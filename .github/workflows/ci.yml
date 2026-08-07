@@ -11,17 +11,26 @@
 
 name: CI
 
+# Se dispara en TODA rama, no solo en main.
+#
+# La configuración original (`push: [main]` + `pull_request`) no ejecutaba nada al empujar una
+# rama de trabajo sin PR abierto: cero runs, cero fallos, cero señal. Es el mismo modo de avería
+# que el hallazgo de `exportsFields` en ADR-0021 — la ausencia de fallo se lee como éxito. Un
+# pipeline que solo corre en main descubre los problemas después de mergear, que es tarde.
 on:
-  pull_request:
   push:
-    branches: [main]
+  pull_request:
 
+# Evita el run duplicado (push + pull_request) sobre la misma rama y cancela el anterior.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 env:
   NODE_VERSION: "22"
+  # Corepack pide confirmación interactiva al descargar un packageManager que no trae fijado.
+  # En CI no hay nadie para responder: el job se cuelga hasta el timeout.
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
 
 jobs:
   setup:
@@ -46,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        step: [format:check, boundaries, lint, typecheck, test, build]
+        step: ["format:check", "boundaries", "lint", "typecheck", "test", "build"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
