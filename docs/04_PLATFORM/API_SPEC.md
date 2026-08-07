@@ -24,9 +24,31 @@ está en el paquete equivocado.
 
 ## Dinero en el contrato
 
-Los montos viajan como **string decimal**: `"1234.56000000"`. Nunca como número JSON.
-En OpenAPI se declaran `type: string, format: decimal`. Un cliente que haga
-`JSON.parse` y opere con el resultado como número está introduciendo un error de redondeo.
+**Todo valor monetario viaja como objeto `{ amount, currency }`. Nunca como string escalar,
+nunca como número JSON.**
+
+```json
+{ "amount": "1234.56000000", "currency": "VES" }
+```
+
+- `amount`: string decimal canónico, **siempre 8 decimales**, notación plana, sin separador de
+  miles, sin exponente. En OpenAPI: `type: string, format: decimal`, `pattern` de 8 decimales.
+- `currency`: código ISO-4217. **Obligatorio en cada importe**, aunque el documento ya declare
+  una moneda en la cabecera.
+
+La redundancia es deliberada. Una moneda implícita, heredada de un campo hermano o del
+encabezado del documento, es exactamente la suposición que produce una factura emitida en la
+moneda equivocada. Es más verboso y es el precio correcto.
+
+Un cliente que haga `JSON.parse` y opere con `amount` como número está introduciendo un error
+de redondeo. Los clientes deben pasar el objeto a `@ladino/money/format` para presentarlo y
+enviarlo de vuelta sin tocarlo.
+
+El string escalar de 8 decimales (`toAmountString()`) existe **solo** para persistencia y para
+los tests de paridad con `numeric(24,8)`. No es una forma válida del contrato de la API.
+
+En un documento multimoneda, un importe convertido añade los campos de trazabilidad de
+ADR-0020 junto al par: `fx_rate`, `rate_source`, `rate_timestamp`, más el par funcional.
 
 ## Errores
 

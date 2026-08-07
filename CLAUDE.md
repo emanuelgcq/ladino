@@ -79,12 +79,24 @@ Idioma: **código, identificadores y commits en inglés; comentarios, docs y UI 
 ```bash
 pnpm install              # instalar (lockfile obligatorio, solo pnpm)
 pnpm dev                  # entorno local completo
-pnpm verify               # lint + typecheck + test + build  <- el gate real
+pnpm verify               # el gate real. 7 pasos, en este orden:
+                          #   1. format:check   prettier --check
+                          #   2. boundaries     dependency-cruiser (ADR-0021)
+                          #   3. lint           eslint
+                          #   4. typecheck      tsc -b --noEmit
+                          #   5. test           vitest (property-based de money incluido)
+                          #   6. build          tsc -b
+                          #   7. api-surface    ningún `number` en la API pública de money
 pnpm test:rls             # pgTAP contra la base local
 pnpm db:new <nombre>      # nueva migración (nunca editar una aplicada)
 pnpm db:reset             # reset local + seed
 pnpm openapi              # regenerar openapi.json desde los schemas
 ```
+
+`verify` reproduce el **núcleo** del pipeline de `DEVOPS_CI_CD.md`, no el pipeline entero.
+`migration test`, `pgTAP`, `integration` y `openapi:check` son bloqueantes en CI pero quedan
+fuera de `verify` hasta que S0.3 y S0.5 los hagan existir: un gate que falla por algo que
+todavía no se construyó solo entrena a ignorarlo.
 
 ## 6. Formato de entrega (todas las tareas)
 
@@ -100,13 +112,18 @@ VALIDAR-*      — puntos que requieren confirmación humana antes de producció
 
 ## 7. Fronteras del código
 
+- `packages/core` — `Result`, `DomainError`, `Brand`, `Instant`. **Cero dependencias.** Todos pueden importarlo.
 - `packages/accounting` — invariantes de partida doble. Puro. Sin I/O.
 - `packages/fiscal` — documentos, numeración, eventos, adapters de imprenta. **Release train propio.**
-- `packages/money` — Decimal, redondeo, FX. Puro.
+- `packages/money` — Decimal, redondeo, FX. Puro. Solo importa `core`.
 - `packages/domain` — casos de uso administrativos transaccionales.
 - `apps/api` — orquestación, permisos, idempotencia. No contiene reglas de negocio.
 - `apps/worker` — outbox, jobs, reintentos.
 - `apps/web` / `apps/mobile` — **cero reglas tributarias**. Solo presentación y llamadas a la API.
+  De dinero solo pueden importar `@ladino/money/format`, nunca la raíz `@ladino/money`.
+
+La tabla completa y su gate (`dependency-cruiser`) están en
+`docs/00_GOVERNANCE/MONOREPO_STRUCTURE.md` y ADR-0021.
 
 Ninguna UI persiste "estado final" de dinero, stock o documentos fiscales. Siempre invoca un caso
 de uso de dominio transaccional que valide permisos → bloquee → calcule → persista → audite →

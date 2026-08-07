@@ -2,21 +2,53 @@
 
 Aritmética monetaria de Ladino. **Paquete puro: sin I/O, sin fecha del sistema, sin red.**
 
+Solo puede importar `@ladino/core` (`Result`, `DomainError`, `Brand`, `Instant`) y `decimal.js`.
+Nada más del repositorio.
+
+## Dos entradas
+
+| Entrada | Contenido | Quién la importa |
+|---|---|---|
+| `@ladino/money` | `Money`, aritmética, los cuatro redondeos, FX, `allocate`, `MonetaryFact` | `accounting`, `fiscal`, `inventory`, `domain`, `api`, `worker` |
+| `@ladino/money/format` | `formatMoney`, `parseUserInput`. Cero aritmética, cero FX, cero redondeo fiscal | además: `web`, `mobile`, `ui` |
+
+`web`, `mobile` y `ui` **no pueden importar la raíz**. La regla es mecánica en
+`dependency-cruiser`, no una anotación (ADR-0021).
+
 ## Contrato
 
 - Tipo `Money { amount: Decimal; currency: CurrencyCode }`. Nunca un `number` suelto.
-- `decimal.js` internamente. Precisión alineada con `numeric(24,8)` de Postgres.
-- Serialización a JSON como `string`. `Money.toJSON()` nunca produce un número.
+  Ningún `number` aparece en una firma pública: `Scale` es una unión literal (`0|2|4|6|8`)
+  precisamente para que el gate `api-surface` no necesite excepciones.
+- `decimal.js` internamente, vía **clon privado** (`Decimal.clone()`), nunca el constructor
+  global: su configuración es global y mutable. Precisión 50, alineada con `numeric(24,8)`.
+- Serialización a JSON como objeto `{ amount, currency }`, con `amount` siempre a 8 decimales.
+  `Money.toJSON()` nunca produce un número. `toAmountString()` es solo para persistencia y
+  paridad con `numeric(24,8)`, no es forma válida del contrato de la API.
 - El redondeo es **explícito y nombrado**: `roundForCurrency`, `roundForTax`, `roundForDocument`,
   `roundForPayment`. No existe un redondeo "por defecto" implícito.
-- Conversión FX requiere `{ rate, source, timestamp }`. Una conversión sin origen no compila.
-- Se conservan valores pre-redondeo cuando la auditoría los necesita.
+- Los cuatro devuelven `RoundedMoney`, que conserva el pre-redondeo **siempre**. Si fuera
+  opcional, se perdería.
+- El paquete **no tiene opinión fiscal**: la `RoundingPolicy` se inyecta. Los valores vigentes
+  son un formulario abierto en `docs/04_PLATFORM/MONEY_AND_ROUNDING_SPEC.md` §6.
+- Conversión FX requiere `{ rate, source, timestamp }`. `source` y `timestamp` son
+  **obligatorios en el tipo** (garantía de compile-time) y su **no-vacuidad se valida en
+  `makeFxRate`**, que es la única vía de construcción. `'' as RateSource` compila en cualquier
+  sistema de tipos de TypeScript; la doc no promete lo que el compilador no puede dar.
+- `convert()` no redondea. Devuelve el valor exacto; redondear es decisión del llamador.
+- Errores como valores: `Result<T, MoneyError>` de `@ladino/core`. Códigos estables, parte
+  del contrato.
 
 ## Tests
 
-Property-based obligatorio. Como mínimo:
+Property-based obligatorio con fast-check, **escritos antes que la implementación** (ADR-0016).
+Como mínimo:
 - asociatividad y conmutatividad de la suma en el rango soportado;
-- `0.1 + 0.2 === 0.3` exacto;
-- redondeo half-even vs half-up documentado y probado por moneda;
+- `0.1 + 0.2 === 0.3` exacto, y su generalización contra aritmética de enteros escalados a 10⁸;
+- redondeo half-even vs half-up documentado y probado por moneda — la documentación es la tabla
+  de `MONEY_AND_ROUNDING_SPEC.md` §6.1; mientras esté vacía se prueban los cinco modos por igual;
 - ida y vuelta de serialización sin pérdida;
-- una conversión FX y su inversa con la misma tasa recuperan el original dentro de tolerancia declarada.
+- una conversión FX y su inversa con la misma tasa recuperan el original dentro de tolerancia
+  declarada **como constante en el test**, no descubierta ajustando hasta que pase;
+- `allocate`: la suma de las partes es exactamente el total;
+- pureza: un espía sobre `Date.now` falla el test si el dominio lee el reloj.
