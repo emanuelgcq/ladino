@@ -1,0 +1,38 @@
+# Dependencias
+node_modules/
+.pnpm-store/
+
+# Artefactos de build
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Caché de herramientas
+.turbo/
+.eslintcache
+.vite/
+.expo/
+
+# Entorno y secretos — nunca en el repositorio (ver DEVOPS_CI_CD.md)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Supabase local
+supabase/.branches/
+supabase/.temp/
+
+# Sistema operativo y editores
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Salidas locales de Claude Code
+.claude/settings.local.json

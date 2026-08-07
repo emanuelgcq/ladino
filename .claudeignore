@@ -1,0 +1,17 @@
+node_modules/
+.pnpm-store/
+dist/
+build/
+.next/
+.expo/
+coverage/
+*.log
+.env
+.env.*
+secrets/
+*.pem
+*.key
+supabase/.branches/
+supabase/.temp/
+ios/
+android/

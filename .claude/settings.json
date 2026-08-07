@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)",
+      "Read(./secrets/**)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(docker system prune:*)",
+      "Bash(docker network rm:*)",
+      "Bash(docker volume rm:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(npm install:*)",
+      "Bash(yarn:*)",
+      "Bash(supabase db reset --linked:*)",
+      "Bash(supabase link:*)"
+    ],
+    "ask": [
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(pnpm add:*)",
+      "Bash(pnpm remove:*)",
+      "Bash(docker compose:*)",
+      "Bash(ssh:*)",
+      "Bash(scp:*)",
+      "Bash(supabase db push:*)",
+      "Bash(eas build:*)",
+      "Bash(eas submit:*)",
+      "Write(./supabase/migrations/**)",
+      "Edit(./infra/**)",
+      "Edit(./.github/workflows/**)"
+    ],
+    "allow": [
+      "Read(./**)",
+      "Grep",
+      "Glob",
+      "Edit(./apps/**)",
+      "Edit(./packages/**)",
+      "Edit(./docs/**)",
+      "Write(./apps/**)",
+      "Write(./packages/**)",
+      "Write(./docs/**)",
+      "Bash(pnpm install)",
+      "Bash(pnpm verify:*)",
+      "Bash(pnpm lint:*)",
+      "Bash(pnpm typecheck:*)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm db:new:*)",
+      "Bash(pnpm db:reset)",
+      "Bash(pnpm openapi)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout -b:*)",
+      "Bash(supabase start)",
+      "Bash(supabase stop)",
+      "Bash(supabase migration new:*)",
+      "Bash(supabase test db:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/session-start.sh" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/guard-immutability.sh" }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/guard-infra.sh" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/post-edit-verify.sh" }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "LADINO_PHASE": "sprint-0",
+    "NODE_OPTIONS": "--max-old-space-size=4096"
+  }
+}
