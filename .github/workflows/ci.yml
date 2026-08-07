@@ -1,0 +1,71 @@
+# Pipeline de PR de Ladino — DEVOPS_CI_CD.md
+#
+# CI corre SOLO en Node 22 LTS. Si algo diverge entre un portátil con Node 26 y este pipeline,
+# gana CI y se arregla el código, no el pipeline: la reproducibilidad vive donde se construye
+# el artefacto.
+#
+# Los pasos van como jobs separados y no como un solo `pnpm verify`, para que la matriz diga
+# cuál falló sin tener que leer el log. `pnpm verify` reproduce el mismo núcleo en local.
+#
+# Todavía NO están: migration test, pgTAP, integration, openapi:check. Llegan con S0.3 y S0.5.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  setup:
+    name: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Habilitar corepack
+        # Un `packageManager` que nadie hace cumplir da falsa sensación de gestor fijado.
+        run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Comprobar que el lockfile no cambió
+        run: git diff --exit-code pnpm-lock.yaml
+
+  quality:
+    name: ${{ matrix.step }}
+    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        step: [format:check, boundaries, lint, typecheck, test, build]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run ${{ matrix.step }}
+
+  api-surface:
+    name: api-surface (ningún `number` en la API pública de money)
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm run api-surface

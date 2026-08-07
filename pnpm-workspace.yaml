@@ -1,0 +1,10 @@
+# apps/mobile está DENTRO del workspace a propósito (ADR-0022).
+# El criterio de salida está escrito en ese ADR; no se ejecta por incomodidad.
+packages:
+  - "apps/*"
+  - "packages/*"
+# Scripts de build aprobados explícitamente. Por defecto pnpm los bloquea, que es lo correcto:
+# un postinstall es ejecución de código arbitrario en cada `pnpm install`.
+allowBuilds:
+  # esbuild lo usa vitest para transformar TypeScript. Necesita su binario nativo.
+  esbuild: true

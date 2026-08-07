@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "comment": [
+    "Solo para el editor. No compila nada: cada paquete tiene su propio tsconfig y el",
+    "orden de compilación lo resuelve Turborepo vía dependsOn ^build, no project references.",
+    "Los paquetes se consumen por 'exports' + dist, nunca por 'paths' (ADR-0022)."
+  ],
+  "files": [],
+  "include": []
+}

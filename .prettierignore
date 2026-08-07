@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.turbo/
+pnpm-lock.yaml
+*.tsbuildinfo
+
+# La documentación funcional se edita a mano y su formato es deliberado.
+docs/
+*.md
+
+# La capa .claude/ es configuración de herramienta, no código del producto.
+# Reformatearla produce diffs que nadie pidió (y que compiten con ediciones manuales).
+.claude/
