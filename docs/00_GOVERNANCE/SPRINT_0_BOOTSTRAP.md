@@ -30,7 +30,7 @@ Primero los tests, después la implementación. Es el paquete del que depende to
 
 Migración `0001`:
 
-- `tenants`, `companies`, `branches`, `warehouses`, `registers`.
+- `tenants`, `companies`, `branches`, `warehouses`, `cash_registers`.
 - `memberships`, `roles`, `permissions`, `role_permissions`, `user_role_assignments`, `scope_bindings`.
 - Funciones `auth.ladino_company_ids()` y `auth.ladino_has_permission(perm, company_id)`.
 - RLS habilitado **y forzado** en todas.

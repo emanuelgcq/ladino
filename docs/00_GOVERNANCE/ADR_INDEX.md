@@ -30,6 +30,7 @@ Usa la skill `adr` de Claude Code.
 | [0022](adr/ADR-0022-mobile-dentro-del-workspace.md) | `apps/mobile` dentro del workspace, con criterio de salida escrito | Aceptado | NO |
 | [0023](adr/ADR-0023-money-y-exactmoney.md) | `Money` (persistible) separado de `ExactMoney` (calculado); solo se sale redondeando | Aceptado | SÍ |
 | [0024](adr/ADR-0024-politica-de-redondeo-en-el-hecho-monetario.md) | `MonetaryFact` pasa a ocho campos: la política de redondeo se persiste (amplía ADR-0020) | Aceptado | SÍ |
+| [0025](adr/ADR-0025-modelo-rbac-y-aislamiento.md) | Modelo RBAC con `requires_scope`; `permissions` global; por qué la inmutabilidad es un trigger y no una policy | **Propuesto** | NO |
 
 ## Decisiones aún abiertas
 
