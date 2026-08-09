@@ -5,8 +5,9 @@ import type { FxConversion } from "./fx.js";
 import { isRoundingOf, type RoundedMoney } from "./rounding.js";
 
 /**
- * Los **siete campos** que ADR-0020 exige persistir por cada importe. Definición canónica
- * única: ninguna tabla los redeclara por su cuenta a partir de S0.3.
+ * Los **ocho campos** que se persisten por cada importe: los siete de ADR-0020 más la política
+ * de redondeo aplicada (ADR-0024). Definición canónica única: ninguna tabla los redeclara por su
+ * cuenta a partir de S0.3.
  *
  * Todo string, porque así es como viajan y como se persisten (`numeric(24,8)` y `text`).
  * Ningún `number` — ni siquiera aquí.
@@ -19,6 +20,18 @@ export interface MonetaryFact {
   readonly functionalCurrency: string;
   readonly rateSource: string;
   readonly rateTimestamp: Instant;
+  /**
+   * Política con la que se pasó del valor exacto convertido al importe funcional guardado
+   * (ADR-0024).
+   *
+   * Sin ella se sabe el importe redondeado y se sabe el pre-redondeo, pero no con qué regla se
+   * llegó de uno al otro — y reproducir la cifra exigiría adivinar qué política estaba vigente
+   * aquel día, que es justo lo que ADR-0020 existe para no tener que hacer.
+   *
+   * Simetría con la tasa: `fxRate` no se acepta sin `rateSource`; `functionalAmount` no se
+   * acepta sin `roundingPolicyId`.
+   */
+  readonly roundingPolicyId: string;
 }
 
 /**
@@ -100,5 +113,7 @@ export function toMonetaryFact(
     functionalCurrency: functional.value.currency,
     rateSource: conversion.rate.source,
     rateTimestamp: conversion.rate.timestamp,
+    // `applyPolicy` rechaza una política sin identificador, así que aquí nunca llega vacío.
+    roundingPolicyId: functional.policy.id,
   });
 }

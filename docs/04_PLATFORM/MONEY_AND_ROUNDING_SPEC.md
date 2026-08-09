@@ -56,10 +56,11 @@ construcción y verificado en `packages/money/test/no-leak.test.ts`.
 La cota de `numeric(24,8)` se comprueba **en un solo punto**: el puente `roundFor*`. Por eso esas
 cuatro funciones devuelven `Result`.
 
-## 2. Los siete campos de un importe (ADR-0020)
+## 2. Los ocho campos de un importe (ADR-0020 + ADR-0024)
 
-Todo importe persistido lleva los siete. El tipo `MonetaryFact` de `packages/money` es su
-única definición canónica; ninguna tabla los redeclara por su cuenta.
+Todo importe persistido lleva los ocho: los siete de trazabilidad de la tasa (ADR-0020) más la
+política de redondeo aplicada (ADR-0024). El tipo `MonetaryFact` de `packages/money` es su única
+definición canónica; ninguna tabla los redeclara por su cuenta.
 
 Se obtienen con `toMonetaryFact(conversion, functional)`, que necesita **los dos** argumentos:
 `conversion.converted` es un `ExactMoney` y `functional_amount` no existe hasta que alguien nombra
@@ -158,6 +159,19 @@ packages/money  roundForTax(money, policy) → RoundedMoney
     ▼
 se persisten value, preRound y policy.id junto al importe
 ```
+
+**`policy.id` se persiste en el propio importe, no solo en el documento (ADR-0024).** Es el
+octavo campo de `MonetaryFact`. Sin él se guarda el importe redondeado y se guarda el
+pre-redondeo, pero no con qué regla se pasó de uno al otro: reproducir la cifra exigiría adivinar
+qué política estaba vigente aquel día.
+
+No basta con `rules_version` a nivel de documento. Un mismo documento lleva importes redondeados
+con **políticas distintas** —base imponible, impuesto, total y liquidación de caja son cuatro
+contextos— y deducir cuál tocó a cada importe sería inferencia, no registro.
+
+Simetría con la tasa: `fx_rate` no se acepta sin `rate_source`; `functional_amount` no se acepta
+sin `rounding_policy_id`. `roundFor*` rechaza una política sin identificador
+(`INVALID_ROUNDING_POLICY`), así que el campo nunca queda vacío.
 
 El único redondeo con default es `roundForCurrency`: su escala son las *minor units* de
 ISO-4217 de la moneda, que es metadato de la moneda y **no** una regla tributaria.

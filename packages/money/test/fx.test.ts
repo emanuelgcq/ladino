@@ -174,7 +174,9 @@ describe("P27 — trazabilidad estructural: los 7 campos de ADR-0020", () => {
     expect(c.rate.timestamp).toBe(TIMESTAMP);
   });
 
-  it("toMonetaryFact proyecta exactamente los 7 campos, todos string", () => {
+  it("toMonetaryFact proyecta exactamente los 8 campos, todos string", () => {
+    // Siete de ADR-0020 más la política aplicada (ADR-0024): sin ella no se puede reproducir
+    // cómo se llegó del pre-redondeo al importe guardado.
     const c = must(convert(must(Money.of("100", "USD")), rate("36.5")));
     const functional = must(roundForCurrency(c.converted));
     const fact = must(toMonetaryFact(c, functional));
@@ -187,9 +189,12 @@ describe("P27 — trazabilidad estructural: los 7 campos de ADR-0020", () => {
         "fxRate",
         "rateSource",
         "rateTimestamp",
+        "roundingPolicyId",
         "transactionCurrency",
       ].sort(),
     );
+    expect(fact.roundingPolicyId).toBe(functional.policy.id);
+    expect(fact.roundingPolicyId).not.toBe("");
     Object.values(fact).forEach((v) => expect(typeof v).toBe("string"));
     expect(fact.amountTransactionCurrency).toBe("100.00000000");
     expect(fact.transactionCurrency).toBe("USD");

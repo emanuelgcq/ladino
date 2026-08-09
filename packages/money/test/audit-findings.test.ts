@@ -98,7 +98,17 @@ describe("H1/H2 — la tasa persistida tiene que caber en numeric(24,8)", () => 
 
           const original = must(Money.of(fact.amountTransactionCurrency, fact.transactionCurrency));
           const tasa = must(parseDecimal(fact.fxRate));
-          const recalculado = must(roundForCurrency(original.multiply(tasa)));
+
+          // Se recalcula con la política QUE CITA EL HECHO (ADR-0024), no con una elegida por el
+          // test. Sin `roundingPolicyId` habría que adivinar cuál estaba vigente aquel día.
+          expect(fact.roundingPolicyId).toBe(functional.policy.id);
+          const recalculado = must(
+            roundForTax(original.multiply(tasa), {
+              id: fact.roundingPolicyId,
+              scale: functional.policy.scale,
+              mode: functional.policy.mode,
+            }),
+          );
 
           expect(recalculado.value.toAmountString()).toBe(fact.functionalAmount);
         },
