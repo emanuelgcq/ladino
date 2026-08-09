@@ -63,7 +63,7 @@ describe("P29 — ninguna función pública lee el reloj del sistema", () => {
 
     must(a.add(b));
     must(a.subtract(b));
-    must(a.multiply(must(parseDecimal("3"))));
+    a.multiply(must(parseDecimal("3")));
     a.negate();
     a.isZero();
     must(a.compare(b));
@@ -71,12 +71,18 @@ describe("P29 — ninguna función pública lee el reloj del sistema", () => {
     a.toJSON();
     a.toString();
 
-    roundForCurrency(a);
-    roundForTax(a, policy);
-    roundForDocument(a, policy);
-    roundForPayment(a, policy);
+    must(roundForCurrency(a));
+    must(roundForTax(a, policy));
+    must(roundForDocument(a, policy));
+    must(roundForPayment(a, policy));
 
-    must(allocate(a, [must(parseDecimal("1")), must(parseDecimal("2"))], 2));
+    must(
+      allocate(
+        must(roundForCurrency(a)).value,
+        [must(parseDecimal("1")), must(parseDecimal("2"))],
+        2,
+      ),
+    );
 
     const fx = must(
       makeFxRate({
@@ -88,7 +94,8 @@ describe("P29 — ninguna función pública lee el reloj del sistema", () => {
       }),
     );
     must(invertFxRate(fx));
-    toMonetaryFact(must(convert(a, fx)));
+    const conversion = must(convert(a, fx));
+    must(toMonetaryFact(conversion, must(roundForCurrency(conversion.converted))));
 
     expect(clockReads).toBe(0);
   });
@@ -121,7 +128,7 @@ describe("inmutabilidad: un Money nunca se modifica en sitio", () => {
     must(a.add(must(Money.of("1.00", "VES"))));
     must(a.subtract(must(Money.of("1.00", "VES"))));
     a.negate();
-    roundForCurrency(a);
+    must(roundForCurrency(a));
 
     expect(a.toAmountString()).toBe(antes);
   });

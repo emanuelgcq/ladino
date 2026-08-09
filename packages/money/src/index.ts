@@ -16,12 +16,18 @@ export { parseDecimal } from "./decimal.js";
 export type { MoneyError } from "./errors.js";
 export { MoneyErrorCode } from "./errors.js";
 
+export type { MonetaryValue } from "./monetary-value.js";
+
 export type { MoneyJSON } from "./money.js";
 export { Money } from "./money.js";
 
-export type { RoundedMoney, RoundingMode, RoundingPolicy } from "./rounding.js";
+export { ExactMoney } from "./exact-money.js";
+
+export type { Roundable, RoundedMoney, RoundingMode, RoundingPolicy } from "./rounding.js";
 export {
   allocate,
+  ISO_PRESENTATION_MODE,
+  isRoundingOf,
   roundForCurrency,
   roundForDocument,
   roundForPayment,

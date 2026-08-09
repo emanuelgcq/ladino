@@ -17,7 +17,8 @@ Decimal exacto. Nunca IEEE 754.
 | Capa | Tipo |
 |---|---|
 | Postgres | `numeric(24,8)` — 16 dígitos enteros, 8 decimales |
-| TypeScript | `Money` de `packages/money`, respaldado por `decimal.js` |
+| TypeScript, valor persistible | `Money` de `packages/money` |
+| TypeScript, intermedio de cálculo | `ExactMoney` de `packages/money` |
 | JSON / API | objeto `{ amount: string, currency: string }` (ver `API_SPEC.md`) |
 | Persistencia / paridad de tests | string canónico de 8 decimales |
 
@@ -25,24 +26,73 @@ Decimal exacto. Nunca IEEE 754.
 global: la configuración de `decimal.js` es global y mutable, y una dependencia transitiva que
 llamara `Decimal.set()` alteraría en silencio todos nuestros cálculos.
 
+## 1.1 Dos tipos, un solo puente (ADR-0023)
+
+Un importe calculado y un importe persistible **no son la misma cosa**, y confundirlos obliga a
+elegir entre dos males: redondear a escondidas o mentir sobre lo que un valor representa.
+
+```
+   Money  ──multiply──▶  ExactMoney  ──roundFor*──▶  RoundedMoney { value: Money, preRound, policy }
+     ▲                        ▲                                          │
+     └──────── convert ───────┘                                          ▼
+                                                                    se persiste
+```
+
+| | `Money` | `ExactMoney` |
+|---|---|---|
+| Escala | ≤ 8 decimales | hasta 50 dígitos significativos |
+| Magnitud | acotada a `numeric(24,8)` | sin acotar |
+| Serializa | `toJSON()` → `{ amount, currency }` | **no. Lanza.** |
+| Salida | es el destino | solo un `roundFor*` |
+
+La razón concreta: el resultado exacto de una conversión casi nunca cabe en ocho decimales
+—`0.00000001 USD × 36.5 = 0.000000365 VES`— y redondearlo dentro de `convert` rompería la
+linealidad y con ella el cuadre del diferencial cambiario.
+
+**Consecuencia práctica:** no existe forma de persistir ni publicar un valor calculado sin haber
+nombrado antes la política de redondeo. No es una convención de estilo; está cerrado por
+construcción y verificado en `packages/money/test/no-leak.test.ts`.
+
+La cota de `numeric(24,8)` se comprueba **en un solo punto**: el puente `roundFor*`. Por eso esas
+cuatro funciones devuelven `Result`.
+
 ## 2. Los siete campos de un importe (ADR-0020)
 
 Todo importe persistido lleva los siete. El tipo `MonetaryFact` de `packages/money` es su
 única definición canónica; ninguna tabla los redeclara por su cuenta.
 
+Se obtienen con `toMonetaryFact(conversion, functional)`, que necesita **los dos** argumentos:
+`conversion.converted` es un `ExactMoney` y `functional_amount` no existe hasta que alguien nombra
+una política de redondeo.
+
 | Campo | Origen en `packages/money` |
 |---|---|
-| `amount_transaction_currency` | `FxConversion.original.amount` |
-| `transaction_currency` | `FxConversion.original.currency` |
-| `fx_rate` | `FxConversion.rate.rate` |
-| `functional_amount` | `FxConversion.converted.amount` |
-| `functional_currency` | `FxConversion.converted.currency` |
-| `rate_source` | `FxConversion.rate.source` |
-| `rate_timestamp` | `FxConversion.rate.timestamp` |
+| `amount_transaction_currency` | `conversion.original.toAmountString()` |
+| `transaction_currency` | `conversion.original.currency` |
+| `fx_rate` | `conversion.rate.rate` |
+| `functional_amount` | `functional.value.toAmountString()` — **ya redondeado** |
+| `functional_currency` | `functional.value.currency` |
+| `rate_source` | `conversion.rate.source` |
+| `rate_timestamp` | `conversion.rate.timestamp` |
+
+`toMonetaryFact` **valida la procedencia**: comprueba que `functional.preRound` sea el valor
+convertido de esa conversión y que la moneda funcional sea la moneda destino de la tasa. Si no,
+`MONEY_FACT_ROUNDING_MISMATCH`.
+
+No es rutina defensiva. Los siete campos solo significan algo si son coherentes entre sí: un
+`fx_rate` que no corresponde al `functional_amount` persistido produce un registro donde cada
+campo es individualmente cierto y el conjunto es mentira. Nadie puede reproducir esa cifra, y en
+una inspección el registro se contradice solo.
 
 `convert()` **no redondea**. Devuelve el valor exacto y el redondeo es una decisión posterior
 y explícita del contexto. Si `convert` redondeara internamente, se perdería la linealidad
-(`convert(a+b) = convert(a) + convert(b)`) y los diferenciales cambiarios dejarían de cuadrar.
+(`convert(a+b) = convert(a) + convert(b)`) y los diferenciales cambiarios dejarían de cuadrar:
+
+```
+a·r = 0.000000005      b·r = 0.000000005
+redondeando cada uno:  0.00000000 + 0.00000000 = 0.00000000
+redondeando la suma:   round(0.00000001)       = 0.00000001
+```
 
 ## 3. Qué es una `RoundingPolicy`
 
@@ -62,11 +112,18 @@ previo. El pre-redondeo es estructural, no opcional: si fuera opcional, se perde
 
 ```ts
 interface RoundedMoney {
-  value:    Money;          // redondeado
-  preRound: Money;          // el valor exacto, sin excepción
+  value:    Money;          // redondeado, persistible
+  preRound: ExactMoney;     // el valor exacto, sin excepción
   policy:   RoundingPolicy; // qué política se aplicó realmente
 }
 ```
+
+`preRound` es un `ExactMoney` porque el valor de entrada normalmente tiene más precisión de la
+que `numeric(24,8)` admite — viniendo de una conversión FX, es el caso habitual.
+
+**Serializar un `RoundedMoney` entero lanza**, precisamente porque arrastra el pre-redondeo. Lo
+que se publica es `value`, explícitamente. Es un tipo pensado para cruzar capas, así que esa
+puerta también está cerrada y probada.
 
 ## 4. Dónde viven las políticas
 

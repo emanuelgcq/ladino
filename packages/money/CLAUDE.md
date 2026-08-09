@@ -15,11 +15,50 @@ Nada más del repositorio.
 `web`, `mobile` y `ui` **no pueden importar la raíz**. La regla es mecánica en
 `dependency-cruiser`, no una anotación (ADR-0021).
 
+## Dos tipos, un solo puente (ADR-0023)
+
+```
+Money ──multiply──▶ ExactMoney ──roundFor*──▶ RoundedMoney { value: Money, preRound, policy }
+  ▲                      ▲                                        │
+  └────── convert ───────┘                                        ▼ se persiste
+```
+
+| | `Money` | `ExactMoney` |
+|---|---|---|
+| Qué es | lo persistible | el intermedio de cálculo |
+| Escala | ≤ 8 decimales | hasta 50 dígitos significativos |
+| Magnitud | acotada a `numeric(24,8)` | sin acotar |
+| Serializa | `toJSON()` → `{ amount, currency }` | **no. Lanza.** |
+| Salida | es el destino | solo un `roundFor*` |
+
+`0.00000001 USD × 36.5 = 0.000000365 VES`: el resultado exacto de una conversión casi nunca cabe
+en ocho decimales. **No existe forma de persistir ni publicar un valor calculado sin nombrar
+antes la política de redondeo.** Está cerrado por construcción, no por convención.
+
+La cota de `numeric(24,8)` se comprueba en **un solo punto**, el puente. Por eso `roundFor*`
+devuelve `Result`.
+
+### Estanqueidad
+
+`amount` y `currency` son campos privados (`#`) con getter en el prototipo, no propiedades
+propias. Cierra las cuatro vías de publicación —`JSON.stringify`, spread, `Object.entries`,
+`structuredClone`— **por construcción**: un getter en prototipo no es propiedad propia y no hay
+descriptor que alguien pueda rehacer con `Object.defineProperty`.
+
+Vale también para `Money`, y no solo por simetría: con propiedades propias, `{...money}` producía
+`{"amount":"1.005"}` en vez del canónico `"1.00500000"`. **Un valor válido mal formado**, con la
+forma exacta de un payload legítimo y sin forma de que el receptor lo detecte. Peor que uno
+ausente.
+
+Ver `test/no-leak.test.ts`. **Ausencia de mecanismo no es prohibición** (`CLAUDE.md` §2).
+
 ## Contrato
 
 - Tipo `Money { amount: Decimal; currency: CurrencyCode }`. Nunca un `number` suelto.
   Ningún `number` aparece en una firma pública: `Scale` es una unión literal (`0|2|4|6|8`)
   precisamente para que el gate `api-surface` no necesite excepciones.
+- `Money#multiply` devuelve `ExactMoney` y **no es `Result`**: multiplicar te saca del mundo
+  persistible, así que no promete caber en ninguna parte.
 - `decimal.js` internamente, vía **clon privado** (`Decimal.clone()`), nunca el constructor
   global: su configuración es global y mutable. Precisión 50, alineada con `numeric(24,8)`.
 - Serialización a JSON como objeto `{ amount, currency }`, con `amount` siempre a 8 decimales.
@@ -35,7 +74,11 @@ Nada más del repositorio.
   **obligatorios en el tipo** (garantía de compile-time) y su **no-vacuidad se valida en
   `makeFxRate`**, que es la única vía de construcción. `'' as RateSource` compila en cualquier
   sistema de tipos de TypeScript; la doc no promete lo que el compilador no puede dar.
-- `convert()` no redondea. Devuelve el valor exacto; redondear es decisión del llamador.
+- `convert()` no redondea. Devuelve `converted: ExactMoney` exacto; redondear es del llamador.
+- `toMonetaryFact(conversion, functional)` necesita los dos argumentos y **valida la
+  procedencia**: si `functional.preRound` no es el valor convertido de esa conversión,
+  `FACT_ROUNDING_MISMATCH`. Un `fx_rate` que no corresponde al `functional_amount` persistido
+  da un registro donde cada campo es cierto y el conjunto es mentira — indefendible en auditoría.
 - Errores como valores: `Result<T, MoneyError>` de `@ladino/core`. Códigos estables, parte
   del contrato.
 

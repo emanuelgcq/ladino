@@ -47,6 +47,15 @@ enviarlo de vuelta sin tocarlo.
 El string escalar de 8 decimales (`toAmountString()`) existe **solo** para persistencia y para
 los tests de paridad con `numeric(24,8)`. No es una forma válida del contrato de la API.
 
+**La única serialización de un importe es su `toJSON()`.** Nunca `{ ...money }` ni
+`Object.entries`: el spread se salta la forma canónica y produce `"1.005"` en lugar de
+`"1.00500000"` — un valor válido mal formado, indistinguible de uno correcto para el receptor.
+En `packages/money` está cerrado por construcción (ADR-0023), pero la regla aplica a cualquier
+DTO que envuelva un importe.
+
+Un `ExactMoney` **no se serializa en absoluto**: es un intermedio de cálculo y hay que redondearlo
+con una política nombrada antes de que pueda salir en una respuesta.
+
 En un documento multimoneda, un importe convertido añade los campos de trazabilidad de
 ADR-0020 junto al par: `fx_rate`, `rate_source`, `rate_timestamp`, más el par funcional.
 

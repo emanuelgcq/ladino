@@ -13,43 +13,62 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { Money, MoneyErrorCode, allocate, parseDecimal } from "../src/index.js";
-import { arbAmountString, arbCurrency, must, stringToScaled } from "./arbitraries.js";
+import {
+  arbAmountString,
+  arbCurrency,
+  must,
+  scaledToString,
+  stringToScaled,
+} from "./arbitraries.js";
 
 const d = (v: string) => must(parseDecimal(v));
 
 const arbWeights = fc.array(fc.integer({ min: 1, max: 10_000 }), { minLength: 1, maxLength: 24 });
 
-describe("P23 — la suma de las partes es EXACTAMENTE el total", () => {
-  it("para todo total y todo vector de pesos", () => {
-    fc.assert(
-      fc.property(
-        arbAmountString(10n ** 18n),
-        arbCurrency,
-        arbWeights,
-        fc.constantFrom(0 as const, 2 as const, 8 as const),
-        (amount, currency, weights, scale) => {
-          const total = must(Money.of(amount, currency));
-          const parts = must(
-            allocate(
-              total,
-              weights.map((w) => d(String(w))),
-              scale,
-            ),
-          );
+/**
+ * Total generado YA representable en la escala del reparto.
+ *
+ * Es la corrección de la formulación original, que combinaba totales de 8 decimales con escalas
+ * 0 y 2 y por tanto pedía dos cosas incompatibles: suma exacta y partes múltiplo de la unidad
+ * mínima. El contraejemplo fue `total = -0.00000001, scale = 0`. El caso no desaparece: pasa a
+ * tener su propio test de precondición, más abajo.
+ */
+const arbTotalAtScale = fc.constantFrom(0 as const, 2 as const, 8 as const).chain((scale) =>
+  fc
+    .tuple(fc.bigInt({ min: -(10n ** 14n), max: 10n ** 14n }), arbCurrency)
+    .map(([units, currency]) => {
+      const value = scaledToString(units * 10n ** BigInt(8 - scale));
+      return { total: must(Money.of(value, currency)), scale };
+    }),
+);
 
-          const sum = parts.reduce((acc, p) => must(acc.add(p)), Money.zero(total.currency));
-          expect(sum.toAmountString()).toBe(total.toAmountString());
-          expect(parts).toHaveLength(weights.length);
-        },
-      ),
+describe("P23 — la suma de las partes es EXACTAMENTE el total", () => {
+  it("para todo total representable en la escala y todo vector de pesos", () => {
+    fc.assert(
+      fc.property(arbTotalAtScale, arbWeights, ({ total, scale }, weights) => {
+        const parts = must(
+          allocate(
+            total,
+            weights.map((w) => d(String(w))),
+            scale,
+          ),
+        );
+
+        const sum = parts.reduce((acc, p) => must(acc.add(p)), Money.zero(total.currency));
+        expect(sum.toAmountString()).toBe(total.toAmountString());
+        expect(parts).toHaveLength(weights.length);
+      }),
     );
   });
 
   it("cada parte dista como mucho una unidad mínima de su proporción ideal", () => {
     fc.assert(
-      fc.property(arbAmountString(10n ** 16n), arbWeights, (amount, weights) => {
-        const total = must(Money.of(amount, "VES"));
+      fc.property(arbAmountString(10n ** 14n), arbWeights, (raw, weights) => {
         const scale = 2 as const;
+        // A escala 2, la unidad mínima son 10^6 unidades de 10^-8.
+        const total = must(
+          Money.of(scaledToString((stringToScaled(raw) / 1_000_000n) * 1_000_000n), "VES"),
+        );
         const parts = must(
           allocate(
             total,
@@ -85,11 +104,10 @@ describe("P23 — la suma de las partes es EXACTAMENTE el total", () => {
 
   it("es determinista: mismos argumentos, mismo reparto", () => {
     fc.assert(
-      fc.property(arbAmountString(10n ** 16n), arbWeights, (amount, weights) => {
-        const total = must(Money.of(amount, "VES"));
+      fc.property(arbTotalAtScale, arbWeights, ({ total, scale }, weights) => {
         const ws = weights.map((w) => d(String(w)));
-        const a = must(allocate(total, ws, 2));
-        const b = must(allocate(total, ws, 2));
+        const a = must(allocate(total, ws, scale));
+        const b = must(allocate(total, ws, scale));
         expect(a.map((m) => m.toAmountString())).toEqual(b.map((m) => m.toAmountString()));
       }),
     );
@@ -99,6 +117,70 @@ describe("P23 — la suma de las partes es EXACTAMENTE el total", () => {
     const parts = must(allocate(must(Money.of("-0.10", "VES")), [d("1"), d("1"), d("1")], 2));
     const sum = parts.reduce((acc, p) => must(acc.add(p)), Money.zero(parts[0]!.currency));
     expect(sum.toAmountString()).toBe("-0.10000000");
+  });
+});
+
+describe("P23b — el reparto del resto es simétrico respecto al signo", () => {
+  it("allocate(−t) = allocate(t) negado, parte a parte", () => {
+    // El contraejemplo que destapó el problema de formulación era negativo, y una nota de
+    // crédito es exactamente eso: si el céntimo sobrante cayera en otra línea al invertir el
+    // signo, la nota no revertiría la factura y el invariante 3 de
+    // ACCOUNTING_INVARIANTS_TESTS.md ("reversal suma cero con original") sería falso.
+    fc.assert(
+      fc.property(arbTotalAtScale, arbWeights, ({ total, scale }, weights) => {
+        const ws = weights.map((w) => d(String(w)));
+        const positivo = must(allocate(total, ws, scale));
+        const negativo = must(allocate(total.negate(), ws, scale));
+
+        expect(negativo.map((m) => m.toAmountString())).toEqual(
+          positivo.map((m) => m.negate().toAmountString()),
+        );
+      }),
+    );
+  });
+
+  it("caso concreto: 0.10 y −0.10 entre tres reparten el céntimo en la misma línea", () => {
+    const w = [d("1"), d("1"), d("1")];
+    const positivo = must(allocate(must(Money.of("0.10", "VES")), w, 2));
+    const negativo = must(allocate(must(Money.of("-0.10", "VES")), w, 2));
+
+    expect(positivo.map((m) => m.toAmountString())).toEqual([
+      "0.04000000",
+      "0.03000000",
+      "0.03000000",
+    ]);
+    expect(negativo.map((m) => m.toAmountString())).toEqual([
+      "-0.04000000",
+      "-0.03000000",
+      "-0.03000000",
+    ]);
+  });
+});
+
+describe("P23c — precondición: el total tiene que caber en la escala", () => {
+  it("un total con más precisión que la escala se rechaza en vez de redondearse", () => {
+    // allocate NO redondea el total. Redondear es una decisión con nombre y con política
+    // (MONEY_AND_ROUNDING_SPEC.md §5); hacerlo aquí en silencio escondería un céntimo.
+    const r = allocate(must(Money.of("0.00000001", "VES")), [d("1")], 0);
+    expect(r.ok).toBe(false);
+    expect(r.ok ? null : r.error.code).toBe(MoneyErrorCode.TOTAL_NOT_AT_SCALE);
+  });
+
+  it("el mismo total sí se reparte a escala 8", () => {
+    const parts = must(allocate(must(Money.of("0.00000001", "VES")), [d("1")], 8));
+    expect(parts.map((m) => m.toAmountString())).toEqual(["0.00000001"]);
+  });
+
+  it("rechaza también el caso negativo del contraejemplo original", () => {
+    const r = allocate(must(Money.of("-0.00000001", "VES")), [d("1")], 0);
+    expect(r.ok).toBe(false);
+    expect(r.ok ? null : r.error.code).toBe(MoneyErrorCode.TOTAL_NOT_AT_SCALE);
+  });
+
+  it("un total con céntimos no se puede repartir a escala 0", () => {
+    const r = allocate(must(Money.of("100.50", "VES")), [d("1"), d("1")], 0);
+    expect(r.ok).toBe(false);
+    expect(r.ok ? null : r.error.code).toBe(MoneyErrorCode.TOTAL_NOT_AT_SCALE);
   });
 });
 

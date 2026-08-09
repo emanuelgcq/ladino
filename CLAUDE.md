@@ -32,6 +32,9 @@ Idioma: **código, identificadores y commits en inglés; comentarios, docs y UI 
 - `docker compose down` global, `docker system prune`, `docker network rm` en el VPS.
 - `git push --force`, `git commit` o deploy sin aprobación explícita del usuario en el mensaje.
 
+**Ausencia de mecanismo no es prohibición.** Si algo no debe poder hacerse, tiene que fallar
+activamente, no depender de que el método no exista.
+
 ## 3. Cómo trabajar en este repo
 
 **Siempre en este orden. No saltes pasos.**
