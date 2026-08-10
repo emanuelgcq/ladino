@@ -34,7 +34,7 @@ ladino/
     ui/                        # componentes compartidos web
     observability/             # OTel, logger estructurado
   supabase/     CLAUDE.md
-    migrations/                # YYYYMMDDHHMM_verbo_objeto.sql — nunca se editan
+    migrations/                # YYYYMMDDHHMMSS_verbo_objeto.sql — nunca se editan
     seed/
     functions/                 # Edge Functions (integraciones ligeras, nunca fiscal core)
     tests/                     # pgTAP

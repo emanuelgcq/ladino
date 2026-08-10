@@ -169,14 +169,36 @@ rechaza**.
 ### 5. Las cuatro funciones de alcance
 
 ```sql
-auth.ladino_tenant_ids()                          -- returns setof uuid
-auth.ladino_company_ids()                         -- returns setof uuid
-auth.ladino_has_permission(perm text, company_id uuid)  -- returns boolean
+platform.ladino_tenant_ids()                          -- returns setof uuid
+platform.ladino_company_ids()                         -- returns setof uuid
+platform.ladino_has_permission(perm text, company_id uuid)  -- returns boolean
 ```
 
 `ladino_tenant_ids()` no estaba en la lista de S0.3 (sí en `SUPABASE_DESIGN.md`). Se incluye: es
 la base sobre la que se construyen las otras dos y separarla evita repetir la misma subconsulta en
 cada policy.
+
+#### Van en `platform`, no en `auth` — y esto lo descubrió la base de datos
+
+La primera versión de este ADR, ADR-0014 y `SUPABASE_DESIGN.md` las nombraban `auth.ladino_*`.
+Al aplicar la migración, Postgres cortó en la sentencia 63:
+
+```
+ERROR: permission denied for schema auth (SQLSTATE 42501)
+```
+
+**El esquema `auth` no es nuestro.** Lo posee `supabase_auth_admin` (GoTrue); las migraciones
+corren como `postgres`, que no tiene `CREATE` sobre él. Y aunque se forzara el permiso, sería
+peor: Supabase gestiona ese esquema y lo reescribe en sus actualizaciones, así que las funciones
+podrían desaparecer sin aviso en un upgrade de la plataforma.
+
+Van en **`platform`**, por el mismo razonamiento que ya llevó ahí a `uuidv7()` y
+`reject_mutation()` (§8): es el esquema que **sí** es nuestro y que PostgREST no expone.
+
+Vale la pena registrar cómo se llegó al error, porque el modo de fallo es nuevo: **tres
+documentos coincidían entre sí y ninguno se había contrastado contra la plataforma.** La
+coherencia interna se confundió con la corrección. No fue ausencia de fallo leída como éxito —
+fue acuerdo entre fuentes que compartían el mismo supuesto sin verificar.
 
 Las cuatro son **`STABLE`**, no `IMMUTABLE`: dependen de datos de tabla que cambian. Y
 **`SECURITY DEFINER`** con `search_path` fijado, porque tienen que leer `memberships` y
@@ -192,8 +214,8 @@ puede llamarse sin autenticar es una fuga de la estructura organizativa completa
 Las cuatro llevan, sin excepción:
 
 ```sql
-REVOKE EXECUTE ON FUNCTION auth.ladino_...  FROM PUBLIC;
-GRANT  EXECUTE ON FUNCTION auth.ladino_...  TO authenticated;
+REVOKE EXECUTE ON FUNCTION platform.ladino_...  FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION platform.ladino_...  TO authenticated;
 ```
 
 Concesión explícita y solo a `authenticated`. `anon` no las invoca.
@@ -201,7 +223,7 @@ Concesión explícita y solo a `authenticated`. `anon` no las invoca.
 Para el alcance por recurso, una cuarta:
 
 ```sql
-auth.ladino_has_scope(perm text, scope_type text, scope_id uuid)  -- returns boolean
+platform.ladino_has_scope(perm text, scope_type text, scope_id uuid)  -- returns boolean
 ```
 
 Es la que consultarán las policies de las tablas operativas que lleguen en fases posteriores
@@ -225,8 +247,23 @@ policy restrictiva. No es una elección de estilo ni redundancia defensiva:
 
 | Capa | Contiene a | No contiene a |
 |---|---|---|
-| Policies RLS | `anon`, `authenticated`, propietario (con `FORCE`) | **`service_role`** (`BYPASSRLS`) |
-| Trigger `reject_mutation()` | **todos**, incluido `service_role` | superusuario que lo deshabilite |
+| Policies RLS | `anon`, `authenticated`, propietario (con `FORCE`) | **`service_role`** (`BYPASSRLS`), y **`TRUNCATE` de cualquiera** |
+| Trigger `reject_mutation()` | `UPDATE`, `DELETE` **y `TRUNCATE`**, para todos incluido `service_role` | superusuario que lo deshabilite |
+
+> **Corrección (auditoría de S0.3).** La primera versión de esta tabla decía que
+> el trigger contenía "a **todos**". Era falso para `TRUNCATE`, y `TRUNCATE` es
+> justo la operación que vacía una tabla append-only entera:
+>
+> - **ignora la RLS por diseño** — ninguna policy lo ve;
+> - **no dispara un trigger `BEFORE UPDATE OR DELETE`**;
+> - y Supabase concede `TRUNCATE` a `anon` y `authenticated` en **toda tabla
+>   nueva** vía `ALTER DEFAULT PRIVILEGES`. `auto_expose_new_tables = false`
+>   suprime `arwd`, no `Dxtm`.
+>
+> Un trigger de `TRUNCATE` es obligatoriamente `FOR EACH STATEMENT`: no hay filas
+> que recorrer. La migración 5/5 lo añade y revoca los privilegios por defecto,
+> para que la defensa no dependa de enumerar cada tabla a mano — que es la forma
+> lenta de olvidarse.
 
 **Esta razón queda escrita aquí porque sin ella alguien simplificará.** Un trigger que parece
 duplicar lo que ya hace una policy es el candidato natural a "limpieza" en una revisión futura, y
@@ -242,7 +279,7 @@ ADR-0014 decidió que los permisos se resuelven **contra la base en cada consult
 JWT, para que revocar un acceso no dependa de esperar la expiración de un token. Esa decisión
 tiene una factura y conviene verla antes de pagarla.
 
-Cada policy RLS invoca `auth.ladino_*`, y cada invocación consulta `memberships`,
+Cada policy RLS invoca `platform.ladino_*`, y cada invocación consulta `memberships`,
 `user_role_assignments` y `scope_bindings`. En una consulta que devuelve mil filas, el planificador
 puede evaluar la función una vez (si la reconoce como `STABLE` y el predicado no depende de la
 fila) o por fila (si depende). **La diferencia entre las dos es de tres órdenes de magnitud**, y
@@ -333,6 +370,115 @@ Tests pgTAP obligatorios de la función, en la propia migración:
 | **Monotonía**: ids generados en secuencia ordenan por tiempo | que el timestamp no esté en los bits altos, que es todo el motivo de usar v7 |
 | **Unicidad bajo concurrencia**: N sesiones generando a la vez, cero colisiones | entropía insuficiente dentro del mismo milisegundo |
 
+### 9. Superficie de escritura: qué pasa por PostgREST y qué por la API
+
+Consecuencia directa de §5, descubierta al escribir el DDL. Las cuatro funciones de alcance
+resuelven permisos **por company**, y hay operaciones que no tienen una contra la que preguntar:
+
+- **Crear una company** no tiene `company_id` todavía.
+- **Gestionar `memberships`, `roles` o `user_role_assignments`** es alcance de tenant, no de company.
+
+Escribir el predicado en línea dentro de una policy de `memberships` tampoco vale: **recurriría
+sobre la propia tabla**, porque decidir si puedes escribir en `memberships` exige leer
+`memberships`.
+
+**Decisión: `authenticated` no escribe nada de nivel tenant ni del bloque RBAC.**
+
+| Tabla | `authenticated` escribe | Pasa por la API con `service_role` |
+|---|---|---|
+| `branches`, `warehouses`, `cash_registers` | **sí** (insert/update/delete) | — |
+| `companies` | solo `update` | insert, delete |
+| `tenants` | no | **sí** |
+| `memberships`, `roles`, `permissions`, `role_permissions`, `user_role_assignments`, `scope_bindings` | **no** | **sí** |
+
+Todas conservan su policy de `select`: leer el propio alcance es legítimo y necesario para
+pintar una UI. Lo que no se puede es escribirlo.
+
+**Que nadie pueda concederse permisos por PostgREST es una propiedad deseada, no un efecto
+lateral.** El bloque RBAC es exactamente la superficie que un atacante con un token válido
+querría tocar; que no exista policy de escritura la cierra por construcción, sin depender de que
+un predicado esté bien escrito.
+
+**Habilitar escritura RBAC por PostgREST exigiría una quinta función `SECURITY DEFINER`** —algo
+como `platform.ladino_has_tenant_permission(perm, tenant_id)`— con su propio `search_path`, su
+`REVOKE`/`GRANT`, y el análisis de por qué no recurre. Eso es superficie de privilegio nueva sobre
+la tabla que concede privilegios: **requiere ADR propio**, no un parche en una migración posterior.
+
+### 9.1 Las FK compuestas, y por qué no son un detalle de implementación
+
+`tenant_id` está denormalizado en toda tabla que también lleva `company_id`. Es lo que permite que
+el predicado de cada policy empiece por `tenant_id` sin un join.
+
+El precio: **un `tenant_id` mal copiado convierte el ancla de aislamiento en mentira, y ninguna
+policy lo nota.** Una fila de `branches` con el `company_id` de la empresa A y el `tenant_id` del
+tenant B satisface la policy del tenant B y expone datos de A. Es un fallo de integridad que se
+presenta como un fallo de seguridad, y las pruebas de aislamiento no lo encuentran porque prueban
+el mecanismo, no los datos.
+
+**FK compuestas** `(tenant_id, company_id) → companies (tenant_id, id)`, que obligan a un
+`UNIQUE (tenant_id, id)` en las tablas referenciadas. Con ellas la incoherencia es imposible de
+insertar, no improbable.
+
+#### Corrección: coherencia no es inmutabilidad
+
+**Esta sección se leyó, y se aprobó, como si las FK compuestas impidieran que una fila cambiara
+de tenant. No lo hacen, y la diferencia resultó ser una fuga entre tenants.**
+
+Lo que garantizan es que `tenant_id` y `company_id` **concuerdan entre sí**. Nada impide
+cambiarlos **los dos a la vez** a un par igualmente coherente de otro tenant.
+
+Y una policy de `UPDATE` tampoco puede impedirlo: tiene `USING` (evalúa la fila vieja) y
+`WITH CHECK` (evalúa la nueva), pero **Postgres no ofrece `OLD` dentro de una policy**. Para un
+usuario con membership en dos tenants las dos comprobaciones pasan —ve la fila en A, y B está
+entre sus tenants— y un solo `UPDATE` traslada la fila. Después, cualquier miembro de B la lee.
+
+No es un caso exótico: es **el caso central del producto**, la firma contable que lleva veinte
+clientes con la que este mismo ADR justifica la existencia de `tenants`.
+
+La inmutabilidad se consigue donde la RLS no llega, y en dos capas por el argumento de §6:
+
+| Capa | Qué hace | A quién no alcanza |
+|---|---|---|
+| `GRANT UPDATE (col, …)` por columna | `authenticated` no puede ni nombrar `tenant_id` | `service_role` |
+| Trigger `assert_isolation_anchors_immutable()` | rechaza `new.tenant_id is distinct from old.tenant_id` | superusuario |
+
+Migración 5/5. SQLSTATE `LAD28`.
+
+Excepción: **`roles.tenant_id` es nullable** (§3), y una FK compuesta con `MATCH SIMPLE` —el
+default— **se salta la comprobación entera si alguna columna es NULL**. Justo en la tabla donde
+más importa. Ahí la FK se sustituye por `platform.assert_rbac_tenant_coherence()`, un trigger que
+comprueba lo mismo sin depender de la semántica de NULL.
+
+Esto no estaba en la versión original de este ADR. Es una mejora sobre él.
+
+### 9.2 `permissions` tiene dos excepciones, no una
+
+§3 declara que `permissions` no lleva `tenant_id`. Al escribir el DDL apareció la segunda:
+
+- **Sin `tenant_id`** — es vocabulario del sistema, no dato de nadie (§3).
+- **PK textual**, la propia `key` (`invoice.issue`, `journal.post`), no un `uuid`. Un catálogo
+  cerrado que se puebla por migración y se referencia por nombre en el código no gana nada con un
+  identificador opaco, y sí pierde legibilidad en cada `role_permissions` y en cada mensaje de
+  error.
+
+Las dos van declaradas en el mismo comentario SQL de la tabla. Una excepción sin declarar es
+indistinguible de un olvido.
+
+### 9.3 `VALIDAR-RBAC` — la clasificación de `invoice.issue`
+
+De los 23 permisos del catálogo inicial, **`invoice.issue` es el único cuya clasificación
+`is_scoped` no está clara**. Queda en `false` (company-wide) con la marca en la migración.
+
+La duda es real: si emitir una factura debe estar acotado a la caja o a la sucursal desde la que
+se emite —cosa que `packages/fiscal` decidirá con las series fiscales delante— entonces debería
+ser `true`.
+
+Lo que hace segura la espera es el invariante de §4: el día que se reclasifique, el
+`update permissions set is_scoped = true` **hará fallar el `COMMIT`** si algún rol company-wide ya
+lo tenía concedido. El error será ruidoso y en el momento correcto, que es exactamente lo que se
+quiere de una clasificación provisional.
+
+
 ## Consecuencias
 
 **Positivas**
@@ -399,7 +545,7 @@ de que este ADR exista antes que el SQL.
 - pgTAP: `permissions` no admite `INSERT` desde `authenticated`.
 - pgTAP: marcar `is_scoped = true` en un permiso que ya tienen roles company-wide **hace fallar el
   `COMMIT`**. Es el tercer flanco del invariante, el que no toca ni `roles` ni `role_permissions`.
-- pgTAP: ninguna de las cuatro funciones `auth.ladino_*` es ejecutable por `anon`.
+- pgTAP: ninguna de las cuatro funciones `platform.ladino_*` es ejecutable por `anon`.
 - `rls-security-auditor`: cero tablas de `public` sin RLS habilitada y forzada.
 - Plan de ejecución registrado para al menos una policy con volumen, como línea base de
   rendimiento.

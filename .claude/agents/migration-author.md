@@ -11,7 +11,7 @@ Eres el autor de migraciones de Ladino. Postgres sobre Supabase gestionado.
 
 ## Reglas duras
 
-- Nombre: `supabase/migrations/YYYYMMDDHHMM_verbo_objeto.sql`. Nunca edites una existente.
+- Nombre: `supabase/migrations/YYYYMMDDHHMMSS_verbo_objeto.sql`. Nunca edites una existente.
 - Toda tabla de negocio lleva: `id uuid primary key default gen_random_uuid()`,
   `tenant_id uuid not null`, `company_id uuid`, `created_at timestamptz not null default now()`,
   `created_by uuid`, y `version bigint not null default 1` donde aplique concurrencia optimista.
@@ -24,7 +24,7 @@ Eres el autor de migraciones de Ladino. Postgres sobre Supabase gestionado.
 ## RLS — obligatorio, sin excepciones
 
 Cada tabla: `alter table X enable row level security;` **y** `force row level security`.
-Las policies se apoyan en una función `auth.ladino_tenant_ids()` / `auth.ladino_company_ids()`
+Las policies se apoyan en una función `platform.ladino_tenant_ids()` / `platform.ladino_company_ids()`
 resuelta desde memberships, no desde claims estáticos del JWT.
 Escribe policies separadas por operación (`select`, `insert`, `update`, `delete`), nunca `for all`.
 

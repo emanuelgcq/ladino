@@ -32,14 +32,33 @@ Migración `0001`:
 
 - `tenants`, `companies`, `branches`, `warehouses`, `cash_registers`.
 - `memberships`, `roles`, `permissions`, `role_permissions`, `user_role_assignments`, `scope_bindings`.
-- Funciones `auth.ladino_company_ids()` y `auth.ladino_has_permission(perm, company_id)`.
+- Funciones `platform.ladino_company_ids()` y `platform.ladino_has_permission(perm, company_id)`.
 - RLS habilitado **y forzado** en todas.
-- Función `public.reject_mutation()` para las append-only que vendrán.
+- Función `platform.reject_mutation()` para las append-only que vendrán.
 
 Tests pgTAP: un usuario de la empresa A no ve nada de la empresa B, ni leyendo ni escribiendo.
 
 **Hecho cuando:** `supabase test db` pasa y el subagente `rls-security-auditor` reporta cero
 tablas sin RLS.
+
+### Bloqueante heredado para S0.4
+
+**Toda tabla de S0.4 tiene que nacer con `created_by`, `created_at` y `version` gobernados por
+`platform.set_row_provenance()`.** No es opcional ni cosmético.
+
+La auditoría de S0.3 encontró que esas tres columnas eran ordinarias y el cliente podía fijarlas
+a lo que quisiera: insertó una fila **atribuida a otro usuario y fechada en 1999**. En tablas de
+estructura el daño es acotado. **El mismo DDL sobre `audit_events` o `fiscal_events` es
+falsificación de la pista de auditoría** — exactamente lo que la regla 3 de `CLAUDE.md` existe
+para impedir: *"todo documento fiscal y movimiento contable guarda autor, timestamp, origen y
+versión de reglas"*. Un autor que el propio actor elige no es un autor, y un log que se puede
+antedatar no prueba nada.
+
+Se arregló en la migración 5/5 para las cinco tablas de la jerarquía. **S0.4 no puede repetir el
+DDL sin el trigger.**
+
+Igual con `platform.reject_mutation()`: engancharlo `before update or delete` **y**
+`before truncate ... for each statement`. `TRUNCATE` ignora la RLS y no dispara el primero.
 
 ## S0.4 — Audit log y outbox
 
@@ -54,6 +73,19 @@ Test pgTAP: un `update` sobre `audit_events` como `service_role` lanza excepció
 **Hecho cuando:** la inmutabilidad es estructural, no depende del código de aplicación.
 
 ## S0.5 — Esqueleto de API y del caso de uso transaccional
+
+### Contrato heredado de S0.3: la API declara el actor
+
+Toda transacción que escriba fija `set local ladino.actor_id = '<uuid>'` antes del primer
+`INSERT`. Sin eso, `created_by` queda `NULL` **en silencio** — no hay error, la fila se escribe,
+y el vacío aparece en una auditoría meses después, sobre datos que ya no se pueden reconstruir.
+
+Existe porque `tenants`, `companies` y todo el bloque RBAC solo se escriben con `service_role`
+(ADR-0025 §9), y ahí `auth.uid()` es `NULL`.
+
+El detalle y los cuatro puntos de verificación están en `04_PLATFORM/API_SPEC.md` §Procedencia.
+El que cuenta es el test de integración: un caso de uso ejecutado sin GUC tiene que fallar,
+porque es el único que recorre el mismo camino que producción.
 
 - Hono con middleware de auth, autorización, idempotencia, request-id y logging estructurado.
 - **Un** caso de uso completo de ejemplo (crear empresa) que recorra los 10 pasos del patrón.

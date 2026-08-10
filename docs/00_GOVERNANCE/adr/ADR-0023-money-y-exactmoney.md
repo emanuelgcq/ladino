@@ -169,7 +169,7 @@ ninguna. Congelar impide modificar; no impide leer ni copiar.
 
 ## La lección: la ausencia de fallo leída como éxito
 
-Este patrón apareció **cuatro veces en un solo sprint**, en cuatro capas distintas. Es lo más
+Este patrón apareció **ocho veces en un solo sprint**, en ocho capas distintas. Es lo más
 transferible que deja S0.1/S0.2 y por eso se escribe aquí, donde sobrevivirá al código que lo
 produjo.
 
@@ -179,13 +179,49 @@ produjo.
 | 2 | GitHub Actions | "CI configurado" | El trigger era `push: [main]` + `pull_request`. El primer push a una rama de trabajo sin PR no disparó nada: **cero runs, cero fallos, cero señal.** |
 | 3 | `ExactMoney` | "no tiene `toJSON`, luego no se puede publicar" | `JSON.stringify` enumera las propiedades propias aunque no haya `toJSON`, y `Decimal` trae el suyo. Se publicaba `{"amount":"1.23456789012345",...}`. |
 | 4 | `Money` / `ExactMoney` | "`toJSON` ya está cerrado" | El spread y `Object.entries` **ni siquiera pasan por `toJSON`**. Seguían publicando el objeto entero. |
+| 5 | Suite de `money` | "146 propiedades en verde, S0.2 terminado" | Siete defectos en los huecos que el autor no pensó probar. Los encontró una revisión con mandato de buscar el fallo, no de confirmar el acierto. |
+| 6 | `CLAUDE.md` §5 | "`pnpm db:reset`, `db:new` y `test:rls` son los comandos del proyecto" | **No existían.** Documentados desde el primer día, ausentes de `package.json`, y nadie se entera hasta que va a usarlos — en S0.3, dos sprints después. |
+| 7 | Aislamiento multi-tenant | "120 aserciones pgTAP en verde, A no ve a B" | **Ningún test tenía un usuario con membership en dos tenants.** Probábamos A↔A y B↔B. El atacante realista de un sistema multi-tenant es el usuario legítimo de ambos, y es el caso central del producto. Un `UPDATE` trasladaba filas de un tenant a otro. |
+| 8 | `alter default privileges ... revoke all on functions from anon, authenticated` | "las funciones nuevas quedan cerradas" | **No-op.** El `EXECUTE` por defecto lo tiene `PUBLIC`, no `anon`. Revocar de quien no lo tiene no quita nada: una función nueva en `public` seguía siendo ejecutable por `anon`. |
 
-Los cuatro comparten la misma estructura: **se confundió "no observé un fallo" con "no hay
+El caso 8 es de la peor variante: **no es una defensa ausente, es una defensa que parece estar.**
+Un `revoke` escrito, revisado y aprobado, que no revoca nada. Quien lo lea después dará el flanco
+por cubierto y no volverá a mirar. Una defensa que no existe se acaba echando en falta; una que
+existe y no funciona, no.
+
+Los ocho comparten la misma estructura: **se confundió "no observé un fallo" con "no hay
 fallo"**, cuando lo que ocurría era que el mecanismo de detección no estaba conectado.
 
-Y en los cuatro, lo que lo destapó fue un control que existía **precisamente para desconfiar del
+Y en casi todos, lo que lo destapó fue un control que existía **precisamente para desconfiar del
 control principal**: la regla `no-unresolvable` en el caso 1, empujar la puerta a propósito en el
 3 y el 4.
+
+### Un modo de fallo distinto: la defensa que cierra el camino autorizado
+
+Los ocho casos de arriba comparten estructura. **Este no**, y por eso va aparte — va a repetirse.
+
+Al cerrar la falsificación de `created_by` se fijó `created_by := auth.uid()` sin excepción.
+Impecable contra el cliente. Pero `tenants`, `companies` y todo el bloque RBAC **solo se escriben
+con `service_role`**, donde `auth.uid()` es `NULL`. El resultado: el 100 % de esas altas quedaban
+sin autor, y el servidor no tenía forma de corregirlo.
+
+**Se hizo el campo no forjable y, a la vez, no escribible por el único camino que puede
+escribirlo.** La regla que la defensa venía a proteger quedó insatisfacible justo donde más
+importaba.
+
+Lo que lo hace peligroso no es el error: es que **no falla**. No hay excepción, la fila se
+escribe, la respuesta es `201`. El hueco aparece meses después, en una auditoría, sobre datos que
+ya no se pueden reconstruir.
+
+> **Una defensa que cierra el único camino autorizado no es una defensa: es una avería
+> silenciosa.** Antes de cerrar una vía, enumera quién la usa legítimamente y comprueba que le
+> queda una. Si el camino legítimo es el de servicio, la defensa necesita una entrada para él —
+> controlada por el servidor, nunca por el payload.
+
+En Ladino esa entrada es el GUC de transacción `ladino.actor_id`, y su contrato está en
+`04_PLATFORM/API_SPEC.md` §Procedencia. Que exista no basta: **si la API olvida fijarlo, el fallo
+vuelve a ser silencioso.** Por eso el contrato dice dónde se verifica, y por eso el test que
+cuenta es el de integración y no el de la función.
 
 De ahí tres reglas operativas para todo el repositorio:
 

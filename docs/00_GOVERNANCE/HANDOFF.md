@@ -101,7 +101,7 @@ redondea en silencio y no hay guardia; el oráculo BigInt de P5e compara a 10⁻
 `0001_create_organizational_identity.sql` con el subagente `migration-author`: `tenants`,
 `companies`, `branches`, `warehouses`, `registers`, más `memberships`, `roles`, `permissions`,
 `role_permissions`, `user_role_assignments` y `scope_bindings`, con RLS habilitada *y forzada* en
-todas y las funciones `auth.ladino_company_ids()` y `auth.ladino_has_permission(perm, company_id)`.**
+todas y las funciones `platform.ladino_company_ids()` y `platform.ladino_has_permission(perm, company_id)`.**
 
 Lectura obligatoria antes de escribir una línea de SQL (usa `spec-explorer` para no llenar el
 contexto principal):
@@ -115,7 +115,7 @@ contexto principal):
 - `docs/00_GOVERNANCE/ENGINEERING_STANDARDS.md` §SQL — FK reales, `CHECK` para todo enumerado,
   índices `(tenant_id, company_id)`, UUID v7
 
-Además, `public.reject_mutation()` para las tablas append-only que llegan en S0.4, y el test
+Además, `platform.reject_mutation()` para las tablas append-only que llegan en S0.4, y el test
 pgTAP que exige S0.3: **un usuario de la empresa A no ve nada de la empresa B, ni leyendo ni
 escribiendo**. Hecho cuando `supabase test db` pasa y `rls-security-auditor` reporta cero tablas
 sin RLS.

@@ -4,7 +4,7 @@ Postgres gestionado (Supabase cloud) como system of record de Ladino.
 
 ## Migraciones
 
-- `supabase/migrations/YYYYMMDDHHMM_verbo_objeto.sql`. Crear con `pnpm db:new`.
+- `supabase/migrations/YYYYMMDDHHMMSS_verbo_objeto.sql`. Crear con `pnpm db:new`.
 - **Una migración aplicada nunca se edita.** Un hook lo bloquea. Se corrige con otra migración.
 - Compatibilidad expand/contract: la migración debe funcionar con la versión de app saliente
   y la entrante, porque migración y deploy no son atómicos.
@@ -14,8 +14,8 @@ Postgres gestionado (Supabase cloud) como system of record de Ladino.
 
 Toda tabla del esquema `public`: `enable row level security` **y** `force row level security`.
 Policies separadas por operación. Nunca `for all`.
-El alcance se resuelve con funciones (`auth.ladino_company_ids()`,
-`auth.ladino_has_permission()`) apoyadas en `memberships`, no en claims estáticos de larga vida.
+El alcance se resuelve con funciones (`platform.ladino_company_ids()`,
+`platform.ladino_has_permission()`) apoyadas en `memberships`, no en claims estáticos de larga vida.
 
 Una tabla sin RLS es una fuga de datos entre clientes. No hay excepciones "temporales".
 
