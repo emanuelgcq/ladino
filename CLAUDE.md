@@ -32,6 +32,9 @@ Idioma: **código, identificadores y commits en inglés; comentarios, docs y UI 
 - `docker compose down` global, `docker system prune`, `docker network rm` en el VPS.
 - `git push --force`, `git commit` o deploy sin aprobación explícita del usuario en el mensaje.
 
+**Ausencia de mecanismo no es prohibición.** Si algo no debe poder hacerse, tiene que fallar
+activamente, no depender de que el método no exista.
+
 ## 3. Cómo trabajar en este repo
 
 **Siempre en este orden. No saltes pasos.**
@@ -79,7 +82,7 @@ Idioma: **código, identificadores y commits en inglés; comentarios, docs y UI 
 ```bash
 pnpm install              # instalar (lockfile obligatorio, solo pnpm)
 pnpm dev                  # entorno local completo
-pnpm verify               # el gate real. 7 pasos, en este orden:
+pnpm verify               # el gate real. 9 pasos, en este orden:
                           #   1. format:check   prettier --check
                           #   2. boundaries     dependency-cruiser (ADR-0021)
                           #   3. lint           eslint
@@ -87,16 +90,23 @@ pnpm verify               # el gate real. 7 pasos, en este orden:
                           #   5. test           vitest (property-based de money incluido)
                           #   6. build          tsc -b
                           #   7. api-surface    ningún `number` en la API pública de money
-pnpm test:rls             # pgTAP contra la base local
+                          #   8. db:reset       aplica TODAS las migraciones desde cero
+                          #   9. test:rls       pgTAP: aislamiento y append-only
+
+pnpm db:start             # levanta Postgres local en contenedores (necesita Docker)
+pnpm db:stop              # lo baja
 pnpm db:new <nombre>      # nueva migración (nunca editar una aplicada)
-pnpm db:reset             # reset local + seed
+pnpm db:reset             # reset local + todas las migraciones + seed
+pnpm test:rls             # pgTAP contra la base local
 pnpm openapi              # regenerar openapi.json desde los schemas
 ```
 
+**Los pasos 8 y 9 necesitan Docker y el stack local levantado** (`pnpm db:start`). Es el precio
+de que el proyecto ya tenga base de datos: desde S0.3, `verify` no se puede pasar sin ella.
+
 `verify` reproduce el **núcleo** del pipeline de `DEVOPS_CI_CD.md`, no el pipeline entero.
-`migration test`, `pgTAP`, `integration` y `openapi:check` son bloqueantes en CI pero quedan
-fuera de `verify` hasta que S0.3 y S0.5 los hagan existir: un gate que falla por algo que
-todavía no se construyó solo entrena a ignorarlo.
+`integration` y `openapi:check` siguen fuera hasta que S0.5 los haga existir: un gate que falla
+por algo que todavía no se construyó solo entrena a ignorarlo.
 
 ## 6. Formato de entrega (todas las tareas)
 

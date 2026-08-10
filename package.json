@@ -1,0 +1,44 @@
+{
+  "name": "ladino",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.6.0",
+  "engines": {
+    "node": ">=22.11.0 <27",
+    "pnpm": ">=11"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "boundaries": "depcruise --config .dependency-cruiser.cjs apps packages && node scripts/assert-no-cross-package-paths.mjs",
+    "boundaries:graph": "depcruise --config .dependency-cruiser.cjs --output-type dot apps packages",
+    "api-surface": "turbo run api-surface",
+    "db:start": "supabase start -x studio,storage,imgproxy,logflare,vector",
+    "db:stop": "supabase stop",
+    "db:new": "supabase migration new",
+    "db:reset": "supabase db reset",
+    "test:rls": "supabase test db",
+    "db:verify": "node scripts/require-local-db.mjs && pnpm run db:reset && pnpm run test:rls",
+    "verify": "pnpm run format:check && pnpm run boundaries && turbo run lint typecheck test build && turbo run api-surface && pnpm run db:verify"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/node": "^22.15.3",
+    "dependency-cruiser": "^16.10.4",
+    "eslint": "^9.39.0",
+    "globals": "^16.5.0",
+    "prettier": "^3.6.2",
+    "supabase": "^2.112.0",
+    "turbo": "^2.5.8",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.2",
+    "vitest": "^3.2.4"
+  }
+}

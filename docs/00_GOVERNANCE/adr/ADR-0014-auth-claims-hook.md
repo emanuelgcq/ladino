@@ -13,7 +13,7 @@ Supabase Auth para autenticación. Un custom access token hook inyecta lo mínim
 (`user_id`, tenants a los que pertenece) para el enrutamiento rápido.
 
 **Los permisos efectivos se resuelven contra la base de datos**, mediante funciones
-`auth.ladino_company_ids()` y `auth.ladino_has_permission(perm, company_id)` que leen
+`platform.ladino_company_ids()` y `platform.ladino_has_permission(perm, company_id)` que leen
 `memberships`, `user_role_assignments` y `scope_bindings`. Las policies RLS usan esas funciones.
 MFA obligatorio para roles críticos.
 

@@ -26,9 +26,9 @@ Policies **separadas por operación**. Nunca `for all`. El alcance se resuelve c
 `stable` sobre `memberships`:
 
 ```sql
-auth.ladino_tenant_ids()                          -- uuid[]
-auth.ladino_company_ids()                         -- uuid[]
-auth.ladino_has_permission(perm text, company uuid) -- boolean
+platform.ladino_tenant_ids()                          -- uuid[]
+platform.ladino_company_ids()                         -- uuid[]
+platform.ladino_has_permission(perm text, company uuid) -- boolean
 ```
 
 Se leen de la base, no de claims estáticos de larga vida: quitar un membership revoca el acceso
@@ -53,7 +53,7 @@ Un RPC que "es más rápido" pero no se puede probar no compensa.
 
 ## Migraciones
 
-- `supabase/migrations/YYYYMMDDHHMM_verbo_objeto.sql`. Crear con `pnpm db:new`.
+- `supabase/migrations/YYYYMMDDHHMMSS_verbo_objeto.sql`. Crear con `pnpm db:new`.
 - **Una migración aplicada nunca se edita.** Un hook de Claude Code lo bloquea.
 - Expand/contract obligatorio (ADR-0019): migración y deploy no son atómicos, y la app móvil
   convive con el esquema durante semanas.
