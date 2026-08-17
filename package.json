@@ -25,6 +25,8 @@
     "db:new": "supabase migration new",
     "db:reset": "supabase db reset",
     "test:rls": "supabase test db",
+    "test:concurrency": "node scripts/outbox-concurrency.mjs",
+    "test:concurrency:selftest": "node scripts/outbox-concurrency.mjs --roto --seconds 4",
     "db:verify": "node scripts/require-local-db.mjs && pnpm run db:reset && pnpm run test:rls",
     "verify": "pnpm run format:check && pnpm run boundaries && turbo run lint typecheck test build && turbo run api-surface && pnpm run db:verify"
   },
