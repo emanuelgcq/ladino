@@ -24,13 +24,19 @@ select is(
   0::bigint,
   'ninguna policy es FOR ALL: separadas por operación, sin excepción');
 
+-- CORREGIDO EN S0.4: esto decía `= 11`, el número de tablas que había en S0.3.
+-- Un recuento fijo no comprueba la propiedad "toda tabla tiene policy": pasa a
+-- rojo cuando se AÑADE una tabla con policies —que es correcto— y seguiría en
+-- verde si a una tabla se le quitaran las suyas y otra nueva las trajera. Se
+-- comprueba la propiedad: CERO tablas de public sin una sola policy.
 select is(
-  (select count(distinct c.relname) from pg_policy p
-     join pg_class c on c.oid = p.polrelid
+  (select count(*) from pg_class c
      join pg_namespace n on n.oid = c.relnamespace
-    where n.nspname = 'public'),
-  11::bigint,
-  'las once tablas tienen al menos una policy');
+    where n.nspname = 'public' and c.relkind = 'r'
+      and not exists (select 1 from pg_policy p where p.polrelid = c.oid)),
+  0::bigint,
+  'CERO tablas de public sin policy. Una tabla con RLS forzada y sin policies '
+  'no filtra: cierra a todo el mundo, que es una avería con aspecto de defensa');
 
 -- Cero tablas de `public` sin RLS. Es la condición que el rls-security-auditor
 -- comprueba, aquí como test para que no dependa de que alguien lo ejecute.

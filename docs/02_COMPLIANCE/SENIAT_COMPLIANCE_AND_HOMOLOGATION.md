@@ -1,5 +1,23 @@
 # Cumplimiento y homologación SENIAT
 
+> # ⛔ DOCUMENTO HISTÓRICO — LA NORMA QUE LO SOSTIENE ESTÁ DEROGADA
+>
+> **PA SNAT/2024/000121 fue derogada por PA SNAT/2026/00084**, Gaceta Oficial N.º 43.435 del
+> **12/08/2026**, **sin norma sustituta**.
+>
+> **Nada de lo que este documento describe es exigible hoy**: ni la homologación del sistema, ni la
+> autorización previa del proveedor, ni la obligación del contribuyente de usar software
+> homologado —que vivía en la Disposición Final Cuarta de la propia 121 y cae con ella—, ni el
+> checklist de expediente, ni las prohibiciones del Art. 8.
+>
+> **Se conserva a propósito y no se actualiza.** Si la 121 vuelve reformada, la pregunta útil no
+> será «¿qué dice la nueva?» sino «¿qué cambió respecto de esta?», y para responderla hace falta
+> el texto de entonces, no una versión reescrita a posteriori. Un histórico corregido no es un
+> histórico.
+>
+> Estado vigente en **`REGULATORY_STATUS.md`**, que es el punto de entrada de esta carpeta.
+> Por qué la arquitectura no cambia: **ADR-0027**. Qué se deja preparado para la norma esperada:
+> **ADR-0028**.
 
 > **Estado de la documentación:** base de ingeniería de Ladino, preparada el 2026-08-07.  
 > **Regla de cumplimiento:** ninguna tasa, formato tributario, obligación o interpretación jurídica debe quedar hard-coded sin una fuente normativa versionada. Los puntos marcados `VALIDAR-SENIAT`, `VALIDAR-TRIBUTARIO` o `VALIDAR-LABORAL` requieren confirmación formal antes de producción/homologación.

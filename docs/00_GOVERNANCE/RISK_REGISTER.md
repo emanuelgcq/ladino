@@ -56,6 +56,113 @@ residuo. No tiene sentido implementar cuatro modos antes de saber cuál se exige
 **Deja de ser aceptable:** cuando §6.3 se responda, o antes si `packages/fiscal` necesita un modo
 distinto del actual.
 
+### R-06 · Norma sustituta desconocida
+
+- **Severidad:** Alta · **Dueño:** responsable del proyecto (decisión de negocio y seguimiento
+  regulatorio; la ingeniería no puede resolverlo)
+- **Disparador:** publicación de una nueva providencia administrativa del SENIAT en el ámbito que
+  ocupaba PA SNAT/2024/000121
+- **Dónde:** `docs/02_COMPLIANCE/REGULATORY_STATUS.md` §3 · ADR-0027 · ADR-0028
+
+PA SNAT/2024/000121 fue derogada el 12/08/2026 por PA SNAT/2026/00084 (Gaceta 43.435) **sin norma
+sustituta**. Se espera normativa nueva con estándares técnicos y protocolos de comunicación. **No
+está publicada**: no hay borrador, ni fecha, ni alcance confirmado.
+
+El riesgo no es que llegue una norma nueva —eso es lo esperable— sino **el vacío mientras tanto**,
+que empuja en dos direcciones opuestas y las dos malas:
+
+1. **Anticipar.** Implementar contra lo que "seguramente pedirá", normalmente por parecido con la
+   121. Es inventar una obligación legal sin fuente, que `CLAUDE.md` §2 prohíbe, y sale caro dos
+   veces: se construye lo que no se necesita y luego hay que deshacerlo.
+2. **Desmontar.** Retirar controles ahora que nadie los exige — append-only, versionado de reglas,
+   pista de auditoría. Reconstruirlos después, con datos productivos dentro, cuesta un orden de
+   magnitud más. *Ausencia de obligación no es autorización* (ADR-0027 §4).
+
+**Mitigación, ya aplicada:** ADR-0027 (la regulación entra como dato versionado, nunca como
+estructura de código: una norma nueva es un adaptador más una migración) y ADR-0028 (la
+transmisión se diseña como consumidor de outbox tras interfaz, con `NullTransmitter` por defecto,
+de modo que enchufar un protocolo no toca el dominio).
+
+**Qué vigilar concretamente:** publicación en Gaceta Oficial en el ámbito de sistemas de
+facturación; si reintroduce homologación previa, se reabren **tal cual** los seis `VALIDAR-SENIAT`
+marcados resueltos por derogación en `REGULATORY_STATUS.md` §5 y el `VALIDAR-SENIAT` tachado de
+ADR-0003 — están tachados y no borrados exactamente por esto.
+
+**Deja de ser aceptable:** nunca, mientras no haya norma. Es un riesgo de entorno, no de deuda: no
+se cierra trabajando, se cierra cuando el Estado publica. Lo que sí se puede exigir es que la
+respuesta cueste un adaptador, y de eso responden ADR-0027 y ADR-0028.
+
+### R-05 · Los documentos fiscales deben COPIAR el RIF del emisor, no referenciarlo
+
+- **Severidad:** Crítica · **Dueño:** quien cree la primera tabla de documentos fiscales en `packages/fiscal`
+- **Disparador:** la primera migración de la Fase 11 que cree una tabla de documentos emitidos
+- **Dónde:** Fase 11 · relacionado con `supabase/migrations/20260811190652_guard_company_tax_id.sql`
+
+**La decisión ya está tomada, lo que falta es aplicarla:** el RIF de un documento fiscal es el
+**vigente al emitir**, no el actual de la company. La migración de M4 lo deja escrito y S0.4 no
+puede hacer más, porque no existe todavía ninguna tabla de documentos.
+
+El fallo que esto evita es silencioso y grave. Si el RIF del emisor se resuelve con un `JOIN`
+contra `companies` al imprimir o al declarar, entonces **un solo `UPDATE` sobre `companies.tax_id`
+reescribe retroactivamente el contribuyente de todos los documentos ya emitidos**. Un documento
+inmutable que cambia de emisor sin que se toque una sola fila del pasado: es editar el pasado por
+la puerta de atrás, y contradice la regla 1 de `CLAUDE.md` sin violar ni una línea de su letra.
+
+**Requisito concreto: el SNAPSHOT COMPLETO, no solo el RIF.** `FISCAL_DOCUMENTS_SPEC.md`
+§«Identidad fiscal congelada» ya enumera **diez** elementos a copiar al emitir, y una versión
+anterior de este riesgo nombraba uno solo. Quien lo cerrase añadiendo `issuer_tax_id` marcaría el
+riesgo resuelto con nueve agujeros abiertos:
+
+razón social · RIF · domicilio · datos del cliente · líneas · tasas · moneda y tasa de cambio ·
+serie y secuencia · imprenta digital · versión fiscal del software.
+
+A esa lista hay que sumar la **versión de reglas** con la que se calcularon las tasas, que es por
+lo que `rules_version` ya es columna en `audit_events` desde S0.4.
+
+**Dos huecos concretos, detectados en la auditoría de cierre de S0.4:**
+
+- **`legal_name` está hoy en estado pre-M4.** `authenticated` conserva `UPDATE` sobre esa columna
+  y ningún trigger lo audita: la razón social se puede reescribir sin rastro. **Decisión tomada:
+  se trata en Fase 11 con el snapshot completo**, no con un trigger suelto ahora. Es menos grave
+  que el RIF —no identifica al contribuyente— pero no es inocuo, y va aquí para que no se pierda.
+- **`companies` no tiene columna de domicilio fiscal**, que PA 102 Art. 7 exige en la factura. No
+  es todavía un problema de congelación: es un campo obligatorio que aún no existe en el modelo.
+
+Con `audit_events` ya se puede reconstruir la cadena de cambios de RIF (M4 registra el valor
+anterior, y desde la migración 5/5 también el alta), pero reconstruir a posteriori qué RIF tenía
+la company el día de cada emisión es trabajo forense — y ante una fiscalización, trabajo forense
+es lo mismo que no tenerlo.
+
+**Deja de ser aceptable:** en el momento en que exista la primera tabla de documentos fiscales.
+Añadir la columna después obliga a rellenarla por inferencia sobre documentos ya emitidos, que es
+exactamente lo que no se puede hacer.
+
+### R-04 · No existe la lista de qué se audita
+
+- **Severidad:** Alta · **Dueño:** quien escriba el primer caso de uso de dominio (`packages/domain`)
+- **Disparador:** el primer `EVENT_CATALOG.md` con eventos reales, o el primer caso de uso que
+  llame a `writeAuditEvent` — lo que ocurra antes
+- **Dónde:** `docs/04_PLATFORM/EVENT_CATALOG.md` y `audit_events.event_type`
+
+S0.4 entrega el **mecanismo** de auditoría; no entrega la **política**. Cuatro documentos exigen
+auditar las "acciones críticas" (`AUDIT_TRAIL_AND_IMMUTABILITY.md`, `DEFINITION_OF_DONE.md:13`,
+`PRODUCT_REQUIREMENTS.md:86`, `NOTIFICATIONS_WORKFLOWS_SPEC.md:18`) y **ninguno define
+"crítica"**. Tampoco está decidido si se auditan **lecturas**, que `PRIVACY_AND_DATA_GOVERNANCE.md:15`
+exige para RRHH y fiscal y ningún otro documento contempla.
+
+El diferimiento es deliberado y está en ADR-0026 (D10): una lista de eventos escrita antes de que
+exista un solo caso de uso sería adivinación. Pero **un diferimiento sin dueño es un olvido con
+buena redacción**. Sin este registro, "se decide con `EVENT_CATALOG`" se descubre sin decidir en
+la Fase 11, con la emisión fiscal encima y sin margen para discutirlo.
+
+Mientras tanto la tabla no se queda indefensa: `event_type` lleva un `CHECK` de forma
+(`^[a-z_]+\.[a-z_]+$`) que impide que el campo degenere en texto libre antes de que exista el
+catálogo. Restringir a un conjunto cerrado de valores es fácil después; recuperar seis meses de
+`event_type` inventados sobre la marcha, no.
+
+**Deja de ser aceptable:** cuando `packages/domain` tenga su segundo caso de uso. Con uno se puede
+argumentar que el catálogo se deduce; con dos ya hay divergencia.
+
 ### R-03 · `decimal.js` redondea en silencio más allá de 50 dígitos significativos
 
 - **Severidad:** Media · **Disparador:** una cadena larga de operaciones sobre `ExactMoney`

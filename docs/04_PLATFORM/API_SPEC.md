@@ -89,7 +89,15 @@ Sin el GUC, esas altas no tienen autor.
 reconstruir.
 
 Es el peor modo de fallo posible para una pista de auditoría: silencioso, tardío e irreversible.
-En S0.4 alcanza a `audit_events` y `fiscal_events`, que escribe el worker.
+En S0.4 alcanza a `audit_events`.
+
+> **Corrección (S0.4, ADR-0026).** Este párrafo decía antes *"`audit_events` y `fiscal_events`,
+> que escribe el worker"*. Era incorrecto por partida doble. **La auditoría la escribe el caso de
+> uso, dentro de su misma transacción**, no el worker: el outbox es *at-least-once*, y una fila
+> de auditoría escrita por el consumidor queda **fuera** de la transacción del hecho que audita —
+> auditoría que se puede perder. La regla 3 de `CLAUDE.md` quiere que el registro exista si y
+> solo si el hecho ocurrió, y eso solo lo garantiza el commit compartido. Y `fiscal_events` no
+> es de S0.4: llega en la Fase 11 (`IMPLEMENTATION_PLAN.md`).
 
 ### Precedencia: `auth.uid()` gana al GUC
 
@@ -139,7 +147,30 @@ y posting de nómina.
 
 - Misma clave, mismo cuerpo → devuelve la respuesta original, sin repetir el efecto.
 - Misma clave, cuerpo distinto → `409 IDEMPOTENCY_KEY_REUSED`.
-- La clave se persiste **dentro** de la transacción del caso de uso.
+- ~~La clave se persiste **dentro** de la transacción del caso de uso.~~ Sigue siendo lo correcto
+  cuando el trabajo es local, pero **se admite el protocolo de dos transacciones** para operaciones
+  con un viaje externo — la emisión fiscal lo necesita. Ver la enmienda de ADR-0018.
+
+### El alcance de la clave, y la parte que se olvida
+
+**Alcance: `(tenant_id, company_id, actor_id, key)`.** `endpoint` **no** entra (ADR-0026 D5): si
+entrara, un cliente que reusa la clave en otro endpoint obtendría dos efectos en vez de un 409.
+
+⚠ **CONTRATO OBLIGATORIO DE S0.5, y el índice no lo puede imponer solo:**
+
+1. **La API fija `actor_id` explícitamente al reservar la clave.** No lo deriva de `created_by`, que
+   es procedencia best-effort y puede quedar NULL en silencio. La columna es `NOT NULL`: si se
+   olvida, la reserva **falla activamente**, que es lo que se busca. Para trabajo de sistema sin
+   usuario existe el centinela documentado en la columna.
+2. **El lookup de replay DEBE filtrar por `actor_id`.** Esta es la que se olvida y la que importa:
+   *el índice único nunca fue la fuga*. Si la consulta que busca la respuesta guardada hace
+   `where tenant_id = ? and company_id = ? and key = ?` sin el actor, devuelve la fila de **otro
+   usuario** y le entrega su respuesta — con un `200`, y sin ejecutar la operación que sí pidió.
+   Arreglar el almacenamiento y no la lectura deja el agujero intacto con aspecto de cerrado.
+
+Pendiente y no decidido: el TTL concreto (`expires_at` no tiene default a propósito) y la
+**canonicalización de `request_hash`**, sin la cual dos cuerpos semánticamente iguales producen
+409 espurios sobre peticiones correctas.
 
 ## Versionado
 

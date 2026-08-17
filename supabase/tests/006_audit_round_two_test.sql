@@ -15,6 +15,14 @@ select plan(20);
 
 -- La propiedad, no la lista: TODA tabla de public con tenant_id tiene el
 -- trigger. Enumerar tablas caduca; esta consulta cubre también las de S0.4.
+--
+-- CORREGIDO EN S0.4: la condición era `t.tgname like '%anchors_immutable'`, es
+-- decir, comprobaba el NOMBRE del trigger y no lo que el trigger hace. Fallaba
+-- de las dos maneras: `audit_events` llevaba el trigger correcto con el nombre
+-- `audit_events_anchors` y se reportó como ausente (falso positivo), y un
+-- trigger llamado `x_anchors_immutable` que ejecutara cualquier otra función
+-- habría pasado (falso negativo, que es el peor de los dos). Se comprueba
+-- `tgfoid`: la función que realmente se ejecuta.
 select is(
   (select count(*) from pg_class c
      join pg_namespace n on n.oid = c.relnamespace
@@ -23,7 +31,8 @@ select is(
                    where col.table_schema = 'public' and col.table_name = c.relname
                      and col.column_name = 'tenant_id')
       and not exists (select 1 from pg_trigger t
-                       where t.tgrelid = c.oid and t.tgname like '%anchors_immutable')),
+                       where t.tgrelid = c.oid
+                         and t.tgfoid = 'platform.assert_isolation_anchors_immutable()'::regprocedure)),
   0::bigint,
   'TODA tabla de public con tenant_id tiene trigger de ancla. roles y '
   'role_permissions se quedaron fuera en 5/5, y la cadena que abría concedía '

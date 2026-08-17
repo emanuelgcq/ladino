@@ -48,6 +48,39 @@ activamente, no depender de que el método no exista.
 6. **Verificar**: `pnpm verify` debe pasar en verde.
 7. **Reportar** con el formato de entrega (sección 6).
 
+### Calibración del rigor
+
+Los siete pasos son el orden, no la intensidad. **El criterio para calibrar es reversibilidad y
+coste del error, no importancia percibida.** Un catálogo de productos se siente importante; un
+error en él se arregla con un `UPDATE`. Un asiento mal cuadrado, no.
+
+| Rigor | Dónde | Qué implica |
+|---|---|---|
+| **Máximo** | dinero · contabilidad · fiscal · aislamiento multi-tenant · auditoría | ADR **antes** del código, pgTAP/property tests exhaustivos, `rls-security-auditor` **y** `fiscal-reviewer` al cerrar |
+| **Normal** | maestros · catálogos · CRM · reportes · notificaciones · UI | una pasada de revisión; ADR **solo si la decisión es irreversible** |
+
+Y sobre datos: **auditoría completa sobre tablas con datos, ligera sobre tablas vacías.** Una
+migración sobre una tabla vacía se revierte escribiendo otra; sobre una tabla con dos años de
+movimientos, no se revierte.
+
+Aplicar rigor máximo a todo no es prudencia: diluye la señal. Si toda revisión es exhaustiva,
+ninguna lo es de verdad, y la que importaba se aprueba con la misma atención que la que no.
+
+### Una migración que arregla otra necesita su propia auditoría completa
+
+Pasó en S0.3 y volvió a pasar en S0.4, las dos veces igual: la migración escrita
+para cerrar unos hallazgos **introdujo otros nuevos**, y la revisión siguiente los
+encontró porque miró de nuevo el conjunto, no solo el arreglo.
+
+**El foco puesto en el defecto conocido es exactamente lo que deja pasar el nuevo.**
+Un arreglo se escribe mirando el fallo que se quiere cerrar, y esa atención estrecha
+es la que no ve que el `CHECK` nuevo rechaza un caso legítimo, que la columna que
+sustituye a otra perdió la defensa que aquella tenía, o que la función extraída para
+no duplicar lógica replanifica por fila.
+
+Una corrección no es media tarea: **es una migración, con el mismo rigor, los mismos
+tests y la misma pasada de auditoría que la que corrige.**
+
 ### Qué leer según la tarea
 
 | Si tocas… | Lee obligatoriamente |
@@ -98,11 +131,19 @@ pnpm db:stop              # lo baja
 pnpm db:new <nombre>      # nueva migración (nunca editar una aplicada)
 pnpm db:reset             # reset local + todas las migraciones + seed
 pnpm test:rls             # pgTAP contra la base local
+pnpm test:concurrency     # outbox bajo N sesiones reales (pgbench en el contenedor)
+pnpm test:concurrency:selftest   # rompe el pickup a propósito: comprueba que la prueba detecta
 pnpm openapi              # regenerar openapi.json desde los schemas
 ```
 
 **Los pasos 8 y 9 necesitan Docker y el stack local levantado** (`pnpm db:start`). Es el precio
 de que el proyecto ya tenga base de datos: desde S0.3, `verify` no se puede pasar sin ella.
+
+**`test:concurrency` NO está dentro de `verify`, y es deliberado.** Es una prueba de *muestreo*:
+abre N sesiones, compite durante T segundos y comprueba que nadie se lleva la misma fila dos
+veces. Un verde dice «no encontré doble entrega», nunca «no puede haberla». Poner un gate
+muestral en cada `verify` enseña a reejecutarlo hasta que pase, y ahí deja de ser un gate.
+Corre cuando toques el outbox o su consumo, y en CI sobre esa ruta.
 
 `verify` reproduce el **núcleo** del pipeline de `DEVOPS_CI_CD.md`, no el pipeline entero.
 `integration` y `openapi:check` siguen fuera hasta que S0.5 los haga existir: un gate que falla
