@@ -1,5 +1,21 @@
 # Matriz de controles — PA121
 
+> # ⛔ DOCUMENTO HISTÓRICO — PA121 DEROGADA
+>
+> **PA SNAT/2024/000121 fue derogada por PA SNAT/2026/00084**, Gaceta Oficial N.º 43.435 del
+> **12/08/2026**, sin norma sustituta. **Ninguna fila de esta matriz es exigible hoy.**
+>
+> Se conserva porque sigue siendo útil por dos motivos distintos de aquel para el que se escribió:
+>
+> 1. **Es el diff de referencia** si la 121 vuelve reformada.
+> 2. **La columna del medio no caducó.** Los controles —append-only, RLS, transacciones ACID,
+>    versionado de reglas, event ledger— siguen construidos y siguen siendo buenos controles de
+>    ERP. Lo que caducó es la columna de la izquierda: la obligación legal de demostrarlos ante un
+>    evaluador. Se mantienen porque un ERP contable sin trazabilidad no es vendible, no porque una
+>    providencia lo mande. Ver ADR-0027.
+>
+> Estado vigente en `REGULATORY_STATUS.md`.
+
 | Requisito | Control Ladino | Evidencia |
 |---|---|---|
 | Integridad | FK/checks + hash | pruebas DB + auditoría |

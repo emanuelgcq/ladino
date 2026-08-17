@@ -1,163 +1,216 @@
-# Handoff — 2026-08-09
+# Handoff — 2026-08-17
 
 ## Estado
 
-**S0.1, S0.2 y S0.3 cerrados y en verde.** El siguiente es **S0.4 — audit log y outbox**.
+**S0.1 a S0.4 cerrados y en verde.** El siguiente es **S0.5 — API y caso de uso**.
 
-S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ⬜ · S0.5 ⬜ · S0.6 ⬜
+S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ⬜ · S0.6 ⏸️ (diferido, ver abajo)
 
-`pnpm verify` corre **9 pasos** y el 8 y el 9 necesitan Docker: desde S0.3 el gate incluye la
-base de datos.
+`pnpm verify` corre **9 pasos**; el 8 y el 9 necesitan Docker. Fuera del gate, por muestrales:
+`pnpm test:concurrency` y `pnpm test:concurrency:selftest`.
+
+**368 aserciones pgTAP en verde**, 13 suites, 13 migraciones aplicadas desde cero.
+
+---
+
+## Lo que cambió el suelo: la 121 está derogada
+
+**PA SNAT/2024/000121 fue derogada por PA SNAT/2026/00084** (Gaceta 43.435, 12/08/2026), **sin
+norma sustituta**. Cae la homologación del sistema, la autorización del proveedor y —la de mayor
+efecto— **la obligación del contribuyente de usar software homologado**, que vivía en la
+Disposición Final Cuarta de la propia 121.
+
+Siguen vigentes PA 071, PA 102 y PA 0141, y todo lo tributario sustantivo. Aparte,
+**PA SNAT/2026/00080** reforma el RIF: deja de caducar, pero debe actualizarse ante cambios de
+datos.
+
+**Punto de entrada: `docs/02_COMPLIANCE/REGULATORY_STATUS.md`** — tres categorías (derogado /
+vigente / esperado). Los documentos de la 121 se conservan con encabezado de derogación y **sin
+actualizar**: si vuelve reformada, la pregunta útil será «¿qué cambió respecto de esta?».
+
+**Consecuencia de producto, y es la grande:** Ladino sin emisión fiscal es un ERP administrativo,
+de inventario y contable **completo y vendible hoy**. La emisión fiscal deja de ser gate de salida
+y pasa a ser un módulo más.
+
+---
 
 ## Hecho en esta sesión
 
-**S0.3 — identidad y aislamiento.** Seis migraciones, seis suites pgTAP, **170 aserciones**.
-
-Se partió en seis porque el primer intento era una migración de 1.520 líneas que fallaba entera
-ante cualquier error. Seis que se aplican y prueban por separado convirtieron el ciclo de minutos
-en segundos, y cuando 3/6 falló, 1/6 y 2/6 siguieron verdes sin tocarlas.
+### S0.4 — auditoría, outbox, idempotencia e identidad fiscal
 
 | | |
 |---|---|
-| 1/6 | esquema `platform`, `uuidv7()`, `reject_mutation()` |
-| 2/6 | jerarquía: `tenants`, `companies`, `branches`, `warehouses`, `cash_registers` |
-| 3/6 | RBAC: seis tablas, cuatro `platform.ladino_*`, tres constraint triggers, 23 permisos |
-| 4/6 | 43 policies, ninguna `FOR ALL`, RLS enable+force en las once |
-| 5/6 | anclas inmutables, TRUNCATE cerrado, procedencia no forjable |
-| 6/6 | cierre de la segunda auditoría |
+| 1/7 | `audit_events` append-only en dos capas, `payload_hash` generado |
+| 2/7 | `outbox` con máquina de estados en el esquema e índice de toma parcial |
+| 3/7 | `idempotency_keys` con `UNIQUE NULLS NOT DISTINCT` |
+| 4/7 | **M4**: el RIF exige permiso propio y deja rastro con el valor anterior |
+| 5/7 | seis defectos de la auditoría de cierre |
+| 6/7 | regresión de rendimiento 28× + `actor_id` propio + `occurred_at` al trigger |
+| 7/7 | `actor_id` clavado y `aggregate_type` acotado |
 
-**Tres pasadas del `rls-security-auditor`.** La primera encontró un CRÍTICO; la segunda, tres
-ALTO **que eran defectos de la migración que arreglaba el primero**; la tercera salió limpia.
+**Deuda de S0.3 cerrada antes de empezar:** revocación inmediata con sesión abierta (11
+aserciones — la promesa central de ADR-0014, que es lo que justifica el coste por consulta de las
+policies) y concurrencia real del outbox con `pgbench`.
 
-- **CRÍTICO** — un usuario con membership en dos tenants trasladaba filas de uno a otro con un
-  `UPDATE`. Una policy tiene `USING` (fila vieja) y `WITH CHECK` (fila nueva), y **Postgres no
-  ofrece `OLD` dentro de una policy**: ninguna puede exigir que una columna no cambie. Cerrado
-  con `GRANT` por columna + trigger.
-- **ALTO** — el trigger de ancla se saltó `roles` y `role_permissions`; un `alter default
-  privileges` que revocaba de `anon` en vez de `PUBLIC` y por tanto no revocaba nada; y
-  `created_by := auth.uid()` que dejaba sin autor el 100 % de las altas por `service_role`.
+**Cinco ADR:** 0026 (esquema de las tres tablas, diez decisiones), **0027 (la regulación es dato)**,
+**0028 (transmisión SENIAT como consumidor de outbox)**, enmiendas a 0003 y 0018.
+
+### Lo que encontraron las auditorías, y que ningún test veía
+
+Cuatro pasadas. **Las tres primeras encontraron defectos en la migración que arreglaba la
+anterior.** Es el patrón de S0.3 repetido, y merece quedar escrito: **una migración escrita para
+arreglar otra necesita su propia auditoría**, porque el foco puesto en el defecto conocido es
+exactamente lo que deja pasar el nuevo.
+
+- **El `CHECK` de `event_type` rechazaba los siete eventos fiscales** del catálogo. Escrito como
+  guardia barata, nunca contrastado contra `EVENT_CATALOG.md`. La primera emisión de la Fase 11
+  habría fallado — y no el log, la **emisión**, porque auditoría y outbox van dentro de la
+  transacción del caso de uso.
+- **`occurred_at <= created_at` comparaba contra la hora de inicio de transacción.** Cualquier
+  timestamp real tomado tras el `BEGIN` fallaba. Corregido a un trigger contra `clock_timestamp()`.
+- **Regresión de rendimiento de 28×** en la función que usan más de cuarenta policies: una función
+  SQL cuyo cuerpo es una sola llamada a otra función SQL no inlinable **replanifica por fila**. En
+  `plpgsql` el plan sobrevive en el `simple_eval_estate`. Medido: 394 ms → 10.380 ms → 372 ms.
+- **`service_role` no podía escribir auditoría en absoluto** — a la función del hash generado le
+  faltaba `GRANT EXECUTE`, y `has_table_privilege(…, 'INSERT')` decía que sí.
+- **La unicidad de idempotencia colgaba de una columna best-effort.** `created_by` queda NULL en
+  silencio si la API olvida el GUC; el reintento sin GUC creaba una segunda reserva.
+
+### Gates que no existían y ahora sí
+
+1. **`pnpm test:concurrency`** — outbox bajo N sesiones reales de `pgbench`. Fuera de `verify` a
+   propósito: es muestral, y un gate muestral en cada commit enseña a reejecutarlo.
+2. **Gate de coste (test 013)** — presupuesto de tiempo sobre la ruta real de RLS. **Faltaba
+   entero**: los 348 asserts anteriores dejaron pasar la regresión de 28× porque ninguno medía
+   tiempo.
+3. **Variantes rotas** en los dos, y en el `NULLS NOT DISTINCT` de idempotencia. Regla escrita en
+   la skill: *una prueba que nunca ha fallado no se sabe si detecta algo*. Y su corolario, que salió
+   caro aprender: **cuando la variante rota falla, mira QUÉ la detectó** — en el outbox no fueron
+   las invariantes de la prueba, fue un `CHECK` del esquema escrito como higiene.
+
+---
 
 ## En vuelo
 
-**Nada de S0.3.** Migraciones aplicadas de cero, 170 aserciones verdes, `pnpm verify` en verde.
+**Nada.** Trece migraciones aplicadas desde cero, 368 aserciones verdes, `pnpm verify` en verde,
+concurrencia y autotest verdes.
 
-## Decisiones tomadas
+**Sin commitear.** Todo el trabajo está en el árbol de `s0.4/audit-log-and-outbox`. Los commits
+requieren aprobación explícita (`CLAUDE.md` §2).
 
-ADR-0021 (fronteras) · ADR-0022 (mobile en workspace) · ADR-0023 (`Money`/`ExactMoney`) ·
-ADR-0024 (`MonetaryFact` a ocho campos) · **ADR-0025 (modelo RBAC y aislamiento)**.
+---
 
-## Bloqueantes para S0.4
+## Primer paso de S0.5
 
-**Los tres son de esquema. Cuestan poco ahora y mucho después.**
+**S0.5 es la API y el caso de uso.** El orden importa y el primero no es escribir un endpoint:
 
-1. **Toda tabla nace con `platform.set_row_provenance()`.** `created_by`, `created_at` y
-   `version` gobernados por trigger. Sin él, el cliente atribuye la fila a otro usuario y la
-   antedata — la auditoría lo hizo, con fecha 1999. En `audit_events` eso es falsificación de la
-   pista de auditoría (regla 3 de `CLAUDE.md`).
-2. **`reject_mutation()` se engancha DOS veces:** `before update or delete for each row` **y**
-   `before truncate for each statement`. `TRUNCATE` ignora la RLS y no dispara el primero.
-3. **Toda tabla con `tenant_id` lleva `assert_isolation_anchors_immutable()`.** El test de 006 lo
-   comprueba como propiedad sobre el catálogo, así que S0.4 lo hereda automáticamente: si falta,
-   falla.
+> **Escribir el middleware de procedencia e idempotencia ANTES que el primer endpoint.**
 
-Y uno de producto: **M4 — el RIF es mutable.** `companies.tax_id` es texto libre que cualquiera
-con `company.manage` reescribe, sin rastro, y es quien identifica al contribuyente en los
-documentos emitidos. **Debería bloquear la parte fiscal de S0.4.** `VALIDAR-SENIAT` para el
-formato.
+Porque S0.4 dejó **tres contratos que la base no puede imponer sola**, y los tres fallan en
+silencio si el middleware llega después:
 
-## Qué clases de ataque seguimos sin probar
+1. **`set local ladino.actor_id`** en toda transacción de servidor. Sin él, `created_by` queda NULL
+   sin error (`API_SPEC.md` §Procedencia).
+2. **`actor_id` explícito** al reservar una clave de idempotencia — este sí falla activamente
+   (`NOT NULL`), que es como debe ser.
+3. **El lookup de replay filtra por `actor_id`.** Es el que más fácil se olvida: el índice único
+   nunca fue la fuga, la fuga es la lectura. Sin este filtro, un usuario recibe la respuesta de
+   otro con un `200`.
 
-La fuga crítica apareció por no tener un usuario multi-tenant. Estas son las clases que **siguen
-sin cubrir**, listadas antes de S0.4 y no después:
+### Decisiones que S0.5 tiene que tomar, no heredar
 
-| Clase | Por qué importa | Cuándo |
-|---|---|---|
-| **Concurrencia** | Dos transacciones simultáneas sobre el mismo alcance. Todo el pgTAP corre en una conexión. `uuidv7` multi-sesión ya está marcado `VALIDAR-QA`; el resto ni eso | S0.4 (outbox tiene carreras por diseño) |
-| **Escalada por composición** | Cada permiso se prueba aislado. Nadie prueba *combinaciones*: dos permisos inocuos que juntos rinden uno que no se concedió. Es el terreno de la SoD | con la migración de pagos |
-| **Agotamiento y DoS** | Un tenant que inserta 10⁷ filas degrada las policies de los demás. No hay cuota, ni test de vecino ruidoso | antes de producción |
-| **Canal lateral por errores y tiempos** | Un mensaje o una latencia distinta revela si un id existe en otro tenant. Hoy los errores llevan ids y nombres de tabla | S0.5, con el formato de error |
-| **Ciclo de vida** | Nadie prueba qué pasa al suspender una company, borrar un usuario de `auth.users` o revocar un membership **con sesión abierta**. La revocación inmediata es la promesa central de ADR-0014 y no está probada | S0.4 |
-| **Orden de migración** | Las seis se prueban aplicadas todas. Nadie prueba el estado intermedio en un despliegue real, donde app vieja y esquema nuevo conviven (ADR-0019) | S0.5 |
-| **`service_role` comprometido** | Es el modelo de amenaza de la capa 2, y solo se prueba contra los triggers. Qué puede leer o exfiltrar no se ha mirado | S0.4, con `audit_events` |
-| **Datos, no mecanismo** | Las pruebas usan dos tenants limpios. Nadie prueba con datos heredados incoherentes — que es como llegan las migraciones reales | cuando haya seed realista |
+- **¿Se valida `actor_id` contra el actor real?** Hoy la columna acepta cualquier UUID: un
+  `actor_id` tomado de una cabecera del cliente permitiría pre-reservar el espacio de claves de
+  otro usuario. Un trigger que exija `actor_id = coalesce(auth.uid(), GUC, centinela)` lo cierra.
+  Es `CLAUDE.md` §2 —*ausencia de mecanismo no es prohibición*— y está sin decidir.
+- **Qué responde la API ante una clave `in_progress`**: esperar, `409` o `425`. El esquema hace la
+  distinción posible; el contrato no existe.
+- **Canonicalización de `request_hash`.** Sin forma canónica, dos cuerpos semánticamente iguales
+  producen 409 espurios sobre peticiones correctas.
+- **TTL de las claves.** `expires_at` no tiene default a propósito: ponerlo habría decidido la
+  retención por la puerta de atrás.
+- **`fiscal_protocol_version` y el manifest de release** existen solo en documentación. El gate de
+  CI que ADR-0009 describe no tiene destinatario. Se difiere el **gate**, no el versionado.
 
-## Decisiones pendientes
+### Y una prohibición para S0.5, que es fácil de incumplir por defecto
 
-- **M1** — el `SELECT` del RBAC es tenant-wide: cualquier miembro ve el organigrama completo y el
-  mapa de privilegios. No es fuga entre tenants. Resolver antes de exponer la UI de administración.
-- **M3 — SoD.** No existe nada: ni `payment.create`/`payment.approve`, ni cajero/supervisor. Las
-  tres reglas de `MULTITENANCY_AND_RBAC.md` §Segregación no son verificables. **Entra como
-  requisito de esquema en la migración que cree pagos y cierres**, no después: comparar identidades
-  de actores sobre un documento es una restricción de tabla, y añadirla sobre datos existentes es
-  mucho más cara.
-- **Contrato de cliente para S0.5** — el `upsert` por defecto de `supabase-js` reenvía la fila
-  completa, incluidas `tenant_id` y `company_id`, y chocará con los `GRANT` por columna aunque no
-  cambien de valor. Hay que documentarlo o el primer que lo use pensará que hay un bug.
-- **R-01/R-02/R-03** de `RISK_REGISTER.md` (pesos negativos en `allocate`, `ResidualAllocation`,
-  `decimal.js` más allá de 50 dígitos) siguen abiertos.
+**No poner un regex de RIF en los esquemas Zod.** La migración se negó a escribir el `CHECK`
+porque el formato no está en `docs/02_COMPLIANCE/` con fuente citada. La misma obligación
+inventada volvería a entrar por el contrato de la API, donde es **peor**: se convierte en
+validación aplicada en el cliente, y eso es un cliente decidiendo una regla fiscal.
 
-## Siguiente paso concreto
+---
 
-**Migración `create_audit_and_outbox`: `audit_events` append-only, `outbox` con estado, intentos
-y `available_at`, e `idempotency_keys` con único por `(company_id, key)`.**
+## S0.6 — diferido
 
-Las tres nacen con: `platform.uuidv7()` en la PK, `set_row_provenance()`, RLS enable+force,
-policies por operación, `assert_isolation_anchors_immutable()`, y en `audit_events` los **dos**
-enganches de `reject_mutation()`.
+Contenedores y proyecto Supabase remoto siguen en pie. Lo que se difiere es el **release train
+fiscal con manifest de homologación**: no hay régimen al que reportar.
 
-Lectura antes de escribir SQL (usa `spec-explorer`):
+Dos procesos que S0.6 debe traer y que hoy no tienen dueño, los dos de **disponibilidad**:
 
-- `docs/04_PLATFORM/AUDIT_TRAIL_AND_IMMUTABILITY.md`
-- `docs/04_PLATFORM/EVENT_CATALOG.md` — qué eventos existen y su forma
-- `docs/00_GOVERNANCE/adr/ADR-0005-transactional-outbox.md` y `ADR-0006-ledger-append-only.md`
-- `docs/00_GOVERNANCE/adr/ADR-0018-idempotencia.md`
-- `docs/00_GOVERNANCE/adr/ADR-0025-modelo-rbac-y-aislamiento.md` §6 y §9 — las dos capas
-- La skill `migracion-supabase`, que ahora lleva las cuatro lecciones de S0.3
+- **El reaper del outbox.** `outbox_in_flight_idx` existe *«para encontrar lo que un worker muerto
+  dejó colgado»* y ese proceso no existe.
+- **El reaper de idempotencia.** Con el protocolo de dos transacciones, un proceso que muere entre
+  T1 y T2 deja la clave clavada en `in_progress` y **bloquea el reintento legítimo hasta
+  `expires_at`** — es decir, impide emitir el documento.
 
-Test pgTAP mínimo: un `update` sobre `audit_events` como `service_role` lanza `LAD06`; un
-`TRUNCATE` también; y el aislamiento A/B con **usuario multi-tenant**, que ya es obligatorio.
+---
 
-## Estado del PR #1 — mi recomendación: mergear ya
+## Riesgos abiertos
 
-**https://github.com/emanuelgcq/ladino/pull/1** — abierto, sin mergear, y ahora lleva S0.3 encima.
-Su descripción cubre S0.1+S0.2 y se ha quedado corta.
+`RISK_REGISTER.md` tiene **R-01 a R-06**. Los tres que importan para lo que viene:
 
-**Mergearlo ya**, por tres razones:
+- **R-06 · norma sustituta desconocida.** Riesgo de entorno: no se cierra trabajando. Mitigado por
+  ADR-0027 y ADR-0028.
+- **R-05 · el snapshot fiscal completo.** Los documentos deben **copiar** diez elementos al emitir
+  —razón social, RIF, domicilio, datos del cliente, líneas, tasas, moneda y tasa, serie, imprenta,
+  versión fiscal— no resolverlos por `JOIN`. Con `JOIN`, un `UPDATE` sobre `companies` reescribe
+  retroactivamente el emisor de todos los documentos ya emitidos. **`legal_name` sigue hoy en
+  estado pre-M4** y se trata en Fase 11 con el snapshot completo. `companies` **no tiene columna de
+  domicilio fiscal**, que PA 102 Art. 7 exige en la factura.
+- **R-04 · no existe la lista de qué se audita.** El mecanismo está; la política se difiere hasta
+  el segundo caso de uso de `packages/domain`.
 
-1. **Ya no es un PR, son tres sprints.** Nadie lo va a revisar entero; un PR que no se puede
-   revisar es un PR que se aprueba sin leer.
-2. **`main` tiene documentación que el código contradice.** ADR-0023, 0024 y 0025 viven solo en la
-   rama, y ADR-0014 sigue diciendo `auth.ladino_*` en `main`. Cuanto más dure, más divergen.
-3. **S0.4 tiene una dependencia dura de S0.3**: `set_row_provenance`, `reject_mutation` y el
-   trigger de anclas. Construir sobre una rama sin mergear multiplica el coste de un conflicto.
+## Clases de ataque que siguen sin probar
 
-Actualiza la descripción del PR con S0.3 antes de mergear, y **abre S0.4 en rama propia desde
-`main`**. La disciplina de una rama por sprint se recupera ahí.
+Cerradas en S0.4: **ciclo de vida** (revocación) y **concurrencia de mecanismo**. Siguen abiertas
+en `HANDOFF` histórico y aquí en resumen: escalada por composición (SoD), agotamiento y vecino
+ruidoso, canal lateral por errores y tiempos, orden de migración en despliegue real,
+`service_role` comprometido en lectura, y datos heredados incoherentes.
 
-Si prefieres esperar: la única razón buena sería querer revisar S0.3 y S0.4 juntos porque la
-inmutabilidad se entiende mejor con las append-only reales delante. Es defendible, pero paga
-con un PR que crece.
+Sin entrada en el registro y debería tenerla: **SoD** — `MULTITENANCY_AND_RBAC.md` exige
+segregación configurable y no existe ni el permiso `payment.approve` ni mecanismo que compare
+creador con aprobador.
 
-## Estado del repo
+## Límites conocidos que quedan anotados
 
-- **Rama:** `s0/skeleton-and-money` · **último commit:** `466443e`
-- **`main`:** `411e252` — solo S0.1/S0.2 docs y ADR-0021/0022
-- **Migraciones:** 6, aplicadas de cero sin error
-- **`pnpm verify`:** ✅ 9 pasos · **pgTAP:** 170 · **Vitest:** 165 en `money`, 8 en `core`
-- **CI:** verde en los 8 jobs (sin la parte de base de datos: falta añadirla al workflow)
+- **`payload_hash` no da evidencia de manipulación.** Es columna generada: se recalcula si la fila
+  se reescribe. La integridad la dan las dos capas de prevención, no la detección. Corregido en la
+  redacción de ADR-0026 D1 y `AUDIT_TRAIL_AND_IMMUTABILITY.md`; **no citarlo como «hash de
+  integridad» ante un tercero.**
+- **`platform.audit_payload_hash()` colisiona** sobre `jsonb` arbitrario. El `CHECK` de objeto hace
+  la colisión inalcanzable **por la tabla**, no imposible en la función. No se corrige la función
+  porque cambiar su cuerpo **no recalcula** los hashes ya almacenados.
+- **Sin política de retención** de `audit_events` ni del outbox: crecen de forma monótona.
+  `VALIDAR-SENIAT` para el plazo legal; la política **operativa** sí se puede escribir sin esperar
+  a nadie.
+- **`ladino.rules_version` de más de 64 caracteres aborta el alta de una company.** BAJO sin
+  arreglar: validar o truncar el GUC en el middleware.
+- **El trigger de `occurred_at` ordena antes que el de procedencia** por nombre. Hoy da igual;
+  un futuro BEFORE INSERT que ordenase después podría esquivarlo.
 
-### Trampas del entorno
+## Lecciones incorporadas
 
-- `supabase start` completo falla: `analytics`, `storage` y `studio` quedan *unhealthy*.
-  `db:start` ya excluye `studio,storage,imgproxy,logflare,vector`.
-- Docker Desktop se cae solo; `docker desktop start` lo levanta sin perder los contenedores.
-- **`alter default privileges ... revoke execute on functions from public` NO funciona.** Postgres
-  ignora el default para funciones: nacen con `EXECUTE` para `PUBLIC`. Con tablas y secuencias sí
-  funciona. La defensa es la regla (RPC en `platform`) más el detector de 006.
-- **`create or replace function` es un reemplazo completo**: resetea `proconfig`. Repite siempre
-  `security definer`, `set search_path` y la volatilidad.
-- Los heredoc de Git Bash en Windows se comen un nivel de escape. Para backticks y `\u`, usa la
-  herramienta de edición.
-- `dependency-cruiser` necesita `exportsFields: ["exports"]` explícito o no resuelve nada y el
-  gate da verde con las reglas inertes.
-- Node local 26, CI 22. Si algo diverge, gana CI.
+`CLAUDE.md` §3 lleva la **calibración del rigor** — reversibilidad y coste del error, no
+importancia percibida. La skill `migracion-supabase` lleva ocho lecciones, tres de esta sesión:
+
+- **Ejerce la operación, no preguntes por el privilegio.** Un bit de `has_*_privilege` dice que
+  puedes intentarlo, no que funcione.
+- **Toda prueba de un invariante crítico necesita su variante rota**, y hay que mirar qué la
+  detecta.
+- **Un envoltorio SQL sobre una función SQL no inlinable replanifica por fila**, y un gate de
+  corrección no detecta una regresión de coste.
+
+ADR-0023 conserva los **ocho** casos del patrón «ausencia de fallo leída como éxito». Se retiró un
+noveno que resultó ser falso —el permiso que creí ausente estaba en la base desde S0.3— porque
+retirar un caso falso protege la autoridad del resto.
