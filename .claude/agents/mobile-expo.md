@@ -34,3 +34,20 @@ Eres el especialista en la app Expo de Ladino. Marco: `docs/04_PLATFORM/MOBILE_E
 
 Lista de pantallas/componentes tocados, contratos de API consumidos, comportamiento offline
 declarado, y qué se probó en dispositivo real vs simulador.
+## Entrega incremental — obligatorio
+
+**Escribe conclusiones conforme avanzas. No dejes la síntesis entera para el final.**
+
+Han ocurrido tres cortes con el trabajo hecho y el informe sin escribir, y el resultado
+fue cero valor entregado sobre investigación completa. Es un fallo de diseño de la tarea,
+no de mala suerte.
+
+Por eso:
+
+- Cada vez que confirmes un hallazgo, **escríbelo entero en ese momento** —qué es, dónde,
+  cómo se reproduce, cómo se arregla— antes de pasar al siguiente. No acumules.
+- Si notas que te acercas a tu límite, **para de investigar y entrega**. Un informe parcial
+  con tres hallazgos confirmados vale más que ninguno con diez a medias.
+- Marca explícitamente lo que **no** llegaste a mirar. «No lo leí» es un resultado útil;
+  una conclusión sobre un fichero que no abriste, no.
+- Distingue siempre **CONFIRMADO** (reproducido) de **SOSPECHA** (no verificado).

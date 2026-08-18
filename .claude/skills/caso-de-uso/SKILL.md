@@ -63,9 +63,34 @@ export async function issueInvoice(
 - Nada de `number` en montos. `Decimal` de `packages/money`.
 - La asignación de número fiscal ocurre en el paso 6 y es transaccional. Nunca antes.
 
+## La idempotencia acota la ventana; la clave natural la cierra
+
+**Toda operación crítica necesita LAS DOS, y asumir que con `Idempotency-Key`
+basta es el malentendido más fácil de cometer al copiar la plantilla.**
+
+El borde exacto (medido en S0.5, escrito también en `idempotency.ts` y en
+`ENGINEERING_STANDARDS.md`): si el proceso muere después de que el caso de uso
+commiteara y antes de que T2 cerrara la clave, la reserva queda `in_progress`.
+Dentro del TTL, el reintento recibe 409 y nada se duplica. **Pasado el TTL, el
+reintento reejecuta el cuerpo entero** — y lo único que impide el doble efecto
+es la restricción única natural del esquema:
+
+| Operación | Su clave natural |
+|---|---|
+| crear empresa | `unique (tenant_id, tax_id)` |
+| emitir factura | número fiscal por serie, asignado transaccionalmente |
+| postear asiento | `source_type + source_id + event` (ACCOUNTING_ENGINE_SPEC) |
+| registrar pago | la que el módulo defina — **si no existe, hay que crearla ANTES del endpoint** |
+
+Una operación crítica sin clave natural única tiene un doble efecto programado
+para 24 horas después de su primer fallo de infraestructura.
+
 ## Tests que acompañan siempre
 
 - property-based: para cualquier input válido, `sum(debit) === sum(credit)`;
 - idempotencia: dos llamadas con la misma key producen un solo efecto;
+- **la clave natural, ejercida**: la reejecución directa del cuerpo (sin pasar
+  por la idempotencia) muere en el único del esquema — es el test de que la
+  segunda defensa existe, no solo la primera;
 - concurrencia: dos llamadas simultáneas no duplican número fiscal ni stock negativo;
 - periodo cerrado: rechaza.
