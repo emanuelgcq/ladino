@@ -1,7 +1,9 @@
 /**
- * @ladino/domain — Casos de uso administrativos transaccionales
+ * @ladino/domain — Casos de uso administrativos transaccionales.
  *
- * Placeholder de Sprint 0 (S0.1). Sin framework y sin lógica: el esqueleto debe compilar
- * antes de que exista una sola regla de negocio. Ver docs/00_GOVERNANCE/SPRINT_0_BOOTSTRAP.md.
+ * Cada caso de uso recibe la transacción YA ABIERTA (UnitOfWork de @ladino/db,
+ * que fijó el GUC de procedencia) y devuelve Result. No abre transacciones, no
+ * commitea, no conoce HTTP. El patrón de diez pasos, con su plantilla de
+ * referencia, está en create-company.ts.
  */
-export const PACKAGE_NAME = "@ladino/domain" as const;
+export { createCompany, RULES_VERSION, type CreateCompanyError } from "./create-company.js";

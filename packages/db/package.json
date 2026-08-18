@@ -1,0 +1,27 @@
+{
+  "name": "@ladino/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Único punto de entrada a Postgres. Abre la transacción y fija el GUC de procedencia. Nadie más importa el cliente.",
+  "exports": {
+    ".": {
+      "ladino-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint src",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ladino/core": "workspace:*",
+    "postgres": "^3.4.5"
+  }
+}

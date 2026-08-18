@@ -99,6 +99,44 @@ En S0.4 alcanza a `audit_events`.
 > solo si el hecho ocurrió, y eso solo lo garantiza el commit compartido. Y `fiscal_events` no
 > es de S0.4: llega en la Fase 11 (`IMPLEMENTATION_PLAN.md`).
 
+### La API verifica la firma del JWT. No delega.
+
+**Hueco de documentación, detectado al abrir S0.5 y anotado como tal:** hasta ahora **ningún
+documento decía quién verifica el JWT**. ADR-0014 lo menciona solo para argumentar contra los
+tokens de larga vida, y `SECURITY.md` habla de qué clave va en el cliente. La decisión faltaba.
+
+**La API verifica la firma ella misma, antes de cualquier otra cosa.** La razón es una consecuencia
+directa de ADR-0025 §9: **la API escribe con `service_role`, que tiene `BYPASSRLS`**. Es decir, la
+RLS —que es lo que protege el camino `authenticated`— **no protege a la API**. Si la API no verifica
+el token, no lo verifica nadie: se estaría confiando en un `sub` que cualquiera puede escribir.
+
+No es un detalle de implementación. Es el único punto donde se decide que el actor es quien dice
+ser, y de ese actor cuelgan `created_by`, la resolución de permisos y el alcance de la clave de
+idempotencia.
+
+### El centinela de sistema vale para unas tablas y no para otras — y es deliberado
+
+Asimetría que **no es obvia y que alguien va a "corregir"**, así que va escrita:
+
+| Columna | ¿Acepta el centinela `00000000-0000-4000-8000-000000000000`? | Por qué |
+|---|---|---|
+| `companies.created_by` | **NO** | Tiene **FK a `auth.users`**. El actor debe ser un usuario real |
+| `idempotency_keys.actor_id` | **SÍ** | **Sin FK a propósito**: el centinela no es un usuario |
+
+Las dos decisiones son correctas y por motivos distintos. `created_by` es **procedencia**: responde
+«quién hizo esto», y atribuirlo a un UUID que no corresponde a nadie sería peor que dejarlo nulo.
+`actor_id` es **semántica de la clave de idempotencia**: responde «en nombre de quién se reserva»,
+y el trabajo de sistema sin usuario necesita un valor explícito — un `NULL` ahí significaría «no me
+acordé», que es justo lo que ADR-0027 §3-bis prohíbe.
+
+**Consecuencia práctica para el middleware:** un alta de company **no se puede ejecutar con el
+actor de sistema**. Falla con `companies_created_by_fkey`, comprobado. Toda operación que cree una
+company exige un usuario real detrás, y eso es correcto.
+
+**Quien intente unificarlas** —poner FK en `actor_id` o quitarla de `created_by`— romperá una de
+las dos: la FK en `actor_id` impediría el trabajo de sistema y bloquearía el borrado de usuarios;
+quitarla de `created_by` permitiría atribuir filas a actores inexistentes.
+
 ### Precedencia: `auth.uid()` gana al GUC
 
 El `coalesce` pone `auth.uid()` primero, y eso tiene dos consecuencias que conviene saber:

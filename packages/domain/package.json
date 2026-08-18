@@ -19,5 +19,10 @@
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@ladino/core": "workspace:*",
+    "@ladino/db": "workspace:*",
+    "@ladino/schemas": "workspace:*"
   }
 }

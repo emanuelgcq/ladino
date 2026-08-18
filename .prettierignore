@@ -12,3 +12,9 @@ docs/
 # La capa .claude/ es configuración de herramienta, no código del producto.
 # Reformatearla produce diffs que nadie pidió (y que compiten con ediciones manuales).
 .claude/
+
+# openapi.json es un ARTEFACTO GENERADO (pnpm openapi) y su formato lo fija el
+# generador. Si prettier lo reformateara, openapi:check —que es un diff exacto
+# contra lo generado— fallaría siempre: dos gates exigiendo formatos distintos
+# del mismo fichero. Se commitea, pero su formato no es de prettier.
+openapi.json

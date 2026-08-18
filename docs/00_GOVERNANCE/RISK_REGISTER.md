@@ -56,6 +56,35 @@ residuo. No tiene sentido implementar cuatro modos antes de saber cuál se exige
 **Deja de ser aceptable:** cuando §6.3 se responda, o antes si `packages/fiscal` necesita un modo
 distinto del actual.
 
+### R-07 · Quien tenga las credenciales de infraestructura no pasa por ninguna defensa
+
+- **Severidad:** Crítica · **Dueño:** responsable del proyecto (es control operativo, no de código)
+- **Disparador:** existe desde que hay un proyecto Supabase remoto — es decir, desde S0.6
+- **Dónde:** fuera del código. Relacionado con ADR-0030 y `EXPEDIENTE_TECNICO.md` §Advertencia
+
+Todo lo construido en S0.3 y S0.4 —RLS con `FORCE`, privilegios por columna, `reject_mutation()`,
+las anclas inmutables, el acceso acotado del operador de ADR-0030— **gobierna el acceso por la
+aplicación**. Nada de eso aplica a quien se conecta directamente a la base con las credenciales del
+proyecto.
+
+Concretamente, con acceso directo se puede: leer cualquier tabla de cualquier tenant (`BYPASSRLS`),
+**desactivar los triggers** (`ALTER TABLE ... DISABLE TRIGGER`) y con ellos toda la inmutabilidad,
+y reescribir `audit_events` sin dejar rastro — porque `payload_hash` es una columna generada que se
+recalcula con la fila (ADR-0026 D1).
+
+**No es un defecto de diseño ni se arregla con más SQL.** Es la frontera de lo que la aplicación
+puede garantizar, y va escrita porque el riesgo real es el contrario: que la solidez de los
+controles de aplicación haga *creer* que este flanco está cubierto. ADR-0030 acota al operador
+dentro de la aplicación; no le quita las llaves del servidor.
+
+**Mitigación, y es toda operativa:** separación de credenciales de infraestructura de las de
+operación diaria; acceso al proyecto con MFA y sin credenciales compartidas; registro de acceso del
+proveedor; y —lo único que da detección real— **copia de la pista de auditoría fuera de la misma
+base**, que es también lo que hace verificable la cadena diferida de ADR-0026 D1.
+
+**Deja de ser aceptable:** cuando exista el proyecto remoto con datos de un cliente real. Hasta
+entonces solo hay una base local.
+
 ### R-06 · Norma sustituta desconocida
 
 - **Severidad:** Alta · **Dueño:** responsable del proyecto (decisión de negocio y seguimiento
