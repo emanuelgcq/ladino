@@ -1,0 +1,220 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Ladino API",
+    "version": "0.1.0",
+    "description": "API administrativa, contable y fiscal. Errores: docs/04_PLATFORM/ERROR_CATALOG.md."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "components": {
+    "schemas": {
+      "CreateCompanyRequest": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "legal_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "trade_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "tax_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          }
+        },
+        "required": [
+          "tenant_id",
+          "legal_name",
+          "tax_id"
+        ],
+        "additionalProperties": false
+      },
+      "CompanyResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "legal_name": {
+            "type": "string"
+          },
+          "trade_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "tax_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "onboarding",
+              "active",
+              "suspended"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "legal_name",
+          "trade_name",
+          "tax_id",
+          "status",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "nullable": true
+          },
+          "request_id": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/v1/companies": {
+      "post": {
+        "summary": "Crear una empresa",
+        "description": "Operación de nivel tenant. Exige `company.manage` en una asignación tenant-wide, `Idempotency-Key`, y un usuario real (no el actor de sistema). El RIF no se valida en formato: VALIDAR-SENIAT pendiente.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCompanyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Empresa creada. Un replay con la misma clave devuelve esta misma respuesta.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Falta Idempotency-Key en una operación crítica.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado (TOKEN_EXPIRED se distingue).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Tenant visible pero sin company.manage (PERMISSION_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tenant inexistente O no visible para el usuario — indistinguibles a propósito.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "RIF duplicado, tenant suspendido, clave reutilizada o en vuelo.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida (VALIDATION_FAILED) o clave fuera de cota.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

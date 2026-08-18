@@ -1,9 +1,9 @@
 {
-  "name": "@ladino/api",
+  "name": "@ladino/db",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Hono sobre Node 22. Orquestacion, permisos, idempotencia.",
+  "description": "Único punto de entrada a Postgres. Abre la transacción y fija el GUC de procedencia. Nadie más importa el cliente.",
   "exports": {
     ".": {
       "ladino-source": "./src/index.ts",
@@ -22,12 +22,6 @@
   },
   "dependencies": {
     "@ladino/core": "workspace:*",
-    "@ladino/db": "workspace:*",
-    "hono": "^4.6.14",
-    "jose": "^5.9.6",
-    "@ladino/schemas": "workspace:*",
-    "@ladino/domain": "workspace:*",
-    "zod": "^3.24.1",
-    "@asteasolutions/zod-to-openapi": "^7.3.0"
+    "postgres": "^3.4.5"
   }
 }

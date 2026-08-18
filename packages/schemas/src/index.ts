@@ -1,7 +1,3 @@
-/**
- * @ladino/schemas — Zod: fuente unica de contratos
- *
- * Placeholder de Sprint 0 (S0.1). Sin framework y sin lógica: el esqueleto debe compilar
- * antes de que exista una sola regla de negocio. Ver docs/00_GOVERNANCE/SPRINT_0_BOOTSTRAP.md.
- */
-export const PACKAGE_NAME = "@ladino/schemas" as const;
+// @ladino/schemas — contratos Zod compartidos, fuente única del OpenAPI
+// (ADR-0004, ADR-0015). Paquete PURO: zod y nada más.
+export { CreateCompanyRequest, CompanyResponse, ErrorResponse } from "./companies.js";
