@@ -100,16 +100,71 @@ otro **en silencio**, que es el modo de fallo que este proyecto lleva ocho casos
 respuesta guardada no filtra por actor. Arreglar el almacenamiento y no la lectura deja el agujero
 intacto con aspecto de cerrado. Escrito en `API_SPEC.md` §Idempotencia.
 
-### 4. La ausencia de norma no es permiso para relajar controles
+### 4. Los controles se clasifican en tres categorías, y solo una es diferible
 
-Los controles de la matriz de PA121 —append-only, RLS, ACID, versionado de reglas, event ledger—
-**se quedan enteros**. Dejaron de ser obligación legal y siguen siendo requisitos de producto: un
-ERP contable sin trazabilidad no es vendible, homologado o no.
+*Ausencia de mecanismo no es prohibición* (`CLAUDE.md` §2) — y **ausencia de obligación no es
+autorización**. Pero decir «los controles se quedan» en bloque, como decía la primera versión de
+esta sección, es demasiado grueso: mete en el mismo saco cosas que no se pueden diferir nunca y
+cosas que solo existían porque una providencia las pedía. La clasificación es la que decide qué se
+puede diferir, así que va explícita, **fila por fila en `SENIAT_ART121_CONTROL_MATRIX.md`**.
 
-Es el mismo argumento de `CLAUDE.md` §2 en su forma menos evidente: *ausencia de mecanismo no es
-prohibición* — y **ausencia de obligación no es autorización**. Que nadie vaya a exigir la pista
-de auditoría no la hace prescindible; la hace voluntaria, que es distinto y no cambia nada de lo
-construido.
+**P · Por naturaleza del producto.** Aislamiento multi-tenant y RLS, partida doble, `Decimal` en vez
+de `float`, idempotencia, auditoría con autor y timestamp, inmutabilidad de los asientos posteados.
+
+Sin esto el ERP está roto de origen, y el argumento decisivo no es fiscal sino contractual: **un
+cliente que ve los datos de otro demanda al proveedor, no al fisco.** Estos controles no se relajan
+nunca, no dependen del SENIAT, y **una providencia nueva no los revisa**.
+
+*La prueba de que no dependen de la norma:* la 121 murió el 12 de agosto de 2026 y **nada de S0.3
+perdió sentido**. Valían lo mismo el día 11 y el día 13.
+
+**R · Por regulación fiscal vigente.** Numeración sin huecos, imprenta digital para los números de
+control (PA 102), libros de compra y venta, retenciones, y la transmisión si la norma futura la
+exige.
+
+**Sí son diferibles**, y es lo que hace que Ladino sea vendible hoy sin módulo fiscal. Es también
+lo único que hay que revisar cuando se publique una providencia nueva.
+
+**D · Ya derogado, conservado como histórico.** Homologación del proveedor, rehomologación por
+versión, registro por RIF. Se conservan **sin actualizar** como diff de referencia, y como línea
+base voluntaria (§5).
+
+**La corrección que esto obliga:** el banner de la matriz afirmaba que los controles de la 121
+«siguen siendo buenos controles de ERP» sobre una lista que incluye **Remisión**, **Acceso SENIAT**
+y **release gate**. Esas tres **no tienen valor de producto** y no deben reclamarlo: existen solo si
+una norma las exige. Corregido.
+
+### 5. Preparación para homologación futura — línea base voluntaria
+
+**Restricción que gobierna el diseño fiscal de aquí en adelante: si el SENIAT vuelve a exigir
+homologación, Ladino debe poder homologarse sin reescribir nada.** El trámite no lo controlamos;
+que el sistema cumpla el día que se pida, sí.
+
+**Criterio: se cumple el estándar técnico de la 121 como línea base voluntaria, aunque esté
+derogada.** Por dos razones que se sostienen solas:
+
+1. Es **la mejor aproximación disponible** a lo que pedirá cualquier norma nueva. No hay otra
+   referencia, y la expectativa pública apunta a estándares técnicos y protocolos de comunicación,
+   que es justo lo que la 121 pedía.
+2. **Casi todo ya está construido** — por ser buen ERP, no por la providencia. La distancia entre
+   «lo que tenemos» y «lo que pedía la 121» es pequeña justamente porque la categoría P se
+   construyó por su propio valor.
+
+Cumplir una norma derogada suena a trabajo perdido y no lo es: el coste marginal es bajo porque la
+mayor parte del trabajo ya está hecho, y el coste de *no* hacerlo se paga entero y con plazo el día
+que se publique la norma nueva.
+
+**Tres entregables, con su fase:**
+
+| # | Entregable | Fase | Estado |
+|---|---|---|---|
+| 1 | **`EXPEDIENTE_TECNICO.md`** — el documento entregable ante una eventual homologación. **No se escribe de cero: se genera desde los ADR y specs existentes y se mantiene como índice vivo que apunta a ellos.** Empieza ahora aunque quede incompleto. | **ahora** | creado, incompleto por diseño |
+| 2 | **Registro de versiones desde la primera.** El manifest de `RELEASE_AND_VERSION_HOMOLOGATION.md` hay que **empezar a poblarlo ya**, no cuando haga falta: si algún día se homologa la 3.2, preguntarán qué había antes y qué cambió. | genera desde **S0.6** | requisitos anotados en el entregable 1 |
+| 3 | **Transmisión como enchufe** (ADR-0028). Verificar que `NullTransmitter` **se puede sustituir sin tocar el dominio**, y que hay un test que lo demuestra **con un transmisor falso**. | cuando exista `packages/fiscal` | pendiente |
+
+El entregable 2 tiene una propiedad que conviene no perder: **un registro de versiones solo sirve
+si empieza en la primera.** Reconstruirlo a posteriori es inferencia sobre el propio historial, que
+es exactamente lo que un evaluador no acepta.
 
 ## Consecuencias
 

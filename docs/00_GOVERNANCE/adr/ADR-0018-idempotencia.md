@@ -65,9 +65,19 @@ la misma company con la misma clave chocaban, y las dos ramas son malas: con el 
 segundo recibe **la respuesta del primero** —datos de otro usuario— y su operación no se ejecuta,
 con un 200; con cuerpo distinto, un 409 sobre una operación correcta.
 
-El alcance vigente es **`(tenant_id, company_id, created_by, key)`**, con `NULLS NOT DISTINCT`.
+El alcance vigente es **`(tenant_id, company_id, actor_id, key)`**, con `NULLS NOT DISTINCT`.
 `tenant_id` lo exige la regla 5 de `CLAUDE.md` (ADR-0026 D4); `endpoint` sigue **fuera** a
-propósito (ADR-0026 D5). Aplicado en la migración `20260816010608`.
+propósito (ADR-0026 D5). Aplicado en la migración `20260817000254`, y `actor_id` clavado por
+trigger en `20260817003238`.
+
+> **Corrección.** Este párrafo decía `created_by` y citaba la migración `20260816010608`. Las dos
+> cosas estaban mal y se corrigieron en la misma sesión: `created_by` es procedencia **best-effort**
+> —queda NULL en silencio si la API olvida el GUC— y sostener una restricción de unicidad sobre
+> ella producía dos reservas para el mismo cliente. `actor_id` es columna propia, `NOT NULL`,
+> fijada por el middleware. La regla general está en ADR-0027 §3-bis.
+>
+> Que este texto quedara desfasado respecto del esquema es, otra vez, documentación y catálogo como
+> dos fuentes. Lo detectó `spec-explorer` al abrir S0.5.
 
 ### Lo que sigue sin decidir
 
