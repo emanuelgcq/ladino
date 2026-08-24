@@ -102,6 +102,23 @@ esta regla cubre el canal por **mensaje**, no el canal por **tiempo**.
 `23514` merece el comentario que lleva: un `CHECK` que llega hasta la base significa que el esquema
 Zod no lo cubría. Es un `422` correcto **y** una señal de que falta validación en el borde.
 
+## Códigos de la capa HTTP — no vienen de la base
+
+Los produce un middleware antes de que el handler exista. **Los tres últimos son de S0.6a** y
+existen por la auditoría de ese sprint: sin ellos, una caída del JWKS de Supabase era un `401`
+para todo el tráfico (y los clientes borraban la sesión), una petición colgada no tenía tope, y
+la idempotencia protegía del reintento pero no del abuso.
+
+| `code` | HTTP | Quién | Cuándo |
+|---|---|---|---|
+| `UNAUTHENTICATED` | `401` | auth | sin token, o token que NO verifica (firma, emisor, audiencia, rol, `sub`). Sin detallar cuál |
+| `TOKEN_EXPIRED` | `401` | auth | verifica pero caducó: el cliente debe refrescar |
+| `AUTH_BACKEND_UNAVAILABLE` | `503` + `Retry-After: 5` | auth | el JWKS no respondió (timeout, red, respuesta malformada). **No es culpa del token**: se registra a nivel `error` |
+| `RATE_LIMITED` | `429` + `Retry-After` | rate limit | más de N peticiones por minuto **por usuario** (`RATE_LIMIT_PER_MINUTE`, 300). Nunca por IP en la API |
+| `GATEWAY_TIMEOUT` | `504` | timeout | la petición superó `REQUEST_TIMEOUT_MS` (30 s). El handler sigue hasta terminar; su respuesta se descarta |
+| `COMPANY_SCOPE_NOT_IMPLEMENTED` | `422` | contexto | `X-Company-Id` llega antes de que exista su validación |
+| `PAYLOAD_TOO_LARGE` | `413` | `bodyLimit` | cuerpo > 1 MB |
+
 ## Lo que este documento NO decide
 
 - El `code` de API de cada uno, y su estado HTTP.

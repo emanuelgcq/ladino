@@ -287,11 +287,27 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
       await withTransaction(cfg.sql, actor, async ({ sql: tx }) => {
         // 4xx/5xx: la operación no produjo su efecto. `failed` deja la clave
         // reintentable, que es lo que un cliente con backoff espera.
-        await tx`
+        // GUARDA DE ESTADO, como en T1 (F-10 de la auditoría de S0.6a): si el
+        // reaper liberó esta clave y otro reintento la volvió a reservar, este
+        // T2 llega tarde y NO debe cerrar la reserva ajena con su respuesta.
+        // Con el timeout de petición (30 s) muy por debajo del umbral del
+        // reaper (15 min) esto no debería ocurrir nunca; si ocurre, se sabe.
+        const cerradas = await tx<{ id: string }[]>`
           update public.idempotency_keys
              set status = ${exito ? "completed" : "failed"},
                  response = ${tx.json({ status: res.status, body })}
-           where id = ${t1.id}`;
+           where id = ${t1.id} and status = 'in_progress'
+          returning id`;
+        if (cerradas.length === 0) {
+          console.error(
+            JSON.stringify({
+              nivel: "error",
+              evento: "idempotency.t2_claim_lost",
+              request_id: ctx.requestId,
+              clave_id: t1.id,
+            }),
+          );
+        }
       });
     } catch (e) {
       // Sin logger estructurado todavía (ADR-0017, pendiente): stderr con el

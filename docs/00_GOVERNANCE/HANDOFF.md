@@ -1,14 +1,103 @@
-# Handoff — 2026-08-18
+# Handoff — 2026-08-24
 
 ## Estado
 
-**S0.1 a S0.5 cerrados y en verde.** S0.5 auditado (ocho hallazgos, ocho corregidos) y con PR #3 abierto a la espera de tu aprobación para el merge.
+**S0.1 a S0.6a cerrados y en verde.** PR #3 (S0.5) mergeado en `main`. S0.6a en la rama
+`s0.6a/deploy-and-worker`, auditado (24 hallazgos: 22 cerrados, 1 diferido a tu decisión, 1 nota
+de riesgo escrita) y **sin commitear**: como siempre, commit y PR esperan tu aprobación explícita.
 
-S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ (merge pendiente) · S0.6a ⬜ · S0.6b ⏸️
+S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ (commit pendiente) · S0.6b ⏸️
 
-`pnpm verify` corre **10 pasos** — S0.5 añadió `openapi:check` (paso 8) y metió la integración de
-la API dentro del paso de test. **Los pasos 5, 9 y 10 necesitan el stack local** (`pnpm db:start`).
-368 aserciones pgTAP + 37 tests de vitest (API + db), todo verde. `pnpm boundaries:selftest`: 22/22.
+`pnpm verify` corre **11 pasos** — S0.6a añadió `release:manifest:check` (paso 9). **Los pasos 5,
+10 y 11 necesitan el stack local** (`pnpm db:start`). 368 pgTAP + **74 tests de vitest** en API y
+worker (61 + 13), todo verde. `pnpm boundaries:selftest`: 22/22. La imagen `ladino-api` se
+construye (247 MB).
+
+**⚠ En esta máquina, `TURBO_CONCURRENCY=1 pnpm verify`.** Con la concurrencia por defecto se cae
+por memoria (`VirtualAlloc failed`, exit `-1073740791`): hay ~2 GB libres con Docker y un stack
+Supabase de OTRO proyecto (`padrino-academy`) levantado junto al de Ladino. No es un fallo de
+código y no se paran contenedores ajenos.
+
+## S0.6a — qué hay, en el orden que pediste
+
+1. **`auth.ts` en dos modos** — `jwks` (ES256, clave pública del proyecto, el de producción) y
+   `hs256` (solo el stack local). El modo es configuración, no detección. `config.ts` es puro y
+   probado: `hs256` no arranca con `NODE_ENV=production` **ni** contra un emisor que no sea local —
+   dos capas, cada una probada sola. Un JWKS caído ya no es un 401 masivo: es `503
+   AUTH_BACKEND_UNAVAILABLE` con log.
+2. **Contenedores** — `infra/docker/Dockerfile.{api,worker}` (multi-stage, base por digest, no
+   root, `--ignore-scripts`, heap por debajo del límite) y `infra/compose/docker-compose.ladino.yml`
+   con **límites de CPU/memoria** (api 1.0/512M, worker 0.5/256M), `cap_drop`, `read_only`,
+   `no-new-privileges`, `pids_limit`, `stop_grace_period`. **Worker** con consumo del outbox en dos
+   fases + testigo de reserva, **los dos reapers** (outbox e idempotencia) y la purga de claves
+   caducadas; se mata solo tras 5 ciclos fallidos porque Docker no reinicia por `unhealthy`.
+3. **`releases/manifest.json`** con la release `0.1.0` retroactiva (13 hashes de migración, base
+   image, `homologation_status: not_applicable`); `scripts/release-manifest.mjs check|new|digest`;
+   el check es paso de `verify` y **probado con cuatro variantes rotas** (migración editada,
+   borrada, nueva sin registrar con y sin tag). La variante «editada» destapó que el hash era
+   sensible a CRLF: normalizado.
+4. **Traefik: solo labels** — router propio con `Host && !Path(/healthz) && !Path(/readyz)`,
+   cabeceras, rate limit laxo por IP. Red del proxy `external: true`. Nada de n8n, nada de la
+   configuración estática.
+
+Controles nuevos en la API que salieron de la auditoría: **rate limit por usuario** (`429
+RATE_LIMITED`, 300/min, nunca por IP en la API), **plazo por petición** (`504 GATEWAY_TIMEOUT`,
+30 s ≪ 15 min del reaper: es lo que hace seguro liberar claves), `/readyz` con plazo y sin
+detalle, apagado con respaldo de 8 s, `X-Request-Id` acotado. Catálogo en `ERROR_CATALOG.md`.
+
+### La auditoría de S0.6a: 24 hallazgos
+
+| # | Sev. | Qué era | Estado |
+|---|---|---|---|
+| F-1 | alto | fallo del JWKS servido como 401 sin log | ✅ 503 + log, tests con `fetch failed` y `ERR_JWKS_TIMEOUT` |
+| F-2 | medio | hs256-en-producción dependía de una sola señal, sin test | ✅ segunda capa (emisor local) + 8 tests de `config.ts` |
+| F-3 | bajo | caché JWKS 10 min tras revocar | 📝 runbook en `infra/README.md` |
+| F-4 | bajo | `X-Request-Id` sin acotar | ✅ `/^[\w.-]{1,64}$/` o se genera |
+| F-5 | medio | `/readyz` público, con `select 1` gratis y campo `db` | ✅ excluido del router, sin detalle |
+| F-6 | alto | sin rate limit en ninguna capa | ✅ por usuario en la API + laxo por IP en Traefik, tests |
+| F-7 | medio | readiness que se cuelga | ✅ plazo 2 s, test con base que no responde |
+| F-8 | medio | apagado sin plazo ni idempotencia de señal, promesa sin manejar | ✅ flag, respaldo 8 s, `unhandledRejection` |
+| **F-9** | **alto** | **T2 tardío del worker pisaba la reserva viva de otro worker** | ✅ testigo `attempts` + plazo de entrega < reaper, **test con la carrera exacta** |
+| F-10 | alto | T2 de idempotencia sin guarda; reaper podía liberar una operación viva | ✅ `and status='in_progress'` + timeout de petición 30 s |
+| F-11 | alto | healthcheck del worker sin actuador (Docker no reinicia `unhealthy`) | ✅ el worker sale con 1 tras 5 fallos o ciclo colgado |
+| F-12 | medio | claves caducadas `in_progress` para siempre; sin purga | ✅ reaper las libera; `purgarIdempotencia` a 7 días, test |
+| F-13 | medio | reaper devolvía sin backoff | ✅ backoff por intentos, test |
+| F-14 | medio | bucle sin red: sin handlers, reapers después del lote | ✅ |
+| **F-15** | **alto** | **los dos servicios se conectan como el superusuario `postgres.<ref>`** | ⏸️ **TU DECISIÓN**: roles `ladino_api`/`ladino_worker` con GRANT mínimo = migración con rigor máximo (ADR + pgTAP). Recomiendo hacerlo ANTES del primer deploy real |
+| F-16 | bajo | `NullTransmitter` con `console.log` por defecto en paquete puro | ✅ sumidero obligatorio |
+| F-17 | riesgo | `published` ≠ «recibido por SENIAT» con el transmisor nulo | 📝 `REGULATORY_STATUS.md` + README |
+| F-18 | medio | red del proxy compartida: `ladino-api:3000` alcanzable desde n8n | ✅ controles en la app; escrito en compose y README |
+| F-19 | medio | sin `cap_drop`/`read_only`/`no-new-privileges`/`pids_limit` | ✅ |
+| F-20 | medio | base image sin digest | ✅ `node:22-alpine@sha256:c610fc…` + `base_image` en manifest |
+| F-21 | bajo | postinstall como root en el build | ✅ `--ignore-scripts` |
+| F-22 | bajo | `.dockerignore` no cubría `apps/*/.env` | ✅ `**/.env*` |
+| F-23 | bajo | `.npmrc` copiado al build | 📝 nota: jamás tokens ahí; secret de BuildKit si hace falta |
+| F-24 | bajo | `reservations.cpus` no actúa en Compose | 📝 dicho en compose y README |
+
+**Lo que la auditoría cerró sola y no aparece arriba:** el test del worker asertaba `publicados: 3`
+y pasaba solo pero fallaba dentro de `verify` (8: cinco filas de otros tenants dejadas por los
+tests de la API). El worker es global por diseño; el test ahora drena, aserta por tenant y acota
+los contadores por abajo. Un test que depende del orden de los suites no es un test.
+
+### Lo que queda ANTES del primer deploy real (en orden)
+
+1. **Decidir F-15** (roles de base dedicados). Si sí: migración 14 con pgTAP y variante rota.
+2. **Rotar credenciales** — la `sb_secret` y el token `sbp_…` se pegaron en un chat.
+3. Construir y publicar las imágenes por la secuencia de `infra/README.md`; anotar digests con
+   `pnpm release:manifest digest`; etiquetar `v0.1.0`.
+4. En el VPS: consultar la red y el resolver del Traefik existente (no inventarlos), secretos en
+   `/etc/ladino/*.env` con `chmod 600`, `docker compose -p ladino … up -d`.
+
+Después: **maestros por `platform.ladino_user_company_ids(uuid)`** (sección «Primer paso del
+bloque 4», más abajo): migración con gate de coste y variante rota → middleware de alcance →
+primer maestro. Rigor normal.
+
+---
+
+# Handoff anterior — 2026-08-18 (S0.5)
+
+`pnpm verify` corría entonces **10 pasos**; 368 pgTAP + 37 tests de vitest. Lo que sigue se
+conserva porque el bloque 4 (maestros) se apoya en ello.
 
 ## La auditoría de S0.5: corrió (al quinto intento) y encontró OCHO cosas — todas cerradas
 
