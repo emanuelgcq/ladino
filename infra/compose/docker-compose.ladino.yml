@@ -1,0 +1,136 @@
+# Ladino en el VPS compartido — SOLO labels de Traefik, nada de su configuración
+# estática; n8n no aparece aquí y no se toca. Project name fijo: `ladino`.
+#
+#   docker compose -p ladino -f infra/compose/docker-compose.ladino.yml up -d
+#
+# Las imágenes van POR DIGEST (nunca `latest`), tomadas de releases/manifest.json.
+# Los secretos entran por env_file del host (/etc/ladino/*.env), jamás en git.
+#
+# LÍMITES DE CPU Y MEMORIA EN TODOS: el VPS es compartido y sin ellos el blast
+# radius de un fallo de Ladino es el servidor entero, n8n incluido. Las cotas
+# son deliberadamente estrechas para un arranque; se suben con datos de
+# consumo real, no por adelantado. Y cada límite de memoria tiene su
+# `--max-old-space-size` correspondiente en el Dockerfile, por debajo.
+# Lo que MANDA de verdad en Compose (sin Swarm) es `limits`; de `reservations`
+# solo la memoria cuenta, como límite blando. `reservations.cpus` es decorativo
+# y se deja por documentar la intención, no porque actúe.
+#
+# La red del proxy es COMPARTIDA con n8n y los demás proyectos del VPS:
+# cualquier contenedor de esa red alcanza `ladino-api:3000` sin pasar por
+# Traefik. Por eso los controles que importan (auth, rate limit por usuario,
+# timeout) viven en la aplicación; los labels de Traefik solo gobiernan la
+# ruta pública.
+
+name: ladino
+
+services:
+  api:
+    image: ${LADINO_API_IMAGE:?falta LADINO_API_IMAGE (digest, ver releases/manifest.json)}
+    container_name: ladino-api
+    restart: unless-stopped
+    # Mayor que el respaldo de apagado de la API (8 s): el proceso sale solo
+    # antes de que Docker mande SIGKILL.
+    stop_grace_period: 20s
+    env_file:
+      - /etc/ladino/api.env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      LADINO_AUTH_MODE: jwks
+    networks:
+      - ladino-net
+      - proxy
+    # Endurecimiento barato que en un VPS COMPARTIDO es el que acota de verdad
+    # el blast radius: sin escalada de privilegios, sin capabilities, sistema
+    # de ficheros de solo lectura, tope de procesos.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    pids_limit: 256
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:?falta TRAEFIK_NETWORK}
+      # Las sondas NO se publican: las lee el healthcheck desde dentro del
+      # contenedor. Fuera, /readyz sería un `select 1` gratis y sin auth para
+      # cualquiera, y una señal fiable de si la base está viva.
+      traefik.http.routers.ladino-api.rule: Host(`${LADINO_API_HOST:?falta LADINO_API_HOST}`) && !Path(`/healthz`) && !Path(`/readyz`)
+      traefik.http.routers.ladino-api.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.ladino-api.tls: "true"
+      traefik.http.routers.ladino-api.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:?falta TRAEFIK_CERT_RESOLVER}
+      traefik.http.services.ladino-api.loadbalancer.server.port: "3000"
+      traefik.http.routers.ladino-api.middlewares: ladino-api-headers,ladino-api-ratelimit
+      # Límite por IP en el borde, LAXO a propósito: el NAT móvil agrupa a
+      # miles de usuarios tras una IP. El límite fino, por usuario, está en la
+      # API (middleware/rate-limit.ts). Este solo frena a quien no tiene token.
+      traefik.http.middlewares.ladino-api-ratelimit.ratelimit.average: "100"
+      traefik.http.middlewares.ladino-api-ratelimit.ratelimit.burst: "200"
+      traefik.http.middlewares.ladino-api-headers.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.ladino-api-headers.headers.contentTypeNosniff: "true"
+      traefik.http.middlewares.ladino-api-headers.headers.frameDeny: "true"
+
+  worker:
+    image: ${LADINO_WORKER_IMAGE:?falta LADINO_WORKER_IMAGE (digest)}
+    container_name: ladino-worker
+    restart: unless-stopped
+    stop_grace_period: 20s
+    env_file:
+      - /etc/ladino/worker.env
+    environment:
+      NODE_ENV: production
+      WORKER_INTERVAL_MS: "2000"
+    # Solo la red interna: el worker no recibe tráfico de nadie.
+    networks:
+      - ladino-net
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp] # el latido del healthcheck se escribe aquí
+    pids_limit: 128
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "test $(( $(date +%s) - $(stat -c %Y /tmp/ladino-worker.heartbeat 2>/dev/null || echo 0) )) -lt 60 || exit 1",
+        ]
+      interval: 30s
+      timeout: 3s
+      start_period: 15s
+      retries: 2
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+networks:
+  ladino-net:
+    name: ladino-net
+  # La red del proxy YA EXISTE (es de Traefik, compartida con otros proyectos).
+  # Ladino se une; no la crea, no la borra, no la renombra.
+  proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:?falta TRAEFIK_NETWORK}

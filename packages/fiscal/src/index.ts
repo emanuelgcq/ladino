@@ -5,3 +5,5 @@
  * antes de que exista una sola regla de negocio. Ver docs/00_GOVERNANCE/SPRINT_0_BOOTSTRAP.md.
  */
 export const PACKAGE_NAME = "@ladino/fiscal" as const;
+
+export { NullTransmitter, type SeniatTransmitter, type EventoOutbox } from "./transmitter.js";

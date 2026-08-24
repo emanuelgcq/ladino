@@ -1,0 +1,45 @@
+# ladino-api — multi-stage, imagen final sin toolchain, usuario no root.
+#
+# Se construye desde la RAÍZ del monorepo:
+#   docker build -f infra/docker/Dockerfile.api -t ladino-api:<version> .
+#
+# La imagen BASE va por digest (F-20 de la auditoría de S0.6a: sin fijarla, dos
+# builds del mismo commit podían producir imágenes distintas), y la RESULTANTE
+# también: su digest se obtiene del build (`docker inspect --format '{{index
+# .RepoDigests 0}}'`) y se anota con `pnpm release:manifest digest`. La base se
+# actualiza a mano y se registra en releases/manifest.json (`base_image`).
+# Nunca `latest` en despliegue.
+
+ARG NODE_IMAGE=node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+
+# ── build ────────────────────────────────────────────────────────────────────
+FROM ${NODE_IMAGE} AS build
+RUN corepack enable
+WORKDIR /repo
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* tsconfig*.json turbo.json ./
+COPY apps ./apps
+COPY packages ./packages
+# frozen-lockfile: el lockfile es contrato (CLAUDE.md §5). Si no cuadra, el build falla.
+# --ignore-scripts: el lockfile fija versiones, no lo que hacen los postinstall,
+# que aquí correrían como root. Si una dependencia lo necesita, se aprueba a mano.
+RUN pnpm install --frozen-lockfile --ignore-scripts
+RUN pnpm turbo run build --filter=@ladino/api...
+# `pnpm deploy` copia el paquete con SOLO sus dependencias de producción,
+# incluidas las del workspace como copias reales (su `files` = dist).
+RUN pnpm --filter @ladino/api deploy --legacy --prod /out
+
+# ── runtime ──────────────────────────────────────────────────────────────────
+FROM ${NODE_IMAGE}
+RUN addgroup -S ladino && adduser -S ladino -G ladino
+WORKDIR /app
+COPY --from=build /out .
+USER ladino
+ENV NODE_ENV=production PORT=3000
+# Cota de heap por DEBAJO del límite de memoria del contenedor (compose: 512M):
+# así Node falla por OOM propio y legible, no matado por el kernel a mitad de
+# una transacción.
+ENV NODE_OPTIONS=--max-old-space-size=384
+EXPOSE 3000
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:3000/healthz > /dev/null || exit 1
+CMD ["node", "dist/server.js"]

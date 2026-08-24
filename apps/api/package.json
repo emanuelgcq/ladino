@@ -18,7 +18,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src",
-    "test": "vitest run"
+    "test": "vitest run",
+    "start": "node dist/server.js"
   },
   "dependencies": {
     "@ladino/core": "workspace:*",
@@ -28,6 +29,7 @@
     "@ladino/schemas": "workspace:*",
     "@ladino/domain": "workspace:*",
     "zod": "^3.24.1",
-    "@asteasolutions/zod-to-openapi": "^7.3.0"
+    "@asteasolutions/zod-to-openapi": "^7.3.0",
+    "@hono/node-server": "^1.13.7"
   }
 }

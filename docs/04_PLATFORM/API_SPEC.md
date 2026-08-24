@@ -114,6 +114,35 @@ No es un detalle de implementación. Es el único punto donde se decide que el a
 ser, y de ese actor cuelgan `created_by`, la resolución de permisos y el alcance de la clave de
 idempotencia.
 
+### Dos modos de firma, y el que manda es el asimétrico (S0.6a)
+
+| Modo | Dónde | Algoritmo | Qué necesita la API |
+|---|---|---|---|
+| `jwks` | **producción** (el proyecto remoto firma así, comprobado contra su JWKS público) | ES256 | solo la clave **pública**, vía `/auth/v1/.well-known/jwks.json` |
+| `hs256` | solo el stack **local** de `supabase start` | HS256 | el secreto legacy compartido |
+
+**Los secretos compartidos no escalan y no rotan bien**: cada servicio que verifica necesita el
+secreto, y rotarlo es redeploy coordinado. Con JWKS la API no guarda nada que proteger, la
+rotación de clave del proyecto se absorbe sola (jose refresca por `kid`), y la clase de ataque de
+«confusión de algoritmo» desaparece porque no existe secreto HMAC contra el que reinterpretar.
+
+**El modo es configuración, no detección.** Un token no elige cómo se le verifica: en modo `jwks`
+un HS256 muere aunque su secreto coincidiera con algo. Y `LADINO_AUTH_MODE=hs256` **no arranca**
+ni con `NODE_ENV=production` ni contra un emisor que no sea local (dos capas, `config.ts`): es un
+error de despliegue y falla activamente.
+
+**Un token que no PUDO verificarse no es un token inválido.** Si el JWKS no responde, la API
+devuelve `503 AUTH_BACKEND_UNAVAILABLE` con `Retry-After`, no `401`: un 401 masivo hace que los
+clientes borren la sesión por una incidencia de red nuestra.
+
+### Controles de borde en `/v1/*` (S0.6a)
+
+`bodyLimit (1 MB) → timeout (30 s, 504 GATEWAY_TIMEOUT) → auth → rate limit (300/min por
+USUARIO, 429 RATE_LIMITED) → contexto → [idempotencia]`. El rate limit en la API es por usuario,
+nunca por IP (NAT móvil); el límite por IP existe en Traefik, mucho más laxo. El plazo de 30 s
+es lo que hace seguro que el reaper libere claves de idempotencia a los 15 min. Códigos en
+`ERROR_CATALOG.md`.
+
 ### El centinela de sistema vale para unas tablas y no para otras — y es deliberado
 
 Asimetría que **no es obvia y que alguien va a "corregir"**, así que va escrita:

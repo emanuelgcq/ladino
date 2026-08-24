@@ -18,6 +18,12 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint src",
-    "test": "vitest run"
+    "test": "vitest run",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@ladino/core": "workspace:*",
+    "@ladino/db": "workspace:*",
+    "@ladino/fiscal": "workspace:*"
   }
 }

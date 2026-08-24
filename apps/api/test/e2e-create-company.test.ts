@@ -67,7 +67,9 @@ async function crear(opts: {
 
 beforeAll(async () => {
   sql = createClient(URL_LOCAL);
-  app = buildApp({ sql, auth: { jwtSecret: JWT_SECRET, issuer: ISSUER } });
+  // Modo hs256 porque es el que firma el stack LOCAL. Contra el remoto la API
+  // corre en modo jwks (ES256); ese modo tiene su propia suite en auth.test.ts.
+  app = buildApp({ sql, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
 
   await sql`delete from public.idempotency_keys where tenant_id = ${TENANT}`;
   await sql`insert into auth.users (id) values (${ADMIN}), (${MIEMBRO}), (${FORASTERO}), (${ACOTADO})
