@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql } from "@ladino/db";
 import { CreateCompanyRequest } from "@ladino/schemas";
 import { createCompany } from "@ladino/domain";
@@ -25,8 +25,12 @@ import { DominioError, ValidacionError } from "../middleware/errors.js";
  * camino), GUC (lo fija el helper), idempotencia (T1/T2 del middleware,
  * montado en app.ts).
  */
-export function companiesRoutes(app: Hono, sql: Sql): void {
-  app.post("/v1/companies", async (c) => {
+export function companiesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler): void {
+  // La idempotencia se monta POR RUTA Y MÉTODO, no por path con app.use (H-6):
+  // montada por path, un `DELETE /v1/companies` sin handler atravesaba T1,
+  // reservaba la clave, recibía el 404 de Hono y T2 la marcaba failed —
+  // escritura en la tabla por un método que no existe.
+  app.post("/v1/companies", idempotencia, async (c) => {
     // Validar la FORMA. Los invariantes de negocio (tenant activo, RIF
     // duplicado) son del caso de uso: Zod no puede saberlos.
     const parsed = CreateCompanyRequest.safeParse(await c.req.json().catch(() => null));

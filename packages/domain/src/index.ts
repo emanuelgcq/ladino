@@ -7,3 +7,4 @@
  * referencia, está en create-company.ts.
  */
 export { createCompany, RULES_VERSION, type CreateCompanyError } from "./create-company.js";
+export { tenantVisible } from "./tenant-visibility.js";

@@ -93,8 +93,11 @@ export async function verificarToken(
 /** Middleware: exige `Authorization: Bearer <jwt>` y deja el resultado en el contexto. */
 export function authMiddleware(cfg: AuthConfig) {
   return async (c: Context, next: Next): Promise<Response | void> => {
+    // El esquema es case-insensitive por RFC 7235: `bearer` y `BEARER` valen.
+    // Con `startsWith("Bearer ")` un cliente legítimo recibía 401 sin motivo.
     const header = c.req.header("Authorization");
-    const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
+    const m = header ? /^bearer\s+(\S+)$/i.exec(header.trim()) : null;
+    const token = m?.[1] ?? null;
     if (!token) {
       return c.json({ code: "UNAUTHENTICATED", message: "Autenticación requerida." }, 401);
     }

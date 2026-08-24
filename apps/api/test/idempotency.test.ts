@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import { Hono } from "hono";
-import { createClient } from "@ladino/db";
+import { createClient, type TransactionSql } from "@ladino/db";
 import { idempotencyMiddleware } from "../src/middleware/idempotency.js";
 import type { RequestContext } from "../src/middleware/context.js";
 import type { AuthResult } from "../src/middleware/auth.js";
@@ -72,6 +72,12 @@ beforeAll(async () => {
              on conflict (id) do nothing`;
     await tx`insert into public.companies (id, tenant_id, tax_id, legal_name)
              values (${COMPANY}, ${TENANT}, 'J-IDEM', 'Empresa idem')
+             on conflict (id) do nothing`;
+    // Desde H-2, el middleware exige que el actor VEA el tenant antes de
+    // reservar nada: los dos usuarios necesitan membership activo.
+    await tx`insert into public.memberships (id, tenant_id, user_id) values
+             ('ffffffff-ffff-4fff-8fff-0000000000a1', ${TENANT}, ${USUARIO_A}),
+             ('ffffffff-ffff-4fff-8fff-0000000000b1', ${TENANT}, ${USUARIO_B})
              on conflict (id) do nothing`;
   });
 });
@@ -189,6 +195,75 @@ describe("idempotencia de extremo a extremo", () => {
     const r2 = await pedir(app, "K-6", { nombre: "zeta" });
     expect(r2.status).toBe(201);
     expect(ejecuciones).toBe(2);
+  });
+
+  it("H-4: una clave CADUCADA se reclama y se reejecuta — no queda inutilizable", async () => {
+    // Antes: el lookup no veía la fila caducada, el INSERT chocaba con el
+    // índice, el 23505 escapaba (H-1) y salía DUPLICATE para siempre.
+    const { createHash } = await import("node:crypto");
+    const hash = createHash("sha256")
+      .update(JSON.stringify({ nombre: "theta" }))
+      .digest();
+    const [vieja] = await sql<{ id: string }[]>`
+      insert into public.idempotency_keys
+        (tenant_id, company_id, actor_id, key, endpoint, request_hash, expires_at, status, response)
+      values (${TENANT}, ${COMPANY}, ${USUARIO_A}, 'K-TTL', 'POST /v1/cosas', ${hash},
+              now() + interval '1 second', 'completed', '{"status":201,"body":{"vieja":true}}')
+      returning id`;
+    // No se puede insertar una fila YA caducada: el CHECK exige
+    // expires_at > created_at, y created_at lo pone el trigger. Se caduca
+    // esperando — que es, además, el único modo en que caduca en producción.
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const res = await pedir(appPara(USUARIO_A), "K-TTL", { nombre: "theta" });
+    expect(res.status).toBe(201);
+    expect(ejecuciones).toBe(1); // se REEJECUTÓ: no devolvió la respuesta vieja
+    const [fila] = await sql<{ id: string; status: string; vigente: boolean }[]>`
+      select id, status, expires_at > now() as vigente
+        from public.idempotency_keys where key = 'K-TTL'`;
+    expect(fila?.id).toBe(vieja?.id); // la MISMA fila, reclamada, no una segunda
+    expect(fila?.status).toBe("completed");
+    expect(fila?.vigente).toBe(true);
+  });
+
+  it("H-3: dos reintentos CONCURRENTES de una clave failed no se rehabilitan los dos", async () => {
+    // El intercalado exacto de la auditoría, con dos conexiones reales y las
+    // sentencias del middleware: A lee failed → B lee → B escribe → A escribe.
+    // Sin `for update`, A y B veían failed y el caso de uso corría dos veces.
+    // Con él, el select de B BLOQUEA hasta que A commitea y entonces ve
+    // in_progress. Promise.all de dos peticiones HTTP no lo reproduce de forma
+    // fiable (la ventana es un round-trip), así que se prueba a nivel de SQL.
+    await sql`insert into public.idempotency_keys
+      (tenant_id, company_id, actor_id, key, endpoint, request_hash, expires_at, status,
+       response)
+      values (${TENANT}, ${COMPANY}, ${USUARIO_A}, 'K-RACE', 'POST /v1/cosas',
+              ${Buffer.alloc(32)}, now() + interval '1 hour', 'failed', '{"status":422}')`;
+
+    const lookup = (tx: TransactionSql) => tx<{ status: string }[]>`
+      select status from public.idempotency_keys
+       where tenant_id = ${TENANT} and company_id = ${COMPANY}
+         and actor_id = ${USUARIO_A} and key = 'K-RACE' and expires_at > now()
+         for update`;
+
+    let vistoPorB = "";
+    let b: Promise<unknown> = Promise.resolve();
+    await sql.begin(async (ta) => {
+      const [fa] = await lookup(ta);
+      expect(fa?.status).toBe("failed");
+      // B arranca en OTRA conexión mientras A tiene el lock: su select bloquea.
+      // No se espera aquí dentro — A tiene que commitear para que B avance;
+      // esperarla dentro de A sería un deadlock por construcción.
+      b = sql.begin(async (tb) => {
+        const [fb] = await lookup(tb);
+        vistoPorB = fb?.status ?? "";
+      });
+      await new Promise((r) => setTimeout(r, 150));
+      await ta`update public.idempotency_keys set status = 'in_progress', response = null
+               where key = 'K-RACE' and status = 'failed'`;
+    }); // ← A commitea aquí y libera el lock
+    await b;
+    // B NO vio failed: vio lo que A dejó tras commitear.
+    expect(vistoPorB).toBe("in_progress");
   });
 
   it("7. sin Idempotency-Key en una ruta crítica → 400, sin ejecutar", async () => {

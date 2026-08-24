@@ -1,6 +1,7 @@
 import { err, ok, type Result } from "@ladino/core";
 import type { UnitOfWork } from "@ladino/db";
 import type { CreateCompanyRequest, CompanyResponse } from "@ladino/schemas";
+import { tenantVisible } from "./tenant-visibility.js";
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -88,50 +89,45 @@ export async function createCompany(
          and m.status = 'active'
     ) as autorizado`;
 
-  // ── 3. CARGAR Y BLOQUEAR ──────────────────────────────────────────────────
-  // (El paso 2, idempotencia, vive en el MIDDLEWARE: T1 reservó la clave antes
-  //  de llegar aquí y T2 la cierra después. Un replay no ejecuta este cuerpo.)
-  //
-  // Se bloquea la fila del TENANT: serializa el alta contra una suspensión
-  // concurrente del tenant, y de paso responde si existe. FOR UPDATE y no
-  // FOR SHARE porque la decisión de crear depende del estado que se lee.
-  const [tenant] = await sql<{ id: string; status: string }[]>`
-    select id, status from public.tenants
-     where id = ${input.tenant_id}
-       for update`;
-
-  // La regla 404/403 de ERROR_CATALOG.md, aplicada en el orden que la hace
-  // valer: PRIMERO invisible (404), DESPUÉS sin permiso (403). Al revés, un
-  // 403 sobre un tenant ajeno confirmaría que existe.
-  if (!tenant || !membresia?.autorizado) {
-    // Sin membership activo en el tenant, el tenant NO ES VISIBLE para este
-    // usuario → 404, exista o no (las dos respuestas deben ser idénticas: un
-    // 403 sobre tenant ajeno confirmaría su existencia). Con membership pero
-    // sin company.manage tenant-wide → 403: la existencia ya la conocía.
-    const [visible] = await sql<{ v: boolean }[]>`
-      select exists (
-        select 1 from public.memberships
-         where tenant_id = ${input.tenant_id}
-           and user_id = ${actor.userId} and status = 'active'
-      ) as v`;
-    if (!tenant || !visible?.v) {
-      // Código NOT_FOUND, EL MISMO que produce el 23503 de la FK cuando el
-      // tenant no existe. Con un código propio (TENANT_NOT_FOUND) los dos 404
-      // eran distinguibles por el cuerpo y el status no ocultaba nada: quien
-      // sondea leería «existe pero no es tuyo» en el code. Lo cazó el test E2E
-      // comparando los cuerpos de los dos caminos, no solo el status.
-      return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-    }
+  // La regla 404/403 de ERROR_CATALOG.md, en el orden que la hace valer:
+  // PRIMERO invisible (404, idéntico exista o no el tenant), DESPUÉS sin
+  // permiso (403: la existencia ya la conocía). El predicado de visibilidad es
+  // el helper COMPARTIDO con el middleware de idempotencia — una sola copia.
+  if (!(await tenantVisible(sql, actor.userId, input.tenant_id))) {
+    // Código NOT_FOUND, EL MISMO que produce el 23503 de la FK cuando el
+    // tenant no existe: los dos 404 deben ser indistinguibles también en el
+    // cuerpo. Lo cazó el test E2E comparando cuerpos, no solo status.
+    return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  }
+  if (!membresia?.autorizado) {
     return err({
       code: "PERMISSION_REQUIRED",
       message: "Crear empresas exige el permiso company.manage a nivel de tenant.",
     });
   }
 
+  // ── 3. CARGAR Y BLOQUEAR ──────────────────────────────────────────────────
+  // (El paso 2, idempotencia, vive en el MIDDLEWARE: T1 reservó la clave antes
+  //  de llegar aquí y T2 la cierra después. Un replay no ejecuta este cuerpo.)
+  //
+  // El lock va DESPUÉS de autorizar, no antes — H-7 de la auditoría: bloquear
+  // primero dejaba que cualquier autenticado tomara un lock exclusivo sobre la
+  // fila de un tenant AJENO durante su transacción. Aquí la ventana era corta;
+  // en un caso de uso pesado es contención cross-tenant servida gratis. El
+  // orden que la plantilla enseña: visibilidad → permiso → bloquear.
+  //
+  // FOR UPDATE y no FOR SHARE porque la decisión de crear depende del estado
+  // que se lee. La fila existe siempre a estas alturas: la visibilidad implica
+  // membership, y el membership tiene FK al tenant.
+  const [tenant] = await sql<{ id: string; status: string }[]>`
+    select id, status from public.tenants
+     where id = ${input.tenant_id}
+       for update`;
+
   // ── 4. VALIDAR ────────────────────────────────────────────────────────────
   // La FORMA la validó Zod en el borde (el handler no llama aquí sin parsear).
   // Aquí van los invariantes de NEGOCIO que Zod no puede saber:
-  if (tenant.status !== "active") {
+  if (tenant!.status !== "active") {
     return err({
       code: "TENANT_SUSPENDED",
       message: "No se pueden crear empresas en un tenant suspendido.",
@@ -151,19 +147,32 @@ export async function createCompany(
   // ── 6. PERSISTIR ──────────────────────────────────────────────────────────
   // created_by/created_at/version los gobierna set_row_provenance() desde el
   // GUC que fijó withTransaction: el caso de uso NO los toca.
+  //
+  // ⚠ EL INSERT VA EN UN SAVEPOINT, Y NO ES OPCIONAL. Un error de Postgres
+  // CONDENA la transacción entera: los pasos 8 y 9 fallarían con 25P02, y
+  // además postgres.js RECHAZA begin() con el error original AUNQUE el
+  // callback lo capture y devuelva un valor — un `try/catch` desnudo alrededor
+  // de este INSERT es código muerto que PARECE funcionar, porque el error
+  // crudo sube a onError y la tabla de SQLSTATE produce el mismo
+  // DUPLICATE/409 que el catch habría producido. El test que los distingue
+  // compara el MENSAJE, no el código. Hallado por la auditoría de S0.5 y
+  // reproducido; el patrón para todo conflicto ESPERABLE dentro de una
+  // transacción es este: savepoint + catch fuera.
   let fila: CompanyRow;
   try {
-    const [creada] = await sql<CompanyRow[]>`
-      insert into public.companies (tenant_id, legal_name, trade_name, tax_id)
-      values (${input.tenant_id}, ${input.legal_name}, ${input.trade_name ?? null},
-              ${input.tax_id})
-      returning id, tenant_id, legal_name, trade_name, tax_id, status,
-                -- ISO 8601 explícito: el texto por defecto de timestamptz usa
-                -- espacio y offset corto, y depender del parseo laxo de Date
-                -- es depender de un detalle del motor.
-                to_char(created_at at time zone 'utc',
-                        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
-    fila = creada!;
+    fila = await sql.savepoint(async (sp) => {
+      const [creada] = await sp<CompanyRow[]>`
+        insert into public.companies (tenant_id, legal_name, trade_name, tax_id)
+        values (${input.tenant_id}, ${input.legal_name}, ${input.trade_name ?? null},
+                ${input.tax_id})
+        returning id, tenant_id, legal_name, trade_name, tax_id, status,
+                  -- ISO 8601 explícito: el texto por defecto de timestamptz usa
+                  -- espacio y offset corto, y depender del parseo laxo de Date
+                  -- es depender de un detalle del motor.
+                  to_char(created_at at time zone 'utc',
+                          'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
+      return creada!;
+    });
   } catch (e) {
     // El único conflicto esperable: RIF repetido en el tenant
     // (companies_tenant_tax_id_key). Cualquier otro error sube al middleware.

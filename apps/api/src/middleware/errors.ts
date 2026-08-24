@@ -41,6 +41,10 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // 404 por la regla de arriba: un 403 confirmaría que existe.
   "23503": { code: "NOT_FOUND", status: 404 },
   "23502": { code: "VALIDATION_FAILED", status: 422 },
+  // Texto malformado para el tipo (un uuid que no lo es). Red de seguridad:
+  // la validación de forma debe cazarlo ANTES en Zod o en el middleware; si
+  // llega aquí es un 422 correcto y una señal de que faltó una comprobación.
+  "22P02": { code: "VALIDATION_FAILED", status: 422 },
   "54000": { code: "PAYLOAD_TOO_LARGE", status: 413 },
 };
 

@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import type { Context, Next } from "hono";
 import { withTransaction, SYSTEM_ACTOR_ID, type Actor, type Sql, type JSONValue } from "@ladino/db";
+import { tenantVisible } from "@ladino/domain";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Middleware de idempotencia — el protocolo de DOS transacciones de ADR-0018
@@ -46,8 +49,11 @@ import { withTransaction, SYSTEM_ACTOR_ID, type Actor, type Sql, type JSONValue 
  * Si el proceso muere DESPUÉS de que el caso de uso commiteara y ANTES de T2,
  * la clave queda `in_progress` con el efecto YA HECHO. Dentro del TTL no pasa
  * nada malo: el reintento recibe 409 IN_PROGRESS y ningún efecto se duplica.
- * PASADO el TTL, la clave expira del lookup y el reintento REEJECUTA el
- * cuerpo:
+ * PASADO el TTL, la clave sale del lookup, el INSERT choca con el índice y T1
+ * la RECLAMA (update sobre la fila caducada) — el reintento REEJECUTA el
+ * cuerpo. (Antes del arreglo H-4 esto no ocurría: el 23505 escapaba, la clave
+ * quedaba inutilizable para siempre y el cliente veía un DUPLICATE que mentía
+ * sobre la causa.) Y entonces:
  *
  *   · si la operación tiene una clave natural única (companies: el RIF por
  *     tenant), la reejecución muere en 23505 → DUPLICATE. Sin doble efecto,
@@ -121,7 +127,10 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
         /* cuerpo no-JSON: cae al error de abajo */
       }
     }
-    if (tenantId === null) {
+    // Forma UUID ANTES de tocar la base (H-5): sin esto, un tenant_id
+    // malformado producía 22P02 → 500 INTERNAL, un error de servidor
+    // disparable por cualquier autenticado.
+    if (tenantId === null || !UUID_RE.test(tenantId)) {
       return c.json(
         {
           code: "TENANT_SCOPE_REQUIRED",
@@ -131,8 +140,30 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
       );
     }
 
+    // ── VISIBILIDAD DEL TENANT, ANTES DE T1 (H-2) ─────────────────────────────
+    // Sin esta comprobación, T1 reservaba la clave con el tenant del CUERPO sin
+    // autorizar: cualquier autenticado escribía filas en la partición lógica de
+    // otro cliente (regla 5, en la dirección de la escritura), y el par de
+    // respuestas 409-reused / 404 delataba qué tenants existen — la reserva
+    // sobrevivía como oráculo. El predicado es el MISMO helper que usa el caso
+    // de uso: una sola copia (ADR-0027 §3-bis). El actor de sistema no pasa por
+    // aquí: es camino de servidor y responde la API por él.
+    if (actor.kind === "user" && !(await tenantVisible(cfg.sql, actor.userId, tenantId))) {
+      // El MISMO cuerpo que devuelve el caso de uso para tenant invisible o
+      // inexistente: los tres 404 indistinguibles, también en el cuerpo.
+      return c.json(
+        { code: "NOT_FOUND", message: "Recurso no encontrado.", request_id: ctx.requestId },
+        404,
+      );
+    }
+
     // ── T1: buscar la reserva (FILTRANDO POR ACTOR) o crearla ────────────────
     const t1 = await withTransaction(cfg.sql, actor, async ({ sql: tx }) => {
+      // `for update` NO es opcional (H-3): sin él, dos reintentos concurrentes
+      // de una clave `failed` leían `failed` los dos, se rehabilitaban los dos
+      // y el caso de uso corría DOS VECES — doble efecto en cualquier módulo
+      // sin clave natural única. Con el lock, la segunda T1 espera a la
+      // primera y ve `in_progress`.
       const [existente] = await tx<Reserva[]>`
         select id, status, request_hash, response
           from public.idempotency_keys
@@ -140,23 +171,49 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
            and company_id is not distinct from ${companyId}
            and actor_id = ${actorId(actor)}
            and key = ${key}
-           and expires_at > now()`;
+           and expires_at > now()
+           for update`;
 
       if (!existente) {
+        // ⚠ SAVEPOINT, no try/catch desnudo (H-1): postgres.js RECHAZA begin()
+        // con el error original aunque el callback lo capture — un catch sin
+        // savepoint aquí es código muerto que PARECE funcionar porque el error
+        // crudo cae en la tabla de SQLSTATE de onError con el código
+        // equivocado (DUPLICATE en vez de IN_PROGRESS).
         try {
-          const [nueva] = await tx<{ id: string }[]>`
-            insert into public.idempotency_keys
-              (tenant_id, company_id, actor_id, key, endpoint, request_hash, expires_at)
-            values (${tenantId}, ${companyId}, ${actorId(actor)}, ${key}, ${endpoint},
-                    ${cuerpo}, now() + make_interval(hours => ${ttl}))
-            returning id`;
-          return { tipo: "reservada" as const, id: nueva!.id };
+          const nueva = await tx.savepoint(async (sp) => {
+            const [fila] = await sp<{ id: string }[]>`
+              insert into public.idempotency_keys
+                (tenant_id, company_id, actor_id, key, endpoint, request_hash, expires_at)
+              values (${tenantId}, ${companyId}, ${actorId(actor)}, ${key}, ${endpoint},
+                      ${cuerpo}, now() + make_interval(hours => ${ttl}))
+              returning id`;
+            return fila!;
+          });
+          return { tipo: "reservada" as const, id: nueva.id };
         } catch (e) {
-          // Carrera: dos peticiones simultáneas con la misma clave. La segunda
-          // pierde el índice único y se comporta como si hubiera visto
-          // `in_progress` — porque eso es exactamente lo que es.
-          if ((e as { code?: string }).code === "23505") return { tipo: "en_vuelo" as const };
-          throw e;
+          if ((e as { code?: string }).code !== "23505") throw e;
+          // El único choca con una fila que el lookup NO vio. Dos causas, dos
+          // respuestas (H-4):
+          //   · fila CADUCADA → se RECLAMA y se reejecuta. Es el comportamiento
+          //     que la cabecera documenta para «pasado el TTL»; sin esto, la
+          //     clave quedaba permanentemente inutilizable con un DUPLICATE
+          //     que mentía sobre la causa.
+          //   · fila VIGENTE → carrera con otra petición en vuelo: 409
+          //     IN_PROGRESS, que es lo que es.
+          const [reclamada] = await tx<{ id: string }[]>`
+            update public.idempotency_keys
+               set status = 'in_progress', response = null,
+                   request_hash = ${cuerpo}, endpoint = ${endpoint},
+                   expires_at = now() + make_interval(hours => ${ttl})
+             where tenant_id = ${tenantId}
+               and company_id is not distinct from ${companyId}
+               and actor_id = ${actorId(actor)}
+               and key = ${key}
+               and expires_at <= now()
+            returning id`;
+          if (reclamada) return { tipo: "reservada" as const, id: reclamada.id };
+          return { tipo: "en_vuelo" as const };
         }
       }
 
@@ -168,12 +225,16 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
         return { tipo: "replay" as const, guardada: existente.response! };
       }
       // `failed`: el reintento es legítimo. Vuelve a in_progress (el CHECK
-      // exige response NULL en ese estado) y se reejecuta.
-      await tx`
+      // exige response NULL en ese estado) y se reejecuta. La guarda de estado
+      // es cinturón sobre el `for update` de arriba: si esto actualiza 0 filas,
+      // algo cambió debajo y NO se reejecuta.
+      const [rehabilitada] = await tx<{ id: string }[]>`
         update public.idempotency_keys
            set status = 'in_progress', response = null, request_hash = ${cuerpo}
-         where id = ${existente.id}`;
-      return { tipo: "reservada" as const, id: existente.id };
+         where id = ${existente.id} and status = 'failed'
+        returning id`;
+      if (!rehabilitada) return { tipo: "en_vuelo" as const };
+      return { tipo: "reservada" as const, id: rehabilitada.id };
     });
 
     switch (t1.tipo) {
@@ -216,22 +277,34 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
       .catch(() => null)) as JSONValue;
     const exito = res.status < 400;
 
-    await withTransaction(cfg.sql, actor, async ({ sql: tx }) => {
-      if (exito) {
-        await tx`
-          update public.idempotency_keys
-             set status = 'completed',
-                 response = ${tx.json({ status: res.status, body })}
-           where id = ${t1.id}`;
-      } else {
+    // T2 NO puede pisar la respuesta del handler (H-8). Si la base cae justo
+    // aquí, el efecto YA ESTÁ HECHO (el caso de uso commiteó): convertir ese
+    // 201 real en un 500 haría que el cliente reintentara algo que ocurrió.
+    // Se registra el fallo y se devuelve la respuesta igualmente; la clave
+    // queda `in_progress` y la reclama el mecanismo de caducidad de T1 — que
+    // es exactamente el borde documentado en la cabecera.
+    try {
+      await withTransaction(cfg.sql, actor, async ({ sql: tx }) => {
         // 4xx/5xx: la operación no produjo su efecto. `failed` deja la clave
         // reintentable, que es lo que un cliente con backoff espera.
         await tx`
           update public.idempotency_keys
-             set status = 'failed',
+             set status = ${exito ? "completed" : "failed"},
                  response = ${tx.json({ status: res.status, body })}
            where id = ${t1.id}`;
-      }
-    });
+      });
+    } catch (e) {
+      // Sin logger estructurado todavía (ADR-0017, pendiente): stderr con el
+      // request_id, que es lo mínimo para correlacionar.
+      console.error(
+        JSON.stringify({
+          nivel: "error",
+          evento: "idempotency.t2_failed",
+          request_id: ctx.requestId,
+          clave_id: t1.id,
+          error: String((e as Error).message ?? e),
+        }),
+      );
+    }
   };
 }

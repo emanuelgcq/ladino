@@ -91,6 +91,20 @@ situación repetidamente es la señal de que las reglas que debería respaldar e
 tapadas — y la respuesta correcta no es celebrarlo, es auditar el resto
 (`pnpm boundaries:selftest` existe por esto).
 
+### Asevera el mensaje, no solo el código: dos caminos pueden producir el mismo `code`
+
+En S0.5, el `catch` de `23505` del caso de uso estaba **muerto** —postgres.js rechaza `begin()`
+con el error original aunque el callback lo capture— y el test E2E llevaba en verde desde que
+existía: el error crudo caía en la tabla de SQLSTATE de `onError` y producía **el mismo
+`DUPLICATE/409`** que el catch habría producido. El test probaba el mapeo genérico creyendo
+probar el caso de uso. Lo destapó comparar el **mensaje**, que era lo único distinto.
+
+Regla: cuando dos caminos distintos pueden converger en la misma respuesta, el test tiene que
+asertar lo que **solo** produce el camino que dice probar. Y su pariente: un error de Postgres
+**condena la transacción**; capturarlo sin `savepoint` es código que parece funcionar. Con
+Hono pasó lo equivalente (`next()` no propaga excepciones). Dos frameworks, dos semánticas de
+error contraintuitivas, y **ninguna la vio un test unitario: las vio el E2E real.**
+
 ### Qué leer según la tarea
 
 | Si tocas… | Lee obligatoriamente |

@@ -254,7 +254,71 @@ describe("POST /v1/companies — la plantilla, de extremo a extremo", () => {
       body: { tenant_id: TENANT, legal_name: "Theta", tax_id: rif(7) },
     });
     expect(res.status).toBe(409);
-    expect(((await res.json()) as { code: string }).code).toBe("DUPLICATE");
+    const cuerpo = (await res.json()) as { code: string; message: string };
+    expect(cuerpo.code).toBe("DUPLICATE");
+    // EL MENSAJE, no solo el código (H-1): el catch del caso de uso y la tabla
+    // de SQLSTATE de onError producen el MISMO code/status, así que un assert
+    // de código pasaba con el catch MUERTO. Solo el mensaje —el del dominio,
+    // no el genérico «Ya existe un registro con esos datos.»— demuestra que el
+    // savepoint mantiene vivo el camino que dice probar.
+    expect(cuerpo.message).toBe("Ya existe una empresa con ese RIF en este tenant.");
+  });
+
+  it("H-2: un forastero NO deja reserva de idempotencia en el tenant ajeno", async () => {
+    // Antes, T1 reservaba con el tenant del cuerpo sin autorizar: escritura
+    // en la partición de otro cliente, y la reserva sobreviviente delataba
+    // que el tenant existía (409 REUSED en el segundo intento vs 404).
+    const key = `${RUN}-KH2`;
+    const t = await tokenDe(FORASTERO);
+    const r1 = await crear({
+      token: t,
+      key,
+      body: { tenant_id: TENANT, legal_name: "A", tax_id: rif(20) },
+    });
+    const r2 = await crear({
+      token: t,
+      key,
+      body: { tenant_id: TENANT, legal_name: "B", tax_id: rif(21) },
+    });
+    expect(r1.status).toBe(404);
+    expect(r2.status).toBe(404); // no 409: no quedó nada que reusar
+    const [n] = await sql<{ c: string }[]>`
+      select count(*)::text as c from public.idempotency_keys where key = ${key}`;
+    expect(n?.c).toBe("0");
+  });
+
+  it("H-5: tenant_id malformado → 422, no 500", async () => {
+    const res = await crear({
+      token: await tokenDe(ADMIN),
+      key: `${RUN}-KH5`,
+      body: { tenant_id: "no-soy-uuid", legal_name: "X", tax_id: rif(22) },
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("H-6: un método sin handler no reserva claves", async () => {
+    const key = `${RUN}-KH6`;
+    const res = await app.request("/v1/companies", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${await tokenDe(ADMIN)}`, "Idempotency-Key": key },
+    });
+    expect(res.status).toBe(404);
+    const [n] = await sql<{ c: string }[]>`
+      select count(*)::text as c from public.idempotency_keys where key = ${key}`;
+    expect(n?.c).toBe("0");
+  });
+
+  it("`bearer` en minúsculas vale: el esquema es case-insensitive (RFC 7235)", async () => {
+    const res = await app.request("/v1/companies", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        authorization: `bearer ${await tokenDe(ADMIN)}`,
+        "Idempotency-Key": `${RUN}-KB`,
+      },
+      body: JSON.stringify({ tenant_id: TENANT, legal_name: "Bearer C.A.", tax_id: rif(23) }),
+    });
+    expect(res.status).toBe(201);
   });
 
   it("cuerpo inválido → 422 VALIDATION_FAILED con request_id, mapeado por el MIDDLEWARE", async () => {

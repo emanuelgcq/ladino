@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { Sql } from "@ladino/db";
 import { authMiddleware, type AuthConfig } from "./middleware/auth.js";
 import { contextMiddleware } from "./middleware/scope.js";
@@ -38,14 +39,22 @@ export function buildApp(cfg: AppConfig): Hono {
   // onError y no un middleware: en Hono, next() NO propaga excepciones — un
   // try/catch alrededor de next() nunca las ve. Ver middleware/errors.ts.
   app.onError(onErrorResponder);
+  // Cota de cuerpo ANTES de auth: la idempotencia lee el cuerpo entero a
+  // memoria para hashearlo, y sin cota cualquiera fuerza reserva de memoria
+  // arbitraria. 1 MB sobra para todo contrato de S0.5; los ficheros no van
+  // por aquí. Observación del auditor de S0.5, fuera de su ámbito pero real.
+  app.use("*", bodyLimit({ maxSize: 1024 * 1024 }));
   app.use("/v1/*", authMiddleware(cfg.auth));
   app.use("/v1/*", contextMiddleware());
-  app.use("/v1/companies", idempotencyMiddleware({ sql: cfg.sql }));
+
+  // La idempotencia se pasa a cada ruta crítica y se monta POR MÉTODO (H-6),
+  // no con app.use por path: así un método sin handler no reserva claves.
+  const idempotencia = idempotencyMiddleware({ sql: cfg.sql });
 
   // Registradas SOBRE esta app, nunca con app.route(): una sub-app gestiona
   // sus errores con su propio onError y se saltaría el errorMapper de arriba.
   // El porqué completo está en routes/companies.ts.
-  companiesRoutes(app, cfg.sql);
+  companiesRoutes(app, cfg.sql, idempotencia);
 
   return app;
 }
