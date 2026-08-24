@@ -184,12 +184,28 @@ produjo.
 | 7 | Aislamiento multi-tenant | "120 aserciones pgTAP en verde, A no ve a B" | **Ningún test tenía un usuario con membership en dos tenants.** Probábamos A↔A y B↔B. El atacante realista de un sistema multi-tenant es el usuario legítimo de ambos, y es el caso central del producto. Un `UPDATE` trasladaba filas de un tenant a otro. |
 | 8 | `alter default privileges ... revoke all on functions from anon, authenticated` | "las funciones nuevas quedan cerradas" | **No-op.** El `EXECUTE` por defecto lo tiene `PUBLIC`, no `anon`. Revocar de quien no lo tiene no quita nada: una función nueva en `public` seguía siendo ejecutable por `anon`. |
 
-El caso 8 es de la peor variante: **no es una defensa ausente, es una defensa que parece estar.**
+| 9 | `pure-packages-no-io-libs`, la regla que garantiza que `money`, `accounting`, `fiscal` e `inventory` no tocan un cliente de base de datos ni HTTP | "el invariante de pureza está cubierto por el gate de fronteras" | **Inerte desde el día que se escribió.** `node_modules` estaba en `exclude`, así que esos módulos no entraban en el grafo, **ninguna arista npm existía**, y la regla daba verde por no tener nada que mirar. El invariante nunca estuvo protegido. Detectada en S0.5 al escribir una regla nueva del mismo tipo y comprobar con su variante rota que tampoco disparaba. |
+| 10 | `no-dev-dep-in-src`, y el `exclude` corregido del caso 9 | "ya está arreglado: quitamos `node_modules` del `exclude`" | El patrón quedó en `(^|/)(dist|coverage)/`, **sin anclar**, y eso excluye también el `dist/` **interno de las dependencias npm** — donde casi todas publican su entry point. `postgres` se salvaba por exponer `src/index.js`; `vitest` desaparecía del grafo. **El arreglo del caso 9 dejó vivo el mismo fallo un nivel más abajo**, y solo lo destapó el autotest regla por regla. |
+
+**El caso 9 es el más grave de la lista, y por un motivo que no es su alcance:** es la **segunda vez
+que `no-unresolvable` tapa este patrón dentro del gate que existe para detectarlo**. En el caso 1
+fue lo único que delató que `dependency-cruiser` no resolvía nada; aquí fue lo que hizo *parecer*
+cubierta una violación que la regla concreta no veía. Un control de seguridad que salva la
+situación dos veces seguidas no es una red: es la señal de que las reglas que debería respaldar no
+se están comprobando.
+
+**Y la generalización, que es lo que hay que llevarse:** *un gate compuesto no está vivo porque el
+conjunto pase.* Veintidós reglas en verde pueden ser veintiuna vivas y una muerta, y desde fuera se
+ven igual. Cada regla tiene que demostrar que dispara, con su propia violación. Es lo que hace
+`pnpm boundaries:selftest`, que al escribirlo encontró **dos** reglas muertas y **una** que solo
+parecía viva.
+
+Los casos 8, 9 y 10 son de la peor variante: **no es una defensa ausente, es una defensa que parece estar.**
 Un `revoke` escrito, revisado y aprobado, que no revoca nada. Quien lo lea después dará el flanco
 por cubierto y no volverá a mirar. Una defensa que no existe se acaba echando en falta; una que
 existe y no funciona, no.
 
-Los ocho comparten la misma estructura: **se confundió "no observé un fallo" con "no hay
+Los diez comparten la misma estructura: **se confundió "no observé un fallo" con "no hay
 fallo"**, cuando lo que ocurría era que el mecanismo de detección no estaba conectado.
 
 Y en casi todos, lo que lo destapó fue un control que existía **precisamente para desconfiar del

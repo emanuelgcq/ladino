@@ -81,6 +81,30 @@ no duplicar lógica replanifica por fila.
 Una corrección no es media tarea: **es una migración, con el mismo rigor, los mismos
 tests y la misma pasada de auditoría que la que corrige.**
 
+### Si un mismo control detecta los fallos una y otra vez, sospecha
+
+**No es que ese control sea bueno: es que está haciendo el trabajo de reglas que no se
+comprueban.** Pasó dos veces con `no-unresolvable` dentro del gate de fronteras: en S0.1 fue
+lo único que delató que `dependency-cruiser` no resolvía nada, y en S0.5 fue lo que hizo
+parecer cubierta una violación que la regla concreta no veía. Un control que salva la
+situación repetidamente es la señal de que las reglas que debería respaldar están inertes o
+tapadas — y la respuesta correcta no es celebrarlo, es auditar el resto
+(`pnpm boundaries:selftest` existe por esto).
+
+### Asevera el mensaje, no solo el código: dos caminos pueden producir el mismo `code`
+
+En S0.5, el `catch` de `23505` del caso de uso estaba **muerto** —postgres.js rechaza `begin()`
+con el error original aunque el callback lo capture— y el test E2E llevaba en verde desde que
+existía: el error crudo caía en la tabla de SQLSTATE de `onError` y producía **el mismo
+`DUPLICATE/409`** que el catch habría producido. El test probaba el mapeo genérico creyendo
+probar el caso de uso. Lo destapó comparar el **mensaje**, que era lo único distinto.
+
+Regla: cuando dos caminos distintos pueden converger en la misma respuesta, el test tiene que
+asertar lo que **solo** produce el camino que dice probar. Y su pariente: un error de Postgres
+**condena la transacción**; capturarlo sin `savepoint` es código que parece funcionar. Con
+Hono pasó lo equivalente (`next()` no propaga excepciones). Dos frameworks, dos semánticas de
+error contraintuitivas, y **ninguna la vio un test unitario: las vio el E2E real.**
+
 ### Qué leer según la tarea
 
 | Si tocas… | Lee obligatoriamente |
@@ -115,16 +139,20 @@ tests y la misma pasada de auditoría que la que corrige.**
 ```bash
 pnpm install              # instalar (lockfile obligatorio, solo pnpm)
 pnpm dev                  # entorno local completo
-pnpm verify               # el gate real. 9 pasos, en este orden:
+pnpm verify               # el gate real. 10 pasos, en este orden:
                           #   1. format:check   prettier --check
                           #   2. boundaries     dependency-cruiser (ADR-0021)
                           #   3. lint           eslint
                           #   4. typecheck      tsc -b --noEmit
-                          #   5. test           vitest (property-based de money incluido)
+                          #   5. test           vitest — incluye la INTEGRACIÓN de la API
+                          #                     contra Postgres local (ADR-0016): necesita
+                          #                     el stack levantado, igual que 9 y 10
                           #   6. build          tsc -b
                           #   7. api-surface    ningún `number` en la API pública de money
-                          #   8. db:reset       aplica TODAS las migraciones desde cero
-                          #   9. test:rls       pgTAP: aislamiento y append-only
+                          #   8. openapi:check  el openapi.json commiteado == el generado
+                          #                     desde los Zod de packages/schemas (ADR-0004)
+                          #   9. db:reset       aplica TODAS las migraciones desde cero
+                          #  10. test:rls       pgTAP: aislamiento y append-only
 
 pnpm db:start             # levanta Postgres local en contenedores (necesita Docker)
 pnpm db:stop              # lo baja
@@ -136,8 +164,8 @@ pnpm test:concurrency:selftest   # rompe el pickup a propósito: comprueba que l
 pnpm openapi              # regenerar openapi.json desde los schemas
 ```
 
-**Los pasos 8 y 9 necesitan Docker y el stack local levantado** (`pnpm db:start`). Es el precio
-de que el proyecto ya tenga base de datos: desde S0.3, `verify` no se puede pasar sin ella.
+**Los pasos 5, 9 y 10 necesitan Docker y el stack local levantado** (`pnpm db:start`): desde
+S0.5, el paso de test incluye la integración de la API contra Postgres real (ADR-0016).
 
 **`test:concurrency` NO está dentro de `verify`, y es deliberado.** Es una prueba de *muestreo*:
 abre N sesiones, compite durante T segundos y comprueba que nadie se lleva la misma fila dos
@@ -146,8 +174,8 @@ muestral en cada `verify` enseña a reejecutarlo hasta que pase, y ahí deja de 
 Corre cuando toques el outbox o su consumo, y en CI sobre esa ruta.
 
 `verify` reproduce el **núcleo** del pipeline de `DEVOPS_CI_CD.md`, no el pipeline entero.
-`integration` y `openapi:check` siguen fuera hasta que S0.5 los haga existir: un gate que falla
-por algo que todavía no se construyó solo entrena a ignorarlo.
+Desde S0.5, `openapi:check` es el paso 8 y la integración vive dentro del paso de test: los dos
+existen y bloquean. Lo que sigue fuera del gate es `test:concurrency`, por muestral.
 
 ## 6. Formato de entrega (todas las tareas)
 

@@ -49,10 +49,21 @@ Una conversión sin `source` y `timestamp` no se persiste.
 Todo posting contable, emisión fiscal, movimiento de inventario y pago es ACID y sigue el
 patrón de 10 pasos de la skill `caso-de-uso`. Si dos escrituras pueden divergir, es un bug.
 
-## Idempotencia (ADR-0018)
+## Idempotencia (ADR-0018, enmendado)
 
-`Idempotency-Key` obligatorio en emisión, pagos, cobros, posting, reintentos fiscales y nómina.
-Se persiste dentro de la misma transacción del caso de uso.
+`Idempotency-Key` obligatorio en emisión, pagos, cobros, posting, reintentos fiscales, nómina
+y creación de empresas. Trabajo local: la clave se persiste en la transacción del caso de uso.
+Con viaje externo: protocolo de dos transacciones (T1 reserva → trabajo → T2 cierra).
+
+**La idempotencia acota la ventana; la clave natural la cierra. Toda operación crítica
+necesita LAS DOS.** No es redundancia, es la frontera exacta del at-least-once: si el proceso
+muere después de que el caso de uso commiteara y antes de T2, la clave queda `in_progress` y
+dentro del TTL nada se duplica — pero pasado el TTL el reintento **reejecuta el cuerpo**, y lo
+único que entonces impide el doble efecto es una restricción única natural en el esquema (el
+RIF por tenant, el número fiscal por serie, el `source_type/source_id` del asiento). Una
+operación crítica sin clave natural única tiene un doble efecto programado para 24 horas
+después de su primer fallo de infraestructura. Asumir que con `Idempotency-Key` basta es el
+malentendido más caro que deja S0.5.
 
 ## Eventos (ADR-0005)
 

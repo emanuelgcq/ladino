@@ -137,6 +137,21 @@ module.exports = {
       },
     },
 
+    {
+      name: "db-client-only-in-db-package",
+      severity: "error",
+      comment:
+        "El helper de @ladino/db es el ÚNICO punto de entrada a Postgres, porque es quien fija " +
+        "`set local ladino.actor_id` como primera sentencia de la transacción. Si otro módulo " +
+        "abre su propia conexión, escribe sin autor: `set_row_provenance()` deja created_by en " +
+        "NULL EN SILENCIO, sin error y con 201 de vuelta, y el vacío aparece meses después en " +
+        "una auditoría. Un contrato documentado no basta (CLAUDE.md §2: ausencia de mecanismo " +
+        "no es prohibición); esta regla lo convierte en imposible. ADR-0027 §3-bis y " +
+        "API_SPEC.md §Procedencia.",
+      from: { pathNot: "^packages/db/" },
+      to: { path: "node_modules/postgres/" },
+    },
+
     // ------------------------------------------------------------------ higiene
     {
       name: "no-circular",
@@ -165,14 +180,35 @@ module.exports = {
       name: "no-orphans",
       severity: "warn",
       comment: "Módulo que nadie importa. Suele ser código muerto.",
-      from: { orphan: true, pathNot: "\\.d\\.ts$|(^|/)index\\.ts$" },
+      // Los `*-cli.ts` son puntos de entrada (los invoca node, no un import).
+      from: { orphan: true, pathNot: "\\.d\\.ts$|(^|/)index\\.ts$|(^|/)[a-z-]+-cli\\.ts$" },
       to: {},
     },
   ],
 
   options: {
     doNotFollow: { path: "node_modules" },
-    exclude: { path: "(^|/)(dist|coverage|node_modules)/" },
+    // ⚠ `node_modules` NO va en `exclude`, y la diferencia con `doNotFollow` es
+    // la que decide si media docena de reglas funcionan o son decorativas:
+    //
+    //   · `doNotFollow` conserva el módulo en el grafo pero no lo atraviesa —la
+    //     arista `mi-código → node_modules/postgres` EXISTE y se puede prohibir;
+    //   · `exclude` lo borra del grafo, así que esa arista no existe y toda
+    //     regla con `to: { path: "node_modules/..." }` no coincide con nada.
+    //
+    // Con `node_modules` en `exclude` estaban INERTES `pure-packages-no-io-libs`
+    // —la que garantiza que money, accounting y fiscal no tocan un cliente de
+    // base de datos ni HTTP— y `db-client-only-in-db-package`. Las dos daban
+    // verde por no encontrar nada que mirar, que es el caso 1 del patrón de
+    // ADR-0023. Detectado en S0.5 al escribir la segunda y comprobar, con la
+    // variante rota, que no se disparaba.
+    // Y el patrón va ANCLADO a nuestros paquetes. `(^|/)(dist|coverage)/` sin
+    // anclar excluía también el `dist/` INTERNO de las dependencias npm, que es
+    // donde casi todas publican su entry point: `postgres` se salvaba por
+    // exponer `src/index.js`, pero `vitest` y compañía desaparecían del grafo y
+    // `no-dev-dep-in-src` no tenía nada que mirar. Mismo fallo que el de
+    // `node_modules`, un nivel más abajo y más difícil de ver.
+    exclude: { path: "^(packages|apps)/[^/]+/(dist|coverage)/" },
     tsPreCompilationDeps: true,
     combinedDependencies: false,
     enhancedResolveOptions: {

@@ -231,6 +231,50 @@ función SQL, su `FmgrInfo` se construye por invocación.
 envoltorio va en `plpgsql`.** Y va con comentario, porque reescribirlo en SQL
 parece más limpio y equivalente.
 
+### Un gate COMPUESTO no está vivo porque el conjunto pase
+
+Generalización de la anterior, y la más cara de aprender hasta ahora.
+
+Un gate con N reglas —`dependency-cruiser`, un `eslint` con su config, una suite
+de policies— **no demuestra nada por pasar entero**. Veintidós reglas en verde
+pueden ser veintiuna vivas y una muerta, y desde fuera se ven exactamente igual.
+
+**Cada regla tiene que demostrar que dispara, con su propia violación.**
+
+En Ladino eso es `pnpm boundaries:selftest`, y al escribirlo encontró:
+
+- **`pure-packages-no-io-libs` INERTE desde el día que se escribió** — el
+  invariante de que `money`, `accounting` y `fiscal` no tocan I/O nunca estuvo
+  protegido. `node_modules` estaba en `exclude`, así que no había aristas npm
+  en el grafo y la regla no tenía qué mirar.
+- **Y después, el arreglo dejó vivo el mismo fallo un nivel más abajo**: el
+  patrón sin anclar excluía también el `dist/` interno de las dependencias npm,
+  donde casi todas publican su entry point.
+
+**Los dos estados de una regla que no funciona — y son conceptos, no detalles
+del script:**
+
+- **INERTE**: la violación no la detecta nada. El gate da verde con el agujero
+  abierto. Es grave y es la variante *visible*: tarde o temprano alguien
+  explota el hueco y se nota.
+- **TAPADA**: la violación la caza OTRA regla, no la que dice cubrirla. **Es
+  peor que una muerta.** El conjunto pasa, alguien lee la regla y cree que
+  protege, y el día que la regla que la cubre cambie de alcance —se relaje
+  `no-unresolvable`, se mueva un `exclude`— el agujero se abre **sin que nadie
+  haya tocado la regla tapada**. No hay commit al que culpar: el fallo lo
+  introdujo un cambio en otra parte, años antes, que nadie conectará.
+
+Por eso el arnés exige que dispare la regla **por su nombre**: que salte otra
+no cuenta.
+
+**Y el arnés necesita su propio arnés.** La primera pasada del selftest reportó
+QUINCE reglas tapadas y era falso: los fixtures importaban paquetes no
+declarados, el import no resolvía, y el arnés medía la *resolución*, no la
+regla. Un verificador de verificadores también puede estar midiendo lo que no
+cree. La advertencia operativa: **si `boundaries:selftest` reporta muchas
+muertas de golpe, el primer sospechoso es el arnés** — una regla muere por un
+cambio concreto; quince a la vez mueren por un defecto del que las mide.
+
 ### Un gate de corrección no detecta una regresión de coste
 
 Corolario del anterior, y es el que dolió: los 348 asserts de S0.4 pasaron en
@@ -277,6 +321,24 @@ El corolario útil sí sobrevivió al error: **una policy que exige un permiso s
 fila en `permissions` cierra la lectura a todo el mundo sin un solo error**. Si
 una policy depende de una fila, la migración comprueba que existe y falla si no
 —tres líneas de `do $$ … raise exception`— en vez de suponerlo.
+
+### Cuando hay que elegir un modo de fallo, se elige el ruidoso
+
+Regla de diseño, no de test, y aplica cada vez que una decisión reparte los
+errores posibles entre dos lados:
+
+- **Un 409 espurio se ve y se corrige.** El cliente recibe el error, lee el
+  mensaje, ajusta y reintenta. Coste: una fricción visible.
+- **Un replay indebido no se ve nunca.** Devuelve `200` con la respuesta de
+  otra operación, nadie recibe señal alguna, y el efecto que faltó (o el que
+  sobró) aparece meses después en un cuadre.
+
+Casos ya decididos con este criterio: `endpoint` fuera del índice único de
+idempotencia (reusar la clave da 409, no dos facturas); `request_hash` sobre
+bytes crudos sin canonicalizar (formato distinto da 409, no un replay de otro
+cuerpo); `NULLS NOT DISTINCT` probado sobre el caso NULL. La pregunta que lo
+resume: *si esta decisión falla, ¿alguien se entera?* Si la respuesta es no,
+elegiste el lado equivocado.
 
 ### Toda prueba de un invariante crítico necesita una variante que la rompa
 

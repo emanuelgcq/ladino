@@ -343,7 +343,9 @@ más provenance.
 
 **`idempotency_keys`** — `id` (`uuidv7`), `tenant_id`, `company_id` (nullable), `key`, `endpoint`,
 `request_hash`, `response` (`jsonb`, nullable), `status` (con `CHECK`), `expires_at`, más
-provenance. Único `NULLS NOT DISTINCT` sobre `(tenant_id, company_id, key)`.
+provenance, más **`actor_id`** (`NOT NULL`, fijado por el middleware, clavado por trigger). Único
+`NULLS NOT DISTINCT` sobre **`(tenant_id, company_id, actor_id, key)`** — ver la enmienda de D5.
+Este párrafo decía `(tenant_id, company_id, key)`: la enmienda de D5 no había bajado hasta aquí.
 
 ### Los tres bloqueantes heredados de S0.3
 

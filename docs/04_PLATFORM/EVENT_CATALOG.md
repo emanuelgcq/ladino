@@ -28,3 +28,21 @@
 - bank.reconciled
 
 Cada evento incluye schema version.
+
+## Estructura organizacional
+
+Sección nueva (S0.5). Las cuatro anteriores —Fiscal, Accounting, Inventory, Money— cubren el
+movimiento del negocio; ninguna cubre los cambios sobre la propia estructura, y `company.created`
+no encajaba en ninguna.
+
+- company.created
+
+Los demás eventos de esta sección se añaden **cuando exista el caso de uso que los emite**, no por
+anticipado: la política de qué se audita está diferida con dueño y disparador en `RISK_REGISTER.md`
+(R-04), y un catálogo escrito por adelantado sería adivinación.
+
+> **Nota sobre el alta de una company.** Deja **dos** rastros y no son duplicados:
+> `company.created` en el outbox —lo emite el caso de uso, y es el evento de integración— y
+> `company.tax_id_established` en `audit_events` —lo escribe el trigger de M4, y es la red del
+> esquema que garantiza que la identidad fiscal inicial queda registrada aunque no haya caso de uso
+> (una carga directa, un script de operación). Hechos distintos, destinos distintos.

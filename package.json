@@ -19,7 +19,10 @@
     "format:check": "prettier --check .",
     "boundaries": "depcruise --config .dependency-cruiser.cjs apps packages && node scripts/assert-no-cross-package-paths.mjs",
     "boundaries:graph": "depcruise --config .dependency-cruiser.cjs --output-type dot apps packages",
+    "boundaries:selftest": "node scripts/boundaries-selftest.mjs",
     "api-surface": "turbo run api-surface",
+    "openapi": "turbo run build --filter=@ladino/api && node apps/api/dist/openapi-cli.js write openapi.json",
+    "openapi:check": "turbo run build --filter=@ladino/api && node apps/api/dist/openapi-cli.js check openapi.json",
     "db:start": "supabase start -x studio,storage,imgproxy,logflare,vector",
     "db:stop": "supabase stop",
     "db:new": "supabase migration new",
@@ -28,7 +31,7 @@
     "test:concurrency": "node scripts/outbox-concurrency.mjs",
     "test:concurrency:selftest": "node scripts/outbox-concurrency.mjs --roto --seconds 4",
     "db:verify": "node scripts/require-local-db.mjs && pnpm run db:reset && pnpm run test:rls",
-    "verify": "pnpm run format:check && pnpm run boundaries && turbo run lint typecheck test build && turbo run api-surface && pnpm run db:verify"
+    "verify": "pnpm run format:check && pnpm run boundaries && turbo run lint typecheck test build && turbo run api-surface && pnpm run openapi:check && pnpm run db:verify"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
