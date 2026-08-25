@@ -33,6 +33,7 @@ Comprobado sobre las funciones realmente instaladas. **Cada uno es único en tie
 | `LAD29` | `platform.audit_tax_id_change()` | cambio de RIF sin `company.tax_id.manage` | *S0.5* | *S0.5* |
 | `LAD30` | `platform.assert_occurred_at_not_future()` | `occurred_at` >30 s por delante del reloj del servidor | *S0.5* | *S0.5* |
 | `LAD31` | `platform.assert_idempotency_actor_immutable()` | intento de mover `actor_id` de una clave | *S0.5* | *S0.5* |
+| `LAD33` | `platform.assert_product_kind_frozen()` | cambiar bien/servicio de un producto que salió de `draft` (D-8, migración 16) | `PRODUCT_KIND_IMMUTABLE` | `409` |
 
 ## Códigos de una sola ejecución — NO llegan a la API
 
@@ -41,6 +42,9 @@ significado (`server_encoding ≠ UTF8` y «permiso fantasma»). **No hay colisi
 ejecución**: los dos están dentro de bloques `do $$` que corren una sola vez al aplicar la
 migración y no dejan función instalada. Se registran aquí para que nadie los lea como duplicados
 al hacer `grep` sobre las migraciones y crea que el mapeo 1:1 es imposible.
+
+`LAD32` (atributos de los roles de servicio, migración 14) y `LAD34` (seeds del catálogo de
+productos, migración 16) son de una sola ejecución: abortan la migración, no llegan a la API.
 
 **Regla para migraciones futuras:** un `LADxx` nuevo se reserva en esta tabla **antes** de usarse,
 incluso para una aserción de una sola ejecución. Reutilizar un número «porque solo corre una vez»
