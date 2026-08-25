@@ -97,7 +97,7 @@ export function buildApp(cfg: AppConfig): Hono {
   app.use("/v1/*", timeoutMiddleware(cfg.requestTimeoutMs ?? 30_000));
   app.use("/v1/*", authMiddleware(cfg.auth));
   app.use("/v1/*", rateLimitMiddleware({ porMinuto: cfg.rateLimitPorMinuto ?? 300 }));
-  app.use("/v1/*", contextMiddleware());
+  app.use("/v1/*", contextMiddleware(cfg.sql));
 
   // La idempotencia se pasa a cada ruta crítica y se monta POR MÉTODO (H-6),
   // no con app.use por path: así un método sin handler no reserva claves.

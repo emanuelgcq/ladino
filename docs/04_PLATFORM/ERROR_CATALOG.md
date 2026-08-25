@@ -116,7 +116,7 @@ la idempotencia protegía del reintento pero no del abuso.
 | `AUTH_BACKEND_UNAVAILABLE` | `503` + `Retry-After: 5` | auth | el JWKS no respondió (timeout, red, respuesta malformada). **No es culpa del token**: se registra a nivel `error` |
 | `RATE_LIMITED` | `429` + `Retry-After` | rate limit | más de N peticiones por minuto **por usuario** (`RATE_LIMIT_PER_MINUTE`, 300). Nunca por IP en la API |
 | `GATEWAY_TIMEOUT` | `504` | timeout | la petición superó `REQUEST_TIMEOUT_MS` (30 s). El handler sigue hasta terminar; su respuesta se descarta |
-| `COMPANY_SCOPE_NOT_IMPLEMENTED` | `422` | contexto | `X-Company-Id` llega antes de que exista su validación |
+| `VALIDATION_FAILED` | `422` | contexto | `X-Company-Id` sin forma de UUID (validado contra `ladino_user_company_ids()` desde la migración 15; invisible o inexistente → `404 NOT_FOUND`, los tres casos indistinguibles). `COMPANY_SCOPE_NOT_IMPLEMENTED` quedó retirado |
 | `PAYLOAD_TOO_LARGE` | `413` | `bodyLimit` | cuerpo > 1 MB |
 
 ## Lo que este documento NO decide
