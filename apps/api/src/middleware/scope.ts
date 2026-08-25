@@ -22,6 +22,8 @@ import type { RequestContext } from "./context.js";
  * no debe poder hacerse, tiene que fallar, no depender de que nadie lo use).
  * Ningún endpoint de S0.5 lo necesita: crear company es de nivel tenant.
  */
+const REQUEST_ID_RE = /^[\w.-]{1,64}$/;
+
 export function contextMiddleware() {
   return async (c: Context, next: Next): Promise<Response | void> => {
     if (c.req.header("X-Company-Id") !== undefined) {
@@ -37,8 +39,12 @@ export function contextMiddleware() {
     }
 
     const auth = c.get("ladino.auth");
+    // `X-Request-Id` es texto del cliente que acaba en logs y en la base: se
+    // acepta solo con forma acotada; si no, se genera uno. Nunca se rechaza la
+    // petición por esto — es correlación, no contrato.
+    const pedido = c.req.header("X-Request-Id");
     const ctx: RequestContext = {
-      requestId: c.req.header("X-Request-Id") ?? crypto.randomUUID(),
+      requestId: pedido && REQUEST_ID_RE.test(pedido) ? pedido : crypto.randomUUID(),
       actor: auth.actor,
       userId: auth.userId,
       companyId: null,

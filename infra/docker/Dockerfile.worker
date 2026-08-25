@@ -1,0 +1,40 @@
+# ladino-worker — consumo del outbox y reapers. Sin puerto: el healthcheck lee
+# el fichero de latido que cada vuelta del bucle refresca.
+#
+#   docker build -f infra/docker/Dockerfile.worker -t ladino-worker:<version> .
+
+# Base POR DIGEST (F-20 de la auditoría de S0.6a): el digest que se anota en el
+# manifest es el de la imagen resultante; sin fijar la base, dos builds del
+# mismo commit podían producir imágenes distintas. Se actualiza a mano y se
+# registra en releases/manifest.json (`base_image`).
+ARG NODE_IMAGE=node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+
+FROM ${NODE_IMAGE} AS build
+RUN corepack enable
+WORKDIR /repo
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* tsconfig*.json turbo.json ./
+COPY apps ./apps
+COPY packages ./packages
+# --ignore-scripts: el lockfile fija versiones, no lo que hacen los postinstall,
+# que aquí correrían como root. Si una dependencia lo necesita, se aprueba a mano.
+RUN pnpm install --frozen-lockfile --ignore-scripts
+RUN pnpm turbo run build --filter=@ladino/worker...
+RUN pnpm --filter @ladino/worker deploy --legacy --prod /out
+
+FROM ${NODE_IMAGE}
+RUN addgroup -S ladino && adduser -S ladino -G ladino
+WORKDIR /app
+COPY --from=build /out .
+USER ladino
+ENV NODE_ENV=production
+ENV WORKER_HEARTBEAT_FILE=/tmp/ladino-worker.heartbeat
+# Por debajo del límite del contenedor (compose: 256M).
+ENV NODE_OPTIONS=--max-old-space-size=192
+# Vivo = el latido tiene menos de 60 s. OJO: Docker NO reinicia un contenedor
+# `unhealthy` (la política `restart` reacciona a la salida del proceso, no a
+# la salud). Este healthcheck es señal para el panel; el actuador es el propio
+# worker, que sale con 1 tras N ciclos fallidos o un ciclo colgado (main.ts),
+# y entonces sí actúa `restart: unless-stopped`.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=2 \
+  CMD test $(( $(date +%s) - $(stat -c %Y /tmp/ladino-worker.heartbeat 2>/dev/null || echo 0) )) -lt 60 || exit 1
+CMD ["node", "dist/main.js"]

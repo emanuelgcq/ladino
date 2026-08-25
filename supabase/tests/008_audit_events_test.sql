@@ -196,10 +196,14 @@ select ok(not has_table_privilege('anon', 'public.audit_events', 'SELECT'),
 
 -- Las denegaciones están ESCRITAS, no son ausencia de policy.
 select is(
-  (select count(*) from pg_policy where polrelid = 'public.audit_events'::regclass),
+  (select count(*) from pg_policy p
+    where p.polrelid = 'public.audit_events'::regclass
+      and (p.polroles = '{0}'::oid[]
+           or p.polroles && array['anon'::regrole::oid, 'authenticated'::regrole::oid])),
   4::bigint,
-  'hay CUATRO policies: una de lectura y tres denegaciones escritas. Una policy '
-  'ausente es indistinguible de un olvido');
+  'el camino de cliente tiene CUATRO policies: una de lectura y tres denegaciones '
+  'escritas. Una policy ausente es indistinguible de un olvido. (Las TO ladino_api '
+  'son de ADR-0031 y las prueba 014.)');
 
 
 -- =============================================================================

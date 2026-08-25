@@ -1,7 +1,9 @@
 /**
- * @ladino/worker — Outbox, jobs, reintentos
+ * @ladino/worker — consumo del outbox y reapers.
  *
- * Placeholder de Sprint 0 (S0.1). Sin framework y sin lógica: el esqueleto debe compilar
- * antes de que exista una sola regla de negocio. Ver docs/00_GOVERNANCE/SPRINT_0_BOOTSTRAP.md.
+ * El arranque del proceso está en main.ts; esto exporta las piezas para
+ * poder probarlas sin bucle ni señales.
  */
+export { procesarLote, backoffSegundos } from "./outbox.js";
+export { reaperOutbox, reaperIdempotencia, purgarIdempotencia } from "./reapers.js";
 export const PACKAGE_NAME = "@ladino/worker" as const;

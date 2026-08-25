@@ -148,7 +148,17 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
     // sobrevivía como oráculo. El predicado es el MISMO helper que usa el caso
     // de uso: una sola copia (ADR-0027 §3-bis). El actor de sistema no pasa por
     // aquí: es camino de servidor y responde la API por él.
-    if (actor.kind === "user" && !(await tenantVisible(cfg.sql, actor.userId, tenantId))) {
+    // DENTRO de withTransaction aunque sea una sola lectura: el predicado corre
+    // bajo la RLS de ladino_api (ADR-0031), y sin el GUC del actor el rol no ve
+    // NADA — ni su propia membership. Desnuda, esta consulta devolvía 404 para
+    // todo el mundo; con `postgres` (BYPASSRLS) el mismo olvido pasaba en
+    // silencio. El rol dedicado lo convirtió en fallo ruidoso, que es su trabajo.
+    const visible =
+      actor.kind !== "user" ||
+      (await withTransaction(cfg.sql, actor, ({ sql: tx }) =>
+        tenantVisible(tx, actor.userId, tenantId),
+      ));
+    if (!visible) {
       // El MISMO cuerpo que devuelve el caso de uso para tenant invisible o
       // inexistente: los tres 404 indistinguibles, también en el cuerpo.
       return c.json(
@@ -287,11 +297,27 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
       await withTransaction(cfg.sql, actor, async ({ sql: tx }) => {
         // 4xx/5xx: la operación no produjo su efecto. `failed` deja la clave
         // reintentable, que es lo que un cliente con backoff espera.
-        await tx`
+        // GUARDA DE ESTADO, como en T1 (F-10 de la auditoría de S0.6a): si el
+        // reaper liberó esta clave y otro reintento la volvió a reservar, este
+        // T2 llega tarde y NO debe cerrar la reserva ajena con su respuesta.
+        // Con el timeout de petición (30 s) muy por debajo del umbral del
+        // reaper (15 min) esto no debería ocurrir nunca; si ocurre, se sabe.
+        const cerradas = await tx<{ id: string }[]>`
           update public.idempotency_keys
              set status = ${exito ? "completed" : "failed"},
                  response = ${tx.json({ status: res.status, body })}
-           where id = ${t1.id}`;
+           where id = ${t1.id} and status = 'in_progress'
+          returning id`;
+        if (cerradas.length === 0) {
+          console.error(
+            JSON.stringify({
+              nivel: "error",
+              evento: "idempotency.t2_claim_lost",
+              request_id: ctx.requestId,
+              clave_id: t1.id,
+            }),
+          );
+        }
       });
     } catch (e) {
       // Sin logger estructurado todavía (ADR-0017, pendiente): stderr con el

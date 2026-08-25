@@ -139,20 +139,22 @@ error contraintuitivas, y **ninguna la vio un test unitario: las vio el E2E real
 ```bash
 pnpm install              # instalar (lockfile obligatorio, solo pnpm)
 pnpm dev                  # entorno local completo
-pnpm verify               # el gate real. 10 pasos, en este orden:
+pnpm verify               # el gate real. 11 pasos, en este orden:
                           #   1. format:check   prettier --check
                           #   2. boundaries     dependency-cruiser (ADR-0021)
                           #   3. lint           eslint
                           #   4. typecheck      tsc -b --noEmit
                           #   5. test           vitest — incluye la INTEGRACIÓN de la API
                           #                     contra Postgres local (ADR-0016): necesita
-                          #                     el stack levantado, igual que 9 y 10
+                          #                     el stack levantado, igual que 10 y 11
                           #   6. build          tsc -b
                           #   7. api-surface    ningún `number` en la API pública de money
                           #   8. openapi:check  el openapi.json commiteado == el generado
                           #                     desde los Zod de packages/schemas (ADR-0004)
-                          #   9. db:reset       aplica TODAS las migraciones desde cero
-                          #  10. test:rls       pgTAP: aislamiento y append-only
+                          #   9. release:manifest:check  releases/manifest.json cubre las
+                          #                     migraciones y ninguna cubierta cambió (ADR-0019)
+                          #  10. db:reset       aplica TODAS las migraciones desde cero
+                          #  11. test:rls       pgTAP: aislamiento y append-only
 
 pnpm db:start             # levanta Postgres local en contenedores (necesita Docker)
 pnpm db:stop              # lo baja
@@ -164,7 +166,7 @@ pnpm test:concurrency:selftest   # rompe el pickup a propósito: comprueba que l
 pnpm openapi              # regenerar openapi.json desde los schemas
 ```
 
-**Los pasos 5, 9 y 10 necesitan Docker y el stack local levantado** (`pnpm db:start`): desde
+**Los pasos 5, 10 y 11 necesitan Docker y el stack local levantado** (`pnpm db:start`): desde
 S0.5, el paso de test incluye la integración de la API contra Postgres real (ADR-0016).
 
 **`test:concurrency` NO está dentro de `verify`, y es deliberado.** Es una prueba de *muestreo*:
@@ -174,7 +176,8 @@ muestral en cada `verify` enseña a reejecutarlo hasta que pase, y ahí deja de 
 Corre cuando toques el outbox o su consumo, y en CI sobre esa ruta.
 
 `verify` reproduce el **núcleo** del pipeline de `DEVOPS_CI_CD.md`, no el pipeline entero.
-Desde S0.5, `openapi:check` es el paso 8 y la integración vive dentro del paso de test: los dos
+Desde S0.5, `openapi:check` es el paso 8 y la integración vive dentro del paso de test; desde
+S0.6a, `release:manifest:check` es el paso 9 (`releases/manifest.json`, ADR-0027 §5). Todos
 existen y bloquean. Lo que sigue fuera del gate es `test:concurrency`, por muestral.
 
 ## 6. Formato de entrega (todas las tareas)

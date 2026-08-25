@@ -105,14 +105,46 @@ En S0.4 alcanza a `audit_events`.
 documento decía quién verifica el JWT**. ADR-0014 lo menciona solo para argumentar contra los
 tokens de larga vida, y `SECURITY.md` habla de qué clave va en el cliente. La decisión faltaba.
 
-**La API verifica la firma ella misma, antes de cualquier otra cosa.** La razón es una consecuencia
-directa de ADR-0025 §9: **la API escribe con `service_role`, que tiene `BYPASSRLS`**. Es decir, la
-RLS —que es lo que protege el camino `authenticated`— **no protege a la API**. Si la API no verifica
-el token, no lo verifica nadie: se estaría confiando en un `sub` que cualquiera puede escribir.
+**La API verifica la firma ella misma, antes de cualquier otra cosa.** La razón original era la
+consecuencia de ADR-0025 §9: la API escribía con `service_role` (`BYPASSRLS`) y la RLS no la
+protegía. **Desde ADR-0031 la API se conecta como `ladino_api`, sin `BYPASSRLS`, y la RLS por
+tenant del actor sí la contiene** — pero la decisión no cambia: la API sigue verificando el token
+ella misma, porque la RLS es la segunda capa, no la autorización, y porque el actor que la RLS usa
+(el GUC) sale precisamente de ese token verificado. Si la API no verifica, el GUC es un `sub` que
+cualquiera escribe.
 
 No es un detalle de implementación. Es el único punto donde se decide que el actor es quien dice
 ser, y de ese actor cuelgan `created_by`, la resolución de permisos y el alcance de la clave de
 idempotencia.
+
+### Dos modos de firma, y el que manda es el asimétrico (S0.6a)
+
+| Modo | Dónde | Algoritmo | Qué necesita la API |
+|---|---|---|---|
+| `jwks` | **producción** (el proyecto remoto firma así, comprobado contra su JWKS público) | ES256 | solo la clave **pública**, vía `/auth/v1/.well-known/jwks.json` |
+| `hs256` | solo el stack **local** de `supabase start` | HS256 | el secreto legacy compartido |
+
+**Los secretos compartidos no escalan y no rotan bien**: cada servicio que verifica necesita el
+secreto, y rotarlo es redeploy coordinado. Con JWKS la API no guarda nada que proteger, la
+rotación de clave del proyecto se absorbe sola (jose refresca por `kid`), y la clase de ataque de
+«confusión de algoritmo» desaparece porque no existe secreto HMAC contra el que reinterpretar.
+
+**El modo es configuración, no detección.** Un token no elige cómo se le verifica: en modo `jwks`
+un HS256 muere aunque su secreto coincidiera con algo. Y `LADINO_AUTH_MODE=hs256` **no arranca**
+ni con `NODE_ENV=production` ni contra un emisor que no sea local (dos capas, `config.ts`): es un
+error de despliegue y falla activamente.
+
+**Un token que no PUDO verificarse no es un token inválido.** Si el JWKS no responde, la API
+devuelve `503 AUTH_BACKEND_UNAVAILABLE` con `Retry-After`, no `401`: un 401 masivo hace que los
+clientes borren la sesión por una incidencia de red nuestra.
+
+### Controles de borde en `/v1/*` (S0.6a)
+
+`bodyLimit (1 MB) → timeout (30 s, 504 GATEWAY_TIMEOUT) → auth → rate limit (300/min por
+USUARIO, 429 RATE_LIMITED) → contexto → [idempotencia]`. El rate limit en la API es por usuario,
+nunca por IP (NAT móvil); el límite por IP existe en Traefik, mucho más laxo. El plazo de 30 s
+es lo que hace seguro que el reaper libere claves de idempotencia a los 15 min. Códigos en
+`ERROR_CATALOG.md`.
 
 ### El centinela de sistema vale para unas tablas y no para otras — y es deliberado
 

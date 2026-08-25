@@ -1,0 +1,42 @@
+{
+  "$comment": "Registro de versiones (ADR-0027 §5). Mantenido por scripts/release-manifest.mjs; check en pnpm verify.",
+  "releases": [
+    {
+      "version": "0.1.0",
+      "date": "2026-08-18",
+      "git_sha": "b5dc38bbae4e7a21cc44b6bf990802326335bb0e",
+      "base_image": "node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32",
+      "images": {
+        "ladino-api": null,
+        "ladino-worker": null
+      },
+      "migrations": {
+        "from": "20260809173319",
+        "to": "20260817003238",
+        "count": 13,
+        "sha256_16": {
+          "20260809173319_create_platform_schema.sql": "05443c14e6997969",
+          "20260809174755_create_organizational_hierarchy.sql": "7180a6332edba5b8",
+          "20260809175358_create_rbac_model.sql": "77d53518a04b8146",
+          "20260809180022_create_rls_policies.sql": "7557a3f2512f4b56",
+          "20260809183252_harden_isolation_anchors_and_provenance.sql": "52f1b15232815e93",
+          "20260809185746_close_audit_round_two.sql": "ae842676654e5820",
+          "20260810040143_create_audit_events.sql": "0755d7c9f26499e4",
+          "20260811154257_create_outbox.sql": "393cd110255f1c15",
+          "20260811181356_create_idempotency_keys.sql": "ae04007b3dcdb977",
+          "20260811190652_guard_company_tax_id.sql": "a161090ae50c5a68",
+          "20260816010608_fix_audit_constraints_and_permission_resolution.sql": "63f24f5b1ffe486f",
+          "20260817000254_fix_permission_plan_cache_and_idempotency_actor.sql": "7499079eb21a201f",
+          "20260817003238_pin_idempotency_actor_and_cap_aggregate_type.sql": "671025b094fd5bb5"
+        }
+      },
+      "fiscal_protocol_version": null,
+      "fiscal_regimes_supported": [],
+      "mobile_min_version": null,
+      "homologation_status": "not_applicable",
+      "homologation_note": "PA SNAT/2024/000121 derogada por PA SNAT/2026/00084 (Gaceta 43.435, 12/08/2026), sin sustituta. Se cumple su estándar técnico como línea base voluntaria (ADR-0027 §5).",
+      "fiscal_behavior_changed": false,
+      "notes": "Línea base RETROACTIVA de Sprint 0 (S0.1–S0.5): esqueleto, money, identidad y RLS, auditoría/outbox/idempotencia, API y plantilla. Registrada antes de la primera imagen para que el historial no sea inferencia."
+    }
+  ]
+}

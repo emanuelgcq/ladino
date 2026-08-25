@@ -181,7 +181,11 @@ module.exports = {
       severity: "warn",
       comment: "Módulo que nadie importa. Suele ser código muerto.",
       // Los `*-cli.ts` son puntos de entrada (los invoca node, no un import).
-      from: { orphan: true, pathNot: "\\.d\\.ts$|(^|/)index\\.ts$|(^|/)[a-z-]+-cli\\.ts$" },
+      // `server.ts` y `main.ts` son los puntos de entrada de los contenedores.
+      from: {
+        orphan: true,
+        pathNot: "\\.d\\.ts$|(^|/)index\\.ts$|(^|/)[a-z-]+-cli\\.ts$|(^|/)(server|main)\\.ts$",
+      },
       to: {},
     },
   ],

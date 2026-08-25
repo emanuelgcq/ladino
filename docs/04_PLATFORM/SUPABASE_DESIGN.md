@@ -63,9 +63,16 @@ Un RPC que "es más rápido" pero no se puede probar no compensa.
 
 ## service_role
 
-Solo en `apps/api`, `apps/worker` y `ladino-fiscal`, desde variables de entorno del host.
 Jamás en un bundle web o Expo. Un hook bloquea cualquier aparición en código de cliente.
 Recuerda que todo `EXPO_PUBLIC_*` es público por definición.
+
+**Y desde la migración 14 (ADR-0031), tampoco es el camino de la API ni del worker.** Los
+servicios se conectan como **`ladino_api`** y **`ladino_worker`**, roles sin `BYPASSRLS`:
+`ladino_api` con policies propias por tenant del actor de servicio (el GUC `ladino.actor_id`,
+leído SOLO por `platform.ladino_service_*` — las funciones del camino `authenticated` siguen con
+`auth.uid()` y jamás miran el GUC), `ladino_worker` con GRANT solo sobre `outbox` e
+`idempotency_keys`. La `service_role` key queda para herramientas de plataforma
+puntuales, cada una con su decisión, nunca como `DATABASE_URL` de un servicio.
 
 ## Storage
 

@@ -1,0 +1,15 @@
+# Lo que NO entra en el contexto de build. Secretos primero: un .env dentro de
+# una imagen es un secreto publicado en cada registry por el que pase.
+**/.env
+**/.env.*
+!**/.env.example
+node_modules
+**/node_modules
+**/dist
+**/.turbo
+coverage
+.git
+supabase/.temp
+docs
+*.md
+!README.md

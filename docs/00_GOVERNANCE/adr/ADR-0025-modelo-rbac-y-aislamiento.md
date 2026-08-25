@@ -242,6 +242,11 @@ Supabase `service_role` lo tiene.
 Consecuencia: **la RLS protege de `anon` y `authenticated`. No protege de `service_role`.** Y
 `service_role` es exactamente lo que usan el worker, los jobs y cualquier proceso de servidor.
 
+> **Enmendado por ADR-0031 (migración 14):** los procesos de servidor YA NO usan `service_role`.
+> La API y el worker se conectan como `ladino_api` / `ladino_worker`, sin `BYPASSRLS`, con
+> policies propias que leen el GUC `ladino.actor_id` vía `platform.ladino_service_actor_id()` — el camino authenticated no lo lee jamás. El
+> párrafo de arriba sigue siendo cierto para `service_role` en sí — por eso dejó de ser el camino.
+
 De ahí que la inmutabilidad de ADR-0006 sea un **trigger `BEFORE UPDATE OR DELETE`** y no una
 policy restrictiva. No es una elección de estilo ni redundancia defensiva:
 

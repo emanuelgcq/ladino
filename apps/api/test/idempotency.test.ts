@@ -15,13 +15,16 @@ import type { AuthResult } from "../src/middleware/auth.js";
  * del primero con un 200— y la razón de que el lookup filtre por actor.
  */
 
+// `postgres` siembra; el middleware corre como `ladino_api` (ADR-0031).
 const URL_LOCAL = "postgres://postgres:postgres@127.0.0.1:54322/postgres";
+const URL_API = "postgres://ladino_api:ladino_api@127.0.0.1:54322/postgres";
 const TENANT = "ffffffff-ffff-4fff-8fff-000000000001";
 const COMPANY = "ffffffff-ffff-4fff-8fff-000000000002";
 const USUARIO_A = "ffffffff-ffff-4fff-8fff-00000000000a";
 const USUARIO_B = "ffffffff-ffff-4fff-8fff-00000000000b";
 
 let sql: ReturnType<typeof createClient>;
+let sqlApi: ReturnType<typeof createClient>;
 let ejecuciones: number;
 
 function appPara(userId: string): Hono {
@@ -42,7 +45,7 @@ function appPara(userId: string): Hono {
     c.set("ladino.ctx", ctx);
     await next();
   });
-  app.use("/v1/cosas", idempotencyMiddleware({ sql }));
+  app.use("/v1/cosas", idempotencyMiddleware({ sql: sqlApi }));
   app.post("/v1/cosas", async (c) => {
     ejecuciones += 1;
     const body = await c.req.json<{ nombre: string }>();
@@ -59,6 +62,7 @@ function pedir(app: Hono, key: string | null, cuerpo: object) {
 
 beforeAll(async () => {
   sql = createClient(URL_LOCAL);
+  sqlApi = createClient(URL_API);
   await sql`delete from public.idempotency_keys where tenant_id = ${TENANT}`;
   await sql`insert into auth.users (id) values (${USUARIO_A}), (${USUARIO_B}) on conflict (id) do nothing`;
   // Tenant y company se REUTILIZAN entre corridas, no se borran: desde la
@@ -85,6 +89,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await sql`delete from public.idempotency_keys where tenant_id = ${TENANT}`;
   await sql.end();
+  await sqlApi.end();
 });
 
 beforeEach(async () => {
@@ -177,7 +182,7 @@ describe("idempotencia de extremo a extremo", () => {
       });
       await next();
     });
-    app.use("/v1/cosas", idempotencyMiddleware({ sql }));
+    app.use("/v1/cosas", idempotencyMiddleware({ sql: sqlApi }));
     let falla = true;
     app.post("/v1/cosas", (c) => {
       ejecuciones += 1;

@@ -85,6 +85,13 @@ ya traía (remisión electrónica) y el que sobrevive a cualquier reforma: si el
 datos, va a querer recibirlos por algún canal. Por eso ADR-0028 deja lista la forma de la
 transmisión sin comprometerse con ningún protocolo.
 
+**Consecuencia operativa que hay que leer bien (S0.6a):** el worker monta `NullTransmitter`, y con
+él **todo evento fiscal queda `published` en el outbox sin haberse transmitido a nadie**.
+`published` significa «el consumidor lo procesó», y hoy el consumidor es el nulo. No significará
+«recibido por el SENIAT» hasta que exista un adaptador real contra un régimen vigente. Un panel
+que cuente «eventos publicados» induce exactamente la lectura contraria; está dicho también en
+`infra/README.md`.
+
 ---
 
 ## 4. PA SNAT/2026/00080 — reforma del RIF
