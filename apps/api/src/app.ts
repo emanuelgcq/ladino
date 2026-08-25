@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { cors } from "hono/cors";
 import type { Sql } from "@ladino/db";
 import { authMiddleware, type AuthConfig } from "./middleware/auth.js";
 import { contextMiddleware } from "./middleware/scope.js";
@@ -18,6 +19,8 @@ export interface AppConfig {
   readonly requestTimeoutMs?: number;
   /** Plazo de la sonda de readiness. Por defecto 2 s. */
   readonly readyTimeoutMs?: number;
+  /** Origen permitido para CORS. Por defecto, el dev server de Vite local. */
+  readonly corsOrigin?: string;
 }
 
 /**
@@ -56,6 +59,24 @@ export function buildApp(cfg: AppConfig): Hono {
   // arbitraria. 1 MB sobra para todo contrato de S0.5; los ficheros no van
   // por aquí. Observación del auditor de S0.5, fuera de su ámbito pero real.
   app.use("*", bodyLimit({ maxSize: 1024 * 1024 }));
+  // CORS con UN origen explícito, nunca "*": la webapp manda Authorization y
+  // headers propios, y el navegador exige el preflight. En producción es el
+  // dominio de la webapp (CORS_ORIGIN); en local, el dev server de Vite.
+  app.use(
+    "*",
+    cors({
+      origin: cfg.corsOrigin ?? "http://127.0.0.1:5173",
+      allowHeaders: [
+        "Authorization",
+        "Content-Type",
+        "Idempotency-Key",
+        "X-Company-Id",
+        "X-Request-Id",
+      ],
+      allowMethods: ["GET", "POST", "OPTIONS"],
+      maxAge: 600,
+    }),
+  );
 
   // Sondas para el orquestador, FUERA de /v1 y sin auth. Liveness no toca la
   // base (un pool agotado no debe hacer que Docker mate el proceso y empeore

@@ -360,3 +360,29 @@ describe("POST /v1/companies — la plantilla, de extremo a extremo", () => {
     expect(((await res.json()) as { code: string }).code).toBe("IDEMPOTENCY_KEY_REQUIRED");
   });
 });
+
+describe("GET /v1/companies — el listado que consume la vertical delgada", () => {
+  it("lista solo lo visible para el actor y cada fila cumple el contrato Zod", async () => {
+    const res = await app.request("/v1/companies", {
+      headers: { Authorization: `Bearer ${await tokenDe(ADMIN)}` },
+    });
+    expect(res.status).toBe(200);
+    const { ListCompaniesResponse } = await import("@ladino/schemas");
+    const lista = ListCompaniesResponse.parse(await res.json());
+    // ADMIN tiene asignación tenant-wide: ve todo lo que las corridas crearon.
+    expect(lista.length).toBeGreaterThanOrEqual(1);
+    expect(lista.every((co) => co.tenant_id === TENANT)).toBe(true);
+  });
+
+  it("un usuario SIN membership recibe un array vacío, no un error ni datos ajenos", async () => {
+    const res = await app.request("/v1/companies", {
+      headers: { Authorization: `Bearer ${await tokenDe(FORASTERO)}` },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([]);
+  });
+
+  it("sin token → 401, como toda /v1", async () => {
+    expect((await app.request("/v1/companies")).status).toBe(401);
+  });
+});

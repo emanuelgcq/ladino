@@ -184,7 +184,7 @@ module.exports = {
       // `server.ts` y `main.ts` son los puntos de entrada de los contenedores.
       from: {
         orphan: true,
-        pathNot: "\\.d\\.ts$|(^|/)index\\.ts$|(^|/)[a-z-]+-cli\\.ts$|(^|/)(server|main)\\.ts$",
+        pathNot: "\\.d\\.ts$|(^|/)index\\.ts$|(^|/)[a-z-]+-cli\\.ts$|(^|/)(server|main)\\.tsx?$",
       },
       to: {},
     },

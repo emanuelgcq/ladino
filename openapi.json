@@ -114,6 +114,40 @@
   },
   "paths": {
     "/v1/companies": {
+      "get": {
+        "summary": "Listar las empresas visibles para el usuario",
+        "description": "Devuelve las companies que `platform.ladino_user_company_ids()` resuelve para el actor — el MISMO predicado que valida `X-Company-Id`, así que esta lista y ese header no pueden divergir. Array plano, sin paginación por ahora.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Las companies visibles (puede ser un array vacío).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CompanyResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "summary": "Crear una empresa",
         "description": "Operación de nivel tenant. Exige `company.manage` en una asignación tenant-wide, `Idempotency-Key`, y un usuario real (no el actor de sistema). El RIF no se valida en formato: VALIDAR-SENIAT pendiente.",

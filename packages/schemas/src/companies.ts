@@ -36,6 +36,15 @@ export const CompanyResponse = z
 
 export type CompanyResponse = z.infer<typeof CompanyResponse>;
 
+/**
+ * GET /v1/companies — las companies VISIBLES para el actor
+ * (`platform.ladino_user_company_ids()`, migración 15). Un array plano: sin
+ * paginación mientras el caso real sean decenas de empresas por usuario; el
+ * día que haga falta, se envuelve en `{items, next}` como cambio de contrato.
+ */
+export const ListCompaniesResponse = z.array(CompanyResponse);
+export type ListCompaniesResponse = z.infer<typeof ListCompaniesResponse>;
+
 /** Cuerpo de error del contrato (`API_SPEC.md` §Errores). */
 export const ErrorResponse = z.object({
   code: z.string(),

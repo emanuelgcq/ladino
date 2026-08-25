@@ -43,6 +43,7 @@ const app = buildApp({
   auth: cfg.auth,
   rateLimitPorMinuto: cfg.rateLimitPorMinuto,
   requestTimeoutMs: cfg.requestTimeoutMs,
+  corsOrigin: cfg.corsOrigin,
 });
 
 const server = serve({ fetch: app.fetch, port: cfg.port, hostname: "0.0.0.0" }, () => {

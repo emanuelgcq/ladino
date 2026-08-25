@@ -32,6 +32,24 @@ export function buildOpenApiDocument(): object {
   });
 
   registry.registerPath({
+    method: "get",
+    path: "/v1/companies",
+    summary: "Listar las empresas visibles para el usuario",
+    description:
+      "Devuelve las companies que `platform.ladino_user_company_ids()` resuelve para el " +
+      "actor — el MISMO predicado que valida `X-Company-Id`, así que esta lista y ese " +
+      "header no pueden divergir. Array plano, sin paginación por ahora.",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: {
+        description: "Las companies visibles (puede ser un array vacío).",
+        content: { "application/json": { schema: z.array(company) } },
+      },
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
+  registry.registerPath({
     method: "post",
     path: "/v1/companies",
     summary: "Crear una empresa",

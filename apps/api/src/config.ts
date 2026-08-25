@@ -76,6 +76,8 @@ export interface ServerConfig {
   readonly rateLimitPorMinuto: number;
   /** Plazo máximo de una petición a /v1/*, en ms. */
   readonly requestTimeoutMs: number;
+  /** Origen permitido para CORS (el dominio de la webapp). */
+  readonly corsOrigin: string;
 }
 
 function entero(env: Entorno, nombre: string, porDefecto: number): number {
@@ -95,5 +97,6 @@ export function configServidor(env: Entorno): ServerConfig {
     // 30 s: MUY por debajo de los 15 min del reaper de idempotencia (F-10):
     // ninguna petición puede seguir viva cuando el reaper libera su clave.
     requestTimeoutMs: entero(env, "REQUEST_TIMEOUT_MS", 30_000),
+    corsOrigin: env["CORS_ORIGIN"] ?? "http://127.0.0.1:5173",
   };
 }

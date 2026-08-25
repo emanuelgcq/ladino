@@ -26,6 +26,27 @@ import { DominioError, ValidacionError } from "../middleware/errors.js";
  * montado en app.ts).
  */
 export function companiesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler): void {
+  // Lectura: las companies VISIBLES para el actor — la misma función de la
+  // migración 15 que usa el middleware de scope, así que lo que este endpoint
+  // lista y lo que X-Company-Id acepta no pueden divergir. Sin idempotencia
+  // (es GET) y sin reglas de negocio: un select con la visibilidad como
+  // predicado y la RLS de ladino_api como segunda capa.
+  app.get("/v1/companies", async (c) => {
+    const { actor, userId } = c.get("ladino.auth");
+    const filas = await withTransaction(
+      sql,
+      actor,
+      ({ sql: tx }) => tx`
+        select id, tenant_id, legal_name, trade_name, tax_id, status,
+               to_char(created_at at time zone 'utc',
+                       'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at
+          from public.companies
+         where id in (select platform.ladino_user_company_ids(${userId}))
+         order by legal_name, id`,
+    );
+    return c.json(filas, 200);
+  });
+
   // La idempotencia se monta POR RUTA Y MÉTODO, no por path con app.use (H-6):
   // montada por path, un `DELETE /v1/companies` sin handler atravesaba T1,
   // reservaba la clave, recibía el 404 de Hono y T2 la marcaba failed —
