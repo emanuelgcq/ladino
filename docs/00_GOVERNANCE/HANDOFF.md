@@ -2,16 +2,19 @@
 
 ## Estado
 
-**S0.1 a S0.6a cerrados y en verde.** PR #3 (S0.5) mergeado en `main`. S0.6a en la rama
-`s0.6a/deploy-and-worker`, auditado (24 hallazgos: 22 cerrados, 1 diferido a tu decisión, 1 nota
-de riesgo escrita) y **sin commitear**: como siempre, commit y PR esperan tu aprobación explícita.
+**S0.1 a S0.6a cerrados y en verde, F-15 incluido.** PR #3 (S0.5) mergeado en `main`. S0.6a
+commiteado en `s0.6a/deploy-and-worker` con **PR #4 abierto** (auditoría de 24 hallazgos en la
+descripción). **F-15 (ADR-0031: roles sin BYPASSRLS) está resuelto en el árbol de trabajo, sin
+commitear**: commit y PR esperan tu aprobación explícita, como siempre.
 
-S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ (commit pendiente) · S0.6b ⏸️
+S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ (PR #4) · F-15 ✅ (commit pendiente) · S0.6b ⏸️
 
 `pnpm verify` corre **11 pasos** — S0.6a añadió `release:manifest:check` (paso 9). **Los pasos 5,
-10 y 11 necesitan el stack local** (`pnpm db:start`). 368 pgTAP + **74 tests de vitest** en API y
-worker (61 + 13), todo verde. `pnpm boundaries:selftest`: 22/22. La imagen `ladino-api` se
-construye (247 MB).
+10 y 11 necesitan el stack local** (`pnpm db:start`). **403 pgTAP** (35 nuevas de la migración
+14) + **74 tests de vitest** en API y worker (61 + 13) — **los E2E conectan como
+`ladino_api`/`ladino_worker`**, no como postgres. `pnpm boundaries:selftest`: 22/22. Las dos
+imágenes se construyen (247/233 MB). Riesgos nuevos R-08..R-11 en `RISK_REGISTER.md`, cada uno
+con disparador.
 
 **⚠ En esta máquina, `TURBO_CONCURRENCY=1 pnpm verify`.** Con la concurrencia por defecto se cae
 por memoria (`VirtualAlloc failed`, exit `-1073740791`): hay ~2 GB libres con Docker y un stack
@@ -63,7 +66,7 @@ detalle, apagado con respaldo de 8 s, `X-Request-Id` acotado. Catálogo en `ERRO
 | F-12 | medio | claves caducadas `in_progress` para siempre; sin purga | ✅ reaper las libera; `purgarIdempotencia` a 7 días, test |
 | F-13 | medio | reaper devolvía sin backoff | ✅ backoff por intentos, test |
 | F-14 | medio | bucle sin red: sin handlers, reapers después del lote | ✅ |
-| **F-15** | **alto** | **los dos servicios se conectan como el superusuario `postgres.<ref>`** | ⏸️ **TU DECISIÓN**: roles `ladino_api`/`ladino_worker` con GRANT mínimo = migración con rigor máximo (ADR + pgTAP). Recomiendo hacerlo ANTES del primer deploy real |
+| **F-15** | **alto** | **los dos servicios se conectan como el superusuario `postgres.<ref>`** | ✅ **CERRADO por decisión tuya, antes del primer deploy**: ADR-0031 + migración 14 + pgTAP 014. Ver sección siguiente |
 | F-16 | bajo | `NullTransmitter` con `console.log` por defecto en paquete puro | ✅ sumidero obligatorio |
 | F-17 | riesgo | `published` ≠ «recibido por SENIAT» con el transmisor nulo | 📝 `REGULATORY_STATUS.md` + README |
 | F-18 | medio | red del proxy compartida: `ladino-api:3000` alcanzable desde n8n | ✅ controles en la app; escrito en compose y README |
@@ -79,10 +82,44 @@ y pasaba solo pero fallaba dentro de `verify` (8: cinco filas de otros tenants d
 tests de la API). El worker es global por diseño; el test ahora drena, aserta por tenant y acota
 los contadores por abajo. Un test que depende del orden de los suites no es un test.
 
+### F-15 cerrado: ADR-0031, migración 14, pgTAP 014 — la RLS ya contiene a la API
+
+Tu razón, que ahora está en el ADR: con el superusuario, las seis migraciones de aislamiento de
+S0.3 eran decorativas para el camino real, y la única defensa era que el código filtrara — el
+modelo descartado. Lo construido:
+
+- **`ladino_api`** y **`ladino_worker`**, `NOBYPASSRLS NOSUPERUSER`, creados por la migración 14
+  **sin contraseña** (LOGIN y contraseña: seed local / operador en remoto, `infra/README.md`).
+- **Funciones de actor SEPARADAS**: `platform.ladino_service_actor_id()` (solo el GUC) y
+  `ladino_service_tenant_ids()`. Las del camino `authenticated` **no se tocaron** — el primer
+  diseño (un `coalesce(auth.uid(), GUC)` compartido) lo tumbaron SEIS suites de pgTAP: con el
+  GUC puesto, una sesión authenticated SIN JWT ganaba visibilidad. La separación es estructural
+  y su variante rota (mezclar los caminos) quedó en 014 como negativo.
+- Policies `TO ladino_api` por **tenant** del actor en las 14 tablas (idempotencia además por
+  actor); `ladino_worker` solo GRANT sobre `outbox` e `idempotency_keys`.
+- **pgTAP 014, 35 aserciones**: catálogo consultado (no supuesto), ejercicio con actor A contra
+  datos de B (0 filas, dato intacto, 42501), multi-tenant, sin actor, y TRES variantes rotas
+  (policy permisiva → mide la RLS; GRANT al worker → mide el privilegio; policy de authenticated
+  con función de servicio → mide la separación). Total pgTAP: **403**.
+- **Los vitest de la API y del worker conectan como los roles dedicados** — y eso encontró dos
+  agujeros reales al primer intento: `tenantVisible()` corría FUERA de `withTransaction` (sin
+  GUC → 404 para todo el mundo; con postgres pasaba en silencio) y a los roles les faltaba
+  USAGE sobre `extensions` (pgcrypto, que usa `uuidv7()`). Los dos, arreglados y en verde.
+- Aprendizajes de aplicación de la migración: `ALTER ROLE … NOSUPERUSER` exige superusuario con
+  solo nombrarlo (las migraciones corren como `postgres`, que no lo es) → el cinturón es el
+  bloque `LAD32` que aborta si los atributos no cumplen. Y cuatro aserciones de catálogo de
+  suites viejos (recuentos de policies, «cero escrituras con predicado») se acotaron al camino
+  de cliente: habían caducado con ADR-0031, la propiedad que protegen sigue intacta.
+
+**VALIDAR-SUPABASE:** que el pooler (6543) acepte los roles dedicados; si no, 5432 directo.
+**Pendiente del operador en remoto:** aplicar migración 14 y fijar contraseñas de los roles.
+
 ### Lo que queda ANTES del primer deploy real (en orden)
 
-1. **Decidir F-15** (roles de base dedicados). Si sí: migración 14 con pgTAP y variante rota.
-2. **Rotar credenciales** — la `sb_secret` y el token `sbp_…` se pegaron en un chat.
+1. **Rotar credenciales** — la `sb_secret` y el token `sbp_…` se pegaron en un chat. (Dijiste
+   que rotas tú y avisas.) Los VALIDAR-DEPLOY de Traefik también los consultas tú en el VPS.
+2. En el remoto: aplicar la migración 14 (la propone la sesión, la ejecutas tú) y fijar las
+   contraseñas de `ladino_api`/`ladino_worker` (`infra/README.md` §Roles de servicio).
 3. Construir y publicar las imágenes por la secuencia de `infra/README.md`; anotar digests con
    `pnpm release:manifest digest`; etiquetar `v0.1.0`.
 4. En el VPS: consultar la red y el resolver del Traefik existente (no inventarlos), secretos en

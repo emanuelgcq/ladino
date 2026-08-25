@@ -148,7 +148,17 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
     // sobrevivía como oráculo. El predicado es el MISMO helper que usa el caso
     // de uso: una sola copia (ADR-0027 §3-bis). El actor de sistema no pasa por
     // aquí: es camino de servidor y responde la API por él.
-    if (actor.kind === "user" && !(await tenantVisible(cfg.sql, actor.userId, tenantId))) {
+    // DENTRO de withTransaction aunque sea una sola lectura: el predicado corre
+    // bajo la RLS de ladino_api (ADR-0031), y sin el GUC del actor el rol no ve
+    // NADA — ni su propia membership. Desnuda, esta consulta devolvía 404 para
+    // todo el mundo; con `postgres` (BYPASSRLS) el mismo olvido pasaba en
+    // silencio. El rol dedicado lo convirtió en fallo ruidoso, que es su trabajo.
+    const visible =
+      actor.kind !== "user" ||
+      (await withTransaction(cfg.sql, actor, ({ sql: tx }) =>
+        tenantVisible(tx, actor.userId, tenantId),
+      ));
+    if (!visible) {
       // El MISMO cuerpo que devuelve el caso de uso para tenant invisible o
       // inexistente: los tres 404 indistinguibles, también en el cuerpo.
       return c.json(

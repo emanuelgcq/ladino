@@ -259,9 +259,13 @@ select ok(
   'que alguien conceda un GRANT amplio, es lo único que queda');
 
 select is(
-  (select count(*) from pg_policy where polrelid = 'public.outbox'::regclass),
+  (select count(*) from pg_policy p
+    where p.polrelid = 'public.outbox'::regclass
+      and (p.polroles = '{0}'::oid[]
+           or p.polroles && array['anon'::regrole::oid, 'authenticated'::regrole::oid])),
   4::bigint,
-  'las cuatro denegaciones están ESCRITAS, no son ausencia de policy');
+  'las cuatro denegaciones del camino de cliente están ESCRITAS, no son ausencia '
+  'de policy (las de ladino_api/ladino_worker son de ADR-0031 y las prueba 014)');
 
 select is(
   (select count(*) from pg_policy p

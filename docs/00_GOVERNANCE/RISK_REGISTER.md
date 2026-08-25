@@ -85,6 +85,75 @@ base**, que es también lo que hace verificable la cadena diferida de ADR-0026 D
 **Deja de ser aceptable:** cuando exista el proyecto remoto con datos de un cliente real. Hasta
 entonces solo hay una base local.
 
+### R-08 · `published` en el outbox NO significa «recibido por el SENIAT»
+
+- **Severidad:** Alta (de interpretación, no de dato) · **Dueño:** quien construya Fase 11
+- **Disparador:** el primer panel, informe o conversación que cuente «eventos publicados»; y
+  el día que exista un régimen al que transmitir
+- **Dónde:** `apps/worker/src/main.ts` (monta `NullTransmitter`), `packages/fiscal/src/transmitter.ts`,
+  `REGULATORY_STATUS.md` §3, `infra/README.md`
+
+Con `NullTransmitter` —la implementación correcta mientras la PA 121 esté derogada sin sustituta
+(ADR-0028)— **todo evento fiscal queda `published` sin haberse transmitido a nadie**. `published`
+significa «el consumidor lo procesó», y el consumidor es el nulo. Es el riesgo que **alguien va a
+malinterpretar en Fase 11**: verá una cola en verde y creerá que hay remisión.
+
+**Mitigación:** escrito en tres sitios; el log `seniat.null_transmitter` por cada evento; y la
+regla de que el adaptador real, cuando exista, **no reutilice `published`** para «aceptado por el
+SENIAT» sin un `fiscal_event` con la respuesta (apps/worker/CLAUDE.md).
+
+**Deja de ser aceptable:** el día que exista un régimen vigente. Ese día el estado «publicado»
+tiene que distinguir «entregado al adaptador» de «acuse recibido», y eso es una migración.
+
+### R-09 · El rate limit de la API vive en memoria de UNA réplica
+
+- **Severidad:** Media · **Dueño:** quien despliegue la segunda réplica
+- **Disparador:** **la segunda réplica de `ladino-api`** (o cualquier balanceo entre procesos)
+- **Dónde:** `apps/api/src/middleware/rate-limit.ts`
+
+El límite por usuario (300/min, `429 RATE_LIMITED`) es una ventana fija en un `Map` del proceso.
+Con dos réplicas, cada una cuenta la mitad: el límite efectivo se duplica sin que nadie cambie
+nada, y el `Retry-After` de una réplica no sabe lo que vio la otra. Hoy hay UNA réplica, y un
+contador compartido (Redis) sería infraestructura nueva para un problema que no existe.
+
+**Mitigación:** el contrato (429 + `Retry-After`) no cambia; cambia ese fichero. El límite laxo
+por IP de Traefik sí es común a las réplicas.
+
+**Deja de ser aceptable:** antes de `deploy.replicas: 2` o de un segundo host.
+
+### R-10 · `apps/worker/src/main.ts` no tiene test
+
+- **Severidad:** Media · **Dueño:** S0.6b o el primer job nuevo del worker
+- **Disparador:** el primer cambio a `main.ts` (un job nuevo, otro intervalo, otro transmisor)
+- **Dónde:** `apps/worker/src/main.ts`
+
+El bucle, el latido, el suicidio tras 5 ciclos fallidos, el plazo por ciclo y el apagado están
+escritos y sin test: `procesarLote`, los reapers y la purga sí lo tienen (13 tests), pero la
+composición que los llama no. Un cambio que rompa el latido o el `process.exit(1)` deja un
+contenedor vivo y `unhealthy` que Docker no reinicia (F-11) — exactamente lo que el diseño evita.
+
+**Mitigación:** extraer `bucle()`/`ciclo()` a un módulo que reciba `sql`, `transmitter`, reloj
+y `salir()` inyectables, y probar: latido escrito por ciclo sano, no escrito por ciclo roto,
+`salir(1)` al 5.º fallo, señal → parada. Es una tarde, no una fase.
+
+**Deja de ser aceptable:** con el primer job que no sea el consumo del outbox.
+
+### R-11 · `pnpm verify` en la máquina de desarrollo solo pasa con `TURBO_CONCURRENCY=1`
+
+- **Severidad:** Baja (operativa) · **Dueño:** responsable del proyecto
+- **Disparador:** cualquier sesión que corra `verify` sin la variable; y CI, que NO tiene este
+  problema pero tampoco lo detecta
+- **Dónde:** la máquina, no el repo. `HANDOFF.md` §Estado
+
+Con ~2 GB libres (Docker Desktop y un stack Supabase de OTRO proyecto levantado junto al de
+Ladino), turbo a concurrencia por defecto muere con `VirtualAlloc failed` / exit `-1073740791`.
+No es un fallo de código; parece uno, y en S0.6a costó tres intentos distinguirlo.
+
+**Mitigación:** `TURBO_CONCURRENCY=1 pnpm verify`; no lanzar `docker build` ni subagentes
+pesados a la vez. Los contenedores ajenos no se paran desde una sesión.
+
+**Deja de ser aceptable:** si aparece en CI. Ahí sería un fallo real de memoria del pipeline.
+
 ### R-06 · Norma sustituta desconocida
 
 - **Severidad:** Alta · **Dueño:** responsable del proyecto (decisión de negocio y seguimiento

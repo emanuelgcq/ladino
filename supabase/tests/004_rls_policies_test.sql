@@ -64,16 +64,23 @@ select is(
 -- Comprobado empíricamente: con `grant all on all tables in schema public to
 -- authenticated` concedido, el INSERT sigue devolviendo 42501. `false` no
 -- depende de los privilegios de tabla.
+-- Acotado al camino authenticated/anon/PUBLIC desde ADR-0031: los roles de
+-- servicio (ladino_api) SÍ tienen policies de escritura con predicado real
+-- sobre el RBAC, y las prueba 014. La propiedad duradera es que la escritura
+-- del bloque RBAC esté DENEGADA por escrito para el camino de cliente.
 select is(
   (select count(*) from pg_policy p
      join pg_class c on c.oid = p.polrelid
     where c.relname in ('memberships','roles','permissions','role_permissions',
                         'user_role_assignments','scope_bindings')
       and p.polcmd in ('a','w','d')
+      and (p.polroles = '{0}'::oid[]
+           or p.polroles && array['anon'::regrole::oid, 'authenticated'::regrole::oid])
       and coalesce(pg_get_expr(p.polqual, p.polrelid), 'false') <> 'false'),
   0::bigint,
-  'toda policy de escritura sobre el bloque RBAC tiene USING (false): la '
-  'denegación está ESCRITA, no es la ausencia de una policy (ADR-0025 §9)');
+  'toda policy de escritura del CAMINO DE CLIENTE sobre el bloque RBAC tiene '
+  'USING (false): la denegación está ESCRITA, no es la ausencia de una policy '
+  '(ADR-0025 §9; las de los roles de servicio son de ADR-0031 y las prueba 014)');
 
 select is(
   (select count(*) from pg_policy p
@@ -81,9 +88,11 @@ select is(
     where c.relname in ('memberships','roles','permissions','role_permissions',
                         'user_role_assignments','scope_bindings')
       and p.polcmd = 'a'
+      and (p.polroles = '{0}'::oid[]
+           or p.polroles && array['anon'::regrole::oid, 'authenticated'::regrole::oid])
       and coalesce(pg_get_expr(p.polwithcheck, p.polrelid), 'false') <> 'false'),
   0::bigint,
-  'y toda policy de INSERT tiene WITH CHECK (false)');
+  'y toda policy de INSERT del camino de cliente tiene WITH CHECK (false)');
 
 select ok(not has_table_privilege('authenticated', 'public.role_permissions', 'INSERT'),
   'segunda capa: authenticated ni siquiera tiene el privilegio INSERT sobre '

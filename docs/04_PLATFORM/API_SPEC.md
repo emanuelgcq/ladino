@@ -105,10 +105,13 @@ En S0.4 alcanza a `audit_events`.
 documento decía quién verifica el JWT**. ADR-0014 lo menciona solo para argumentar contra los
 tokens de larga vida, y `SECURITY.md` habla de qué clave va en el cliente. La decisión faltaba.
 
-**La API verifica la firma ella misma, antes de cualquier otra cosa.** La razón es una consecuencia
-directa de ADR-0025 §9: **la API escribe con `service_role`, que tiene `BYPASSRLS`**. Es decir, la
-RLS —que es lo que protege el camino `authenticated`— **no protege a la API**. Si la API no verifica
-el token, no lo verifica nadie: se estaría confiando en un `sub` que cualquiera puede escribir.
+**La API verifica la firma ella misma, antes de cualquier otra cosa.** La razón original era la
+consecuencia de ADR-0025 §9: la API escribía con `service_role` (`BYPASSRLS`) y la RLS no la
+protegía. **Desde ADR-0031 la API se conecta como `ladino_api`, sin `BYPASSRLS`, y la RLS por
+tenant del actor sí la contiene** — pero la decisión no cambia: la API sigue verificando el token
+ella misma, porque la RLS es la segunda capa, no la autorización, y porque el actor que la RLS usa
+(el GUC) sale precisamente de ese token verificado. Si la API no verifica, el GUC es un `sub` que
+cualquiera escribe.
 
 No es un detalle de implementación. Es el único punto donde se decide que el actor es quien dice
 ser, y de ese actor cuelgan `created_by`, la resolución de permisos y el alcance de la clave de

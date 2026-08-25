@@ -52,13 +52,34 @@ sudo install -d -m 700 /etc/ladino
 sudo install -m 600 api.env    /etc/ladino/api.env
 sudo install -m 600 worker.env /etc/ladino/worker.env
 
-# 6. Migraciones ANTES de arrancar la imagen nueva (ya aplicadas: 13/13, verificadas)
+# 6. Migraciones ANTES de arrancar la imagen nueva. La 14 (roles de servicio,
+#    ADR-0031) tiene que estar aplicada Y los roles tener contraseña (ver
+#    §Roles de servicio, abajo) antes del primer `up -d`.
 
 # 7. Arrancar, acotado al project name
 docker compose -p ladino -f infra/compose/docker-compose.ladino.yml --env-file infra/compose/.env up -d
 docker compose -p ladino ps
 curl -s https://$LADINO_API_HOST/readyz
 ```
+
+## Roles de servicio (ADR-0031) — antes del primer deploy
+
+La API y el worker se conectan como **`ladino_api`** y **`ladino_worker`**, roles sin
+`BYPASSRLS` que crea la migración 14 **sin contraseña** (una contraseña en una migración es un
+secreto en git). Darles `LOGIN` y contraseña es del operador, una vez, en el SQL editor del
+proyecto — nunca desde una sesión de Claude:
+
+```sql
+alter role ladino_api    login password '<generada, 32+ caracteres>';
+alter role ladino_worker login password '<otra, distinta>';
+```
+
+Y esas van a `/etc/ladino/api.env` y `worker.env` como `ladino_api.<ref>` / `ladino_worker.<ref>`.
+**`postgres.<ref>` en un `DATABASE_URL` de servicio es un error de despliegue**: funciona, y por
+eso es peligroso — es exactamente F-15.
+
+**VALIDAR-SUPABASE:** que el pooler (Supavisor, 6543) acepte los roles dedicados. Si no,
+conexión directa por 5432 para los dos servicios (la API sigue con `prepare: false`; no daña).
 
 ## Rollback
 

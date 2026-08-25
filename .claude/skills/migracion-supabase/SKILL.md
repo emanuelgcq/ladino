@@ -390,3 +390,28 @@ supabase test db
 
 Local: `pnpm db:reset`.
 Remoto: **nunca desde la sesión.** Se propone el comando y lo ejecuta el usuario.
+
+## 6. Toda tabla nueva necesita policies `TO ladino_api` (ADR-0031)
+
+Desde la migración 14 la API se conecta como `ladino_api`, **sin `BYPASSRLS`**. Las policies
+`TO authenticated` no le aplican: una tabla nueva con solo esas es una tabla que la API **no puede
+leer ni escribir** — falla ruidoso en el E2E, que corre como `ladino_api`, pero falla.
+
+Por cada tabla con `tenant_id`, además de las de `authenticated`:
+
+```sql
+grant select, insert, update on public.<tabla> to ladino_api;   -- lo mínimo que use el caso de uso
+create policy <tabla>_api_select on public.<tabla> for select to ladino_api
+  using (tenant_id in (select platform.ladino_service_tenant_ids()));
+create policy <tabla>_api_insert on public.<tabla> for insert to ladino_api
+  with check (tenant_id in (select platform.ladino_service_tenant_ids()));
+-- update/delete con using + with check iguales, solo si el caso de uso los necesita
+```
+
+Y en el pgTAP: **como `ladino_api` con actor A, los datos de B no se leen, no se actualizan
+(0 filas, dato intacto) y no se insertan (42501)** — igual que 014. El worker (`ladino_worker`)
+no recibe GRANT sobre tablas de negocio: si un job lo necesita, es una decisión, no un grant.
+
+El actor se resuelve con `platform.ladino_service_actor_id()` (solo el GUC; el camino authenticated usa `auth.uid()` y NUNCA lee el GUC). **Nunca
+`auth.uid()` directo en una función o policy nueva**: el camino de servidor no tiene JWT y
+la policy cerraría la API en silencio.

@@ -318,10 +318,13 @@ select ok(
   'RLS habilitada Y FORZADA');
 
 select is(
-  (select count(*) from pg_policy
-    where polrelid = 'public.idempotency_keys'::regclass),
+  (select count(*) from pg_policy p
+    where p.polrelid = 'public.idempotency_keys'::regclass
+      and (p.polroles = '{0}'::oid[]
+           or p.polroles && array['anon'::regrole::oid, 'authenticated'::regrole::oid])),
   4::bigint,
-  'las cuatro denegaciones ESCRITAS');
+  'las cuatro denegaciones del camino de cliente ESCRITAS (las de los roles de '
+  'servicio son de ADR-0031 y las prueba 014)');
 
 select ok(
   not exists (select 1 from pg_trigger

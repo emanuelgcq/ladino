@@ -22,11 +22,16 @@ import {
  *      muerto dejó colgado.
  */
 
+// `postgres` siembra y comprueba; el worker bajo prueba corre como
+// `ladino_worker` (ADR-0031): dos tablas por GRANT y nada más. Un privilegio
+// que falte se ve aquí, no en producción.
 const URL_LOCAL = "postgres://postgres:postgres@127.0.0.1:54322/postgres";
+const URL_WORKER = "postgres://ladino_worker:ladino_worker@127.0.0.1:54322/postgres";
 const TENANT = "abababab-abab-4bab-8bab-000000000001";
 const USUARIO = "abababab-abab-4bab-8bab-00000000000a";
 
 let sql: ReturnType<typeof createClient>;
+let sqlWorker: ReturnType<typeof createClient>;
 
 class FakeTransmitter implements SeniatTransmitter {
   readonly recibidos: EventoOutbox[] = [];
@@ -66,6 +71,7 @@ async function sembrarOutbox(n: number, extra: Record<string, unknown> = {}): Pr
 
 beforeAll(async () => {
   sql = createClient(URL_LOCAL);
+  sqlWorker = createClient(URL_WORKER);
   await sql`insert into auth.users (id) values (${USUARIO}) on conflict (id) do nothing`;
   await sql.begin(async (tx) => {
     await tx`select set_config('ladino.actor_id', ${USUARIO}, true)`;
@@ -80,7 +86,7 @@ beforeAll(async () => {
   // versión asertaba `publicados: 3` y pasaba sola pero fallaba dentro de
   // `verify` con 8: cinco filas ajenas. Un test que depende del orden de los
   // suites no es un test.
-  while ((await procesarLote(sql, new FakeTransmitter())).publicados > 0) {
+  while ((await procesarLote(sqlWorker, new FakeTransmitter())).publicados > 0) {
     /* drenar */
   }
 });
@@ -89,6 +95,7 @@ afterAll(async () => {
   await sql`delete from public.outbox where tenant_id = ${TENANT}`;
   await sql`delete from public.idempotency_keys where tenant_id = ${TENANT}`;
   await sql.end();
+  await sqlWorker.end();
 });
 
 beforeEach(async () => {
@@ -101,7 +108,7 @@ describe("consumo del outbox", () => {
     const ids = await sembrarOutbox(3);
     const fake = new FakeTransmitter();
 
-    const r = await procesarLote(sql, fake);
+    const r = await procesarLote(sqlWorker, fake);
 
     expect(r.publicados).toBeGreaterThanOrEqual(3);
     expect(r).toMatchObject({ reintentos: 0, muertos: 0 });
@@ -115,7 +122,7 @@ describe("consumo del outbox", () => {
 
   it("fallo de entrega → pending con backoff hacia el futuro y last_error, NO published", async () => {
     await sembrarOutbox(1);
-    const r = await procesarLote(sql, new FakeTransmitter(true));
+    const r = await procesarLote(sqlWorker, new FakeTransmitter(true));
 
     expect(r.publicados).toBe(0); // el transmisor falla para todos
     expect(r.reintentos).toBeGreaterThanOrEqual(1);
@@ -132,7 +139,7 @@ describe("consumo del outbox", () => {
 
   it("intentos agotados → dead, con el motivo", async () => {
     await sembrarOutbox(1, { attempts: 7 }); // el siguiente será el 8.º
-    const r = await procesarLote(sql, new FakeTransmitter(true), { maxIntentos: 8 });
+    const r = await procesarLote(sqlWorker, new FakeTransmitter(true), { maxIntentos: 8 });
 
     expect(r.publicados).toBe(0);
     expect(r.muertos).toBeGreaterThanOrEqual(1);
@@ -145,7 +152,7 @@ describe("consumo del outbox", () => {
   it("una fila con available_at en el futuro NO se toma: el backoff se respeta", async () => {
     await sembrarOutbox(1, { available_at: "now() + interval '1 hour'" });
     const fake = new FakeTransmitter();
-    const r = await procesarLote(sql, fake);
+    const r = await procesarLote(sqlWorker, fake);
     expect(r.muertos).toBe(0);
     expect(fake.recibidos.filter((e) => e.tenantId === TENANT)).toHaveLength(0);
     const [f] = await sql<{ status: string }[]>`
@@ -177,7 +184,7 @@ describe("los dos reapers", () => {
     // Y uno RECIÉN tomado, que NO es huérfano y no debe tocarse.
     const [reciente] = await sembrarOutbox(1, { status: "in_flight", attempts: 1 });
 
-    const r = await reaperOutbox(sql, { minutosHuerfana: 10, maxIntentos: 8 });
+    const r = await reaperOutbox(sqlWorker, { minutosHuerfana: 10, maxIntentos: 8 });
     expect(r).toEqual({ devueltas: 1, muertas: 1 });
 
     const estado = Object.fromEntries(
@@ -202,10 +209,10 @@ describe("los dos reapers", () => {
                 now() + interval '1 hour')`;
     });
 
-    const noToca = await reaperIdempotencia(sql, { minutosHuerfana: 15 });
+    const noToca = await reaperIdempotencia(sqlWorker, { minutosHuerfana: 15 });
     expect(noToca.liberadas).toBe(0);
 
-    const libera = await reaperIdempotencia(sql, { minutosHuerfana: 0 });
+    const libera = await reaperIdempotencia(sqlWorker, { minutosHuerfana: 0 });
     expect(libera.liberadas).toBe(1);
     const [f] = await sql<{ status: string; response: { body: { code: string } } }[]>`
       select status, response from public.idempotency_keys where key = 'K-REAPER'`;
@@ -221,13 +228,13 @@ describe("variantes rotas de la auditoría de S0.6a (F-9, F-12, F-13)", () => {
     // la devuelve; «pasa el tiempo» del backoff; el worker B la toma y la
     // publica. Cuando A vuelve con su T2, la fila ya no es suya.
     const fakeA = new FakeTransmitter(false, async () => {
-      await reaperOutbox(sql, { minutosHuerfana: 0 });
+      await reaperOutbox(sqlWorker, { minutosHuerfana: 0 });
       await sql`update public.outbox set available_at = now() where id = ${id}`;
-      const b = await procesarLote(sql, new FakeTransmitter());
+      const b = await procesarLote(sqlWorker, new FakeTransmitter());
       expect(b.publicados).toBeGreaterThanOrEqual(1);
     });
 
-    const a = await procesarLote(sql, fakeA);
+    const a = await procesarLote(sqlWorker, fakeA);
 
     expect(a.reservasPerdidas).toBe(1); // A lo supo, y no lo contó como publicado
     expect(a.publicados).toBe(0);
@@ -239,7 +246,7 @@ describe("variantes rotas de la auditoría de S0.6a (F-9, F-12, F-13)", () => {
   it("F-9: una entrega que se CUELGA no deja la fila in_flight: el plazo la devuelve a pending", async () => {
     await sembrarOutbox(1);
     const colgado = new FakeTransmitter(false, () => new Promise(() => {}));
-    const r = await procesarLote(sql, colgado, { timeoutMs: 50 });
+    const r = await procesarLote(sqlWorker, colgado, { timeoutMs: 50 });
     expect(r.reintentos).toBeGreaterThanOrEqual(1);
     const [f] = await sql<{ status: string; last_error: string }[]>`
       select status, last_error from public.outbox where tenant_id = ${TENANT}`;
@@ -249,7 +256,7 @@ describe("variantes rotas de la auditoría de S0.6a (F-9, F-12, F-13)", () => {
 
   it("borde inferior del off-by-one: attempts 6 + maxIntentos 8 → pending, no dead", async () => {
     await sembrarOutbox(1, { attempts: 6 });
-    await procesarLote(sql, new FakeTransmitter(true), { maxIntentos: 8 });
+    await procesarLote(sqlWorker, new FakeTransmitter(true), { maxIntentos: 8 });
     const [f] = await sql<{ status: string; attempts: number }[]>`
       select status, attempts from public.outbox where tenant_id = ${TENANT}`;
     expect(f).toEqual({ status: "pending", attempts: 7 });
@@ -261,7 +268,7 @@ describe("variantes rotas de la auditoría de S0.6a (F-9, F-12, F-13)", () => {
       attempts: 3,
       available_at: "now() - interval '20 minutes'",
     });
-    await reaperOutbox(sql, { minutosHuerfana: 10 });
+    await reaperOutbox(sqlWorker, { minutosHuerfana: 10 });
     const [f] = await sql<{ status: string; futuro: boolean; last_error: string }[]>`
       select status, available_at > now() as futuro, last_error
         from public.outbox where tenant_id = ${TENANT}`;
@@ -280,13 +287,13 @@ describe("variantes rotas de la auditoría de S0.6a (F-9, F-12, F-13)", () => {
     // El CHECK expires_at > created_at impide fabricar una clave caducada, así
     // que el «paso del tiempo» se simula con una retención NEGATIVA: -1 día
     // borra lo que caduca antes de mañana. La consulta es la misma.
-    const vigente = await purgarIdempotencia(sql, { diasRetencion: 7 });
+    const vigente = await purgarIdempotencia(sqlWorker, { diasRetencion: 7 });
     expect(vigente.borradas).toBe(0);
     const [antes] = await sql<{ n: number }[]>`
       select count(*)::int as n from public.idempotency_keys where key = 'K-PURGA'`;
     expect(antes?.n).toBe(1);
 
-    const purga = await purgarIdempotencia(sql, { diasRetencion: -1 });
+    const purga = await purgarIdempotencia(sqlWorker, { diasRetencion: -1 });
     expect(purga.borradas).toBeGreaterThanOrEqual(1);
     const [despues] = await sql<{ n: number }[]>`
       select count(*)::int as n from public.idempotency_keys where key = 'K-PURGA'`;

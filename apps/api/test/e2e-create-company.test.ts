@@ -15,7 +15,11 @@ import { buildApp } from "../src/app.js";
  * real como el que emitiría GoTrue local.
  */
 
+// Dos conexiones a propósito (ADR-0031): `postgres` para SEMBRAR (auth.users,
+// tenants: cosas que la API no tiene por qué poder hacer) y `ladino_api` para
+// la app bajo prueba. Si a la API le falta un privilegio, falla AQUÍ.
 const URL_LOCAL = "postgres://postgres:postgres@127.0.0.1:54322/postgres";
+const URL_API = "postgres://ladino_api:ladino_api@127.0.0.1:54322/postgres";
 const JWT_SECRET = new TextEncoder().encode(
   "super-secret-jwt-token-with-at-least-32-characters-long",
 );
@@ -30,6 +34,7 @@ const ACOTADO = "dddddddd-dddd-4ddd-8ddd-00000000000e"; // rol requires_scope=tr
 const ROL_ACOTADO = "dddddddd-dddd-4ddd-8ddd-00000000000f";
 
 let sql: ReturnType<typeof createClient>;
+let sqlApi: ReturnType<typeof createClient>;
 let app: ReturnType<typeof buildApp>;
 
 async function tokenDe(sub: string, expiraEn = "1h"): Promise<string> {
@@ -67,9 +72,13 @@ async function crear(opts: {
 
 beforeAll(async () => {
   sql = createClient(URL_LOCAL);
+  sqlApi = createClient(URL_API);
   // Modo hs256 porque es el que firma el stack LOCAL. Contra el remoto la API
   // corre en modo jwks (ES256); ese modo tiene su propia suite en auth.test.ts.
-  app = buildApp({ sql, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
+  app = buildApp({
+    sql: sqlApi,
+    auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER },
+  });
 
   await sql`delete from public.idempotency_keys where tenant_id = ${TENANT}`;
   await sql`insert into auth.users (id) values (${ADMIN}), (${MIEMBRO}), (${FORASTERO}), (${ACOTADO})
@@ -110,6 +119,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await sql`delete from public.idempotency_keys where tenant_id = ${TENANT}`;
   await sql.end();
+  await sqlApi.end();
 });
 
 describe("POST /v1/companies — la plantilla, de extremo a extremo", () => {

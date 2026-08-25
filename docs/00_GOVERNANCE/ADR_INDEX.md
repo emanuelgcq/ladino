@@ -31,6 +31,12 @@ Usa la skill `adr` de Claude Code.
 | [0023](adr/ADR-0023-money-y-exactmoney.md) | `Money` (persistible) separado de `ExactMoney` (calculado); solo se sale redondeando | Aceptado | SÍ |
 | [0024](adr/ADR-0024-politica-de-redondeo-en-el-hecho-monetario.md) | `MonetaryFact` pasa a ocho campos: la política de redondeo se persiste (amplía ADR-0020) | Aceptado | SÍ |
 | [0025](adr/ADR-0025-modelo-rbac-y-aislamiento.md) | Modelo RBAC con `requires_scope`; `permissions` global; por qué la inmutabilidad es un trigger y no una policy | **Propuesto** | NO |
+| [0026](adr/ADR-0026-auditoria-outbox-e-idempotencia.md) | Esquema de `audit_events`, `outbox` e `idempotency_keys` | Aceptado | SÍ |
+| [0027](adr/ADR-0027-la-regulacion-es-dato.md) | La regulación es dato, no código | Aceptado | SÍ |
+| [0028](adr/ADR-0028-transmision-seniat-como-consumidor-de-outbox.md) | Transmisión SENIAT como consumidor de outbox tras interfaz (`NullTransmitter` hoy) | Aceptado | SÍ |
+| [0029](adr/ADR-0029-regimen-fiscal-como-dato-por-empresa.md) | Régimen fiscal como dato versionado por empresa | Aceptado | SÍ |
+| [0030](adr/ADR-0030-operador-de-plataforma-y-soporte.md) | Operador de plataforma con alcance acotado | Aceptado | NO |
+| [0031](adr/ADR-0031-roles-de-servicio-sin-bypassrls.md) | Roles de servicio sin `BYPASSRLS`: la RLS también contiene a la API y al worker | Aceptado | NO |
 
 ## Decisiones aún abiertas
 
