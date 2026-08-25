@@ -14,3 +14,4 @@ export {
   type Actor,
   type UnitOfWork,
 } from "./transaction.js";
+export { assertServiceRole, PrivilegedRoleError } from "./assert-service-role.js";

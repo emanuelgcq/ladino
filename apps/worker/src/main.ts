@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { createClient } from "@ladino/db";
+import { assertServiceRole, createClient } from "@ladino/db";
 import { NullTransmitter } from "@ladino/fiscal";
 import { procesarLote } from "./outbox.js";
 import { purgarIdempotencia, reaperIdempotencia, reaperOutbox } from "./reapers.js";
@@ -77,6 +77,13 @@ function conPlazo<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 async function bucle(): Promise<void> {
+  // ADR-0031: con un rol SUPERUSER/BYPASSRLS no se arranca. Ruidoso, no un aviso.
+  try {
+    await assertServiceRole(sql);
+  } catch (e) {
+    log("error", "worker.privileged_role_refused", { error: String((e as Error).message ?? e) });
+    process.exit(1);
+  }
   log("info", "worker.start", { intervaloMs, maxFallosSeguidos: MAX_FALLOS_SEGUIDOS });
   while (!parando) {
     try {

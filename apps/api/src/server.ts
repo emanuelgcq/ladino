@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server";
-import { createClient } from "@ladino/db";
+import { assertServiceRole, createClient } from "@ladino/db";
 import { buildApp } from "./app.js";
 import { ConfigError, configServidor } from "./config.js";
 
@@ -28,6 +28,16 @@ try {
 }
 
 const sql = createClient(cfg.databaseUrl);
+
+// ADR-0031: si el DATABASE_URL trae un rol con SUPERUSER/BYPASSRLS, toda la
+// RLS es decorativa y NADIE recibe señal. Modo de fallo ruidoso: no se arranca.
+try {
+  await assertServiceRole(sql);
+} catch (e) {
+  log("error", "api.privileged_role_refused", { error: String((e as Error).message ?? e) });
+  process.exit(1);
+}
+
 const app = buildApp({
   sql,
   auth: cfg.auth,

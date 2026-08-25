@@ -75,8 +75,10 @@ alter role ladino_worker login password '<otra, distinta>';
 ```
 
 Y esas van a `/etc/ladino/api.env` y `worker.env` como `ladino_api.<ref>` / `ladino_worker.<ref>`.
-**`postgres.<ref>` en un `DATABASE_URL` de servicio es un error de despliegue**: funciona, y por
-eso es peligroso — es exactamente F-15.
+**`postgres.<ref>` en un `DATABASE_URL` de servicio es un error de despliegue** — y desde S0.6a
+**los dos procesos se NIEGAN a arrancar** si la conexión trae `SUPERUSER`/`BYPASSRLS`
+(`assertServiceRole`, ADR-0031): el error sale en el log (`*.privileged_role_refused`) en vez de
+convertir la RLS en decoración en silencio.
 
 **VALIDAR-SUPABASE:** que el pooler (Supavisor, 6543) acepte los roles dedicados. Si no,
 conexión directa por 5432 para los dos servicios (la API sigue con `prepare: false`; no daña).
