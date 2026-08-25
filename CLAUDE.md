@@ -30,7 +30,10 @@ Idioma: **código, identificadores y commits en inglés; comentarios, docs y UI 
   `docs/02_COMPLIANCE/` con fuente citada, **se marca `VALIDAR-SENIAT` y se para**.
 - Tocar, reiniciar o reconfigurar el contenedor **n8n** del VPS. Es infraestructura ajena a Ladino.
 - `docker compose down` global, `docker system prune`, `docker network rm` en el VPS.
-- `git push --force`, `git commit` o deploy sin aprobación explícita del usuario en el mensaje.
+- `git push --force`, o deploy sin aprobación explícita del usuario en el mensaje.
+- `git commit` **estructural** sin aprobación explícita: ADR nuevo, migración, cambio de
+  contrato de la API. El trabajo rutinario dentro de un plan ya aprobado se commitea directo
+  (ver §3, «Flujo de commits»).
 
 **Ausencia de mecanismo no es prohibición.** Si algo no debe poder hacerse, tiene que fallar
 activamente, no depender de que el método no exista.
@@ -47,6 +50,21 @@ activamente, no depender de que el método no exista.
 5. **Implementar** en incrementos verificables.
 6. **Verificar**: `pnpm verify` debe pasar en verde.
 7. **Reportar** con el formato de entrega (sección 6).
+
+### Flujo de commits: directo a main, sin PRs (desde S0.6a)
+
+El único revisor es el usuario y el gate real es `pnpm verify` con sus 11 pasos, no una página
+de GitHub. Reglas:
+
+- **`pnpm verify` en verde ANTES de cada commit, sin excepción.**
+- Un commit por unidad de trabajo coherente, mensajes cuidados (en inglés, como siempre).
+- **Push después de cada commit.** No se acumulan commits locales.
+- Lo que queda a medias o con un bloqueante **se dice** en el mensaje del commit y en
+  `HANDOFF.md` — no se esconde.
+- Lo que antes iba al cuerpo de un PR (tabla de auditoría, hallazgos, decisiones abiertas)
+  ahora vive en `HANDOFF.md`.
+- La aprobación explícita sigue siendo obligatoria para lo **estructural**: ADR nuevo,
+  migración, cambio de contrato. Lo rutinario dentro de un plan aprobado no la necesita (§2).
 
 ### Calibración del rigor
 
