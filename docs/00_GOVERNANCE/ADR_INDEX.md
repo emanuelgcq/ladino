@@ -37,6 +37,9 @@ Usa la skill `adr` de Claude Code.
 | [0029](adr/ADR-0029-regimen-fiscal-como-dato-por-empresa.md) | Régimen fiscal como dato versionado por empresa | Aceptado | SÍ |
 | [0030](adr/ADR-0030-operador-de-plataforma-y-soporte.md) | Operador de plataforma con alcance acotado | Aceptado | NO |
 | [0031](adr/ADR-0031-roles-de-servicio-sin-bypassrls.md) | Roles de servicio sin `BYPASSRLS`: la RLS también contiene a la API y al worker | Aceptado | NO |
+| [0032](adr/ADR-0032-precios-append-por-vigencia.md) | Precios por vigencia, append-only estructural, la fecha como parámetro | Aceptado | NO |
+| [0033](adr/ADR-0033-contrapartes-clasificacion-fiscal-y-rif.md) | Contrapartes: clasificación fiscal por catálogos globales y RIF auditado con valor anterior | Aceptado | NO |
+| [0034](adr/ADR-0034-inventario-costeo-promedio-y-kardex-materializado.md) | Inventario: promedio ponderado móvil, kardex append-only materializado y transferencia atómica | Aceptado | NO |
 
 ## Decisiones aún abiertas
 

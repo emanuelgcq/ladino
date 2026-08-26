@@ -36,6 +36,10 @@ Comprobado sobre las funciones realmente instaladas. **Cada uno es único en tie
 | `LAD33` | `platform.assert_product_kind_frozen()` | cambiar bien/servicio de un producto que salió de `draft` (D-8, migración 16) | `PRODUCT_KIND_IMMUTABLE` | `409` |
 | `LAD35` | `platform.assert_price_append_only()` · `close_price()` | editar/borrar un precio, o reabrir una vigencia cerrada (ADR-0032, migración 17) | `PRICE_APPEND_ONLY` | `409` |
 | `LAD36` | `platform.audit_customer_tax_id()` | cambio de RIF de un cliente sin `customer.tax_id.manage` (M4 para clientes, ADR-0033, migración 18) | `PERMISSION_REQUIRED` | `403` |
+| `LAD38` | `platform.apply_inventory_move()` · `assert_product_tracking_frozen()` | el movimiento no es posible con ese producto/almacén/lote: servicio, producto inactivo, seriales sin rastreo, lote obligatorio o prohibido, moneda funcional distinta a la de la empresa, o cambio de banderas de rastreo con movimientos (ADR-0034, migración 19) | `VALIDATION_FAILED` | `422` |
+| `LAD39` | `platform.apply_inventory_move()` | existencia negativa **sin** `allow_negative_stock`, o con la política pero sin `inventory.negative` del actor sobre ese almacén | `NEGATIVE_STOCK` | `409` |
+| `LAD40` | `platform.assert_transfer_balanced()` | al COMMIT, una transferencia sin sus dos patas cuadradas (mismo producto y lote, almacenes distintos, Σcantidad = 0, Σvalor = 0, referencia mutua) | `TRANSFER_UNBALANCED` | `409` |
+| `LAD41` | `platform.apply_inventory_move()` | el costeo declarado por el caso de uso no coincide con el oráculo exacto del esquema (costo de salida, costo unitario resultante o saldos). Casi siempre: la posición cambió entre el cálculo y el INSERT | `COSTING_MISMATCH` | `409` |
 
 ## Códigos de una sola ejecución — NO llegan a la API
 
@@ -46,8 +50,9 @@ migración y no dejan función instalada. Se registran aquí para que nadie los 
 al hacer `grep` sobre las migraciones y crea que el mapeo 1:1 es imposible.
 
 `LAD32` (atributos de los roles de servicio, migración 14), `LAD34` (seeds del catálogo de
-productos, migración 16) y `LAD37` (seeds de clientes, migración 18) son de una sola ejecución:
-abortan la migración, no llegan a la API.
+productos, migración 16), `LAD37` (seeds de clientes, migración 18) y `LAD42` (permisos, capas
+append-only y RLS de inventario, migración 19) son de una sola ejecución: abortan la migración, no
+llegan a la API.
 
 **Regla para migraciones futuras:** un `LADxx` nuevo se reserva en esta tabla **antes** de usarse,
 incluso para una aserción de una sola ejecución. Reutilizar un número «porque solo corre una vez»
