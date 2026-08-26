@@ -11,7 +11,7 @@ export type { CurrencyCode, CurrencyDefinition, Scale } from "./currency.js";
 export { currencyDefinition, parseCurrency, registeredCurrencies } from "./currency.js";
 
 export type { Decimal } from "./decimal.js";
-export { parseDecimal } from "./decimal.js";
+export { isPersistableAsNumeric, NUMERIC_SCALE, parseDecimal } from "./decimal.js";
 
 export type { MoneyError } from "./errors.js";
 export { MoneyErrorCode } from "./errors.js";
@@ -28,6 +28,7 @@ export {
   allocate,
   ISO_PRESENTATION_MODE,
   isRoundingOf,
+  roundForCost,
   roundForCurrency,
   roundForDocument,
   roundForPayment,

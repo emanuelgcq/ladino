@@ -9,7 +9,7 @@ Nada más del repositorio.
 
 | Entrada | Contenido | Quién la importa |
 |---|---|---|
-| `@ladino/money` | `Money`, aritmética, los cuatro redondeos, FX, `allocate`, `MonetaryFact` | `accounting`, `fiscal`, `inventory`, `domain`, `api`, `worker` |
+| `@ladino/money` | `Money`, aritmética, los cinco redondeos nombrados (`roundForCost` llegó con inventario, ADR-0034), FX, `allocate`, `MonetaryFact` | `accounting`, `fiscal`, `inventory`, `domain`, `api`, `worker` |
 | `@ladino/money/format` | `formatMoney`, `parseUserInput`. Cero aritmética, cero FX, cero redondeo fiscal | además: `web`, `mobile`, `ui` |
 
 `web`, `mobile` y `ui` **no pueden importar la raíz**. La regla es mecánica en

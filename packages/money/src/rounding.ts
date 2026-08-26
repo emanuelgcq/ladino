@@ -169,6 +169,20 @@ export function roundForPayment(
 }
 
 /**
+ * Costeo de inventario: el costo de una salida y el costo unitario promedio (MONEY_AND_ROUNDING_SPEC
+ * §6.6, ADR-0034). Quinto contexto, con nombre propio por la misma razón que los otros cuatro: al
+ * leer un movimiento de kardex se sabe que ese céntimo vino del costeo, no de un impuesto ni de un
+ * documento. Exige política — el paquete no decide la escala del costo, la decide el módulo que
+ * lo persiste y queda en `rounding_policy_id`.
+ */
+export function roundForCost(
+  value: Roundable,
+  policy: RoundingPolicy,
+): Result<RoundedMoney, MoneyError> {
+  return applyPolicy(value, policy);
+}
+
+/**
  * Reparte `total` entre `weights` de forma que **la suma de las partes sea exactamente el
  * total**. Sin céntimos perdidos ni inventados.
  *

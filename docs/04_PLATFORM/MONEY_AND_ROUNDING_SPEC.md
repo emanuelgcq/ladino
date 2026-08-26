@@ -268,6 +268,27 @@ El documento fiscal conserva su total exacto. Lo que cambia es la liquidación d
 diferencia es un hecho contable con contrapartida explícita. Absorberla en el cobro dejaría un
 descuadre entre el documento y el arqueo que ningún cierre podría explicar después.
 
+### 6.6 `roundForCost` — costeo de inventario (S0.6, ADR-0034)
+
+Quinto contexto, añadido cuando el módulo de inventario lo necesitó y no cabía en ninguno de los
+cuatro anteriores: el costo de una salida y el costo unitario promedio no son presentación por
+moneda, ni impuesto, ni total de documento fiscal, ni cobro. **No es materia tributaria**: es
+la escala con la que la empresa lleva su kardex valorado, y por eso está decidida aquí y no en el
+formulario del asesor.
+
+| Concepto | Escala | Modo | Política (`rounding_policy_id`) |
+|---|---|---|---|
+| Costo de una salida (promedio ponderado móvil) | `8` (la de `numeric(24,8)`) | `HALF_UP` | `inventory:cost:8:HALF_UP` |
+| Costo unitario promedio resultante | `8` | `HALF_UP` | `inventory:cost:8:HALF_UP` |
+| Importe funcional de una entrada en moneda extranjera | `8` | `HALF_UP` | `inventory:cost:8:HALF_UP` |
+
+Por qué `HALF_UP` y no `HALF_EVEN`: el esquema comprueba cada salida con un **oráculo en SQL**
+(`platform.apply_inventory_move()`, LAD41) que verifica que el costo persistido está a menos de
+media unidad de la octava cifra del cociente exacto — con multiplicaciones exactas, sin dividir —,
+y el `round()` de Postgres es *half away from zero*. Un modo distinto en TypeScript y en SQL
+sería un desacuerdo latente que solo aparecería en un empate exacto. El modo va en la política y
+la política se persiste en cada movimiento: cambiarlo mañana no reescribe la historia.
+
 ### 6.5 Reproducibilidad: el modo aplicado se persiste
 
 Ni la agregación de §6.2 ni la absorción de §6.3 se pueden inferir del resultado. Dos documentos

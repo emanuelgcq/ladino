@@ -16,6 +16,7 @@ import {
   invertFxRate,
   makeFxRate,
   parseDecimal,
+  roundForCost,
   roundForCurrency,
   roundForDocument,
   roundForPayment,
@@ -75,6 +76,7 @@ describe("P29 — ninguna función pública lee el reloj del sistema", () => {
     must(roundForTax(a, policy));
     must(roundForDocument(a, policy));
     must(roundForPayment(a, policy));
+    must(roundForCost(a, policy));
 
     must(
       allocate(

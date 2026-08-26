@@ -18,6 +18,7 @@ import {
   Money,
   MoneyErrorCode,
   parseDecimal,
+  roundForCost,
   roundForCurrency,
   roundForDocument,
   roundForPayment,
@@ -34,11 +35,13 @@ import {
   stringToScaled,
 } from "./arbitraries.js";
 
-/** Las cuatro funciones nombradas. Toda propiedad estructural se verifica en las cuatro. */
+/** Las funciones nombradas que exigen política. Toda propiedad estructural se verifica en todas
+ *  (la quinta, `roundForCost`, llegó con inventario — ADR-0034 — y no se prueba menos). */
 const NAMED_ROUNDINGS = [
   ["roundForTax", roundForTax],
   ["roundForDocument", roundForDocument],
   ["roundForPayment", roundForPayment],
+  ["roundForCost", roundForCost],
 ] as const satisfies readonly (readonly [
   string,
   (m: Roundable, p: RoundingPolicy) => Result<RoundedMoney, MoneyError>,
