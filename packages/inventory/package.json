@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Costeo, kardex. Puro.",
+  "description": "Costeo (promedio ponderado móvil), kardex. Puro.",
   "exports": {
     ".": {
       "ladino-source": "./src/index.ts",
@@ -17,7 +17,15 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
-    "lint": "eslint src",
-    "test": "vitest run"
+    "lint": "eslint src test",
+    "test": "vitest run",
+    "api-surface": "node ../../scripts/assert-no-number-in-dts.mjs dist"
+  },
+  "dependencies": {
+    "@ladino/core": "workspace:*",
+    "@ladino/money": "workspace:*"
+  },
+  "devDependencies": {
+    "fast-check": "^4.3.0"
   }
 }

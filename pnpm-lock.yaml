@@ -143,13 +143,30 @@ importers:
       '@ladino/db':
         specifier: workspace:*
         version: link:../db
+      '@ladino/inventory':
+        specifier: workspace:*
+        version: link:../inventory
+      '@ladino/money':
+        specifier: workspace:*
+        version: link:../money
       '@ladino/schemas':
         specifier: workspace:*
         version: link:../schemas
 
   packages/fiscal: {}
 
-  packages/inventory: {}
+  packages/inventory:
+    dependencies:
+      '@ladino/core':
+        specifier: workspace:*
+        version: link:../core
+      '@ladino/money':
+        specifier: workspace:*
+        version: link:../money
+    devDependencies:
+      fast-check:
+        specifier: ^4.3.0
+        version: 4.9.0
 
   packages/money:
     dependencies:

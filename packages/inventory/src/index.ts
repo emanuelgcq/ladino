@@ -1,7 +1,26 @@
 /**
- * @ladino/inventory — Costeo, kardex. Puro.
+ * @ladino/inventory — costeo (promedio ponderado móvil) y kardex. Paquete PURO (ADR-0034).
  *
- * Placeholder de Sprint 0 (S0.1). Sin framework y sin lógica: el esqueleto debe compilar
- * antes de que exista una sola regla de negocio. Ver docs/00_GOVERNANCE/SPRINT_0_BOOTSTRAP.md.
+ * Solo importa `@ladino/core` y `@ladino/money`. Sin I/O, sin reloj: la posición entra como
+ * argumento y el movimiento valorado sale como valor. Quien persiste es `packages/domain`.
  */
-export const PACKAGE_NAME = "@ladino/inventory" as const;
+export {
+  COST_ROUNDING_POLICY,
+  COSTING_METHODS,
+  adjust,
+  emptyPosition,
+  hasMeaningfulAverage,
+  issue,
+  issueCost,
+  parseQuantity,
+  positionOf,
+  receive,
+  replay,
+  type Costed,
+  type CostedMove,
+  type CostingMethod,
+  type InventoryError,
+  type InventoryErrorCode,
+  type MoveInput,
+  type StockPosition,
+} from "./costing.js";
