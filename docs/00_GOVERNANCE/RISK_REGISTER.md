@@ -85,6 +85,46 @@ base**, que es también lo que hace verificable la cadena diferida de ADR-0026 D
 **Deja de ser aceptable:** cuando exista el proyecto remoto con datos de un cliente real. Hasta
 entonces solo hay una base local.
 
+### R-13 · Una posición en negativo puede quedar con valor residual que nadie regulariza
+
+- **Severidad:** Media · **Dueño:** quien construya el cierre contable de inventario
+- **Disparador:** la primera empresa que active `allow_negative_stock`, o el módulo de conteos
+- **Dónde:** `stock_balances`, `platform.apply_inventory_move()` (migración 19); ADR-0034
+
+Con existencia negativa permitida, una salida saca todo el valor y valora el exceso al promedio
+vigente. Cuando entra la mercancía que faltaba, el valor de la posición puede quedar **negativo o
+descuadrado respecto de la cantidad**: el kardex sigue cuadrando (valor = Σ movimientos, exacto, y
+`stock_reconciliation` da cero), pero el costo unitario deja de tener sentido y se arrastra el
+último conocido en vez de recalcularse — decisión deliberada de ADR-0034 para no persistir jamás
+un costo unitario negativo. El residuo queda **visible** en el valor, no escondido.
+
+**Lo que falta:** un ajuste de SOLO VALOR (sin cantidad) que lo regularice contra una cuenta de
+diferencias, con su asiento. Hoy no existe: `adjustStock` mueve cantidad, y todo ajuste con delta
+cero se rechaza. Mientras tanto la única mitigación es la que ya está: el negativo exige política
+de empresa **y** permiso acotado, así que no ocurre por accidente.
+
+**Deja de ser aceptable:** cuando exista el cierre contable que lleve el inventario valorado al
+libro mayor (invariante 8 de `ACCOUNTING_INVARIANTS_TESTS.md`), porque ahí el residuo tendría que
+tener contrapartida.
+
+### R-14 · `inventory.negative` puede concederse a un rol sin que nadie lo revise
+
+- **Severidad:** Media · **Dueño:** quien construya la administración de roles
+- **Disparador:** la pantalla de gestión de roles y permisos
+- **Dónde:** `permissions` (migración 19), `role_permissions`; ADR-0025 §4
+
+`inventory.negative` es el permiso que convierte «imposible» en «posible» para el descuadre de
+existencias. Es acotado y exige además la bandera de empresa, pero **nada obliga a que su
+concesión pase por una revisión distinta de la de cualquier otro permiso**: quien pueda editar
+roles puede dárselo a sí mismo si también tiene `role.manage`.
+
+**Mitigación posible cuando exista la pantalla:** marcarlo como permiso sensible (junto con
+`period.reopen`, `journal.reverse` y `customer.tax_id.manage`), exigir un segundo aprobador para
+concederlo, y auditar la concesión como hecho propio. Hoy la concesión ya deja fila en
+`audit_events` por la vía general, pero no se distingue de conceder `warehouse.read`.
+
+**Deja de ser aceptable:** en cuanto haya más de un usuario por tenant en producción.
+
 ### R-12 · Cliente y proveedor son dos maestros: el mismo RIF puede divergir entre ambos
 
 - **Severidad:** Media · **Dueño:** quien construya el módulo de proveedores

@@ -21,6 +21,22 @@
 - stock.transferred
 - stock.adjusted
 
+**Implementados en S0.6 (módulo de inventario, ADR-0034), `schema_version` 1.** Los emiten los
+casos de uso de `packages/domain/src/inventory.ts` con `aggregate_type = 'inventory_move'`, y el
+payload lleva siempre `{warehouse_id, product_id, lot_id, quantity, functional_amount,
+functional_currency, unit_cost, quantity_after, rounding_policy_id}` — el importe funcional y la
+política de redondeo van dentro porque un evento de inventario sin ellos no permite reconstruir el
+costo. `stock.adjusted` añade `{reason}` (obligatorio) y `stock.transferred` añade
+`{transfer_id, from_warehouse_id, to_warehouse_id}`.
+
+`INVENTORY_SPEC.md` §API/eventos nombra `inventory.moved`; **el vocabulario bueno es el de este
+catálogo** (`stock.*`), que es el canónico y el que ya estaba escrito. La spec de módulo quedó
+desactualizada y no se sigue.
+
+La entrada de una transferencia NO emite evento propio: es la misma transferencia, y dos eventos
+para un hecho obligan a todo consumidor a deduplicar (el mismo argumento que el autocierre de
+precios en ADR-0032).
+
 ## Money
 - payment.received
 - payment.sent

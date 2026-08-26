@@ -6,11 +6,66 @@
 extremo a extremo: productos y precios, hasta pantalla.** Flujo trunk-based desde S0.6a: todo
 en `main`, `verify` en verde antes de cada commit.
 
-S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅** · S0.6b ⏸️
+S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅ ·
+Inventario ✅** · S0.6b ⏸️
 
 Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **17 migraciones** aplicadas y verificadas por huella
-(2026-08-26). **La 18 (clientes) está solo en local**: entra al remoto con el mismo procedimiento
-(o `supabase db push`, que la reconocerá como pendiente).
+(2026-08-26). **Las migraciones 18 (clientes) y 19 (inventario) están solo en local** y entran
+juntas al remoto: mismo procedimiento por la Management API, o `supabase db push`, que las
+reconocerá como pendientes.
+
+## Módulo de inventario — construido entero (2026-08-26)
+
+Migración 19 · ADR-0034 · pgTAP 019 (60 aserciones) · `packages/inventory` (puro) · cuatro casos
+de uso · seis endpoints + almacenes · pantalla con kardex.
+
+| Pieza | Dónde | Qué gobierna |
+|---|---|---|
+| Costeo | `packages/inventory/src/costing.ts` | Promedio ponderado móvil, puro, property-based |
+| Verificación del costeo | `platform.apply_inventory_move()` (LAD41) | Oráculo EXACTO en SQL, sin dividir |
+| Kardex | `inventory_moves` | Append-only en dos capas (ADR-0006) |
+| Existencias | `stock_balances` | Materializado por trigger, misma transacción |
+| Reconciliación | `platform.stock_reconciliation()` | «Kardex reproduce balance» como consulta |
+| Negativo | `inventory_settings` + `inventory.negative` | Bandera de empresa **y** permiso acotado |
+| Transferencia | `transfer_id` + LAD40 diferido | Instantánea, sin «en tránsito» |
+| Fecha | `platform.stock_at(…, fecha)` | Parámetro, nunca `now()` (como `price_at`) |
+
+**Decisiones que conviene no volver a discutir** (todas en ADR-0034): el promedio es por posición
+`(company, almacén, producto, lote)`; el costo de vaciar una posición es TODO el valor, sin
+residuo; sin promedio significativo (cantidad ≤ 0 **o** valor < 0) se arrastra el último costo
+unitario y **nunca** se persiste uno negativo; `roundForCost` es el quinto contexto de redondeo
+(§6.6, `HALF_UP` para no discrepar con el `round()` de Postgres); la moneda funcional es
+`companies.functional_currency_code` (default `VES`, VALIDAR-TRIBUTARIO).
+
+**Hallazgos de la construcción, que valen más que el código:**
+
+1. **LAD25 rechaza un «jefe de inventario» company-wide.** Los cuatro permisos de inventario son
+   acotados, y ADR-0025 §4 exige `requires_scope = true` en cualquier rol que los tenga. No existe
+   operar «toda la empresa» por omisión: se opera lo que se tiene enlazado, almacén por almacén.
+   Lo destapó el pgTAP al forzar las constraints diferidas, no una revisión.
+2. **`occurred_at` por omisión lo pone el SERVIDOR.** `created_at` sale de `now()`, que es la hora
+   de inicio de transacción; cualquier instante calculado en Node después es posterior y el CHECK
+   `occurred_at <= created_at` lo rechaza **siempre**. Lo destapó el primer test de integración.
+3. **Un constraint trigger sin `WHEN` encola un evento por cada fila**, aunque la función salga en
+   la primera línea: diez mil movimientos, diez mil eventos vivos hasta el commit, y cualquier
+   `TRUNCATE`/`ALTER TABLE` posterior muere con 55006 en vez del error que se esperaba.
+4. **El property test encontró un promedio negativo** (posición en negativo + entrada barata) y un
+   desbordamiento de `numeric(24,8)` que 300 corridas locales no vieron y el `verify` sí, con otra
+   semilla. Los dos están ahora como ejemplos explícitos.
+5. **`pnpm verify` puede resolverse al builtin `verify` de cmd** y dar `VERIFY EXIT=0` con un log
+   de dos líneas. Se usa `pnpm run verify` y se cuenta los pasos (CLAUDE.md §5).
+
+**No construido, y dicho:** reservas (van con ventas), conteos cíclicos (módulo propio con
+aprobación), seriales y BOM (banderas sí, estructura no — un producto con `tracks_serials` **no
+puede moverse**), ajustes de solo valor (R-13), endpoint de `inventory_settings` (hoy la fila la
+escribe el operador), y el asiento contable del COGS (es de contabilidad).
+
+**Siguiente módulo (propuesta): compras (recepción con documento) o ventas.** Inventario ya tiene
+las entradas y salidas; lo que falta es el documento que las origina y las paga. Ventas es lo que
+cierra el ciclo con clientes y precios ya construidos, pero arrastra `reservations` y toca
+facturación fiscal — que sigue bloqueada por `OPEN_QUESTIONS`. **Compras es el camino con menos
+bloqueantes**: proveedores (dispara R-12, la decisión `party`), órdenes, recepción contra la
+entrada de inventario que ya existe, y el costo real de adquisición alimentando el promedio.
 
 ## Módulo de clientes — construido entero (2026-08-26)
 

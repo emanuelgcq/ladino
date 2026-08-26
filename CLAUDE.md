@@ -132,7 +132,7 @@ error contraintuitivas, y **ninguna la vio un test unitario: las vio el E2E real
 | Asientos / cierres | `docs/03_MODULES/ACCOUNTING_ENGINE_SPEC.md`, `docs/03_MODULES/JOURNAL_AND_CLOSING_SPEC.md` |
 | Facturación / impuestos | `docs/02_COMPLIANCE/` completo + `docs/02_COMPLIANCE/SENIAT_COMPLIANCE_AND_HOMOLOGATION.md` |
 | Migraciones / RLS | `docs/04_PLATFORM/SUPABASE_DESIGN.md`, `docs/04_PLATFORM/MULTITENANCY_AND_RBAC.md` |
-| Inventario | `docs/03_MODULES/INVENTORY_SPEC.md`, `docs/03_MODULES/WAREHOUSE_OPERATIONS_SPEC.md` |
+| Inventario | `docs/00_GOVERNANCE/adr/ADR-0034-*` (la fuente real), `docs/03_MODULES/INVENTORY_SPEC.md`, `docs/03_MODULES/WAREHOUSE_OPERATIONS_SPEC.md` |
 | Mobile | `docs/04_PLATFORM/MOBILE_EXPO_SPEC.md`, `docs/08_UX/MOBILE_UX_RULES.md` |
 | Deploy | `docs/05_INFRA/DOCKER_AND_HOSTINGER_DEPLOYMENT.md` |
 | Decisiones estructurales | `docs/00_GOVERNANCE/adr/` — y **crea un ADR nuevo** |
@@ -186,6 +186,20 @@ pnpm openapi              # regenerar openapi.json desde los schemas
 
 **Los pasos 5, 10 y 11 necesitan Docker y el stack local levantado** (`pnpm db:start`): desde
 S0.5, el paso de test incluye la integración de la API contra Postgres real (ADR-0016).
+
+**El resultado del `verify` se lee por `VERIFY EXIT` y por `Failed:`, nunca a ojo.** En esta
+máquina se corre con `TURBO_CONCURRENCY=1` (memoria) y la salida se manda a un log; el veredicto
+es `echo "VERIFY EXIT=$?"` al final más `grep -E "VERIFY EXIT|Failed:"` sobre ese log. Un
+`Result: PASS` de turbo no es el veredicto: turbo cubre cuatro de los once pasos. La regla existe
+porque el módulo de clientes salió con lint en rojo leyendo la cola del log (2026-08-26).
+
+**Y un `VERIFY EXIT=0` tampoco basta por sí solo: hay que ver que el log tiene los pasos.**
+Invocado como `pnpm verify` dentro de una cadena, Windows puede resolverlo al builtin `verify`
+de cmd, que imprime `VERIFY is off.` y devuelve 0 — un log de dos líneas y un verde que no
+verificó nada (visto el 2026-08-26 en el módulo de inventario). Se usa **`pnpm run verify`** y se
+cuenta: `grep -cE "^@ladino/[a-z-]+:(lint|typecheck|test|build)"` sobre el log tiene que dar
+decenas de líneas, y `All tests successful` tiene que aparecer (el pgTAP). Un gate que puede
+apagarse solo y dar verde es peor que no tenerlo.
 
 **`test:concurrency` NO está dentro de `verify`, y es deliberado.** Es una prueba de *muestreo*:
 abre N sesiones, compite durante T segundos y comprueba que nadie se lleva la misma fila dos
