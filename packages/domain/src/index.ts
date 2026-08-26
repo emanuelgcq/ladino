@@ -8,3 +8,11 @@
  */
 export { createCompany, RULES_VERSION, type CreateCompanyError } from "./create-company.js";
 export { tenantVisible } from "./tenant-visibility.js";
+export { companyScope, type CompanyScopeError } from "./company-scope.js";
+export {
+  createProduct,
+  updateProduct,
+  setProductTaxCategory,
+  type ProductError,
+} from "./products.js";
+export { createPriceList, setPrice, type PricingError } from "./pricing.js";

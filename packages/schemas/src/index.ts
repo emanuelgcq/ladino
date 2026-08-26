@@ -6,3 +6,15 @@ export {
   ListCompaniesResponse,
   ErrorResponse,
 } from "./companies.js";
+export {
+  AmountString,
+  CreateProductRequest,
+  UpdateProductRequest,
+  SetProductTaxCategoryRequest,
+  ProductResponse,
+  ListProductsResponse,
+  CreatePriceListRequest,
+  PriceListResponse,
+  SetPriceRequest,
+  PriceItemResponse,
+} from "./products.js";

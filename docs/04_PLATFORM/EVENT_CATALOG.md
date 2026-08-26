@@ -37,6 +37,18 @@ no encajaba en ninguna.
 
 - company.created
 
+## Maestros (catálogo de productos y precios — S0.6, módulo de productos)
+
+Emitidos por los casos de uso de `packages/domain` (products.ts, pricing.ts), `schema_version` 1:
+
+- product.created
+- product.updated
+- product.tax_category_set — el payload lleva `{from, to}`: una reclasificación fiscal sin el
+  valor anterior no se puede revisar (la lección de la migración 10)
+- price_list.created
+- price.set — el payload lleva `{amount (string), currency, effective_from, effective_to}`;
+  el autocierre del período anterior NO emite evento propio: es consecuencia del mismo hecho
+
 Los demás eventos de esta sección se añaden **cuando exista el caso de uso que los emite**, no por
 anticipado: la política de qué se audita está diferida con dueño y disparador en `RISK_REGISTER.md`
 (R-04), y un catálogo escrito por adelantado sería adivinación.

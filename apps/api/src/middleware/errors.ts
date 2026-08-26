@@ -31,6 +31,11 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   LAD29: { code: "PERMISSION_REQUIRED", status: 403 },
   LAD30: { code: "OCCURRED_AT_IN_FUTURE", status: 422 },
   LAD31: { code: "IDEMPOTENCY_ACTOR_IMMUTABLE", status: 409 },
+  // Migraciones 16-17: el tipo de producto congelado tras draft (D-8) y el
+  // append-only de precios (ADR-0032). Ambos son «lo que pides es imposible
+  // por diseño», no un dato malformado: 409, como LAD06.
+  LAD33: { code: "PRODUCT_KIND_IMMUTABLE", status: 409 },
+  LAD35: { code: "PRICE_APPEND_ONLY", status: 409 },
 
   // --- estándar
   "23505": { code: "DUPLICATE", status: 409 },
@@ -46,6 +51,9 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // llega aquí es un 422 correcto y una señal de que faltó una comprobación.
   "22P02": { code: "VALIDATION_FAILED", status: 422 },
   "54000": { code: "PAYLOAD_TOO_LARGE", status: 413 },
+  // EXCLUDE de vigencias de precio (ADR-0032). El caso de uso ya lo traduce
+  // con mensaje propio; esta fila es la red para cualquier otro camino.
+  "23P01": { code: "PRICE_OVERLAP", status: 409 },
 };
 
 /**
@@ -61,8 +69,10 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   NOT_FOUND: 404, // regla 404/403 — un solo código para «no existe» y «no es tuyo»
   PERMISSION_REQUIRED: 403, // visible pero sin permiso
   TENANT_SUSPENDED: 409,
+  COMPANY_SUSPENDED: 409,
   DUPLICATE: 409,
   VALIDATION_FAILED: 422,
+  PRICE_OVERLAP: 409, // ADR-0032: la vigencia pisa un período cerrado
 };
 
 export class DominioError extends Error {
@@ -128,6 +138,12 @@ function mensajePara(code: string): string {
       return "La fecha del hecho está por delante del reloj del servidor.";
     case "PAYLOAD_TOO_LARGE":
       return "El contenido enviado es demasiado grande.";
+    case "PRODUCT_KIND_IMMUTABLE":
+      return "El tipo (bien/servicio) no se cambia después de activar el producto. Crea otro.";
+    case "PRICE_APPEND_ONLY":
+      return "Un precio no se edita ni se borra: corrige con una vigencia nueva.";
+    case "PRICE_OVERLAP":
+      return "La vigencia se solapa con un período ya cerrado.";
     default:
       return "Error interno.";
   }
