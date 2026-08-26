@@ -152,9 +152,16 @@ modelo descartado. Lo construido:
 
 1. **Rotar credenciales** — la `sb_secret` y el token `sbp_…` se pegaron en un chat. (Dijiste
    que rotas tú y avisas.) Los VALIDAR-DEPLOY de Traefik también los consultas tú en el VPS.
-2. En el remoto: `supabase db push` con las migraciones **14 a 17** (dijiste que las 14–16 iban
-   hoy; la 17 es de esta sesión) y fijar las contraseñas de `ladino_api`/`ladino_worker`
-   (`infra/README.md` §Roles de servicio). Pendiente tu confirmación del VALIDAR-SUPABASE del pooler.
+2. ~~Migraciones en el remoto~~ **HECHO (2026-08-26): proyecto NUEVO `udacvwnhwpsdzbouhqhl`
+   («ladino2», us-west-2, Postgres 17.6, firma ES256). Las 17 migraciones aplicadas en orden por la
+   Management API y registradas en `supabase_migrations.schema_migrations` con la forma de la CLI
+   (un `db push` futuro las reconoce). Paridad verificada por huella: 553 objetos idénticos local
+   ↔ remoto (columnas, constraints, índices, policies, funciones con proconfig, triggers, RLS,
+   grants, atributos de roles, seeds).** El proyecto anterior (`igpfrwdgmicgyirwdbgs`) quedó
+   pausado y abandonado. Pendientes: contraseñas de `ladino_api`/`ladino_worker` (las pone el
+   operador; `infra/README.md` §Roles de servicio) y el VALIDAR-SUPABASE del pooler.
+   **Rotación al cerrar**: los tokens `sbp_` (dos) y la `sb_secret` del proyecto nuevo se pegaron
+   en el chat.
 3. Construir y publicar las imágenes por la secuencia de `infra/README.md`; anotar digests con
    `pnpm release:manifest digest`; etiquetar `v0.1.0`.
 4. En el VPS: consultar la red y el resolver del Traefik existente (no inventarlos), secretos en
@@ -281,7 +288,7 @@ Pero S0.6 contenía más cosas, y **tres razones han cambiado el cuadro**:
 
 ### El proyecto remoto ya existe — estado y hallazgos
 
-`igpfrwdgmicgyirwdbgs` (ref en `.env`, que está en `.gitignore`; plantilla en `.env.example`).
+`udacvwnhwpsdzbouhqhl` (ref en `.env`, que está en `.gitignore`; plantilla en `.env.example`).
 Las API keys (publishable/secret) están en el `.env` local. **La `sb_secret` se pegó en un chat:
 rotarla al cerrar el sprint** (dashboard → API Keys → rotate; es un clic y no rompe nada si se
 actualiza el `.env`).

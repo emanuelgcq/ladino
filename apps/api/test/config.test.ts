@@ -15,7 +15,7 @@ const LOCAL = {
   SUPABASE_AUTH_ISSUER: "http://127.0.0.1:54321/auth/v1",
   SUPABASE_JWT_SECRET: "un-secreto-de-al-menos-treinta-y-dos-caracteres",
 };
-const REMOTO = { SUPABASE_AUTH_ISSUER: "https://igpfrwdgmicgyirwdbgs.supabase.co/auth/v1" };
+const REMOTO = { SUPABASE_AUTH_ISSUER: "https://udacvwnhwpsdzbouhqhl.supabase.co/auth/v1" };
 
 describe("configAuth", () => {
   it("por defecto es jwks, y exige la URL del JWKS", () => {
