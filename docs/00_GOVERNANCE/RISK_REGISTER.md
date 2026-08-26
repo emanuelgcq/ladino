@@ -85,6 +85,25 @@ base**, que es también lo que hace verificable la cadena diferida de ADR-0026 D
 **Deja de ser aceptable:** cuando exista el proyecto remoto con datos de un cliente real. Hasta
 entonces solo hay una base local.
 
+### R-12 · Cliente y proveedor son dos maestros: el mismo RIF puede divergir entre ambos
+
+- **Severidad:** Media · **Dueño:** quien construya el módulo de proveedores
+- **Disparador:** **el módulo de proveedores** (H-2 y H-13 del plan de clientes, 2026-08-26)
+- **Dónde:** `customers` (migración 18); `suppliers` (no existe); `DATABASE_SCHEMA` ER
+
+Las specs modelan `customers` y `suppliers` como entidades hermanas sin un «tercero»/`party`
+común (`DATABASE_SCHEMA` ER, endpoints separados, campos asimétricos). Cuando la misma
+contraparte compre y venda a la empresa, tendrá dos filas con razón social, RIF y domicilio
+duplicados que pueden **divergir** — y los documentos fiscales copian esos datos (R-05), así que
+una factura de venta y una de compra a la misma contraparte podrían llevar nombres distintos.
+
+**Decisión pendiente, no tomada en clientes a propósito:** (a) `parties` con roles cliente/
+proveedor y una sola identidad fiscal, o (b) dos maestros con una comprobación cruzada por RIF al
+alta (aviso, no bloqueo). Decidir ANTES de escribir `suppliers`: después, unificar es migración
+de datos con historial.
+
+**Deja de ser aceptable:** con la primera fila de `suppliers`.
+
 ### R-08 · `published` en el outbox NO significa «recibido por el SENIAT»
 
 - **Severidad:** Alta (de interpretación, no de dato) · **Dueño:** quien construya Fase 11

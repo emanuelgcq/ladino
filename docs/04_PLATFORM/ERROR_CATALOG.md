@@ -35,6 +35,7 @@ Comprobado sobre las funciones realmente instaladas. **Cada uno es único en tie
 | `LAD31` | `platform.assert_idempotency_actor_immutable()` | intento de mover `actor_id` de una clave | *S0.5* | *S0.5* |
 | `LAD33` | `platform.assert_product_kind_frozen()` | cambiar bien/servicio de un producto que salió de `draft` (D-8, migración 16) | `PRODUCT_KIND_IMMUTABLE` | `409` |
 | `LAD35` | `platform.assert_price_append_only()` · `close_price()` | editar/borrar un precio, o reabrir una vigencia cerrada (ADR-0032, migración 17) | `PRICE_APPEND_ONLY` | `409` |
+| `LAD36` | `platform.audit_customer_tax_id()` | cambio de RIF de un cliente sin `customer.tax_id.manage` (M4 para clientes, ADR-0033, migración 18) | `PERMISSION_REQUIRED` | `403` |
 
 ## Códigos de una sola ejecución — NO llegan a la API
 
@@ -44,8 +45,9 @@ ejecución**: los dos están dentro de bloques `do $$` que corren una sola vez a
 migración y no dejan función instalada. Se registran aquí para que nadie los lea como duplicados
 al hacer `grep` sobre las migraciones y crea que el mapeo 1:1 es imposible.
 
-`LAD32` (atributos de los roles de servicio, migración 14) y `LAD34` (seeds del catálogo de
-productos, migración 16) son de una sola ejecución: abortan la migración, no llegan a la API.
+`LAD32` (atributos de los roles de servicio, migración 14), `LAD34` (seeds del catálogo de
+productos, migración 16) y `LAD37` (seeds de clientes, migración 18) son de una sola ejecución:
+abortan la migración, no llegan a la API.
 
 **Regla para migraciones futuras:** un `LADxx` nuevo se reserva en esta tabla **antes** de usarse,
 incluso para una aserción de una sola ejecución. Reutilizar un número «porque solo corre una vez»
