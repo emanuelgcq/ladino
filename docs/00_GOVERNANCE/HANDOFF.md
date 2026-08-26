@@ -2,19 +2,53 @@
 
 ## Estado
 
-**S0.1 a S0.6a cerrados y en verde, F-15 incluido.** PR #3 (S0.5) mergeado en `main`. S0.6a
-commiteado en `s0.6a/deploy-and-worker` con **PR #4 abierto** (auditoría de 24 hallazgos en la
-descripción). **F-15 (ADR-0031: roles sin BYPASSRLS) está resuelto en el árbol de trabajo, sin
-commitear**: commit y PR esperan tu aprobación explícita, como siempre.
+**Sprint 0 cerrado (S0.1–S0.6a, PR #4 mergeado) y el PRIMER MÓDULO DE NEGOCIO construido de
+extremo a extremo: productos y precios, hasta pantalla.** Flujo trunk-based desde S0.6a: todo
+en `main`, `verify` en verde antes de cada commit.
 
-S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ (PR #4) · F-15 ✅ (commit pendiente) · S0.6b ⏸️
+S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅** · S0.6b ⏸️
+
+## Módulo de productos — construido entero (2026-08-25)
+
+| Capa | Qué hay | Dónde |
+|---|---|---|
+| Esquema | migración 16 (`products`, `product_categories`, `units`, `currencies`, `product_tax_categories`) y **17** (`price_lists`, `price_list_items` con EXCLUDE por rango, autocierre, guardián LAD35, `close_price()`, `price_at(list, product, FECHA)`) | `supabase/migrations/20260825*` · ADR-0032 |
+| pgTAP | 016 (30) y 017 (33): SKU hostil con roto, anti-confusión fiscal/comercial en tres direcciones, solape 23P01 con roto, LAD35 en dos capas, autocierre por el dato, `now()` como negativo, importe al límite 24,8 | `supabase/tests/016_*`, `017_*` |
+| Dinero | viaje `numeric(24,8) → postgres.js (string) → Money → {amount, currency}` dígito a dígito | `packages/db/test/money-roundtrip.test.ts` |
+| Dominio | `createProduct`, `updateProduct`, `setProductTaxCategory` (permiso segregado), `createPriceList`, `setPrice` — plantilla de 10 pasos company-scoped con `companyScope()` (copia única) | `packages/domain/src/{products,pricing,company-scope}.ts` + 13 tests |
+| API | `GET/POST /v1/products`, `GET/PATCH /v1/products/:id`, `PUT /v1/products/:id/tax-category`, `GET/POST /v1/price-lists`, `GET/POST /v1/price-lists/:id/prices` (`?product_id&at=`), `GET /v1/{units,tax-categories,product-categories}` — todo con `X-Company-Id`, mutaciones con `Idempotency-Key`, OpenAPI generado | `apps/api/src/routes/{products,pricing}.ts` + 8 E2E con JWT real |
+| Web | listado con búsqueda y paginación en servidor, alta/edición, detalle con precio vigente por lista, gestión de listas y carga de precios; importes solo formateados con `@ladino/money/format` | `apps/web/src/{ProductsView,PricingView,money}.tsx` |
+
+**Decisiones tomadas por el camino (todas dentro del plan aprobado):**
+- El detector de coste de 015 quedó **sin roto** con los números medidos (aprobado); el de 017 no
+  tiene detector: el gate por fila con roto sigue siendo 013.
+- `companyScope()` NO toma `FOR UPDATE` sobre la company (desviación de la plantilla, declarada en
+  `products.ts`): serializaría todo el catálogo por un maestro reversible; el SKU lo decide el índice.
+- `GET /v1/products` pagina con `count(*) over ()`; `per_page ≤ 100`; búsqueda `ilike` con comodines
+  escapados.
+- `PriceItemResponse` lleva la moneda de la **lista**: el ítem no la repite (una sola fuente).
+- La web muestra los precios de lista con hasta 8 decimales **exactos** cuando `formatMoney` se
+  niega (formatear no redondea): el dato, no un redondeo inventado en el cliente.
+- **Regla de eslint tapada**: `no-restricted-imports` bloqueaba también `@ladino/money/format` —
+  nunca se notó porque ningún cliente había importado money. Ahora es un regex probado en las dos
+  direcciones (raíz y `/fx` bloqueados, `/format` permitido).
+
+**Lo que NO se hizo, dicho:** no hay CRUD de categorías comerciales (la API solo las lista; el
+producto las acepta) ni endpoint para `close_price()` (retiro sin sustituto: existe en la base con
+su permiso, sin caso de uso todavía); el seed de clasificaciones tributarias sigue **VALIDAR-TRIBUTARIO**;
+`main.ts` del worker sigue sin test (R-10).
+
+**Siguiente módulo (propuesta): clientes (CRM mínimo)** — es el segundo maestro que ventas
+necesita, tiene clave natural clara (RIF por company) y arrastra la primera decisión fiscal de
+contraparte (tipo de contribuyente para retenciones, `TAX_ENGINE_SPEC` `taxpayer_type`) que hay
+que leer en las specs ANTES de escribir SQL, igual que se hizo con productos.
 
 `pnpm verify` corre **11 pasos** — S0.6a añadió `release:manifest:check` (paso 9). **Los pasos 5,
-10 y 11 necesitan el stack local** (`pnpm db:start`). **403 pgTAP** (35 nuevas de la migración
-14) + **74 tests de vitest** en API y worker (61 + 13) — **los E2E conectan como
-`ladino_api`/`ladino_worker`**, no como postgres. `pnpm boundaries:selftest`: 22/22. Las dos
-imágenes se construyen (247/233 MB). Riesgos nuevos R-08..R-11 en `RISK_REGISTER.md`, cada uno
-con disparador.
+10 y 11 necesitan el stack local** (`pnpm db:start`). **476 pgTAP** (17 ficheros) + **112 tests
+de vitest** (API 77 · worker 13 · dominio 13 · db 9) — **los E2E y los tests de dominio conectan
+como `ladino_api`/`ladino_worker`**, no como postgres. `pnpm boundaries:selftest`: 22/22. Las dos
+imágenes se construyen (247/233 MB). Riesgos R-08..R-11 en `RISK_REGISTER.md`, cada uno con
+disparador. **En esta máquina: `TURBO_CONCURRENCY=1 pnpm verify`** (R-11).
 
 **⚠ En esta máquina, `TURBO_CONCURRENCY=1 pnpm verify`.** Con la concurrencia por defecto se cae
 por memoria (`VirtualAlloc failed`, exit `-1073740791`): hay ~2 GB libres con Docker y un stack
@@ -118,8 +152,9 @@ modelo descartado. Lo construido:
 
 1. **Rotar credenciales** — la `sb_secret` y el token `sbp_…` se pegaron en un chat. (Dijiste
    que rotas tú y avisas.) Los VALIDAR-DEPLOY de Traefik también los consultas tú en el VPS.
-2. En el remoto: aplicar la migración 14 (la propone la sesión, la ejecutas tú) y fijar las
-   contraseñas de `ladino_api`/`ladino_worker` (`infra/README.md` §Roles de servicio).
+2. En el remoto: `supabase db push` con las migraciones **14 a 17** (dijiste que las 14–16 iban
+   hoy; la 17 es de esta sesión) y fijar las contraseñas de `ladino_api`/`ladino_worker`
+   (`infra/README.md` §Roles de servicio). Pendiente tu confirmación del VALIDAR-SUPABASE del pooler.
 3. Construir y publicar las imágenes por la secuencia de `infra/README.md`; anotar digests con
    `pnpm release:manifest digest`; etiquetar `v0.1.0`.
 4. En el VPS: consultar la red y el resolver del Traefik existente (no inventarlos), secretos en

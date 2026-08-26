@@ -1,24 +1,18 @@
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { api, supabase, LlamadaApiError } from "./lib.js";
+import { api, supabase, LlamadaApiError, type Company } from "./lib.js";
+import { ProductsView } from "./ProductsView.js";
+import { PricingView } from "./PricingView.js";
 
 /**
- * LA VERTICAL DELGADA. Login → empresas del usuario (GET /v1/companies) →
- * seleccionar una (X-Company-Id validado por el middleware de scope) → crear
- * empresa (POST con Idempotency-Key). Una pantalla, sin pretensiones de
- * diseño: existe para ejercer la cadena Supabase → API → navegador de extremo
- * a extremo y descubrir los problemas de contrato ANTES de las veinte
- * pantallas — token, CORS, cuerpos de error, headers propios.
+ * La webapp de Ladino, aún sin pretensión de diseño: sesión (supabase-js SOLO
+ * para auth), selector de empresa (GET /v1/companies), y los módulos del
+ * catálogo de productos sobre esa selección. Todos los datos van por la API
+ * con Bearer + X-Company-Id; los errores se muestran con el MENSAJE del
+ * dominio. Router y TanStack Query llegan con las pantallas definitivas.
  */
-
-interface Company {
-  id: string;
-  tenant_id: string;
-  legal_name: string;
-  trade_name: string | null;
-  tax_id: string;
-  status: string;
-  created_at: string;
+function mensajeDe(e: unknown): string {
+  return e instanceof LlamadaApiError ? `${e.body.code}: ${e.body.message}` : String(e);
 }
 
 export function App() {
@@ -26,10 +20,10 @@ export function App() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [companies, setCompanies] = useState<Company[] | null>(null);
-  const [seleccionada, setSeleccionada] = useState<Company | null>(null);
-  const [alcance, setAlcance] = useState<string>("");
-  const [error, setError] = useState<string>("");
-  const [form, setForm] = useState({ tenant_id: "", legal_name: "", tax_id: "" });
+  const [empresa, setEmpresa] = useState<Company | null>(null);
+  const [modulo, setModulo] = useState<"productos" | "precios">("productos");
+  const [error, setError] = useState("");
+  const [alta, setAlta] = useState({ tenant_id: "", legal_name: "", tax_id: "" });
 
   useEffect(() => {
     void supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -40,11 +34,12 @@ export function App() {
   useEffect(() => {
     if (!session) {
       setCompanies(null);
+      setEmpresa(null);
       return;
     }
     api<Company[]>(session, "/v1/companies")
       .then(setCompanies)
-      .catch((e: unknown) => setError(String((e as Error).message)));
+      .catch((e: unknown) => setError(mensajeDe(e)));
   }, [session]);
 
   async function entrar(modo: "login" | "signup") {
@@ -56,41 +51,26 @@ export function App() {
     if (r.error) setError(r.error.message);
   }
 
-  async function seleccionar(co: Company) {
+  async function crearEmpresa() {
     if (!session) return;
-    setSeleccionada(co);
-    setAlcance("comprobando…");
-    try {
-      // La misma lista, PERO con X-Company-Id: si el middleware de scope no
-      // acepta la company, esto es un 404 — el contrato que la vertical ejerce.
-      await api<Company[]>(session, "/v1/companies", { companyId: co.id });
-      setAlcance(`X-Company-Id aceptado para ${co.legal_name}`);
-    } catch (e) {
-      setAlcance(e instanceof LlamadaApiError ? `${e.status} ${e.body.code}` : String(e));
-    }
-  }
-
-  async function crear() {
-    if (!session) return;
+    if (!window.confirm(`¿Crear la empresa ${alta.legal_name} (${alta.tax_id})?`)) return;
     setError("");
     try {
-      await api<Company>(session, "/v1/companies", {
+      await api(session, "/v1/companies", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify(form),
+        body: JSON.stringify(alta),
       });
       setCompanies(await api<Company[]>(session, "/v1/companies"));
     } catch (e) {
-      setError(
-        e instanceof LlamadaApiError ? `${e.status} ${e.body.code}: ${e.body.message}` : String(e),
-      );
+      setError(mensajeDe(e));
     }
   }
 
   if (!session) {
     return (
       <main>
-        <h1>Ladino — vertical delgada</h1>
+        <h1>Ladino</h1>
         <p>Sesión contra Supabase Auth (local o remoto según VITE_SUPABASE_URL).</p>
         <input placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} />
         <input
@@ -108,52 +88,77 @@ export function App() {
 
   return (
     <main>
-      <h1>Ladino — vertical delgada</h1>
+      <h1>Ladino</h1>
       <p>
-        {session.user.email} · <button onClick={() => void supabase.auth.signOut()}>Salir</button>
+        {session.user.email}
+        {empresa && (
+          <>
+            {" · "}
+            <strong>{empresa.legal_name}</strong>{" "}
+            <button onClick={() => setEmpresa(null)}>cambiar empresa</button>
+          </>
+        )}
+        {" · "}
+        <button onClick={() => void supabase.auth.signOut()}>Salir</button>
       </p>
-
-      <h2>Tus empresas (GET /v1/companies)</h2>
-      {companies === null ? (
-        <p>cargando…</p>
-      ) : companies.length === 0 ? (
-        <p>
-          Ninguna. Un usuario nuevo no tiene memberships: siémbralo (README) y crea la primera
-          empresa abajo.
-        </p>
-      ) : (
-        <ul>
-          {companies.map((co) => (
-            <li key={co.id}>
-              <button onClick={() => void seleccionar(co)}>
-                {seleccionada?.id === co.id ? "▶ " : ""}
-                {co.legal_name}
-              </button>{" "}
-              — {co.tax_id} · {co.status} · tenant {co.tenant_id.slice(0, 8)}…
-            </li>
-          ))}
-        </ul>
-      )}
-      {alcance && <p>{alcance}</p>}
-
-      <h2>Crear empresa (POST /v1/companies, con Idempotency-Key)</h2>
-      <input
-        placeholder="tenant_id (uuid)"
-        value={form.tenant_id}
-        onChange={(e) => setForm({ ...form, tenant_id: e.target.value })}
-      />
-      <input
-        placeholder="razón social"
-        value={form.legal_name}
-        onChange={(e) => setForm({ ...form, legal_name: e.target.value })}
-      />
-      <input
-        placeholder="RIF"
-        value={form.tax_id}
-        onChange={(e) => setForm({ ...form, tax_id: e.target.value })}
-      />
-      <button onClick={() => void crear()}>Crear</button>
       {error && <p role="alert">{error}</p>}
+
+      {!empresa ? (
+        <>
+          <h2>Elige empresa</h2>
+          {companies === null ? (
+            <p>cargando…</p>
+          ) : companies.length === 0 ? (
+            <p>
+              No tienes empresas visibles. Crea la primera (necesitas el tenant y company.manage).
+            </p>
+          ) : (
+            <ul>
+              {companies.map((co) => (
+                <li key={co.id}>
+                  <button onClick={() => setEmpresa(co)}>{co.legal_name}</button> — {co.tax_id} ·{" "}
+                  {co.status}
+                </li>
+              ))}
+            </ul>
+          )}
+          <fieldset>
+            <legend>Crear empresa</legend>
+            <input
+              placeholder="tenant_id (uuid)"
+              value={alta.tenant_id}
+              onChange={(e) => setAlta({ ...alta, tenant_id: e.target.value })}
+            />{" "}
+            <input
+              placeholder="razón social"
+              value={alta.legal_name}
+              onChange={(e) => setAlta({ ...alta, legal_name: e.target.value })}
+            />{" "}
+            <input
+              placeholder="RIF"
+              value={alta.tax_id}
+              onChange={(e) => setAlta({ ...alta, tax_id: e.target.value })}
+            />{" "}
+            <button onClick={() => void crearEmpresa()}>Crear</button>
+          </fieldset>
+        </>
+      ) : (
+        <>
+          <nav>
+            <button disabled={modulo === "productos"} onClick={() => setModulo("productos")}>
+              Productos
+            </button>{" "}
+            <button disabled={modulo === "precios"} onClick={() => setModulo("precios")}>
+              Listas de precios
+            </button>
+          </nav>
+          {modulo === "productos" ? (
+            <ProductsView session={session} companyId={empresa.id} />
+          ) : (
+            <PricingView session={session} companyId={empresa.id} />
+          )}
+        </>
+      )}
     </main>
   );
 }

@@ -136,7 +136,14 @@ export default tseslint.config(
                 "Cero reglas tributarias ni contables en cliente (CLAUDE.md §7). Consume la API.",
             },
             {
-              group: ["@ladino/money"],
+              // La negación es la mitad de la regla: sin ella, el patrón
+              // bloqueaba TAMBIÉN /format — y nunca se notó porque ningún
+              // cliente había importado money hasta el módulo de productos.
+              // Una regla que prohíbe de más es tan tapada como una que
+              // prohíbe de menos: la destapó el primer uso legítimo.
+              // (Con `group` + negación esta versión de ESLint seguía bloqueando
+              // /format; el regex es explícito y se probó en las dos direcciones.)
+              regex: "^@ladino/money(?!/format$)",
               message:
                 "Desde cliente solo @ladino/money/format. La raíz lleva aritmética y FX (ADR-0021).",
             },

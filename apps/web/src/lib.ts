@@ -31,6 +31,52 @@ export class LlamadaApiError extends Error {
   }
 }
 
+export interface Company {
+  id: string;
+  tenant_id: string;
+  legal_name: string;
+  trade_name: string | null;
+  tax_id: string;
+  status: string;
+  created_at: string;
+}
+export interface Product {
+  id: string;
+  company_id: string;
+  sku: string;
+  name: string;
+  kind: "good" | "service";
+  status: "draft" | "active" | "inactive";
+  unit_code: string;
+  tax_category_code: string;
+  category_id: string | null;
+  barcode: string | null;
+}
+export interface PriceList {
+  id: string;
+  name: string;
+  currency_code: string;
+  status: string;
+}
+export interface PriceItem {
+  id: string;
+  product_id: string;
+  amount: string;
+  currency: string;
+  effective_from: string;
+  effective_to: string | null;
+}
+export interface Unit {
+  code: string;
+  name: string;
+  symbol: string;
+}
+export interface TaxCategory {
+  code: string;
+  name: string;
+  description: string;
+}
+
 /** fetch con el contrato de la API: Bearer, JSON, y errores con `code` estable. */
 export async function api<T>(
   session: Session,
