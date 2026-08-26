@@ -10,9 +10,11 @@ S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 �
 Inventario ✅** · S0.6b ⏸️
 
 Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **17 migraciones** aplicadas y verificadas por huella
-(2026-08-26). **Las migraciones 18 (clientes) y 19 (inventario) están solo en local** y entran
-juntas al remoto: mismo procedimiento por la Management API, o `supabase db push`, que las
-reconocerá como pendientes.
+(2026-08-26). **Las migraciones 18 (clientes), 19 (inventario) y 20 (recetas, unidades,
+vencimientos, variantes y umbrales) están solo en local** y entran **juntas** al remoto con
+`supabase login` + `supabase link` + `supabase db push` — el usuario lo ejecuta, el token vive en su
+sesión y no pasa por el repo ni por el chat. Antes del push, `supabase migration list --linked` tiene
+que listar exactamente esas tres como pendientes; si lista algo más, hay divergencia y se para.
 
 ## Módulo de inventario — construido entero (2026-08-26)
 
@@ -59,6 +61,42 @@ unitario y **nunca** se persiste uno negativo; `roundForCost` es el quinto conte
 aprobación), seriales y BOM (banderas sí, estructura no — un producto con `tracks_serials` **no
 puede moverse**), ajustes de solo valor (R-13), endpoint de `inventory_settings` (hoy la fila la
 escribe el operador), y el asiento contable del COGS (es de contabilidad).
+
+## Inventario, segunda vuelta — cinco capacidades de mercado (2026-08-26)
+
+Migración 20 · ADR-0035 (recetas y unidades) · ADR-0036 (variantes) · pgTAP 020 (45 aserciones) ·
+`packages/inventory/recipes.ts` · `consumeRecipe` · once endpoints · dos paneles y el de recetas.
+
+| Capacidad | Decisión que se tomó | Dónde vive |
+|---|---|---|
+| Recetas | El compuesto **no tiene stock propio** (LAD43); anidamiento **no**, forzado (LAD44) | `product_recipes`, ADR-0035 |
+| Unidades | Conversión **dirigida**, sin derivar inversas; sin fila, se rechaza | `unit_conversions`, LAD45 |
+| Vencimientos | FEFO es **sugerencia**; que un vencido no salga es **obligación** (LAD46) | `suggest_lot_fefo`, `expiring_lots` |
+| Variantes | Cada variante es un **producto**; el template solo agrupa | `product_templates`, ADR-0036 |
+| Umbrales | Solo la consulta; la notificación se difiere al worker | `low_stock_products` |
+
+**Lo que los tests encontraron y no una revisión:**
+
+1. **`sum()` ignora los NULL**, así que `recipe_cost` devolvía un costo **a medias** justo en el
+   caso que su propio comentario decía impedir. Corregido con un `CASE` que exige que ninguna línea
+   sea NULL. Lo destapó el pgTAP 020.
+2. **La clave natural `(company, kind, reference)` de la 19 no sobrevive a las recetas**: vender doce
+   arepas es UNA referencia con N salidas. Se ensancha a incluir producto y lote — la garantía de
+   idempotencia se conserva y un documento pasa a poder tener varias líneas, que es lo que un
+   documento es.
+3. **La linealidad exacta de la explosión es imposible** a escala finita. La propiedad la exigía y
+   falló (5001 contra 5000). No se cambió la implementación para satisfacer una propiedad falsa: se
+   corrigió la propiedad para que diga la verdad con su cota, `(n+1)/2` unidades de 10⁻⁸.
+4. **Un recuento fijo se rompe cuando se añade algo correcto**: el test 016 decía `count(units) = 5`
+   y la migración 20 lo puso en rojo al sembrar gramo, mililitro y minuto. Pasa a comprobar la
+   propiedad (que las cinco de D-4 sigan ahí), que es lo que S0.4 ya había corregido en el test 004.
+5. **Un `CHECK` no admite subconsulta** (0A000): recorrer un `jsonb` lo es. La forma de `attributes`
+   se comprueba con una función `IMMUTABLE`, con su `GRANT` — un CHECK se evalúa con los privilegios
+   de quien inserta, y sin él la tabla quedaría escribible por nadie (la lección de S0.4).
+
+**Deuda que esto deja escrita:** recetas anidadas (una salsa base se repite hoy en cada plato),
+alta masiva de variantes (5 tallas × 8 colores son 40 productos a mano), normalización de los
+valores de `attributes` («azul» vs «Azul»), y la notificación de las alertas.
 
 **Siguiente módulo (propuesta): compras (recepción con documento) o ventas.** Inventario ya tiene
 las entradas y salidas; lo que falta es el documento que las origina y las paga. Ventas es lo que

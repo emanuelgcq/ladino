@@ -37,6 +37,13 @@ La entrada de una transferencia NO emite evento propio: es la misma transferenci
 para un hecho obligan a todo consumidor a deduplicar (el mismo argumento que el autocierre de
 precios en ADR-0032).
 
+**Consumo de una receta (migración 20, ADR-0035).** Vender un compuesto emite **un `stock.shipped`
+por ingrediente**, no un evento nuevo del compuesto, y todos llevan el mismo `source_document_id` en
+el payload. La razón es la misma que arriba: el hecho de inventario es la salida de harina, y quien
+consuma estos eventos (contabilidad, para el COGS) necesita exactamente eso. El hecho comercial —«se
+vendieron doce arepas»— es del módulo de ventas, que todavía no existe; cuando exista, emitirá el
+suyo y se ligará por `source_document_id`.
+
 ## Money
 - payment.received
 - payment.sent

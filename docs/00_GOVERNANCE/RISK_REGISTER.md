@@ -85,6 +85,26 @@ base**, que es también lo que hace verificable la cadena diferida de ADR-0026 D
 **Deja de ser aceptable:** cuando exista el proyecto remoto con datos de un cliente real. Hasta
 entonces solo hay una base local.
 
+### R-15 · Cambiar una receta no revalúa lo ya vendido, y eso es correcto pero confunde
+
+- **Severidad:** Baja · **Dueño:** quien construya el reporte de márgenes
+- **Disparador:** el primer reporte de rentabilidad por plato
+- **Dónde:** `product_recipes`, `inventory_moves` (migración 20); ADR-0035
+
+Una receta es una **definición vigente**, no un hecho histórico: se edita, y `product_recipes` no
+guarda vigencia por fecha (a diferencia de `price_list_items`, que sí). Los consumos ya registrados
+conservan su costo real —salieron las cantidades de entonces— así que el kardex es correcto; pero
+si alguien cambia la receta y luego compara «costo teórico × unidades vendidas» contra el costo
+real del mes, los números no cuadrarán y **el sistema no podrá explicar por qué**: no queda rastro
+de qué receta estaba vigente en cada venta.
+
+**Mitigación cuando duela:** o versionar `product_recipes` por vigencia como se hizo con los
+precios (ADR-0032), o guardar en el consumo una copia de la receta aplicada. La segunda es más
+barata y sigue el patrón R-05 (el documento copia, no referencia).
+
+**Deja de ser aceptable:** cuando exista un reporte de rentabilidad por producto que alguien use
+para tomar decisiones de precio.
+
 ### R-13 · Una posición en negativo puede quedar con valor residual que nadie regulariza
 
 - **Severidad:** Media · **Dueño:** quien construya el cierre contable de inventario
