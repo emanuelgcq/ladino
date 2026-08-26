@@ -40,6 +40,11 @@ Comprobado sobre las funciones realmente instaladas. **Cada uno es único en tie
 | `LAD39` | `platform.apply_inventory_move()` | existencia negativa **sin** `allow_negative_stock`, o con la política pero sin `inventory.negative` del actor sobre ese almacén | `NEGATIVE_STOCK` | `409` |
 | `LAD40` | `platform.assert_transfer_balanced()` | al COMMIT, una transferencia sin sus dos patas cuadradas (mismo producto y lote, almacenes distintos, Σcantidad = 0, Σvalor = 0, referencia mutua) | `TRANSFER_UNBALANCED` | `409` |
 | `LAD41` | `platform.apply_inventory_move()` | el costeo declarado por el caso de uso no coincide con el oráculo exacto del esquema (costo de salida, costo unitario resultante o saldos). Casi siempre: la posición cambió entre el cálculo y el INSERT | `COSTING_MISMATCH` | `409` |
+| `LAD43` | `platform.apply_inventory_move()` | movimiento directo sobre un producto COMPUESTO, en cualquier dirección: no tiene existencias propias (ADR-0035, migración 20) | `COMPOSED_HAS_NO_STOCK` | `409` |
+| `LAD44` | `platform.assert_recipe_shape()` · `assert_composed_flag_coherent()` | receta inválida: el padre no es compuesto, el hijo SÍ lo es (anidamiento no soportado), el hijo es un servicio, o se cambia `is_composed` de un producto que ya es ingrediente / ya tiene movimientos / ya tiene receta | `RECIPE_INVALID` | `409` |
+| `LAD45` | *caso de uso* (`explodeRecipe`) | falta la fila de `unit_conversions` para pasar de la unidad de la receta a la del producto. **No lo lanza la base**: `convert_quantity()` devuelve `NULL` y el caso de uso lo traduce — el NULL es el mecanismo, el código es el contrato | `UNIT_CONVERSION_MISSING` | `422` |
+| `LAD46` | `platform.apply_inventory_move()` | SALIDA de un lote ya vencido sin `inventory.expired` sobre ese almacén. Entrar sí se puede: el control es sobre lo que llega al cliente (ADR-0035) | `PERMISSION_REQUIRED` | `403` |
+| `LAD47` | `platform.assert_variant_attributes()` | la variante declara un eje que su plantilla no tiene, o le falta uno que exige (ADR-0036, migración 20) | `VARIANT_ATTRIBUTES_INVALID` | `422` |
 
 ## Códigos de una sola ejecución — NO llegan a la API
 
@@ -50,9 +55,9 @@ migración y no dejan función instalada. Se registran aquí para que nadie los 
 al hacer `grep` sobre las migraciones y crea que el mapeo 1:1 es imposible.
 
 `LAD32` (atributos de los roles de servicio, migración 14), `LAD34` (seeds del catálogo de
-productos, migración 16), `LAD37` (seeds de clientes, migración 18) y `LAD42` (permisos, capas
-append-only y RLS de inventario, migración 19) son de una sola ejecución: abortan la migración, no
-llegan a la API.
+productos, migración 16), `LAD37` (seeds de clientes, migración 18), `LAD42` (permisos, capas
+append-only y RLS de inventario, migración 19) y `LAD48` (permisos, conversiones de unidad y RLS de
+la migración 20) son de una sola ejecución: abortan la migración, no llegan a la API.
 
 **Regla para migraciones futuras:** un `LADxx` nuevo se reserva en esta tabla **antes** de usarse,
 incluso para una aserción de una sola ejecución. Reutilizar un número «porque solo corre una vez»

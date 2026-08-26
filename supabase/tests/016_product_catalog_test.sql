@@ -51,7 +51,15 @@ select is(
       and c.relname in ('units','currencies','product_tax_categories','product_categories','products')
       and c.relrowsecurity and c.relforcerowsecurity),
   5::bigint, 'las CINCO tablas nuevas tienen RLS habilitada y FORZADA');
-select is((select count(*) from public.units), 5::bigint, 'seed de unidades: las cinco de D-4');
+-- La PROPIEDAD, no el recuento: que estén las cinco de D-4. Decía `= 5` y la
+-- migración 20 lo puso en rojo al sembrar gramo, mililitro y minuto — un recuento
+-- fijo se rompe cuando se AÑADE algo correcto, que es el mismo defecto que S0.4
+-- corrigió en el test 004 («no comprueba la propiedad: pasa a rojo cuando se
+-- añade una tabla, y seguiría en verde si a una le quitaran sus policies»).
+select is(
+  (select count(*) from public.units
+    where code in ('unidad', 'kg', 'litro', 'hora', 'servicio')),
+  5::bigint, 'seed de unidades: las cinco de D-4 siguen ahí');
 select is((select count(*) from public.currencies), 2::bigint, 'seed de monedas: VES y USD (tabla, no CHECK: D-5)');
 select is((select count(*) from public.product_tax_categories where status = 'active'),
   6::bigint, 'seed tributario: las seis clasificaciones, marcadas VALIDAR-TRIBUTARIO');

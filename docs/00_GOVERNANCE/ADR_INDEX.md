@@ -40,6 +40,8 @@ Usa la skill `adr` de Claude Code.
 | [0032](adr/ADR-0032-precios-append-por-vigencia.md) | Precios por vigencia, append-only estructural, la fecha como parámetro | Aceptado | NO |
 | [0033](adr/ADR-0033-contrapartes-clasificacion-fiscal-y-rif.md) | Contrapartes: clasificación fiscal por catálogos globales y RIF auditado con valor anterior | Aceptado | NO |
 | [0034](adr/ADR-0034-inventario-costeo-promedio-y-kardex-materializado.md) | Inventario: promedio ponderado móvil, kardex append-only materializado y transferencia atómica | Aceptado | NO |
+| [0035](adr/ADR-0035-recetas-y-unidades-fraccionadas.md) | Productos compuestos: recetas de ingredientes y unidades fraccionadas | Aceptado | NO |
+| [0036](adr/ADR-0036-variantes-como-productos-derivados.md) | Variantes de producto como productos derivados, no como dimensión de existencias | Aceptado | NO |
 
 ## Decisiones aún abiertas
 
