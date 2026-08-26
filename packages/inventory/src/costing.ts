@@ -50,7 +50,14 @@ export type CostingMethod = "promedio_ponderado_movil";
 export const COSTING_METHODS: readonly CostingMethod[] = ["promedio_ponderado_movil"];
 
 export type InventoryErrorCode =
-  "INVALID_QUANTITY" | "NEGATIVE_STOCK" | "CURRENCY_MISMATCH" | "MONEY";
+  | "INVALID_QUANTITY"
+  | "NEGATIVE_STOCK"
+  | "CURRENCY_MISMATCH"
+  // Falta la fila en unit_conversions. Es un error PROPIO y no VALIDATION_FAILED
+  // porque la acción correctiva es distinta y concreta: cargar la conversión.
+  | "UNIT_CONVERSION_MISSING"
+  | "VALIDATION_FAILED"
+  | "MONEY";
 
 export interface InventoryError {
   readonly code: InventoryErrorCode;

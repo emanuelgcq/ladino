@@ -24,3 +24,4 @@ export {
   type MoveInput,
   type StockPosition,
 } from "./costing.js";
+export { explodeRecipe, totalCost, type ExplodedLine, type RecipeLine } from "./recipes.js";
