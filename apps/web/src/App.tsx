@@ -4,6 +4,7 @@ import { api, supabase, LlamadaApiError, type Company } from "./lib.js";
 import { ProductsView } from "./ProductsView.js";
 import { PricingView } from "./PricingView.js";
 import { CustomersView } from "./CustomersView.js";
+import { InventoryView } from "./InventoryView.js";
 
 /**
  * La webapp de Ladino, aún sin pretensión de diseño: sesión (supabase-js SOLO
@@ -22,7 +23,9 @@ export function App() {
   const [password, setPassword] = useState("");
   const [companies, setCompanies] = useState<Company[] | null>(null);
   const [empresa, setEmpresa] = useState<Company | null>(null);
-  const [modulo, setModulo] = useState<"productos" | "precios" | "clientes">("productos");
+  const [modulo, setModulo] = useState<"productos" | "precios" | "clientes" | "inventario">(
+    "productos",
+  );
   const [error, setError] = useState("");
   const [alta, setAlta] = useState({ tenant_id: "", legal_name: "", tax_id: "" });
 
@@ -154,14 +157,19 @@ export function App() {
             </button>{" "}
             <button disabled={modulo === "clientes"} onClick={() => setModulo("clientes")}>
               Clientes
+            </button>{" "}
+            <button disabled={modulo === "inventario"} onClick={() => setModulo("inventario")}>
+              Inventario
             </button>
           </nav>
           {modulo === "productos" ? (
             <ProductsView session={session} companyId={empresa.id} />
           ) : modulo === "precios" ? (
             <PricingView session={session} companyId={empresa.id} />
-          ) : (
+          ) : modulo === "clientes" ? (
             <CustomersView session={session} companyId={empresa.id} />
+          ) : (
+            <InventoryView session={session} companyId={empresa.id} />
           )}
         </>
       )}

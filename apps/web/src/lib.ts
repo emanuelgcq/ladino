@@ -80,6 +80,50 @@ export interface Customer {
   status: "lead" | "active" | "blocked" | "inactive";
   default_price_list_id: string | null;
 }
+export interface Warehouse {
+  id: string;
+  company_id: string;
+  branch_id: string | null;
+  code: string;
+  name: string;
+  status: "active" | "inactive";
+}
+export interface StockBalance {
+  warehouse_id: string;
+  warehouse_code: string;
+  product_id: string;
+  product_sku: string;
+  product_name: string;
+  lot_id: string | null;
+  lot_code: string | null;
+  /** Cantidad e importes: STRING siempre. La webapp no hace aritmética con ellos. */
+  quantity: string;
+  value: string;
+  currency: string;
+  last_unit_cost: string;
+}
+export interface InventoryMove {
+  id: string;
+  warehouse_id: string;
+  product_id: string;
+  lot_id: string | null;
+  kind: "entrada" | "salida" | "ajuste" | "transferencia_in" | "transferencia_out";
+  quantity: string;
+  functional_amount: string;
+  functional_currency: string;
+  amount_transaction_currency: string;
+  transaction_currency: string;
+  fx_rate: string;
+  rate_source: string;
+  unit_cost: string;
+  /** Saldo y valor TRAS el movimiento, calculados y guardados por el servidor. */
+  quantity_after: string;
+  value_after: string;
+  occurred_at: string;
+  reference: string | null;
+  reason: string | null;
+  transfer_id: string | null;
+}
 export interface CodeCatalog {
   code: string;
   name: string;
