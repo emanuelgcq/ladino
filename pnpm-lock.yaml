@@ -76,6 +76,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@ladino/money':
+        specifier: workspace:*
+        version: link:../../packages/money
       '@supabase/supabase-js':
         specifier: ^2.49.0
         version: 2.112.4
@@ -127,6 +130,10 @@ importers:
       postgres:
         specifier: ^3.4.5
         version: 3.4.9
+    devDependencies:
+      '@ladino/money':
+        specifier: workspace:*
+        version: link:../money
 
   packages/domain:
     dependencies:

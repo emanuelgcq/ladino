@@ -23,5 +23,8 @@
   "dependencies": {
     "@ladino/core": "workspace:*",
     "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@ladino/money": "workspace:*"
   }
 }
