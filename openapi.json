@@ -861,6 +861,888 @@
           "blocked"
         ],
         "additionalProperties": false
+      },
+      "InventoryMoveResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "product_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lot_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "entrada",
+              "salida",
+              "ajuste",
+              "transferencia_in",
+              "transferencia_out"
+            ]
+          },
+          "quantity": {
+            "type": "string"
+          },
+          "functional_amount": {
+            "type": "string"
+          },
+          "functional_currency": {
+            "type": "string"
+          },
+          "amount_transaction_currency": {
+            "type": "string"
+          },
+          "transaction_currency": {
+            "type": "string"
+          },
+          "fx_rate": {
+            "type": "string"
+          },
+          "rate_source": {
+            "type": "string"
+          },
+          "rate_timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "rounding_policy_id": {
+            "type": "string"
+          },
+          "unit_cost": {
+            "type": "string"
+          },
+          "quantity_after": {
+            "type": "string"
+          },
+          "value_after": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reference": {
+            "type": "string",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "transfer_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "id",
+          "company_id",
+          "warehouse_id",
+          "product_id",
+          "lot_id",
+          "kind",
+          "quantity",
+          "functional_amount",
+          "functional_currency",
+          "amount_transaction_currency",
+          "transaction_currency",
+          "fx_rate",
+          "rate_source",
+          "rate_timestamp",
+          "rounding_policy_id",
+          "unit_cost",
+          "quantity_after",
+          "value_after",
+          "occurred_at",
+          "reference",
+          "reason",
+          "transfer_id"
+        ],
+        "additionalProperties": false
+      },
+      "ListInventoryMovesResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "company_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "warehouse_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "product_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "lot_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "entrada",
+                    "salida",
+                    "ajuste",
+                    "transferencia_in",
+                    "transferencia_out"
+                  ]
+                },
+                "quantity": {
+                  "type": "string"
+                },
+                "functional_amount": {
+                  "type": "string"
+                },
+                "functional_currency": {
+                  "type": "string"
+                },
+                "amount_transaction_currency": {
+                  "type": "string"
+                },
+                "transaction_currency": {
+                  "type": "string"
+                },
+                "fx_rate": {
+                  "type": "string"
+                },
+                "rate_source": {
+                  "type": "string"
+                },
+                "rate_timestamp": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "rounding_policy_id": {
+                  "type": "string"
+                },
+                "unit_cost": {
+                  "type": "string"
+                },
+                "quantity_after": {
+                  "type": "string"
+                },
+                "value_after": {
+                  "type": "string"
+                },
+                "occurred_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "reference": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "reason": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "transfer_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "id",
+                "company_id",
+                "warehouse_id",
+                "product_id",
+                "lot_id",
+                "kind",
+                "quantity",
+                "functional_amount",
+                "functional_currency",
+                "amount_transaction_currency",
+                "transaction_currency",
+                "fx_rate",
+                "rate_source",
+                "rate_timestamp",
+                "rounding_policy_id",
+                "unit_cost",
+                "quantity_after",
+                "value_after",
+                "occurred_at",
+                "reference",
+                "reason",
+                "transfer_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "ListStockResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "warehouse_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "warehouse_code": {
+                  "type": "string"
+                },
+                "product_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "product_sku": {
+                  "type": "string"
+                },
+                "product_name": {
+                  "type": "string"
+                },
+                "lot_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "lot_code": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "quantity": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                },
+                "currency": {
+                  "type": "string"
+                },
+                "last_unit_cost": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "warehouse_id",
+                "warehouse_code",
+                "product_id",
+                "product_sku",
+                "product_name",
+                "lot_id",
+                "lot_code",
+                "quantity",
+                "value",
+                "currency",
+                "last_unit_cost"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "ReceiveStockRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "product_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lot_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "quantity": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "fx": {
+            "type": "object",
+            "properties": {
+              "rate": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "rate",
+              "source",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "lot_code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "lot_expires_at": {
+            "type": "string",
+            "format": "date"
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "company_id",
+          "warehouse_id",
+          "product_id",
+          "quantity",
+          "amount",
+          "currency"
+        ],
+        "additionalProperties": false
+      },
+      "IssueStockRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "product_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lot_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "quantity": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "company_id",
+          "warehouse_id",
+          "product_id",
+          "quantity"
+        ],
+        "additionalProperties": false
+      },
+      "AdjustStockRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "product_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lot_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "delta": {
+            "type": "string",
+            "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
+          },
+          "unit_cost": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          }
+        },
+        "required": [
+          "company_id",
+          "warehouse_id",
+          "product_id",
+          "delta",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "TransferStockRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "from_warehouse_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "to_warehouse_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "product_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lot_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "quantity": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "company_id",
+          "from_warehouse_id",
+          "to_warehouse_id",
+          "product_id",
+          "quantity"
+        ],
+        "additionalProperties": false
+      },
+      "TransferResponse": {
+        "type": "object",
+        "properties": {
+          "transfer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "out": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "company_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "warehouse_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "product_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "lot_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "entrada",
+                  "salida",
+                  "ajuste",
+                  "transferencia_in",
+                  "transferencia_out"
+                ]
+              },
+              "quantity": {
+                "type": "string"
+              },
+              "functional_amount": {
+                "type": "string"
+              },
+              "functional_currency": {
+                "type": "string"
+              },
+              "amount_transaction_currency": {
+                "type": "string"
+              },
+              "transaction_currency": {
+                "type": "string"
+              },
+              "fx_rate": {
+                "type": "string"
+              },
+              "rate_source": {
+                "type": "string"
+              },
+              "rate_timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "rounding_policy_id": {
+                "type": "string"
+              },
+              "unit_cost": {
+                "type": "string"
+              },
+              "quantity_after": {
+                "type": "string"
+              },
+              "value_after": {
+                "type": "string"
+              },
+              "occurred_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "reference": {
+                "type": "string",
+                "nullable": true
+              },
+              "reason": {
+                "type": "string",
+                "nullable": true
+              },
+              "transfer_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "id",
+              "company_id",
+              "warehouse_id",
+              "product_id",
+              "lot_id",
+              "kind",
+              "quantity",
+              "functional_amount",
+              "functional_currency",
+              "amount_transaction_currency",
+              "transaction_currency",
+              "fx_rate",
+              "rate_source",
+              "rate_timestamp",
+              "rounding_policy_id",
+              "unit_cost",
+              "quantity_after",
+              "value_after",
+              "occurred_at",
+              "reference",
+              "reason",
+              "transfer_id"
+            ],
+            "additionalProperties": false
+          },
+          "in": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "company_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "warehouse_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "product_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "lot_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "entrada",
+                  "salida",
+                  "ajuste",
+                  "transferencia_in",
+                  "transferencia_out"
+                ]
+              },
+              "quantity": {
+                "type": "string"
+              },
+              "functional_amount": {
+                "type": "string"
+              },
+              "functional_currency": {
+                "type": "string"
+              },
+              "amount_transaction_currency": {
+                "type": "string"
+              },
+              "transaction_currency": {
+                "type": "string"
+              },
+              "fx_rate": {
+                "type": "string"
+              },
+              "rate_source": {
+                "type": "string"
+              },
+              "rate_timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "rounding_policy_id": {
+                "type": "string"
+              },
+              "unit_cost": {
+                "type": "string"
+              },
+              "quantity_after": {
+                "type": "string"
+              },
+              "value_after": {
+                "type": "string"
+              },
+              "occurred_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "reference": {
+                "type": "string",
+                "nullable": true
+              },
+              "reason": {
+                "type": "string",
+                "nullable": true
+              },
+              "transfer_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "id",
+              "company_id",
+              "warehouse_id",
+              "product_id",
+              "lot_id",
+              "kind",
+              "quantity",
+              "functional_amount",
+              "functional_currency",
+              "amount_transaction_currency",
+              "transaction_currency",
+              "fx_rate",
+              "rate_source",
+              "rate_timestamp",
+              "rounding_policy_id",
+              "unit_cost",
+              "quantity_after",
+              "value_after",
+              "occurred_at",
+              "reference",
+              "reason",
+              "transfer_id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "transfer_id",
+          "out",
+          "in"
+        ],
+        "additionalProperties": false
+      },
+      "CreateWarehouseRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "branch_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "company_id",
+          "code",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "WarehouseResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "branch_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "tenant_id",
+          "company_id",
+          "branch_id",
+          "code",
+          "name",
+          "status"
+        ],
+        "additionalProperties": false
       }
     },
     "parameters": {}
@@ -2738,6 +3620,848 @@
           },
           "401": {
             "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inventory/stock": {
+      "get": {
+        "summary": "Existencias por almacén y producto (kardex materializado)",
+        "description": "Lee `stock_balances`, que el trigger del movimiento mantiene en la misma transacción. Coincide siempre con el recálculo desde el kardex (ADR-0034; pgTAP 019 lo exige).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "warehouse_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "product_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "search",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "required": false,
+            "name": "with_stock",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "required": false,
+            "name": "per_page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Existencias con su valor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListStockResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inventory/moves": {
+      "get": {
+        "summary": "Kardex paginado, con filtro por producto, almacén y fecha",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "product_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "warehouse_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "required": false,
+            "name": "per_page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Movimientos con saldo y costo tras cada uno.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListInventoryMovesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inventory/receipts": {
+      "post": {
+        "summary": "Entrada de existencias (permiso inventory.move sobre el almacén)",
+        "description": "El importe es el costo TOTAL de la recepción. En moneda distinta a la funcional exige la tasa con su fuente: sin fuente no se persiste (ADR-0020). El promedio se recalcula.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReceiveStockRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Movimiento registrado. El kardex es append-only: no se edita.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryMoveResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Existencia negativa sin política o sin inventory.negative (NEGATIVE_STOCK), o referencia duplicada (DUPLICATE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inventory/issues": {
+      "post": {
+        "summary": "Salida de existencias al costo promedio (permiso inventory.move sobre el almacén)",
+        "description": "El costo lo calcula el promedio ponderado móvil; el cliente no lo envía.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueStockRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Movimiento registrado. El kardex es append-only: no se edita.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryMoveResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Existencia negativa sin política o sin inventory.negative (NEGATIVE_STOCK), o referencia duplicada (DUPLICATE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inventory/adjustments": {
+      "post": {
+        "summary": "Ajuste de existencias (permiso inventory.adjust, SEGREGADO de inventory.move)",
+        "description": "El motivo es obligatorio: un ajuste sin motivo no es un ajuste, es un descuadre.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdjustStockRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Movimiento registrado. El kardex es append-only: no se edita.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InventoryMoveResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Existencia negativa sin política o sin inventory.negative (NEGATIVE_STOCK), o referencia duplicada (DUPLICATE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inventory/transfers": {
+      "post": {
+        "summary": "Transferencia entre almacenes (permiso inventory.transfer en LOS DOS)",
+        "description": "Salida y entrada en la misma transacción, con referencia mutua y cuadre exigido al commit: no existe instante con el stock en ningún lado ni en los dos. No hay estado «en tránsito» (ADR-0034).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferStockRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Movimiento registrado. El kardex es append-only: no se edita.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Existencia negativa sin política o sin inventory.negative (NEGATIVE_STOCK), o referencia duplicada (DUPLICATE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/warehouses": {
+      "get": {
+        "summary": "Almacenes de la empresa",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Los almacenes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WarehouseResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Crear almacén (permiso warehouse.manage)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWarehouseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Almacén creado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ya existe un almacén con ese código en la empresa.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
             "content": {
               "application/json": {
                 "schema": {

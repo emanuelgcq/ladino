@@ -17,6 +17,13 @@ export {
 } from "./products.js";
 export { createPriceList, setPrice, type PricingError } from "./pricing.js";
 export {
+  receiveStock,
+  issueStock,
+  adjustStock,
+  transferStock,
+  type InventoryError,
+} from "./inventory.js";
+export {
   createCustomer,
   updateCustomer,
   setCustomerTaxId,

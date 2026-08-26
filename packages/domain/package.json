@@ -23,6 +23,8 @@
   "dependencies": {
     "@ladino/core": "workspace:*",
     "@ladino/db": "workspace:*",
+    "@ladino/inventory": "workspace:*",
+    "@ladino/money": "workspace:*",
     "@ladino/schemas": "workspace:*"
   }
 }

@@ -26,6 +26,16 @@ import {
   SetCustomerBlockedRequest,
   CustomerResponse,
   ListCustomersResponse,
+  ReceiveStockRequest,
+  IssueStockRequest,
+  AdjustStockRequest,
+  TransferStockRequest,
+  InventoryMoveResponse,
+  ListInventoryMovesResponse,
+  ListStockResponse,
+  CreateWarehouseRequest,
+  WarehouseResponse,
+  TransferResponse,
 } from "@ladino/schemas";
 
 /**
@@ -405,6 +415,143 @@ export function buildOpenApiDocument(): object {
     z.array(z.object({ code: z.string(), name: z.string(), description: z.string() })),
     false,
   );
+
+  // ── Inventario (migración 19, ADR-0034) ───────────────────────────────────
+  // Cantidades e importes, STRING decimal. Los permisos de movimiento son
+  // ACOTADOS: hacen falta sobre EL almacén, no sobre la empresa.
+  const movimiento = registry.register("InventoryMoveResponse", InventoryMoveResponse);
+  const listaMovimientos = registry.register(
+    "ListInventoryMovesResponse",
+    ListInventoryMovesResponse,
+  );
+  const listaStock = registry.register("ListStockResponse", ListStockResponse);
+  const recibir = registry.register("ReceiveStockRequest", ReceiveStockRequest);
+  const despachar = registry.register("IssueStockRequest", IssueStockRequest);
+  const ajustar = registry.register("AdjustStockRequest", AdjustStockRequest);
+  const transferir = registry.register("TransferStockRequest", TransferStockRequest);
+  const transferencia = registry.register("TransferResponse", TransferResponse);
+  const crearAlmacen = registry.register("CreateWarehouseRequest", CreateWarehouseRequest);
+  const almacen = registry.register("WarehouseResponse", WarehouseResponse);
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/inventory/stock",
+    summary: "Existencias por almacén y producto (kardex materializado)",
+    description:
+      "Lee `stock_balances`, que el trigger del movimiento mantiene en la misma transacción. " +
+      "Coincide siempre con el recálculo desde el kardex (ADR-0034; pgTAP 019 lo exige).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        warehouse_id: z.string().uuid().optional(),
+        product_id: z.string().uuid().optional(),
+        search: z.string().optional(),
+        with_stock: z.enum(["true", "false"]).optional(),
+        page: z.coerce.number().int().min(1).optional(),
+        per_page: z.coerce.number().int().min(1).max(200).optional(),
+      }),
+    },
+    responses: { 200: okJson(listaStock, "Existencias con su valor."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/inventory/moves",
+    summary: "Kardex paginado, con filtro por producto, almacén y fecha",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        product_id: z.string().uuid().optional(),
+        warehouse_id: z.string().uuid().optional(),
+        from: z.string().datetime({ offset: true }).optional(),
+        to: z.string().datetime({ offset: true }).optional(),
+        page: z.coerce.number().int().min(1).optional(),
+        per_page: z.coerce.number().int().min(1).max(200).optional(),
+      }),
+    },
+    responses: {
+      200: okJson(listaMovimientos, "Movimientos con saldo y costo tras cada uno."),
+      ...erroresComunes,
+    },
+  });
+  const mueveStock = (
+    path: string,
+    summary: string,
+    description: string,
+    schema: z.ZodTypeAny,
+    respuesta: z.ZodTypeAny,
+  ) =>
+    registry.registerPath({
+      method: "post",
+      path,
+      summary,
+      description,
+      security: [{ bearerAuth: [] }],
+      request: { headers: idemHeader, body: { content: { "application/json": { schema } } } },
+      responses: {
+        201: okJson(respuesta, "Movimiento registrado. El kardex es append-only: no se edita."),
+        ...erroresComunes,
+        409: errorRef(
+          "Existencia negativa sin política o sin inventory.negative (NEGATIVE_STOCK), o " +
+            "referencia duplicada (DUPLICATE).",
+        ),
+      },
+    });
+  mueveStock(
+    "/v1/inventory/receipts",
+    "Entrada de existencias (permiso inventory.move sobre el almacén)",
+    "El importe es el costo TOTAL de la recepción. En moneda distinta a la funcional exige " +
+      "la tasa con su fuente: sin fuente no se persiste (ADR-0020). El promedio se recalcula.",
+    recibir,
+    movimiento,
+  );
+  mueveStock(
+    "/v1/inventory/issues",
+    "Salida de existencias al costo promedio (permiso inventory.move sobre el almacén)",
+    "El costo lo calcula el promedio ponderado móvil; el cliente no lo envía.",
+    despachar,
+    movimiento,
+  );
+  mueveStock(
+    "/v1/inventory/adjustments",
+    "Ajuste de existencias (permiso inventory.adjust, SEGREGADO de inventory.move)",
+    "El motivo es obligatorio: un ajuste sin motivo no es un ajuste, es un descuadre.",
+    ajustar,
+    movimiento,
+  );
+  mueveStock(
+    "/v1/inventory/transfers",
+    "Transferencia entre almacenes (permiso inventory.transfer en LOS DOS)",
+    "Salida y entrada en la misma transacción, con referencia mutua y cuadre exigido al " +
+      "commit: no existe instante con el stock en ningún lado ni en los dos. No hay estado " +
+      "«en tránsito» (ADR-0034).",
+    transferir,
+    transferencia,
+  );
+  registry.registerPath({
+    method: "get",
+    path: "/v1/warehouses",
+    summary: "Almacenes de la empresa",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(z.array(almacen), "Los almacenes."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/warehouses",
+    summary: "Crear almacén (permiso warehouse.manage)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearAlmacen } } },
+    },
+    responses: {
+      201: okJson(almacen, "Almacén creado."),
+      ...erroresComunes,
+      409: errorRef("Ya existe un almacén con ese código en la empresa."),
+    },
+  });
 
   const generator = new OpenApiGeneratorV3(registry.definitions);
   return generator.generateDocument({

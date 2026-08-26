@@ -39,6 +39,16 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // M4 para clientes (migración 18): el cliente ES visible; falta el permiso
   // segregado del RIF. 403, como LAD29.
   LAD36: { code: "PERMISSION_REQUIRED", status: 403 },
+  // Inventario (migración 19, ADR-0034). LAD38 es «lo que pides no se puede
+  // hacer con este producto/almacén» — dato del cliente semánticamente inválido,
+  // 422. LAD39 (negativo) y LAD40 (transferencia descuadrada) son estados
+  // imposibles por diseño: 409, como LAD06. LAD41 es el oráculo del costeo: el
+  // cálculo del cliente y el de la base discrepan, casi siempre porque la
+  // posición cambió — 409 y reintentar.
+  LAD38: { code: "VALIDATION_FAILED", status: 422 },
+  LAD39: { code: "NEGATIVE_STOCK", status: 409 },
+  LAD40: { code: "TRANSFER_UNBALANCED", status: 409 },
+  LAD41: { code: "COSTING_MISMATCH", status: 409 },
 
   // --- estándar
   "23505": { code: "DUPLICATE", status: 409 },
@@ -76,6 +86,9 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   DUPLICATE: 409,
   VALIDATION_FAILED: 422,
   PRICE_OVERLAP: 409, // ADR-0032: la vigencia pisa un período cerrado
+  NEGATIVE_STOCK: 409, // ADR-0034: existencia negativa sin política o sin permiso
+  TRANSFER_UNBALANCED: 409,
+  COSTING_MISMATCH: 409,
 };
 
 export class DominioError extends Error {
@@ -147,6 +160,12 @@ function mensajePara(code: string): string {
       return "Un precio no se edita ni se borra: corrige con una vigencia nueva.";
     case "PRICE_OVERLAP":
       return "La vigencia se solapa con un período ya cerrado.";
+    case "NEGATIVE_STOCK":
+      return "La operación dejaría la existencia en negativo y no está permitido.";
+    case "TRANSFER_UNBALANCED":
+      return "Una transferencia necesita su salida y su entrada cuadradas.";
+    case "COSTING_MISMATCH":
+      return "El costeo no coincide con el de la base: la existencia cambió. Reintenta.";
     default:
       return "Error interno.";
   }

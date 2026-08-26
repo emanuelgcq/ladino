@@ -19,6 +19,21 @@ export {
   PriceItemResponse,
 } from "./products.js";
 export {
+  QuantityString,
+  FxInput,
+  ReceiveStockRequest,
+  IssueStockRequest,
+  AdjustStockRequest,
+  TransferStockRequest,
+  InventoryMoveResponse,
+  ListInventoryMovesResponse,
+  StockBalanceResponse,
+  ListStockResponse,
+  CreateWarehouseRequest,
+  WarehouseResponse,
+  TransferResponse,
+} from "./inventory.js";
+export {
   CustomerStatus,
   CreateCustomerRequest,
   UpdateCustomerRequest,
