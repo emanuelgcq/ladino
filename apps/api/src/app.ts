@@ -11,6 +11,7 @@ import { timeoutMiddleware } from "./middleware/timeout.js";
 import { companiesRoutes } from "./routes/companies.js";
 import { productsRoutes } from "./routes/products.js";
 import { pricingRoutes, catalogRoutes } from "./routes/pricing.js";
+import { customersRoutes } from "./routes/customers.js";
 
 export interface AppConfig {
   readonly sql: Sql;
@@ -133,6 +134,7 @@ export function buildApp(cfg: AppConfig): Hono {
   productsRoutes(app, cfg.sql, idempotencia);
   pricingRoutes(app, cfg.sql, idempotencia);
   catalogRoutes(app, cfg.sql);
+  customersRoutes(app, cfg.sql, idempotencia);
 
   return app;
 }

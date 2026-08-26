@@ -36,6 +36,9 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // por diseño», no un dato malformado: 409, como LAD06.
   LAD33: { code: "PRODUCT_KIND_IMMUTABLE", status: 409 },
   LAD35: { code: "PRICE_APPEND_ONLY", status: 409 },
+  // M4 para clientes (migración 18): el cliente ES visible; falta el permiso
+  // segregado del RIF. 403, como LAD29.
+  LAD36: { code: "PERMISSION_REQUIRED", status: 403 },
 
   // --- estándar
   "23505": { code: "DUPLICATE", status: 409 },

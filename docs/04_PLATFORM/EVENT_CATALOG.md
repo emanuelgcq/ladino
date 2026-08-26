@@ -49,6 +49,14 @@ Emitidos por los casos de uso de `packages/domain` (products.ts, pricing.ts), `s
 - price.set — el payload lleva `{amount (string), currency, effective_from, effective_to}`;
   el autocierre del período anterior NO emite evento propio: es consecuencia del mismo hecho
 
+Clientes (migración 18, ADR-0033) — casos de uso de `customers.ts`, `schema_version` 1:
+
+- customer.created · customer.updated · customer.blocked · customer.unblocked (payload `{reason}`)
+- customer.tax_id_established — lo escribe el **trigger M4** al alta con RIF (red del esquema)
+- customer.tax_id_changed — lo escribe el **trigger M4** con `{tax_id_anterior, tax_id_nuevo,
+  legal_name}`; el caso de uso `setCustomerTaxId` NO lo duplica en `audit_events`: emite solo el
+  evento de outbox del mismo nombre (la misma partición que `company.tax_id_established`)
+
 Los demás eventos de esta sección se añaden **cuando exista el caso de uso que los emite**, no por
 anticipado: la política de qué se audita está diferida con dueño y disparador en `RISK_REGISTER.md`
 (R-04), y un catálogo escrito por adelantado sería adivinación.

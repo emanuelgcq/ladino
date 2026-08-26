@@ -20,6 +20,12 @@ import {
   PriceListResponse,
   SetPriceRequest,
   PriceItemResponse,
+  CreateCustomerRequest,
+  UpdateCustomerRequest,
+  SetCustomerTaxIdRequest,
+  SetCustomerBlockedRequest,
+  CustomerResponse,
+  ListCustomersResponse,
 } from "@ladino/schemas";
 
 /**
@@ -289,6 +295,115 @@ export function buildOpenApiDocument(): object {
     "Categorías comerciales de la empresa",
     z.array(z.object({ id: z.string().uuid(), name: z.string(), status: z.string() })),
     true,
+  );
+
+  // ── Clientes (migración 18, ADR-0033) ─────────────────────────────────────
+  const cliente = registry.register("CustomerResponse", CustomerResponse);
+  const listaClientes = registry.register("ListCustomersResponse", ListCustomersResponse);
+  const crearCliente = registry.register("CreateCustomerRequest", CreateCustomerRequest);
+  const actualizarCliente = registry.register("UpdateCustomerRequest", UpdateCustomerRequest);
+  const setRif = registry.register("SetCustomerTaxIdRequest", SetCustomerTaxIdRequest);
+  const setBloqueo = registry.register("SetCustomerBlockedRequest", SetCustomerBlockedRequest);
+  const idemHeader = companyHeader.extend({ "Idempotency-Key": z.string().max(255) });
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/customers",
+    summary: "Listar clientes (búsqueda por RIF o razón social, paginación en servidor)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        search: z.string().optional(),
+        page: z.coerce.number().int().min(1).optional(),
+        per_page: z.coerce.number().int().min(1).max(100).optional(),
+      }),
+    },
+    responses: {
+      200: okJson(listaClientes, "Página de clientes con el total."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/customers",
+    summary: "Crear cliente (permiso customer.manage)",
+    description:
+      "RIF sin validación de formato (VALIDAR-SENIAT); nullable solo para persona natural; " +
+      "único por empresa (case-insensitive). El alta con RIF deja customer.tax_id_established.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearCliente } } },
+    },
+    responses: {
+      201: okJson(cliente, "Cliente creado."),
+      ...erroresComunes,
+      409: errorRef("RIF duplicado en la empresa."),
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/customers/{id}",
+    summary: "Detalle de un cliente",
+    security: [{ bearerAuth: [] }],
+    request: { params: idParam, headers: companyHeader },
+    responses: { 200: okJson(cliente, "El cliente."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "patch",
+    path: "/v1/customers/{id}",
+    summary: "Actualizar cliente (nunca el RIF ni el bloqueo: endpoints y permisos propios)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: actualizarCliente } } },
+    },
+    responses: { 200: okJson(cliente, "Cliente actualizado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/customers/{id}/tax-id",
+    summary: "Cambiar el RIF (permiso customer.tax_id.manage, segregado — M4)",
+    description:
+      "El esquema registra el hecho con el VALOR ANTERIOR (customer.tax_id_changed). " +
+      "Null solo para persona natural.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: setRif } } },
+    },
+    responses: {
+      200: okJson(cliente, "RIF cambiado, hecho auditado."),
+      ...erroresComunes,
+      409: errorRef("RIF duplicado."),
+    },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/customers/{id}/blocked",
+    summary: "Bloquear o desbloquear (permiso customer.block — cobranzas, no ventas)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: setBloqueo } } },
+    },
+    responses: { 200: okJson(cliente, "Estado cambiado."), ...erroresComunes },
+  });
+  catalogo(
+    "/v1/taxpayer-types",
+    "Clasificaciones del sujeto pasivo (global, VALIDAR-TRIBUTARIO)",
+    z.array(z.object({ code: z.string(), name: z.string(), description: z.string() })),
+    false,
+  );
+  catalogo(
+    "/v1/person-types",
+    "Tipos de persona (global)",
+    z.array(z.object({ code: z.string(), name: z.string(), description: z.string() })),
+    false,
   );
 
   const generator = new OpenApiGeneratorV3(registry.definitions);

@@ -18,3 +18,12 @@ export {
   SetPriceRequest,
   PriceItemResponse,
 } from "./products.js";
+export {
+  CustomerStatus,
+  CreateCustomerRequest,
+  UpdateCustomerRequest,
+  SetCustomerTaxIdRequest,
+  SetCustomerBlockedRequest,
+  CustomerResponse,
+  ListCustomersResponse,
+} from "./customers.js";

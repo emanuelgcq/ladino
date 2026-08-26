@@ -16,3 +16,10 @@ export {
   type ProductError,
 } from "./products.js";
 export { createPriceList, setPrice, type PricingError } from "./pricing.js";
+export {
+  createCustomer,
+  updateCustomer,
+  setCustomerTaxId,
+  setCustomerBlocked,
+  type CustomerError,
+} from "./customers.js";
