@@ -29,6 +29,13 @@ así» (422 con palabras) de «no existe» (404). **No construido, dicho:** camb
 fiscal tras el alta (sin caso de uso ni permiso todavía), contactos/direcciones múltiples,
 crédito, etiquetas, y el `party` cliente/proveedor → **R-12** con disparador (proveedores).
 
+**⚠ Incidente de proceso (2026-08-26), dicho aquí porque la regla lo exige:** los tres commits
+del módulo de clientes se pusheron con `@ladino/domain#lint` en ROJO (un `as never` innecesario).
+Leí mal la salida del `verify` y commiteé igual. Sin `force`: el arreglo llegó encima
+(`fix(domain): type the audit payload as JSONValue`) con el `verify` leído entero. Lección
+operativa: el resumen del log se lee por `VERIFY EXIT` y por `Failed:`, no por la última línea
+que aparezca; queda en el mensaje del commit y aquí.
+
 **Siguiente módulo (propuesta): inventario.** Con productos y clientes en pie, ventas de bienes
 necesita existencias; los almacenes ya existen desde S0.3. Es donde se decide la frontera
 lotes/seriales/BOM que productos difirió a propósito (cabecera de la migración 16) y donde
