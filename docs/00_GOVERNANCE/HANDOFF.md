@@ -6,7 +6,35 @@
 extremo a extremo: productos y precios, hasta pantalla.** Flujo trunk-based desde S0.6a: todo
 en `main`, `verify` en verde antes de cada commit.
 
-S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅** · S0.6b ⏸️
+S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅** · S0.6b ⏸️
+
+Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **17 migraciones** aplicadas y verificadas por huella
+(2026-08-26). **La 18 (clientes) está solo en local**: entra al remoto con el mismo procedimiento
+(o `supabase db push`, que la reconocerá como pendiente).
+
+## Módulo de clientes — construido entero (2026-08-26)
+
+| Capa | Qué hay | Dónde |
+|---|---|---|
+| Esquema | migración 18: `taxpayer_types` (5, VALIDAR-TRIBUTARIO) y `person_types` (4) globales; `customers` por company con RIF nullable solo para persona natural, único PARCIAL case-insensitive, dirección/email/teléfono inline, lista de precios preferida (FK compuesto), estados lead/active/blocked/inactive; **trigger M4** `audit_customer_tax_id()` (LAD36) con valor anterior; permisos `customer.manage` / `customer.tax_id.manage` / `customer.block` | `supabase/migrations/20260826120000_*` · ADR-0033 |
+| pgTAP | 018 (30): único parcial en las dos direcciones (dos sin RIF conviven, dos iguales no; roto sin el índice), jurídica sin RIF rechazada, valor anterior asertado por el DATO (`tax_id_anterior`/`tax_id_nuevo`, `rules_version` respetada; roto sin el trigger), LAD36 con JWT sin permiso / vive con permiso, aislamiento | `supabase/tests/018_*` |
+| Dominio | `createCustomer`, `updateCustomer`, `setCustomerTaxId` (permiso propio; el trigger escribe el hecho, el caso de uso NO lo duplica), `setCustomerBlocked` (cobranzas) | `packages/domain/src/customers.ts` + 7 tests |
+| API | `GET/POST /v1/customers`, `GET/PATCH /v1/customers/:id`, `PUT /v1/customers/:id/tax-id`, `PUT /v1/customers/:id/blocked`, `GET /v1/{taxpayer-types,person-types}` — OpenAPI generado | `apps/api/src/routes/customers.ts` + 5 E2E |
+| Web | listado con búsqueda por RIF/razón social y paginación, alta/edición, detalle con cambio de RIF (permiso propio, error del dominio visible) y bloqueo/desbloqueo | `apps/web/src/CustomersView.tsx` |
+
+**Decisiones por el camino:** estado por defecto `active` al crear (`lead` se elige explícitamente);
+`updateCustomer` no puede tocar el RIF, las clasificaciones fiscales ni `blocked`, y rechaza cambiar
+el estado de un bloqueado (desbloquear es de cobranzas); `setCustomerBlocked` distingue «ya está
+así» (422 con palabras) de «no existe» (404). **No construido, dicho:** cambio de clasificación
+fiscal tras el alta (sin caso de uso ni permiso todavía), contactos/direcciones múltiples,
+crédito, etiquetas, y el `party` cliente/proveedor → **R-12** con disparador (proveedores).
+
+**Siguiente módulo (propuesta): inventario.** Con productos y clientes en pie, ventas de bienes
+necesita existencias; los almacenes ya existen desde S0.3. Es donde se decide la frontera
+lotes/seriales/BOM que productos difirió a propósito (cabecera de la migración 16) y donde
+`inventory_moves` (append-only, ya en la lista de tablas intocables de CLAUDE.md §2) toca dinero
+por primera vez vía costeo — rigor máximo en valoración. Leer `INVENTORY_SPEC` y
+`WAREHOUSE_OPERATIONS_SPEC` primero, como siempre, y traer los huecos antes del SQL.
 
 ## Módulo de productos — construido entero (2026-08-25)
 
@@ -44,8 +72,8 @@ contraparte (tipo de contribuyente para retenciones, `TAX_ENGINE_SPEC` `taxpayer
 que leer en las specs ANTES de escribir SQL, igual que se hizo con productos.
 
 `pnpm verify` corre **11 pasos** — S0.6a añadió `release:manifest:check` (paso 9). **Los pasos 5,
-10 y 11 necesitan el stack local** (`pnpm db:start`). **476 pgTAP** (17 ficheros) + **112 tests
-de vitest** (API 77 · worker 13 · dominio 13 · db 9) — **los E2E y los tests de dominio conectan
+10 y 11 necesitan el stack local** (`pnpm db:start`). **506 pgTAP** (18 ficheros) + **124 tests
+de vitest** (API 82 · worker 13 · dominio 20 · db 9) — **los E2E y los tests de dominio conectan
 como `ladino_api`/`ladino_worker`**, no como postgres. `pnpm boundaries:selftest`: 22/22. Las dos
 imágenes se construyen (247/233 MB). Riesgos R-08..R-11 en `RISK_REGISTER.md`, cada uno con
 disparador. **En esta máquina: `TURBO_CONCURRENCY=1 pnpm verify`** (R-11).

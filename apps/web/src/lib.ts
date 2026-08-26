@@ -66,6 +66,25 @@ export interface PriceItem {
   effective_from: string;
   effective_to: string | null;
 }
+export interface Customer {
+  id: string;
+  company_id: string;
+  tax_id: string | null;
+  legal_name: string;
+  trade_name: string | null;
+  person_type_code: string;
+  taxpayer_type_code: string;
+  fiscal_address: string | null;
+  email: string | null;
+  phone: string | null;
+  status: "lead" | "active" | "blocked" | "inactive";
+  default_price_list_id: string | null;
+}
+export interface CodeCatalog {
+  code: string;
+  name: string;
+  description: string;
+}
 export interface Unit {
   code: string;
   name: string;
