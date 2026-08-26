@@ -51,6 +51,10 @@ export interface Product {
   tax_category_code: string;
   category_id: string | null;
   barcode: string | null;
+  /** Compuesto: se vende pero no se almacena (ADR-0035). */
+  is_composed: boolean;
+  template_id?: string | null;
+  attributes?: Record<string, string> | null;
 }
 export interface PriceList {
   id: string;
@@ -159,4 +163,35 @@ export async function api<T>(
     );
   }
   return body as T;
+}
+
+export interface LowStockItem {
+  warehouse_id: string;
+  product_id: string;
+  product_sku: string;
+  product_name: string;
+  quantity: string;
+  stock_min: string;
+  missing: string;
+}
+export interface ExpiringLot {
+  lot_id: string;
+  lot_code: string;
+  product_id: string;
+  product_sku: string;
+  warehouse_id: string;
+  expires_at: string;
+  /** Negativo = ya vencido, y son los que más urgen. */
+  days_left: number;
+  quantity: string;
+}
+export interface RecipeLineView {
+  child_product_id: string;
+  child_sku: string;
+  child_name: string;
+  quantity: string;
+  unit_code: string;
+  product_unit_code: string;
+  /** null = falta la conversión: esta receta NO se puede consumir. */
+  quantity_in_product_unit: string | null;
 }

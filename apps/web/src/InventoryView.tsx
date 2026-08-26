@@ -9,6 +9,7 @@ import {
   type Warehouse,
 } from "./lib.js";
 import { mostrarImporte } from "./money.js";
+import { InventoryAlerts, RecipePanel } from "./InventoryAlerts.js";
 
 /**
  * Inventario: existencias, kardex de un producto y los cuatro formularios que
@@ -46,6 +47,8 @@ export function InventoryView({ session, companyId }: Props) {
   const [aviso, setAviso] = useState("");
   const [kardexDe, setKardexDe] = useState<StockBalance | null>(null);
   const [operacion, setOperacion] = useState<Operacion | null>(null);
+  const [compuesto, setCompuesto] = useState<Product | null>(null);
+  const [compuestos, setCompuestos] = useState<Product[]>([]);
 
   const cargar = useCallback(async () => {
     setError("");
@@ -55,7 +58,10 @@ export function InventoryView({ session, companyId }: Props) {
         api<{ items: Product[] }>(session, "/v1/products?per_page=200", { companyId }),
       ]);
       setAlmacenes(w);
-      setProductos(p.items.filter((x) => x.kind === "good"));
+      // Los compuestos NO se mueven: se consumen por receta. Van en su propia
+      // lista para que no aparezcan en los formularios que mueven stock.
+      setProductos(p.items.filter((x) => x.kind === "good" && !x.is_composed));
+      setCompuestos(p.items.filter((x) => x.is_composed));
       const params = new URLSearchParams();
       if (busqueda.trim() !== "") params.set("search", busqueda.trim());
       if (almacen !== "") params.set("warehouse_id", almacen);
@@ -174,6 +180,37 @@ export function InventoryView({ session, companyId }: Props) {
           </tbody>
         </table>
       )}
+
+      {compuestos.length > 0 && (
+        <fieldset>
+          <legend>Productos compuestos (recetas)</legend>
+          <p>
+            {compuestos.map((c) => (
+              <button key={c.id} disabled={compuesto?.id === c.id} onClick={() => setCompuesto(c)}>
+                {c.sku}
+              </button>
+            ))}{" "}
+            {compuesto && <button onClick={() => setCompuesto(null)}>cerrar</button>}
+          </p>
+          {compuesto && almacen === "" && (
+            <p role="alert">Elige un almacén arriba para ver el costo y consumir la receta.</p>
+          )}
+          {compuesto && almacen !== "" && (
+            <RecipePanel
+              session={session}
+              companyId={companyId}
+              producto={compuesto}
+              warehouseId={almacen}
+              onConsumido={(m) => {
+                setAviso(m);
+                void cargar();
+              }}
+            />
+          )}
+        </fieldset>
+      )}
+
+      <InventoryAlerts session={session} companyId={companyId} />
 
       {kardexDe && (
         <Kardex
