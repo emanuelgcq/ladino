@@ -1,5 +1,5 @@
 import { err, ok, type Result } from "@ladino/core";
-import type { UnitOfWork, TransactionSql } from "@ladino/db";
+import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
 import type {
   CreateCustomerRequest,
   UpdateCustomerRequest,
@@ -45,19 +45,19 @@ async function auditarYPublicar(
   sql: TransactionSql,
   fila: Row,
   evento: string,
-  payload: Record<string, unknown>,
+  payload: Record<string, JSONValue>,
 ): Promise<void> {
   await sql`
     insert into public.audit_events
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
        actor_type, occurred_at, rules_version, payload)
     values (${fila.tenant_id}, ${fila.company_id}, 'customer', ${fila.id}, ${evento},
-            'user', now(), ${RULES_VERSION}, ${sql.json(payload as never)})`;
+            'user', now(), ${RULES_VERSION}, ${sql.json(payload)})`;
   await sql`
     insert into public.outbox
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
     values (${fila.tenant_id}, ${fila.company_id}, 'customer', ${fila.id}, ${evento}, 1,
-            ${sql.json({ customer_id: fila.id, company_id: fila.company_id, ...payload } as never)})`;
+            ${sql.json({ customer_id: fila.id, company_id: fila.company_id, ...payload })})`;
 }
 
 export async function createCustomer(
