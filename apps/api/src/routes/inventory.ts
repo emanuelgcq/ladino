@@ -6,8 +6,18 @@ import {
   AdjustStockRequest,
   TransferStockRequest,
   CreateWarehouseRequest,
+  SetRecipeRequest,
+  ConsumeRecipeRequest,
+  CreateProductTemplateRequest,
+  SetStockThresholdRequest,
 } from "@ladino/schemas";
-import { receiveStock, issueStock, adjustStock, transferStock } from "@ladino/domain";
+import {
+  receiveStock,
+  issueStock,
+  adjustStock,
+  transferStock,
+  consumeRecipe,
+} from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
 
@@ -22,7 +32,7 @@ const MOVE_SELECT = `m.id, m.company_id, m.warehouse_id, m.product_id, m.lot_id,
   m.rounding_policy_id, m.unit_cost::text as unit_cost,
   m.quantity_after::text as quantity_after, m.value_after::text as value_after,
   to_char(m.occurred_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as occurred_at,
-  m.reference, m.reason, m.transfer_id`;
+  m.reference, m.reason, m.transfer_id, m.source_document_id`;
 
 function coherente(header: string, body: string): void {
   if (header !== body) {
@@ -213,5 +223,268 @@ export function inventoryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
       return creado!;
     });
     return c.json(fila, 201);
+  });
+}
+
+/**
+ * Rutas de la segunda vuelta (migración 20): recetas de compuestos, plantillas
+ * de variantes, umbrales de reposición y vencimientos.
+ *
+ * Las consultas (bajo stock, por vencer, stock por plantilla) leen funciones de
+ * `platform` en vez de armar el SQL aquí: la regla de qué está bajo mínimo vive
+ * en un sitio, y un reporte y una alerta futura del worker responden lo mismo.
+ */
+export function inventoryExtensionsRoutes(
+  app: Hono,
+  sql: Sql,
+  idempotencia: MiddlewareHandler,
+): void {
+  // ── Recetas ───────────────────────────────────────────────────────────────
+  app.get("/v1/products/:id/recipe", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const id = uuidValido(c.req.param("id"), "id")!;
+    const almacen = uuidValido(c.req.query("warehouse_id"), "warehouse_id");
+    const respuesta = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      const [producto] = await tx<{ is_composed: boolean }[]>`
+        select is_composed from public.products where id = ${id} and company_id = ${companyId}`;
+      if (!producto) return null;
+      const lines = await tx<Record<string, unknown>[]>`
+        select r.child_product_id, hijo.sku as child_sku, hijo.name as child_name,
+               r.quantity::text as quantity, r.unit_code,
+               hijo.unit_code as product_unit_code,
+               platform.convert_quantity(r.quantity, r.unit_code, hijo.unit_code)::text
+                 as quantity_in_product_unit
+          from public.product_recipes r
+          join public.products hijo on hijo.id = r.child_product_id
+         where r.company_id = ${companyId} and r.parent_product_id = ${id}
+         order by hijo.sku`;
+      const [costo] = await tx<{ estimado: string | null; moneda: string }[]>`
+        select platform.recipe_cost(${companyId}, ${almacen ?? null}, ${id})::text as estimado,
+               (select functional_currency_code from public.companies where id = ${companyId})
+                 as moneda`;
+      return {
+        product_id: id,
+        lines,
+        estimated_unit_cost: costo?.estimado ?? null,
+        currency: costo?.moneda ?? "VES",
+      };
+    });
+    if (respuesta === null) {
+      throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    }
+    return c.json(respuesta, 200);
+  });
+
+  // La receta se REEMPLAZA entera: una receta a medias no es una receta, y
+  // parchear línea a línea deja estados intermedios que sí se pueden vender.
+  app.put("/v1/products/:id/recipe", idempotencia, async (c) => {
+    const { companyId, tenantId } = requireCompany(c);
+    const id = uuidValido(c.req.param("id"), "id")!;
+    const parsed = SetRecipeRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    if (actor.kind !== "user") {
+      throw new DominioError({
+        code: "PERMISSION_REQUIRED",
+        message: "Definir una receta exige un usuario real.",
+      });
+    }
+    const userId = actor.userId;
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      const [permiso] = await tx<{ autorizado: boolean }[]>`
+        select platform.ladino_user_has_permission(${userId}, 'product.recipe.manage', ${companyId})
+               as autorizado`;
+      if (!permiso?.autorizado) {
+        throw new DominioError({
+          code: "PERMISSION_REQUIRED",
+          message: "La operación exige el permiso product.recipe.manage sobre esta empresa.",
+        });
+      }
+      await tx`delete from public.product_recipes
+                where company_id = ${companyId} and parent_product_id = ${id}`;
+      for (const l of parsed.data.lines) {
+        await tx`
+          insert into public.product_recipes
+            (tenant_id, company_id, parent_product_id, child_product_id, quantity, unit_code)
+          values (${tenantId}, ${companyId}, ${id}, ${l.child_product_id},
+                  ${l.quantity}, ${l.unit_code})`;
+      }
+      return tx<Record<string, unknown>[]>`
+        select r.child_product_id, r.quantity::text as quantity, r.unit_code
+          from public.product_recipes r
+         where r.company_id = ${companyId} and r.parent_product_id = ${id}
+         order by r.child_product_id`;
+    });
+    return c.json({ product_id: id, lines: filas }, 200);
+  });
+
+  // Consumir el compuesto: N salidas de ingredientes, un solo hecho.
+  app.post("/v1/inventory/recipe-consumptions", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = ConsumeRecipeRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => consumeRecipe(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
+  // ── Plantillas de variantes ───────────────────────────────────────────────
+  app.get("/v1/product-templates", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const filas = await withTransaction(
+      sql,
+      actor,
+      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+        select id, company_id, name, attribute_keys, status
+          from public.product_templates where company_id = ${companyId} order by name`,
+    );
+    return c.json(filas, 200);
+  });
+
+  app.post("/v1/product-templates", idempotencia, async (c) => {
+    const { companyId, tenantId } = requireCompany(c);
+    const parsed = CreateProductTemplateRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    if (actor.kind !== "user") {
+      throw new DominioError({
+        code: "PERMISSION_REQUIRED",
+        message: "Crear una plantilla exige un usuario real.",
+      });
+    }
+    const userId = actor.userId;
+    const fila = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      const [permiso] = await tx<{ autorizado: boolean }[]>`
+        select platform.ladino_user_has_permission(${userId}, 'product.variant.manage', ${companyId})
+               as autorizado`;
+      if (!permiso?.autorizado) {
+        throw new DominioError({
+          code: "PERMISSION_REQUIRED",
+          message: "La operación exige el permiso product.variant.manage sobre esta empresa.",
+        });
+      }
+      const [creada] = await tx<Record<string, unknown>[]>`
+        insert into public.product_templates (tenant_id, company_id, name, attribute_keys)
+        values (${tenantId}, ${companyId}, ${parsed.data.name}, ${parsed.data.attribute_keys})
+        returning id, company_id, name, attribute_keys, status`;
+      return creada!;
+    });
+    return c.json(fila, 201);
+  });
+
+  app.get("/v1/inventory/stock-by-template", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const almacen = uuidValido(c.req.query("warehouse_id"), "warehouse_id");
+    const items = await withTransaction(
+      sql,
+      actor,
+      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+        select template_id, template_name, product_id, sku, attributes, warehouse_id,
+               quantity::text as quantity, value::text as value,
+               template_quantity::text as template_quantity
+          from platform.stock_by_template(${companyId}, ${almacen ?? null})`,
+    );
+    return c.json({ items }, 200);
+  });
+
+  // ── Umbrales y alertas ────────────────────────────────────────────────────
+  app.put("/v1/inventory/thresholds", idempotencia, async (c) => {
+    const { companyId, tenantId } = requireCompany(c);
+    const parsed = SetStockThresholdRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    if (actor.kind !== "user") {
+      throw new DominioError({
+        code: "PERMISSION_REQUIRED",
+        message: "Definir umbrales exige un usuario real.",
+      });
+    }
+    const userId = actor.userId;
+    const fila = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      const [permiso] = await tx<{ autorizado: boolean }[]>`
+        select platform.ladino_user_has_permission(${userId}, 'inventory.threshold.manage', ${companyId})
+               as autorizado`;
+      if (!permiso?.autorizado) {
+        throw new DominioError({
+          code: "PERMISSION_REQUIRED",
+          message: "La operación exige el permiso inventory.threshold.manage sobre esta empresa.",
+        });
+      }
+      const [guardada] = await tx<Record<string, unknown>[]>`
+        insert into public.product_stock_thresholds
+          (tenant_id, company_id, warehouse_id, product_id, stock_min, stock_max)
+        values (${tenantId}, ${companyId}, ${parsed.data.warehouse_id}, ${parsed.data.product_id},
+                ${parsed.data.stock_min}, ${parsed.data.stock_max ?? null})
+        on conflict on constraint product_stock_thresholds_key do update
+          set stock_min = excluded.stock_min, stock_max = excluded.stock_max
+        returning warehouse_id, product_id, stock_min::text as stock_min,
+                  stock_max::text as stock_max`;
+      return guardada!;
+    });
+    return c.json(fila, 200);
+  });
+
+  app.get("/v1/inventory/low-stock", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const almacen = uuidValido(c.req.query("warehouse_id"), "warehouse_id");
+    const items = await withTransaction(
+      sql,
+      actor,
+      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+        select l.warehouse_id, l.product_id, p.sku as product_sku, p.name as product_name,
+               l.quantity::text as quantity, l.stock_min::text as stock_min,
+               l.stock_max::text as stock_max, l.missing::text as missing
+          from platform.low_stock_products(${companyId}, ${almacen ?? null}) l
+          join public.products p on p.id = l.product_id`,
+    );
+    return c.json({ items }, 200);
+  });
+
+  app.get("/v1/inventory/expiring-lots", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const dias = Math.min(Math.max(Number(c.req.query("days") ?? 30) || 30, 0), 3650);
+    const items = await withTransaction(
+      sql,
+      actor,
+      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+        select e.lot_id, e.lot_code, e.product_id, p.sku as product_sku, e.warehouse_id,
+               e.expires_at::text as expires_at, e.days_left, e.quantity::text as quantity
+          from platform.expiring_lots(${companyId}, ${dias}) e
+          join public.products p on p.id = e.product_id`,
+    );
+    return c.json({ items }, 200);
+  });
+
+  // FEFO como SUGERENCIA (ADR-0035): la UI la usa para preseleccionar el lote;
+  // el servidor no obliga. Lo que sí impone es que un vencido no salga sin
+  // inventory.expired, y eso está en el trigger, no aquí.
+  app.get("/v1/inventory/suggest-lot", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const almacen = uuidValido(c.req.query("warehouse_id"), "warehouse_id");
+    const producto = uuidValido(c.req.query("product_id"), "product_id");
+    if (almacen === undefined || producto === undefined) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "warehouse_id y product_id son obligatorios.",
+      });
+    }
+    const [fila] = await withTransaction(
+      sql,
+      actor,
+      ({ sql: tx }) => tx<{ lot_id: string | null }[]>`
+        select platform.suggest_lot_fefo(${companyId}, ${almacen}, ${producto}) as lot_id`,
+    );
+    return c.json({ lot_id: fila?.lot_id ?? null }, 200);
   });
 }

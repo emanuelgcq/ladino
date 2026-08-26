@@ -45,6 +45,8 @@ function comoPatron(termino: string): string {
 
 const PRODUCT_SELECT = `id, tenant_id, company_id, sku, name, kind, status,
   unit_code, tax_category_code, category_id, barcode,
+  is_composed, tracks_lots, tracks_serials, is_manufactured, tracks_expiry,
+  template_id, attributes,
   to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
 
 export function productsRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler): void {

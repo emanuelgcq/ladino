@@ -12,7 +12,7 @@ import { companiesRoutes } from "./routes/companies.js";
 import { productsRoutes } from "./routes/products.js";
 import { pricingRoutes, catalogRoutes } from "./routes/pricing.js";
 import { customersRoutes } from "./routes/customers.js";
-import { inventoryRoutes } from "./routes/inventory.js";
+import { inventoryRoutes, inventoryExtensionsRoutes } from "./routes/inventory.js";
 
 export interface AppConfig {
   readonly sql: Sql;
@@ -137,6 +137,7 @@ export function buildApp(cfg: AppConfig): Hono {
   catalogRoutes(app, cfg.sql);
   customersRoutes(app, cfg.sql, idempotencia);
   inventoryRoutes(app, cfg.sql, idempotencia);
+  inventoryExtensionsRoutes(app, cfg.sql, idempotencia);
 
   return app;
 }

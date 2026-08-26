@@ -32,6 +32,18 @@ export {
   CreateWarehouseRequest,
   WarehouseResponse,
   TransferResponse,
+  RecipeLineRequest,
+  SetRecipeRequest,
+  RecipeLineResponse,
+  RecipeResponse,
+  ConsumeRecipeRequest,
+  ConsumeRecipeResponse,
+  CreateProductTemplateRequest,
+  ProductTemplateResponse,
+  TemplateStockResponse,
+  SetStockThresholdRequest,
+  LowStockResponse,
+  ExpiringLotsResponse,
 } from "./inventory.js";
 export {
   CustomerStatus,

@@ -48,7 +48,8 @@ export type InventoryError =
   | CompanyScopeError
   | { code: "DUPLICATE"; message: string }
   | { code: "VALIDATION_FAILED"; message: string }
-  | { code: "NEGATIVE_STOCK"; message: string };
+  | { code: "NEGATIVE_STOCK"; message: string }
+  | { code: "UNIT_CONVERSION_MISSING"; message: string };
 
 const MOVE_COLUMNS = `id, company_id, warehouse_id, product_id, lot_id, kind,
   quantity::text as quantity,
@@ -59,7 +60,7 @@ const MOVE_COLUMNS = `id, company_id, warehouse_id, product_id, lot_id, kind,
   rounding_policy_id, unit_cost::text as unit_cost,
   quantity_after::text as quantity_after, value_after::text as value_after,
   to_char(occurred_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as occurred_at,
-  reference, reason, transfer_id`;
+  reference, reason, transfer_id, source_document_id`;
 
 interface Contexto {
   readonly tenantId: string;
@@ -195,6 +196,8 @@ interface Insercion {
   readonly transferId: string | null;
   readonly counterpartId: string | null;
   readonly id: string | null;
+  /** Liga los movimientos de UN hecho (las N salidas de una receta). */
+  readonly sourceDocumentId: string | null;
 }
 
 /**
@@ -211,7 +214,8 @@ async function insertar(sql: TransactionSql, m: Insercion): Promise<InventoryMov
        amount_transaction_currency, transaction_currency, fx_rate,
        functional_amount, functional_currency, rate_source, rate_timestamp,
        rounding_policy_id, unit_cost, quantity_after, value_after,
-       occurred_at, reference, reason, note, transfer_id, counterpart_move_id)
+       occurred_at, reference, reason, note, transfer_id, counterpart_move_id,
+       source_document_id)
     values (coalesce(${m.id}::uuid, platform.uuidv7()), ${m.tenantId}, ${m.companyId},
             ${m.warehouseId}, ${m.productId}, ${m.lotId}, ${m.kind},
             ${m.costed.move.quantity.toFixed()},
@@ -222,7 +226,7 @@ async function insertar(sql: TransactionSql, m: Insercion): Promise<InventoryMov
             ${m.costed.move.quantityAfter.toFixed()},
             ${m.costed.move.valueAfter.toAmountString()},
             coalesce(${m.occurredAt}::timestamptz, now()), ${m.reference}, ${m.reason}, ${m.note},
-            ${m.transferId}, ${m.counterpartId})
+            ${m.transferId}, ${m.counterpartId}, ${m.sourceDocumentId})
     returning ${sql.unsafe(MOVE_COLUMNS)}`;
   return fila!;
 }
@@ -324,7 +328,7 @@ async function resolverLote(
 
 export async function receiveStock(
   uow: UnitOfWork,
-  input: ReceiveStockRequest,
+  input: ReceiveStockInput,
 ): Promise<Result<InventoryMoveResponse, InventoryError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
@@ -392,6 +396,7 @@ export async function receiveStock(
         transferId: null,
         counterpartId: null,
         id: null,
+        sourceDocumentId: input.sourceDocumentId ?? null,
       }),
     );
   } catch (e) {
@@ -405,9 +410,18 @@ export async function receiveStock(
   return ok(fila);
 }
 
+/**
+ * `sourceDocumentId` NO está en el contrato Zod a propósito: no lo manda un
+ * cliente, lo pone el caso de uso que agrupa varios movimientos en un hecho
+ * (consumeRecipe hoy; la factura de venta mañana).
+ */
+export type IssueStockInput = IssueStockRequest & { readonly sourceDocumentId?: string };
+export type ReceiveStockInput = ReceiveStockRequest & { readonly sourceDocumentId?: string };
+export type AdjustStockInput = AdjustStockRequest & { readonly sourceDocumentId?: string };
+
 export async function issueStock(
   uow: UnitOfWork,
-  input: IssueStockRequest,
+  input: IssueStockInput,
 ): Promise<Result<InventoryMoveResponse, InventoryError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
@@ -478,6 +492,7 @@ export async function issueStock(
         transferId: null,
         counterpartId: null,
         id: null,
+        sourceDocumentId: input.sourceDocumentId ?? null,
       }),
     );
   } catch (e) {
@@ -494,7 +509,7 @@ export async function issueStock(
 /** Ajuste: permiso PROPIO (`inventory.adjust`, segregación) y motivo obligatorio. */
 export async function adjustStock(
   uow: UnitOfWork,
-  input: AdjustStockRequest,
+  input: AdjustStockInput,
 ): Promise<Result<InventoryMoveResponse, InventoryError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
@@ -576,6 +591,7 @@ export async function adjustStock(
         transferId: null,
         counterpartId: null,
         id: null,
+        sourceDocumentId: input.sourceDocumentId ?? null,
       }),
     );
   } catch (e) {
@@ -694,6 +710,7 @@ export async function transferStock(
     reason: null,
     note: input.note ?? null,
     transferId: ids!.transferencia,
+    sourceDocumentId: null,
   };
 
   let out: InventoryMoveResponse;

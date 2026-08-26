@@ -195,3 +195,174 @@ export const TransferResponse = z
   })
   .strict();
 export type TransferResponse = z.infer<typeof TransferResponse>;
+
+// ── Recetas de productos compuestos (ADR-0035) ───────────────────────────────
+
+export const RecipeLineRequest = z
+  .object({
+    child_product_id: uuid,
+    /** Cantidad por UNA unidad del compuesto, en `unit_code`. */
+    quantity: QuantityString,
+    unit_code: z.string().regex(/^[a-z][a-z0-9_]{0,19}$/),
+  })
+  .strict();
+export type RecipeLineRequest = z.infer<typeof RecipeLineRequest>;
+
+/** La receta se reemplaza ENTERA: una receta a medias no es una receta. */
+export const SetRecipeRequest = z
+  .object({
+    company_id: uuid,
+    lines: z.array(RecipeLineRequest).min(1).max(100),
+  })
+  .strict();
+export type SetRecipeRequest = z.infer<typeof SetRecipeRequest>;
+
+export const RecipeLineResponse = z
+  .object({
+    child_product_id: uuid,
+    child_sku: z.string(),
+    child_name: z.string(),
+    quantity: z.string(),
+    unit_code: z.string(),
+    product_unit_code: z.string(),
+    /** null = no hay conversión cargada: esta receta NO se puede consumir. */
+    quantity_in_product_unit: z.string().nullable(),
+  })
+  .strict();
+export type RecipeLineResponse = z.infer<typeof RecipeLineResponse>;
+
+export const RecipeResponse = z
+  .object({
+    product_id: uuid,
+    lines: z.array(RecipeLineResponse),
+    /** Costo estimado de UNA unidad con los costos vigentes. null si falta alguna conversión. */
+    estimated_unit_cost: z.string().nullable(),
+    currency: z.string(),
+  })
+  .strict();
+export type RecipeResponse = z.infer<typeof RecipeResponse>;
+
+export const ConsumeRecipeRequest = z
+  .object({
+    company_id: uuid,
+    warehouse_id: uuid,
+    /** El producto COMPUESTO que se vende. */
+    product_id: uuid,
+    quantity: QuantityString,
+    occurred_at: z.string().datetime({ offset: true }).optional(),
+    reference: z.string().trim().min(1).max(60).optional(),
+    /** Si el llamante ya tiene el documento (una venta), lo pasa; si no, se genera. */
+    source_document_id: uuid.optional(),
+  })
+  .strict();
+export type ConsumeRecipeRequest = z.infer<typeof ConsumeRecipeRequest>;
+
+export const ConsumeRecipeResponse = z
+  .object({
+    source_document_id: uuid,
+    product_id: uuid,
+    quantity: z.string(),
+    /** La SUMA de lo que costaron las salidas reales, no una estimación. */
+    total_cost: z.string(),
+    currency: z.string(),
+    moves: z.array(InventoryMoveResponse),
+  })
+  .strict();
+export type ConsumeRecipeResponse = z.infer<typeof ConsumeRecipeResponse>;
+
+// ── Plantillas y variantes (ADR-0036) ────────────────────────────────────────
+
+export const CreateProductTemplateRequest = z
+  .object({
+    company_id: uuid,
+    name: z.string().trim().min(1).max(200),
+    attribute_keys: z.array(z.string().trim().min(1).max(40)).min(1).max(8),
+  })
+  .strict();
+export type CreateProductTemplateRequest = z.infer<typeof CreateProductTemplateRequest>;
+
+export const ProductTemplateResponse = z
+  .object({
+    id: uuid,
+    company_id: uuid,
+    name: z.string(),
+    attribute_keys: z.array(z.string()),
+    status: z.enum(["active", "inactive"]),
+  })
+  .strict();
+export type ProductTemplateResponse = z.infer<typeof ProductTemplateResponse>;
+
+export const TemplateStockResponse = z
+  .object({
+    items: z.array(
+      z
+        .object({
+          template_id: uuid,
+          template_name: z.string(),
+          product_id: uuid,
+          sku: z.string(),
+          attributes: z.record(z.string()).nullable(),
+          warehouse_id: uuid.nullable(),
+          quantity: z.string(),
+          value: z.string(),
+          template_quantity: z.string(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type TemplateStockResponse = z.infer<typeof TemplateStockResponse>;
+
+// ── Umbrales y alertas ───────────────────────────────────────────────────────
+
+export const SetStockThresholdRequest = z
+  .object({
+    company_id: uuid,
+    warehouse_id: uuid,
+    product_id: uuid,
+    stock_min: amount,
+    stock_max: amount.optional(),
+  })
+  .strict();
+export type SetStockThresholdRequest = z.infer<typeof SetStockThresholdRequest>;
+
+export const LowStockResponse = z
+  .object({
+    items: z.array(
+      z
+        .object({
+          warehouse_id: uuid,
+          product_id: uuid,
+          product_sku: z.string(),
+          product_name: z.string(),
+          quantity: z.string(),
+          stock_min: z.string(),
+          stock_max: z.string().nullable(),
+          missing: z.string(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type LowStockResponse = z.infer<typeof LowStockResponse>;
+
+export const ExpiringLotsResponse = z
+  .object({
+    items: z.array(
+      z
+        .object({
+          lot_id: uuid,
+          lot_code: z.string(),
+          product_id: uuid,
+          product_sku: z.string(),
+          warehouse_id: uuid,
+          expires_at: z.string(),
+          /** Negativo = YA vencido, y son los que más urgen. */
+          days_left: z.number().int(),
+          quantity: z.string(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type ExpiringLotsResponse = z.infer<typeof ExpiringLotsResponse>;

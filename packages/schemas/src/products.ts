@@ -62,6 +62,17 @@ export const ProductResponse = z
     tax_category_code: z.string(),
     category_id: uuid.nullable(),
     barcode: z.string().nullable(),
+    // Banderas de existencia (migraciones 19-20, ADR-0034/0035/0036). Viven en
+    // el catálogo pero las gobierna inventario: un compuesto no tiene stock, un
+    // producto con seriales no se mueve todavía, y una variante cuelga de una
+    // plantilla.
+    is_composed: z.boolean(),
+    tracks_lots: z.boolean(),
+    tracks_serials: z.boolean(),
+    is_manufactured: z.boolean(),
+    tracks_expiry: z.boolean(),
+    template_id: uuid.nullable(),
+    attributes: z.record(z.string()).nullable(),
     created_at: z.string().datetime({ offset: true }),
   })
   .strict();

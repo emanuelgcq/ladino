@@ -36,6 +36,16 @@ import {
   CreateWarehouseRequest,
   WarehouseResponse,
   TransferResponse,
+  SetRecipeRequest,
+  RecipeResponse,
+  ConsumeRecipeRequest,
+  ConsumeRecipeResponse,
+  CreateProductTemplateRequest,
+  ProductTemplateResponse,
+  TemplateStockResponse,
+  SetStockThresholdRequest,
+  LowStockResponse,
+  ExpiringLotsResponse,
 } from "@ladino/schemas";
 
 /**
@@ -550,6 +560,175 @@ export function buildOpenApiDocument(): object {
       201: okJson(almacen, "Almacén creado."),
       ...erroresComunes,
       409: errorRef("Ya existe un almacén con ese código en la empresa."),
+    },
+  });
+
+  // ── Inventario, segunda vuelta (migración 20, ADR-0035/0036) ──────────────
+  const receta = registry.register("RecipeResponse", RecipeResponse);
+  const setReceta = registry.register("SetRecipeRequest", SetRecipeRequest);
+  const consumir = registry.register("ConsumeRecipeRequest", ConsumeRecipeRequest);
+  const consumo = registry.register("ConsumeRecipeResponse", ConsumeRecipeResponse);
+  const plantilla = registry.register("ProductTemplateResponse", ProductTemplateResponse);
+  const crearPlantilla = registry.register(
+    "CreateProductTemplateRequest",
+    CreateProductTemplateRequest,
+  );
+  const stockPlantilla = registry.register("TemplateStockResponse", TemplateStockResponse);
+  const umbral = registry.register("SetStockThresholdRequest", SetStockThresholdRequest);
+  const bajoStock = registry.register("LowStockResponse", LowStockResponse);
+  const porVencer = registry.register("ExpiringLotsResponse", ExpiringLotsResponse);
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/products/{id}/recipe",
+    summary: "Receta de un producto compuesto, con su costo estimado",
+    description:
+      "`estimated_unit_cost` es una ESTIMACIÓN con los costos vigentes para enseñar en pantalla; " +
+      "el costo real de una venta es la suma de las salidas que persistió el kardex. Es `null` " +
+      "si alguna línea no tiene conversión de unidad: un costo a medias sería peor que ninguno.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: companyHeader,
+      query: z.object({ warehouse_id: z.string().uuid().optional() }),
+    },
+    responses: { 200: okJson(receta, "La receta."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/products/{id}/recipe",
+    summary: "Reemplazar la receta entera (permiso product.recipe.manage)",
+    description:
+      "Se reemplaza COMPLETA: una receta a medias no es una receta, y parchear línea a línea " +
+      "deja estados intermedios que sí se pueden vender. Un ingrediente no puede ser a su vez " +
+      "compuesto: el anidamiento no está soportado (ADR-0035).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: setReceta } } },
+    },
+    responses: {
+      200: okJson(receta, "La receta guardada."),
+      ...erroresComunes,
+      409: errorRef("El producto no es compuesto, o un ingrediente sí lo es (RECIPE_INVALID)."),
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/inventory/recipe-consumptions",
+    summary: "Consumir un compuesto: una salida por ingrediente (permiso inventory.move)",
+    description:
+      "Vender doce arepas no descuenta arepas: descuenta harina y leche. Las N salidas van en " +
+      "la MISMA transacción y comparten `source_document_id`. Si un ingrediente no alcanza, no " +
+      "ocurre ninguna: media receta consumida es peor que ninguna.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: consumir } } },
+    },
+    responses: {
+      201: okJson(consumo, "Las salidas y el costo total REAL de lo consumido."),
+      ...erroresComunes,
+      409: errorRef("Existencia insuficiente (NEGATIVE_STOCK) o receta inválida."),
+    },
+  });
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/product-templates",
+    summary: "Plantillas de variantes de la empresa",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(z.array(plantilla), "Las plantillas."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/product-templates",
+    summary: "Crear plantilla de variantes (permiso product.variant.manage)",
+    description:
+      "`attribute_keys` son los ejes de variación (talla, color). Cada variante es un PRODUCTO " +
+      "con su SKU, precio y costo; la plantilla solo agrupa (ADR-0036).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearPlantilla } } },
+    },
+    responses: { 201: okJson(plantilla, "Plantilla creada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/inventory/stock-by-template",
+    summary: "Existencias desglosadas por variante, con el total de la plantilla",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ warehouse_id: z.string().uuid().optional() }),
+    },
+    responses: {
+      200: okJson(stockPlantilla, "Una fila por variante; `template_quantity` es el total."),
+      ...erroresComunes,
+    },
+  });
+
+  registry.registerPath({
+    method: "put",
+    path: "/v1/inventory/thresholds",
+    summary: "Definir mínimo y máximo de reposición (permiso inventory.threshold.manage)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: umbral } } },
+    },
+    responses: { 200: okJson(umbral, "Umbral guardado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/inventory/low-stock",
+    summary: "Productos por debajo del mínimo, con cuánto falta",
+    description:
+      "Un producto CON umbral y SIN existencias sale con cantidad 0: es justo el que hay que " +
+      "reponer. La notificación (correo, in-app) se difiere al worker; esto es la consulta.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ warehouse_id: z.string().uuid().optional() }),
+    },
+    responses: { 200: okJson(bajoStock, "Lo que falta reponer."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/inventory/expiring-lots",
+    summary: "Lotes con existencia que vencen dentro de N días",
+    description:
+      "Incluye los ya vencidos, con `days_left` negativo: son los que más urgen. Un lote " +
+      "agotado que vence mañana no aparece — no es un problema.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ days: z.coerce.number().int().min(0).max(3650).optional() }),
+    },
+    responses: { 200: okJson(porVencer, "Lotes por vencer."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/inventory/suggest-lot",
+    summary: "FEFO: el lote no vencido que caduca primero (SUGERENCIA)",
+    description:
+      "Es sugerencia para la UI, no obligación: cuál lote sale puede depender de la ubicación " +
+      "física, y forzarlo en el servidor sería imponer una política de cliente. Lo que el " +
+      "servidor SÍ impone es que un lote vencido no salga sin `inventory.expired` (ADR-0035).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ warehouse_id: z.string().uuid(), product_id: z.string().uuid() }),
+    },
+    responses: {
+      200: okJson(
+        z.object({ lot_id: z.string().uuid().nullable() }),
+        "El lote sugerido, o null si no hay ninguno con existencia.",
+      ),
+      ...erroresComunes,
     },
   });
 

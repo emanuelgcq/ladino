@@ -29,7 +29,9 @@ export type ProductError =
   | { code: "VALIDATION_FAILED"; message: string };
 
 const PRODUCT_COLUMNS = `id, tenant_id, company_id, sku, name, kind, status,
-  unit_code, tax_category_code, category_id, barcode` as const;
+  unit_code, tax_category_code, category_id, barcode,
+  is_composed, tracks_lots, tracks_serials, is_manufactured, tracks_expiry,
+  template_id, attributes` as const;
 
 interface ProductRow {
   id: string;
@@ -43,6 +45,15 @@ interface ProductRow {
   tax_category_code: string;
   category_id: string | null;
   barcode: string | null;
+  // Banderas de existencia (migraciones 19-20). Las gobierna inventario; el
+  // catálogo solo las lleva puestas.
+  is_composed: boolean;
+  tracks_lots: boolean;
+  tracks_serials: boolean;
+  is_manufactured: boolean;
+  tracks_expiry: boolean;
+  template_id: string | null;
+  attributes: Record<string, string> | null;
   created_at: string;
 }
 
@@ -258,6 +269,8 @@ export async function setProductTaxCategory(
      where p.id = previa.id
     returning p.id, p.tenant_id, p.company_id, p.sku, p.name, p.kind, p.status,
               p.unit_code, p.tax_category_code, p.category_id, p.barcode,
+              p.is_composed, p.tracks_lots, p.tracks_serials, p.is_manufactured,
+              p.tracks_expiry, p.template_id, p.attributes,
               previa.anterior,
               to_char(p.created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
   if (!fila) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });

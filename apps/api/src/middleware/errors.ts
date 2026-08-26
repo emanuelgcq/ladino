@@ -49,6 +49,15 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   LAD39: { code: "NEGATIVE_STOCK", status: 409 },
   LAD40: { code: "TRANSFER_UNBALANCED", status: 409 },
   LAD41: { code: "COSTING_MISMATCH", status: 409 },
+  // Migración 20 (ADR-0035/0036). LAD43 y LAD44 son «lo que pides es imposible
+  // por diseño» (un compuesto no tiene stock; una receta anidada no existe): 409.
+  // LAD45 y LAD47 son datos mal formados del cliente: 422.
+  // LAD46 es visible-pero-sin-permiso, como LAD29 y LAD36: 403.
+  LAD43: { code: "COMPOSED_HAS_NO_STOCK", status: 409 },
+  LAD44: { code: "RECIPE_INVALID", status: 409 },
+  LAD45: { code: "UNIT_CONVERSION_MISSING", status: 422 },
+  LAD46: { code: "PERMISSION_REQUIRED", status: 403 },
+  LAD47: { code: "VARIANT_ATTRIBUTES_INVALID", status: 422 },
 
   // --- estándar
   "23505": { code: "DUPLICATE", status: 409 },
@@ -89,6 +98,10 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   NEGATIVE_STOCK: 409, // ADR-0034: existencia negativa sin política o sin permiso
   TRANSFER_UNBALANCED: 409,
   COSTING_MISMATCH: 409,
+  COMPOSED_HAS_NO_STOCK: 409,
+  RECIPE_INVALID: 409,
+  UNIT_CONVERSION_MISSING: 422,
+  VARIANT_ATTRIBUTES_INVALID: 422,
 };
 
 export class DominioError extends Error {
@@ -166,6 +179,14 @@ function mensajePara(code: string): string {
       return "Una transferencia necesita su salida y su entrada cuadradas.";
     case "COSTING_MISMATCH":
       return "El costeo no coincide con el de la base: la existencia cambió. Reintenta.";
+    case "COMPOSED_HAS_NO_STOCK":
+      return "Un producto compuesto no tiene existencias propias: se consumen sus ingredientes.";
+    case "RECIPE_INVALID":
+      return "La receta no es válida: revisa que el producto sea compuesto y sus ingredientes no.";
+    case "UNIT_CONVERSION_MISSING":
+      return "Falta la conversión entre esas unidades. Cárgala: el sistema no la adivina.";
+    case "VARIANT_ATTRIBUTES_INVALID":
+      return "Los atributos de la variante no coinciden con los que declara su plantilla.";
     default:
       return "Error interno.";
   }

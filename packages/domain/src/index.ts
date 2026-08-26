@@ -22,7 +22,11 @@ export {
   adjustStock,
   transferStock,
   type InventoryError,
+  type IssueStockInput,
+  type ReceiveStockInput,
+  type AdjustStockInput,
 } from "./inventory.js";
+export { consumeRecipe, type RecipeError } from "./recipes.js";
 export {
   createCustomer,
   updateCustomer,
