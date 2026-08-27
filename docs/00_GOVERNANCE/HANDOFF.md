@@ -2,18 +2,86 @@
 
 ## Estado
 
-**Sprint 0 cerrado y CINCO módulos de negocio construidos de extremo a extremo: productos,
-precios, clientes, inventario (con su segunda vuelta) y VENTAS.** Flujo trunk-based: todo en
-`main`, `verify` en verde antes de cada commit.
+**Sprint 0 cerrado y SEIS módulos de negocio construidos de extremo a extremo: productos,
+precios, clientes, inventario (con su segunda vuelta), VENTAS y COMPRAS.** Flujo trunk-based:
+todo en `main`, `verify` en verde antes de cada commit.
 
 S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅ ·
-Inventario ✅ · Ventas ✅** · S0.6b ⏸️
+Inventario ✅ · Ventas ✅ · Compras ✅** · S0.6b ⏸️
 
-Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **las 21 migraciones aplicadas** (2026-08-27, vía
+Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **las 24 migraciones aplicadas** (2026-08-27, vía
 Management API, registradas en `supabase_migrations.schema_migrations` con la forma de la CLI para
 que un `db push` futuro las reconozca). Paridad verificada por huella, **idéntica en las seis
-clases**: 524 columnas · 387 constraints · 181 índices · 304 policies · 58 funciones · 106
+clases**: 898 columnas · 625 constraints · 238 índices · 450 policies · 70 funciones · 157
 triggers. Local y remoto no divergen.
+
+## Módulo de compras — construido entero (2026-08-27)
+
+Migraciones 22, 23 y 24 · ADR-0039 (retenciones) · ADR-0040 (compras y landed cost) ·
+pgTAP 022 (71 aserciones) · `packages/purchases` (puro, 20 tests) · siete casos de uso ·
+veinte endpoints · cuatro paneles de pantalla · E2E de 21 casos.
+
+| Pieza | Dónde | Qué gobierna |
+|---|---|---|
+| Tablas propias | `purchase_orders` · `goods_receipts` · `supplier_invoices` · `supplier_credit_notes` | No `documents`: el trigger de emisión fiscal es nuestro, la factura la emite el proveedor |
+| Estado de la orden | `platform.purchase_order_status` | DERIVADO de las recepciones, no una columna que se desincroniza |
+| Costo | `goods_receipts` | Se fija en la RECEPCIÓN, con la tasa de ese día (ADR-0040 §4) |
+| Prorrateo | `packages/purchases` | Tres métodos, residuo determinista, property tests |
+| Landed cost tardío | `landed_cost_variances` | Variación declarada; **nunca** prorrateo sobre lo que queda |
+| Revalorización | `inventory_moves` kind `revaluacion` | Valor sin cantidad, POR EL KARDEX (migración 23) |
+| Retención | `platform.resolve_retention` (LAD53) | Del catálogo o **falla**; fórmulas de vocabulario cerrado |
+| Comprobante | `retention_receipts` | Correlativo propio, conservado al anular |
+| Matching | `platform.purchase_matching` | Informa; la política —el umbral— la aplica el caso de uso |
+| IVA soportado | `supplier_invoices.tax_is_recoverable` | Derivado del contribuyente de la EMPRESA |
+
+**Decisiones que conviene no volver a discutir** (ADR-0039 y ADR-0040): compras tiene tablas
+propias porque meterla en `documents` obligaba a exceptuar el trigger de emisión fiscal; el
+correlativo y el número de control del proveedor son TEXTO, no `bigint`, porque son datos de otro
+emisor; `retention_rules` nace vacía y `resolve_retention` falla en vez de devolver cero; las
+fórmulas de retención son un enum cerrado con parámetros en columnas, nunca una expresión
+evaluada; el landed cost tardío genera variación y no encarece lo que queda.
+
+**Los hallazgos, que valen más que el código. Los encontró el E2E, no una revisión:**
+
+1. **La revalorización que rompía el kardex.** Para subir el valor sin añadir unidades, la primera
+   versión metía la cantidad y luego la restaba de `stock_balances` a mano. Eso rompe el invariante
+   sobre el que descansa el módulo de inventario entero: el saldo es una materialización del
+   kardex y `stock_reconciliation()` comprueba que uno reproduce el otro. El descuadre habría
+   aparecido meses después, en una reconciliación, sin forma de saber qué ajuste lo causó.
+   Migración 23: el hecho EXISTE en el kardex, con cantidad cero. `apply_inventory_move()` ya lo
+   calculaba bien; estorbaban dos `CHECK` escritos cuando el caso no se contemplaba.
+2. **El landed cost chocaba con su propia defensa.** `goods_receipt_lines.landed_cost_functional`
+   era un acumulado que había que ACTUALIZAR, y una línea de recepción confirmada es inmutable. Se
+   podía haber exceptuado la columna en el trigger; no se hizo, porque «un trigger compartido con
+   casos especiales se aplica mal» es el argumento que sostiene ADR-0040 §1 entero. La columna era
+   además redundante: las asignaciones, que son append-only, ya la contienen. Migración 24 la
+   quita y la sustituye por `platform.line_landed_cost()`.
+3. **La migración 23 se contradijo con la 19** y nadie lo vio hasta ejecutar el flujo completo: la
+   19 permite `reason` solo en un ajuste, la 23 lo exigía en una revalorización. Juntas prohibían
+   el motivo en el único tipo que más lo necesita. Ahora el motivo es OBLIGATORIO ahí.
+4. **`retention_concepts` se concedió a `authenticated` y no a `ladino_api`**, que es quien lo lee.
+   El síntoma fue un 42501 que la regla 404/403 convierte en «Recurso no encontrado» — correcto
+   por diseño y desconcertante de depurar. Es el precio de esa regla, y conviene tenerlo escrito.
+5. **Todos los documentos de compra nacían ya confirmados** y el caso de uso los actualizaba
+   después con los totales, cosa que el trigger de inmutabilidad rechazaba con razón. Ahora nacen
+   en borrador y se confirman en el UPDATE final, igual que ventas emite.
+6. **`companies` no tenía clasificación tributaria propia.** Hasta ahora la clasificación fiscal
+   era de las contrapartes (ADR-0033), no de uno mismo, y ADR-0040 §7 la necesita para decidir si
+   el IVA soportado es crédito o costo. Se añade NULLABLE y sin default: poner `ordinario` por
+   omisión sería asignarle a cada empresa existente un régimen que nadie declaró.
+
+**Sobre los E2E y el estado global, tercera vez que muerde.** El fichero de compras crea tenant
+nuevo por corrida, pero `exchange_rates`, `tax_rules` y `retention_rules` son GLOBALES y las
+comparte con el de ventas. Consecuencias que quedaron escritas en el propio test: la ausencia de
+tasa **no** se puede demostrar borrando —ventas carga las suyas—, así que se demuestra donde la
+fecha es un parámetro (el gasto de importación, con fecha de 2000); los importes se asertan contra
+la tasa que el documento DECLARA, no contra un 40 escrito a mano, y los números exactos viven en
+el pgTAP, donde la fixture sí está aislada.
+
+**No construido, y dicho:** requisiciones y anticipos a proveedor (fuera de alcance, declarado; los
+anticipos van con tesorería); órdenes automáticas por punto de reorden, aprobaciones multinivel,
+contratos marco y portal de proveedor (diferidos por encargo); el asiento contable de la variación
+de costo (se calcula y se persiste con su cuenta; postearlo es del motor contable).
 
 ## Módulo de ventas — construido entero (2026-08-27)
 
@@ -529,6 +597,27 @@ sistema sembrando una alícuota del 16 % en una migración. **Esa alícuota ser�
 inventada** (CLAUDE.md §2) y quedaría copiada en cada factura emitida a partir de ahí. La carga es
 un acto administrativo con fuente citada, no un seed.
 
+### R-18 · Una empresa agente de retención no puede pagarle a un proveedor hasta que carguen la norma
+
+Simétrico a R-16 y con la misma raíz: `retention_rules` nace vacía y `resolve_retention()` falla en
+vez de devolver cero. El riesgo tampoco es técnico — es que alguien, viendo un 409 en una demo,
+«arregle» el sistema sembrando un 75 % en una migración. **Esa sería una obligación legal inventada
+que se le quita a un tercero y se entera al fisco en nombre de él**, que es peor que inventar una
+alícuota. La pantalla de Retenciones existe para que cargar la regla sea un acto visible con su
+Gaceta, no un ajuste escondido.
+
+### R-19 · Cuánto queda de una recepción concreta es una APROXIMACIÓN, y el landed cost la usa
+
+El kardex no rastrea qué unidad vino de qué recepción —eso exigiría costeo por capas, que ADR-0034
+descartó a propósito—, así que `applyLandedCost` aproxima «lo que queda de esta recepción» con la
+existencia ACTUAL de la posición, acotada por lo recibido en la línea.
+
+Consecuencia real: si entre la recepción y el gasto entró mercancía de OTRA compra, el disponible
+puede cubrir lo recibido aunque estas unidades concretas ya se hayan ido, y el reparto se inclinará
+hacia el inventario. Está elegido así: **revalorizar de más es visible en el costo unitario;
+una variación inflada desaparece en resultados sin que nadie la mire.** Si algún día hace falta
+exactitud, la respuesta es costeo por capas y su ADR, no un parche aquí.
+
 ### R-17 · La emisión y el kardex son atómicos, y eso hace la factura tan frágil como el stock
 
 `createInvoice` descarga el inventario en la misma transacción: si no alcanza la existencia, la
@@ -547,8 +636,13 @@ para eso existe.
 - `6a5bc7e` `packages/pricing` y `packages/sales` — cálculo puro con property tests
 - `c36f838` casos de uso, API, OpenAPI y E2E (los tres hallazgos de arriba)
 - `5ccce55` pantallas de ventas y el KPI de diferencial
+- `5026282` compras: ADR-0039/0040, migración 22 y el paquete puro
+- `dbefc0d` compras: casos de uso, API, pantallas, migraciones 23 y 24
 
-`verify` en verde antes de cada uno; el último: `VERIFY EXIT=0`, 523 pasos, `All tests successful`.
+`verify` en verde antes de cada uno; el último: `VERIFY EXIT=0`, 546 pasos, `All tests successful`
+(746 aserciones pgTAP en 22 ficheros).
+
+**Siguiente módulo: lo decide el usuario entre tesorería y el adaptador Cashea.**
 
 ## Histórico
 
