@@ -97,6 +97,10 @@ export function configServidor(env: Entorno): ServerConfig {
     // 30 s: MUY por debajo de los 15 min del reaper de idempotencia (F-10):
     // ninguna petición puede seguir viva cuando el reaper libera su clave.
     requestTimeoutMs: entero(env, "REQUEST_TIMEOUT_MS", 30_000),
-    corsOrigin: env["CORS_ORIGIN"] ?? "http://127.0.0.1:5173",
+    // 5174 desde 2026-08-27: 5173 lo ocupa otro proyecto en la máquina de
+    // desarrollo. El puerto de la webapp y este default van juntos — si uno
+    // cambia sin el otro, el navegador falla en el preflight y el error que se
+    // ve es «no se pudo conectar», que no dice nada de CORS.
+    corsOrigin: env["CORS_ORIGIN"] ?? "http://127.0.0.1:5174",
   };
 }

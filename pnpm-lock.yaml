@@ -202,6 +202,19 @@ importers:
         specifier: ^4.3.0
         version: 4.9.0
 
+  packages/purchases:
+    dependencies:
+      '@ladino/core':
+        specifier: workspace:*
+        version: link:../core
+      '@ladino/money':
+        specifier: workspace:*
+        version: link:../money
+    devDependencies:
+      fast-check:
+        specifier: ^4.3.0
+        version: 4.9.0
+
   packages/sales:
     dependencies:
       '@ladino/core':

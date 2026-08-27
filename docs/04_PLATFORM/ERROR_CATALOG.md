@@ -47,7 +47,10 @@ Comprobado sobre las funciones realmente instaladas. **Cada uno es único en tie
 | `LAD47` | `platform.assert_variant_attributes()` | la variante declara un eje que su plantilla no tiene, o le falta uno que exige (ADR-0036, migración 20) | `VARIANT_ATTRIBUTES_INVALID` | `422` |
 | `LAD49` | `platform.assert_document_issuance()` · `claim_control_number()` | numeración fiscal (ADR-0037): empresa sin régimen vigente, régimen que no permite emitir, `issued` **sin** número de control cuando el régimen lo exige, `issued` **con** número de control cuando el régimen no lo usa, o rango de control agotado | `FISCAL_NUMBERING_INVALID` | `409` |
 | `LAD50` | `platform.resolve_tax()` | no hay regla tributaria vigente para esa fecha/jurisdicción/categoría, o hay **dos con la misma prioridad** (catálogo ambiguo). ADR-0038: nunca devuelve cero | `TAX_RULE_MISSING` | `409` |
-| `LAD06` | *(también)* `platform.assert_document_immutable()` · `assert_document_lines_immutable()` | editar o borrar un documento **emitido**, mover su correlativo o su control, o una transición de estado no permitida. Se corrige con nota de crédito o débito | `APPEND_ONLY_VIOLATION` | `409` |
+| `LAD06` | *(también)* `platform.assert_document_immutable()` · `assert_document_lines_immutable()` · `assert_purchase_doc_immutable()` · `assert_purchase_lines_immutable()` | editar o borrar un documento **emitido** o una compra **confirmada**, mover su correlativo o su control, o una transición de estado no permitida. Se corrige con nota de crédito o débito | `APPEND_ONLY_VIOLATION` | `409` |
+| `LAD53` | `platform.resolve_retention()` · `compute_retention()` | no hay regla de retención vigente para esa fecha/jurisdicción/concepto, hay **dos con la misma prioridad**, o la `formula_kind` no está en el vocabulario cerrado. ADR-0039: nunca devuelve cero — un cero deja pasar el pago completo y deja a la empresa debiendo al fisco | `RETENTION_RULE_MISSING` | `409` |
+| `LAD54` | `platform.assert_retention_receipt_number()` | cambiar el correlativo de un comprobante de retención emitido, o reemitir uno anulado. El número se conserva al anular (ADR-0039 §5) | `FISCAL_NUMBERING_INVALID` | `409` |
+| `LAD55` | *caso de uso* (`applyLandedCost`) | prorrateo `by_weight` con alguna línea sin peso. **No lo lanza la base**: el esquema admite `unit_weight` nulo porque no todo producto lo tiene; lo que no admite es repartir un flete solo entre lo que sí pesa, y eso lo decide el caso de uso. Mismo patrón que LAD45 | `MISSING_WEIGHT` | `422` |
 
 ## Códigos de una sola ejecución — NO llegan a la API
 
@@ -60,7 +63,10 @@ al hacer `grep` sobre las migraciones y crea que el mapeo 1:1 es imposible.
 `LAD32` (atributos de los roles de servicio, migración 14), `LAD34` (seeds del catálogo de
 productos, migración 16), `LAD37` (seeds de clientes, migración 18), `LAD42` (permisos, capas
 append-only y RLS de inventario, migración 19), `LAD48` (permisos, conversiones de unidad y RLS de
-la migración 20) y `LAD52` (migración 21: que `tax_rules` NAZCA VACÍA, que ningún régimen se siembre
+la migración 20), `LAD56` (migración 22: que `retention_rules` NAZCA VACÍA, que el vocabulario de
+conceptos esté sembrado, que `purchase.receive` sea acotado por almacén, que las diecinueve tablas
+de compras tengan RLS forzada, que ninguna append-only tenga privilegio de mutación, y que
+`fiscal_number_ranges` admita `retention_receipt`) y `LAD52` (migración 21: que `tax_rules` NAZCA VACÍA, que ningún régimen se siembre
 en `per_document`, que ninguno vaya sin norma citada, y que `payments`/`exchange_gain_loss` no
 tengan privilegio de mutación) son de una sola ejecución: abortan la migración, no llegan a la API.
 

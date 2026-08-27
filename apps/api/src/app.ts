@@ -70,7 +70,7 @@ export function buildApp(cfg: AppConfig): Hono {
   app.use(
     "*",
     cors({
-      origin: cfg.corsOrigin ?? "http://127.0.0.1:5173",
+      origin: cfg.corsOrigin ?? "http://127.0.0.1:5174",
       allowHeaders: [
         "Authorization",
         "Content-Type",

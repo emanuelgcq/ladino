@@ -18,7 +18,7 @@ SUPABASE_JWT_SECRET=super-secret-jwt-token-with-at-least-32-characters-long \
 SUPABASE_AUTH_ISSUER=http://127.0.0.1:54321/auth/v1 \
 node apps/api/dist/server.js
 
-pnpm --filter @ladino/web dev       # Vite en http://127.0.0.1:5173
+pnpm --filter @ladino/web dev       # Vite en http://127.0.0.1:5174
 ```
 
 1. **Crear cuenta** en la pantalla (GoTrue local no exige confirmación).
