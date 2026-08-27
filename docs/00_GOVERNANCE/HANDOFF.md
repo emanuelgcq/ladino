@@ -1,20 +1,84 @@
-# Handoff — 2026-08-24
+# Handoff — 2026-08-27
 
 ## Estado
 
-**Sprint 0 cerrado (S0.1–S0.6a, PR #4 mergeado) y el PRIMER MÓDULO DE NEGOCIO construido de
-extremo a extremo: productos y precios, hasta pantalla.** Flujo trunk-based desde S0.6a: todo
-en `main`, `verify` en verde antes de cada commit.
+**Sprint 0 cerrado y CINCO módulos de negocio construidos de extremo a extremo: productos,
+precios, clientes, inventario (con su segunda vuelta) y VENTAS.** Flujo trunk-based: todo en
+`main`, `verify` en verde antes de cada commit.
 
 S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅ ·
-Inventario ✅** · S0.6b ⏸️
+Inventario ✅ · Ventas ✅** · S0.6b ⏸️
 
-Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **17 migraciones** aplicadas y verificadas por huella
-(2026-08-26). **Las migraciones 18 (clientes), 19 (inventario) y 20 (recetas, unidades,
-vencimientos, variantes y umbrales) están solo en local** y entran **juntas** al remoto con
-`supabase login` + `supabase link` + `supabase db push` — el usuario lo ejecuta, el token vive en su
-sesión y no pasa por el repo ni por el chat. Antes del push, `supabase migration list --linked` tiene
-que listar exactamente esas tres como pendientes; si lista algo más, hay divergencia y se para.
+Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **las 21 migraciones aplicadas** (2026-08-27, vía
+Management API, registradas en `supabase_migrations.schema_migrations` con la forma de la CLI para
+que un `db push` futuro las reconozca). Paridad verificada por huella, **idéntica en las seis
+clases**: 524 columnas · 387 constraints · 181 índices · 304 policies · 58 funciones · 106
+triggers. Local y remoto no divergen.
+
+## Módulo de ventas — construido entero (2026-08-27)
+
+Migración 21 · ADR-0037 (numeración) · ADR-0038 (motor tributario) · pgTAP 021 (65 aserciones) ·
+`packages/pricing` + `packages/sales` (puros) · ocho casos de uso · dieciséis endpoints · cuatro
+paneles de pantalla + KPI · E2E de 14 casos.
+
+| Pieza | Dónde | Qué gobierna |
+|---|---|---|
+| Correlativo y número de control | `claim_document_number` / `claim_control_number` | Dos columnas distintas (ADR-0037); el correlativo se conserva al anular |
+| Régimen que decide | `platform.regime_at` + `assert_document_issuance` | Qué numeración aplica, comprobado en INSERT **y** UPDATE |
+| Alícuota | `platform.resolve_tax` (LAD50) | Del catálogo o **falla**; nunca devuelve cero (ADR-0038) |
+| Tasa | `exchange_rates` + `rate_at` (LAD51) | Efectiva por fecha y con fuente; sin tasa no se emite |
+| Cálculo | `packages/sales` | Puro, property-based; el impuesto sobre la base YA redondeada |
+| Saldo | `platform.document_balance` | Calculado, nunca una columna |
+| Antigüedad | `platform.ar_aging` | Cuatro tramos, en el esquema |
+| Diferencial | `exchange_gain_loss` | Solo si la tasa cambió; sin fila de cero |
+| Reserva | `stock_reservations` + `available_stock` | Compromiso con caducidad, **no** kardex |
+| Devolución | `return_lines.unit_cost_original` | Reingreso al costo original, no al de hoy |
+
+**Decisiones que conviene no volver a discutir** (ADR-0037 y ADR-0038): `document_number` y
+`control_number` son DOS columnas y el régimen decide cuál aplica; el correlativo es gapless y
+**sobrevive a la anulación**; `tax_rules` nace VACÍA a propósito y dos reglas de la misma prioridad
+son un catálogo ambiguo que detiene la emisión; un rango agotado **para la caja** y por eso hay
+alerta antes; una nota de crédito exige SU PROPIO rango autorizado.
+
+**Los tres hallazgos de la construcción, que valen más que el código:**
+
+1. **El documento nacía en moneda funcional con `fx_rate = 1`, y eso dejaba el diferencial
+   cambiario como CÓDIGO MUERTO.** Con la tasa ya cocida dentro del total, un cobro posterior no
+   tenía contra qué compararse: la tabla `exchange_gain_loss` habría estado siempre vacía y nadie
+   lo habría notado, porque no falla nada. Ahora el documento vive en la moneda de su lista de
+   precios y la conversión va en los siete campos de ADR-0020. Los totales del pie siguen siendo
+   funcionales —es contra ellos que `document_balance` resta los cobros—, y el impuesto funcional
+   se DERIVA como total − subtotal: convertir los tres por separado produce redondeos que no
+   cuadran y `documents_amounts_chk` exige que cuadren.
+2. **Otra vez la lección de S0.5, y otra vez costó encontrarla.** `resolve_tax` levanta una
+   excepción, un error de Postgres CONDENA la transacción, y el `catch` que la envolvía era código
+   muerto que parecía funcionar: el 409 lo producía en realidad la tabla de SQLSTATE, con mensaje
+   genérico. Lo destapó **comparar el mensaje**, no el código — igual que en S0.5. Ahora va en
+   `savepoint`, y el E2E asevera el mensaje que solo produce ese camino.
+3. **Tres códigos de negocio no estaban en la tabla de dominio y salían como 500.**
+   `EXCHANGE_RATE_MISSING`, `TAX_RULE_MISSING` y `FISCAL_NUMBERING_INVALID`: rechazos legítimos
+   presentándose como fallo del servidor. Añadidos, junto con las filas SQLSTATE LAD49/50/51.
+   `LAD51` estaba **reservado y sin usar**; ahora se usa, y `ERROR_CATALOG.md` lo dice.
+
+Y dos que no llegan a hallazgo pero se pagan en tiempo: `exchange_rates.rate_timestamp` no tenía
+default y nadie lo ponía (23502 → 422 en cada carga de tasa), y `createCompany` no sembraba
+ninguna lista de precios, así que una empresa recién creada no podía vender y el hueco solo
+aparecía en la primera factura. Ahora siembra `detal` y `mayor` en moneda funcional.
+
+**Sobre el E2E y el estado compartido, que ya nos mordió tres veces:** el fichero crea un tenant
+NUEVO en cada corrida. No es manía — ventas asigna correlativos gapless, consume rangos y fija un
+régimen con vigencia sin solape; con un tenant fijo, la segunda corrida arranca con el rango medio
+gastado y el test falla por su propia historia. De lo global limpia solo lo suyo (`exchange_rates`
+por su fuente). **`tax_rules` no se puede limpiar**: una regla citada por una línea de documento
+tiene FK y la base se niega —correctamente, porque borrarla dejaría una factura sin decir con qué
+alícuota se emitió—, así que el caso de «sin regla no se vende» usa un producto cuya categoría
+nunca tiene una.
+
+**No construido, y dicho:** el flujo de dos fases con imprenta digital sigue abierto
+(OPEN_QUESTIONS 10, ningún régimen se siembra en `per_document`); el adaptador BCV es
+`NullBCVAdapter` y la única vía real es la carga manual con fuente; `applyCredit` existe como
+instrumento de cobro (`saldo_a_favor`), no como endpoint propio; no hay asiento contable —ventas
+emite el evento de outbox y el motor contable lo consumirá cuando exista.
 
 ## Módulo de inventario — construido entero (2026-08-26)
 
@@ -452,7 +516,41 @@ en el **entorno del proceso** (variables de usuario de Windows o al lanzar Claud
 - **La clave de idempotencia clavada hasta el TTL** sigue sin reaper (ADR-0018 enmendado lo exige).
 - R-01..R-07 sin cambios. La tensión R-05/ADR-0029 quedó resuelta con el catálogo versionado.
 
+### R-16 · El sistema no puede emitir una sola factura hasta que alguien cargue tres cosas
+
+Y es deliberado, pero conviene que esté escrito antes de la primera demo, porque parece una avería:
+una empresa recién creada **no puede facturar**. Le faltan (1) una regla en `tax_rules` con su
+fuente legal, (2) una tasa en `exchange_rates` con su fuente si vende en otra moneda, y (3) un
+régimen fiscal vigente más, si el régimen lo exige, un rango de números de control de la imprenta.
+Cada una de las cuatro ausencias devuelve un 409 con un mensaje que dice exactamente qué falta.
+
+El riesgo no es técnico: es que alguien, viendo cuatro errores seguidos en una demo, «arregle» el
+sistema sembrando una alícuota del 16 % en una migración. **Esa alícuota sería una obligación legal
+inventada** (CLAUDE.md §2) y quedaría copiada en cada factura emitida a partir de ahí. La carga es
+un acto administrativo con fuente citada, no un seed.
+
+### R-17 · La emisión y el kardex son atómicos, y eso hace la factura tan frágil como el stock
+
+`createInvoice` descarga el inventario en la misma transacción: si no alcanza la existencia, la
+factura entera no ocurrió. Es lo correcto —una factura sin salida de mercancía es un descuadre
+permanente— pero significa que **un problema de inventario impide facturar**, y en un mostrador eso
+se vive como «el sistema no deja vender». La alternativa (facturar y descuadrar) es peor y no se
+va a tomar; lo que falta es que la pantalla lo explique cuando llegue el `NEGATIVE_STOCK`, y que
+la empresa que de verdad venda sin stock use la bandera `allow_negative_stock` con su permiso, que
+para eso existe.
+
 ## Estado en git
+
+`main`, al día y empujado. Últimos commits del módulo de ventas:
+
+- `83ce51b` migración 21 (13 tablas, pgTAP 021, la nota de `set_row_provenance`)
+- `6a5bc7e` `packages/pricing` y `packages/sales` — cálculo puro con property tests
+- `c36f838` casos de uso, API, OpenAPI y E2E (los tres hallazgos de arriba)
+- `5ccce55` pantallas de ventas y el KPI de diferencial
+
+`verify` en verde antes de cada uno; el último: `VERIFY EXIT=0`, 523 pasos, `All tests successful`.
+
+## Histórico
 
 S0.5 commiteado en `s0.5/api-and-use-cases` (cuatro commits: docs, feat, chore, y las correcciones de la auditoría) y con PR #3 abierto hacia `main`. **La auditoría ya no bloquea**; el merge espera tu aprobación explícita, como siempre.
 
