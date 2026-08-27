@@ -65,6 +65,11 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   LAD49: { code: "FISCAL_NUMBERING_INVALID", status: 409 },
   LAD50: { code: "TAX_RULE_MISSING", status: 409 },
   LAD51: { code: "EXCHANGE_RATE_MISSING", status: 409 },
+  // Migración 22 (ADR-0039). Los levanta el ESQUEMA —resolve_retention y el
+  // trigger del comprobante—, así que llegan aquí aunque el caso de uso no los
+  // traduzca: la red que hace valer «sin regla no se retiene» en cualquier ruta.
+  LAD53: { code: "RETENTION_RULE_MISSING", status: 409 },
+  LAD54: { code: "FISCAL_NUMBERING_INVALID", status: 409 },
 
   // --- estándar
   "23505": { code: "DUPLICATE", status: 409 },
@@ -117,6 +122,14 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   TAX_RULE_MISSING: 409, // LAD50
   EXCHANGE_RATE_MISSING: 409, // LAD51
   APPEND_ONLY_VIOLATION: 409, // LAD06 por la vía del caso de uso
+  // Compras (migración 22, ADR-0039/0040). RETENTION_RULE_MISSING es «no puedo
+  // retener porque nadie cargó la norma»: 409, se arregla cargándola.
+  // PRICE_ABOVE_TOLERANCE es «lo que pides excede lo pactado y hace falta otra
+  // firma»: 409 también, porque el cuerpo está bien y el estado no.
+  // MISSING_WEIGHT sí es 422: falta un dato del maestro para poder repartir.
+  RETENTION_RULE_MISSING: 409, // LAD53
+  PRICE_ABOVE_TOLERANCE: 409,
+  MISSING_WEIGHT: 422, // LAD55
 };
 
 export class DominioError extends Error {
@@ -188,6 +201,12 @@ function mensajePara(code: string): string {
       return "Un precio no se edita ni se borra: corrige con una vigencia nueva.";
     case "PRICE_OVERLAP":
       return "La vigencia se solapa con un período ya cerrado.";
+    case "RETENTION_RULE_MISSING":
+      return "No hay regla de retención vigente para ese concepto: cárgala con su norma antes de retener.";
+    case "PRICE_ABOVE_TOLERANCE":
+      return "El precio facturado se sale del umbral acordado en la orden y necesita aprobación.";
+    case "MISSING_WEIGHT":
+      return "Falta el peso de alguna línea y sin él el prorrateo por peso repartiría mal.";
     case "NEGATIVE_STOCK":
       return "La operación dejaría la existencia en negativo y no está permitido.";
     case "TRANSFER_UNBALANCED":

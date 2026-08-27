@@ -365,3 +365,220 @@ export interface ExchangeDifferenceReport {
   neto: string;
   by_month: { month: string; amount: string }[];
 }
+
+// ── Compras (migración 22, ADR-0039/0040) ────────────────────────────────────
+
+export interface Supplier {
+  id: string;
+  company_id: string;
+  tax_id: string | null;
+  legal_name: string;
+  trade_name: string | null;
+  /** Gobierna la forma fiscal: el extranjero no tiene RIF ni clasificación. */
+  supplier_kind: "nacional" | "extranjero";
+  person_type_code: string | null;
+  taxpayer_type_code: string | null;
+  fiscal_address: string | null;
+  email: string | null;
+  phone: string | null;
+  status: string;
+  payment_terms_days: number;
+}
+export interface PurchaseOrder {
+  id: string;
+  company_id: string;
+  supplier_id: string;
+  warehouse_id: string;
+  order_number: number | null;
+  status: string;
+  /** DERIVADO de las recepciones, no leído de una columna. */
+  derived_status?: string;
+  ordered_at: string | null;
+  expected_at: string | null;
+  transaction_currency: string;
+  functional_currency: string;
+  fx_rate: string;
+  rate_source: string;
+  amount_transaction_currency: string;
+  functional_amount: string;
+}
+export interface PurchaseOrderDetail {
+  order: PurchaseOrder;
+  lines: {
+    id: string;
+    line_number: number;
+    product_id: string;
+    description: string;
+    quantity: string;
+    unit_price_transaction: string;
+    line_total_transaction: string;
+    unit_weight: string | null;
+  }[];
+  progress: {
+    order_line_id: string;
+    product_id: string;
+    quantity_ordered: string;
+    quantity_received: string;
+    quantity_pending: string;
+  }[];
+  receipts: {
+    id: string;
+    receipt_number: number | null;
+    status: string;
+    received_at: string | null;
+    functional_amount: string;
+  }[];
+  invoices: {
+    id: string;
+    supplier_document_number: string;
+    invoice_date: string;
+    status: string;
+    total_amount: string;
+  }[];
+  derived_status: string;
+}
+export interface GoodsReceiptDetail {
+  receipt: {
+    id: string;
+    supplier_id: string;
+    purchase_order_id: string | null;
+    warehouse_id: string;
+    receipt_number: number | null;
+    status: string;
+    received_at: string | null;
+    delivery_note_ref: string | null;
+    transaction_currency: string;
+    functional_currency: string;
+    fx_rate: string;
+    rate_source: string;
+    functional_amount: string;
+  };
+  lines: {
+    id: string;
+    line_number: number;
+    product_id: string;
+    quantity: string;
+    unit_price_transaction: string;
+    unit_cost_functional: string;
+    /** DERIVADO de las asignaciones: no es una columna (migración 24). */
+    landed_cost_functional: string;
+    unit_weight: string | null;
+  }[];
+  landed_costs: {
+    id: string;
+    concept: string;
+    allocation_method: string;
+    status: string;
+    functional_amount: string;
+    incurred_on: string;
+  }[];
+}
+export interface SupplierInvoice {
+  id: string;
+  supplier_id: string;
+  purchase_order_id: string | null;
+  /** Del PROVEEDOR, como él lo emitió. Texto, no número. */
+  supplier_document_number: string;
+  supplier_control_number: string | null;
+  supplier_document_ref: string | null;
+  invoice_date: string;
+  due_date: string | null;
+  status: string;
+  subtotal_amount: string;
+  tax_amount: string;
+  total_amount: string;
+  /** Derivado del contribuyente de la EMPRESA, no configurable. */
+  tax_is_recoverable: boolean;
+  retention_total: string;
+  transaction_currency: string;
+  functional_currency: string;
+  fx_rate: string;
+  rate_source: string;
+  balance?: string;
+  retentions?: SupplierRetention[];
+}
+export interface SupplierRetention {
+  id: string;
+  retention_code: string;
+  concept_code: string;
+  formula_kind: string;
+  rate_snapshot: string;
+  base_amount: string;
+  retained_amount: string;
+  /** La norma con la que se retuvo, copiada. Sin ella no sería auditable. */
+  legal_source_snapshot: string;
+  status: string;
+}
+export interface MatchingRow {
+  invoice_line_id: string;
+  product_id: string;
+  qty_ordered: string | null;
+  qty_received: string | null;
+  qty_invoiced: string;
+  price_ordered: string | null;
+  price_invoiced: string;
+  price_diff_pct: string | null;
+}
+export interface LandedCostResult {
+  id: string;
+  goods_receipt_id: string;
+  concept: string;
+  allocation_method: string;
+  functional_amount: string;
+  functional_currency: string;
+  allocations: {
+    goods_receipt_line_id: string;
+    allocated_functional: string;
+    to_inventory_functional: string;
+    to_variance_functional: string;
+    quantity_remaining: string;
+    quantity_received: string;
+  }[];
+  /** Lo que NO capitalizó: gasto del período (ADR-0040 §6). */
+  total_variance: string;
+}
+export interface ApAging {
+  reference_date: string;
+  buckets: { supplier_id: string; bucket: string; document_count: number; amount: string }[];
+  total: string;
+}
+export interface SupplierStatement {
+  supplier_id: string;
+  currency: string;
+  invoices: {
+    id: string;
+    supplier_document_number: string;
+    invoice_date: string;
+    due_date: string | null;
+    status: string;
+    total_amount: string;
+    paid_amount: string;
+    balance: string;
+    days_outstanding: number;
+  }[];
+  total_outstanding: string;
+  total_retained: string;
+  aging: ApAging;
+}
+export interface RetentionRule {
+  id: string;
+  jurisdiction: string;
+  retention_code: string;
+  concept_code: string;
+  formula_kind: string;
+  rate: string;
+  subtrahend: string | null;
+  minimum_exempt: string | null;
+  effective_from: string;
+  effective_to: string | null;
+  /** Obligatoria: una regla sin norma citada es una retención inventada. */
+  legal_source: string;
+  priority: number;
+  status: string;
+}
+export interface RetentionConcept {
+  code: string;
+  retention_code: string;
+  name: string;
+  description: string;
+}

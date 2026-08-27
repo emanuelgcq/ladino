@@ -25,6 +25,7 @@ export {
   type IssueStockInput,
   type ReceiveStockInput,
   type AdjustStockInput,
+  revalueStock,
 } from "./inventory.js";
 export { consumeRecipe, type RecipeError } from "./recipes.js";
 export {
@@ -45,3 +46,13 @@ export {
   confirmReturn,
   type SalesError,
 } from "./sales.js";
+export {
+  createSupplier,
+  createPurchaseOrder,
+  receiveGoods,
+  registerSupplierInvoice,
+  applyLandedCost,
+  registerSupplierCreditNote,
+  registerSupplierPayment,
+  type PurchaseError,
+} from "./purchases.js";

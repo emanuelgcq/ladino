@@ -152,6 +152,9 @@ importers:
       '@ladino/pricing':
         specifier: workspace:*
         version: link:../pricing
+      '@ladino/purchases':
+        specifier: workspace:*
+        version: link:../purchases
       '@ladino/sales':
         specifier: workspace:*
         version: link:../sales

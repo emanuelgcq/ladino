@@ -63,6 +63,26 @@ import {
   CreateFiscalRangeRequest,
   FiscalRangeResponse,
   CreateExchangeRateRequest,
+  CreateSupplierRequest,
+  SupplierResponse,
+  ListSuppliersResponse,
+  CreatePurchaseOrderRequest,
+  PurchaseOrderResponse,
+  ListPurchaseOrdersResponse,
+  ReceiveGoodsRequest,
+  GoodsReceiptResponse,
+  RegisterSupplierInvoiceRequest,
+  SupplierInvoiceResponse,
+  MatchingResponse,
+  ApplyLandedCostRequest,
+  LandedCostResponse,
+  RegisterSupplierCreditNoteRequest,
+  RegisterSupplierPaymentRequest,
+  SupplierPaymentResponse,
+  RetentionReceiptResponse,
+  CreateRetentionRuleRequest,
+  ApAgingResponse,
+  SupplierStatementResponse,
 } from "@ladino/schemas";
 
 /**
@@ -1043,6 +1063,357 @@ export function buildOpenApiDocument(): object {
       ),
       ...erroresComunes,
     },
+  });
+
+  // ── Compras (migración 22, ADR-0039/0040) ─────────────────────────────────
+  const proveedor = registry.register("SupplierResponse", SupplierResponse);
+  const listaProveedores = registry.register("ListSuppliersResponse", ListSuppliersResponse);
+  const crearProveedor = registry.register("CreateSupplierRequest", CreateSupplierRequest);
+  const ordenCompra = registry.register("PurchaseOrderResponse", PurchaseOrderResponse);
+  const listaOrdenes = registry.register("ListPurchaseOrdersResponse", ListPurchaseOrdersResponse);
+  const crearOrden = registry.register("CreatePurchaseOrderRequest", CreatePurchaseOrderRequest);
+  const recibirMercancia = registry.register("ReceiveGoodsRequest", ReceiveGoodsRequest);
+  const recepcion = registry.register("GoodsReceiptResponse", GoodsReceiptResponse);
+  const registrarFactura = registry.register(
+    "RegisterSupplierInvoiceRequest",
+    RegisterSupplierInvoiceRequest,
+  );
+  const facturaProveedor = registry.register("SupplierInvoiceResponse", SupplierInvoiceResponse);
+  const matching = registry.register("MatchingResponse", MatchingResponse);
+  const aplicarLanded = registry.register("ApplyLandedCostRequest", ApplyLandedCostRequest);
+  const landed = registry.register("LandedCostResponse", LandedCostResponse);
+  const notaRecibida = registry.register(
+    "RegisterSupplierCreditNoteRequest",
+    RegisterSupplierCreditNoteRequest,
+  );
+  const pagoProveedor = registry.register(
+    "RegisterSupplierPaymentRequest",
+    RegisterSupplierPaymentRequest,
+  );
+  const respuestaPago = registry.register("SupplierPaymentResponse", SupplierPaymentResponse);
+  const comprobante = registry.register("RetentionReceiptResponse", RetentionReceiptResponse);
+  const crearReglaRet = registry.register("CreateRetentionRuleRequest", CreateRetentionRuleRequest);
+  const antiguedadAp = registry.register("ApAgingResponse", ApAgingResponse);
+  const estadoProveedor = registry.register("SupplierStatementResponse", SupplierStatementResponse);
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/suppliers",
+    summary: "Listar proveedores (búsqueda por RIF o razón social)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        search: z.string().optional(),
+        page: z.coerce.number().int().min(1).optional(),
+        per_page: z.coerce.number().int().min(1).max(100).optional(),
+      }),
+    },
+    responses: { 200: okJson(listaProveedores, "Página de proveedores."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/suppliers",
+    summary: "Crear proveedor (permiso supplier.manage)",
+    description:
+      "El extranjero no lleva RIF ni clasificación fiscal venezolana; el nacional exige ambos. " +
+      "Sin formato de RIF (VALIDAR-SENIAT).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearProveedor } } },
+    },
+    responses: {
+      201: okJson(proveedor, "Proveedor creado."),
+      ...erroresComunes,
+      409: errorRef("RIF duplicado en la empresa."),
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/purchase-orders",
+    summary: "Listar órdenes de compra con su estado DERIVADO de las recepciones",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        status: z.string().optional(),
+        supplier_id: z.string().uuid().optional(),
+        page: z.coerce.number().int().min(1).optional(),
+        per_page: z.coerce.number().int().min(1).max(100).optional(),
+      }),
+    },
+    responses: { 200: okJson(listaOrdenes, "Página de órdenes."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/purchase-orders/{id}",
+    summary: "Detalle de una orden: líneas, avance por línea, recepciones y facturas",
+    security: [{ bearerAuth: [] }],
+    request: { params: idParam, headers: companyHeader },
+    responses: {
+      200: okJson(
+        z.object({
+          order: ordenCompra,
+          lines: z.array(z.record(z.string(), z.unknown())),
+          progress: z.array(z.record(z.string(), z.unknown())),
+          receipts: z.array(z.record(z.string(), z.unknown())),
+          invoices: z.array(z.record(z.string(), z.unknown())),
+          derived_status: z.string(),
+        }),
+        "La orden con lo recibido y lo facturado.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/purchase-orders",
+    summary: "Crear orden de compra (permiso purchase.order.manage)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearOrden } } },
+    },
+    responses: { 201: okJson(ordenCompra, "Orden creada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/goods-receipts",
+    summary: "Recibir mercancía, total o parcialmente (permiso purchase.receive, por almacén)",
+    description:
+      "Es el documento que mueve stock y FIJA EL COSTO: la tasa es la vigente a la fecha de la " +
+      "recepción, no de la orden ni de la factura (ADR-0040 §4). No admite recibir más de lo " +
+      "pendiente en la línea de la orden.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: recibirMercancia } } },
+    },
+    responses: {
+      201: okJson(recepcion, "Recepción confirmada, con el kardex movido."),
+      ...erroresComunes,
+      409: errorRef("Sin tasa vigente para la fecha de la recepción."),
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/goods-receipts/{id}",
+    summary: "Detalle de una recepción con sus líneas y los gastos ya aplicados",
+    security: [{ bearerAuth: [] }],
+    request: { params: idParam, headers: companyHeader },
+    responses: {
+      200: okJson(
+        z.object({
+          receipt: recepcion,
+          lines: z.array(z.record(z.string(), z.unknown())),
+          landed_costs: z.array(z.record(z.string(), z.unknown())),
+        }),
+        "La recepción completa.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/supplier-invoices",
+    summary: "Listar facturas de proveedor con su saldo",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        status: z.string().optional(),
+        supplier_id: z.string().uuid().optional(),
+      }),
+    },
+    responses: {
+      200: okJson(
+        z.object({ items: z.array(z.record(z.string(), z.unknown())), total: z.number().int() }),
+        "Facturas con saldo calculado por el esquema.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/supplier-invoices",
+    summary: "Registrar factura del proveedor y calcular retenciones (purchase.invoice.register)",
+    description:
+      "Registra el correlativo y el número de control DEL PROVEEDOR tal como él los emitió; el " +
+      "extranjero aporta referencia de documento origen en su lugar. Cruza orden-recepción-" +
+      "factura: el precio tolera hasta el umbral de la empresa, la cantidad no tolera nada. " +
+      "Las retenciones se calculan aquí con la regla vigente y se aplican al pagar.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: registrarFactura } } },
+    },
+    responses: {
+      201: okJson(facturaProveedor, "Factura asentada con sus retenciones calculadas."),
+      ...erroresComunes,
+      409: errorRef(
+        "Sin regla de retención (LAD53); precio fuera del umbral sin aprobación; documento del proveedor ya cargado.",
+      ),
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/purchases/matching",
+    summary: "Matching de tres vías: orden, recepción y factura, con la diferencia de precio",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ supplier_invoice_id: z.string().uuid() }),
+    },
+    responses: { 200: okJson(matching, "Una fila por línea de factura."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/landed-costs",
+    summary: "Aplicar un gasto de importación al costo de una recepción",
+    description:
+      "Prorratea por valor, peso o unidades. Lo que corresponde a la mercancía que SIGUE en " +
+      "existencia revaloriza el inventario por el kardex; lo de la ya vendida es VARIACIÓN DE " +
+      "COSTO, un gasto del período (ADR-0040 §6). No se prorratea sobre lo que queda: eso " +
+      "encarecería unidades que no incurrieron en el gasto.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: aplicarLanded } } },
+    },
+    responses: {
+      201: okJson(landed, "Gasto aplicado, con el reparto congelado."),
+      ...erroresComunes,
+      422: errorRef("Prorrateo por peso con alguna línea sin peso (LAD55)."),
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/landed-costs/variances",
+    summary: "Variaciones de costo del período: lo que el landed cost tardío no capitalizó",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ from: z.string().optional(), to: z.string().optional() }),
+    },
+    responses: {
+      200: okJson(
+        z.object({
+          items: z.array(z.record(z.string(), z.unknown())),
+          total: z.string(),
+          currency: z.string(),
+        }),
+        "Las variaciones y su total.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/supplier-credit-notes",
+    summary: "Registrar nota de crédito recibida (permiso purchase.credit_note.register)",
+    description: "Reduce el saldo de la factura que abona. No hay abono sin factura que abonar.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: notaRecibida } } },
+    },
+    responses: {
+      201: okJson(
+        z.object({ id: z.string().uuid(), total_amount: z.string(), balance: z.string() }),
+        "Nota registrada y saldo recalculado.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/supplier-payments",
+    summary: "Pagar al proveedor aplicando la retención (permiso purchase.payment.register)",
+    description:
+      "El importe que viaja es el BRUTO: es lo que cancela deuda. El proveedor cobra el neto y " +
+      "la diferencia se le debe al fisco. La retención solo se aplica cuando el pago cancela la " +
+      "factura entera — prorratearla en un abono parcial no correspondería a ninguna base " +
+      "declarable. Si se pide, emite el comprobante con su correlativo.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: pagoProveedor } } },
+    },
+    responses: {
+      201: okJson(respuestaPago, "Pago aplicado, con el comprobante si se pidió."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/retention-receipts",
+    summary: "Comprobantes de retención emitidos",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(z.array(comprobante), "Los comprobantes de la empresa."),
+      ...erroresComunes,
+    },
+  });
+  catalogo(
+    "/v1/retention-concepts",
+    "Conceptos de retención (vocabulario global, SIN porcentajes)",
+    z.array(
+      z.object({
+        code: z.string(),
+        retention_code: z.string(),
+        name: z.string(),
+        description: z.string(),
+      }),
+    ),
+    false,
+  );
+  registry.registerPath({
+    method: "get",
+    path: "/v1/retention-rules",
+    summary: "Reglas de retención cargadas (el catálogo nace VACÍO)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(z.array(z.record(z.string(), z.unknown())), "Las reglas y su fuente legal."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/retention-rules",
+    summary: "Cargar una regla de retención con su norma (permiso retention.rules.manage)",
+    description:
+      "Es el acto por el que una empresa PUEDE retener. El catálogo nace vacío a propósito " +
+      "(ADR-0039) y sin regla no se retiene: retener cero dejaría a la empresa debiendo al " +
+      "fisco en silencio. La fuente legal es obligatoria.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearReglaRet } } },
+    },
+    responses: { 201: okJson(crearReglaRet, "Regla cargada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/suppliers/{id}/aging",
+    summary: "Antigüedad de saldos por pagar de un proveedor (permiso ap.read)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: companyHeader,
+      query: z.object({ reference_date: z.string().optional() }),
+    },
+    responses: { 200: okJson(antiguedadAp, "Tramos 0-30, 31-60, 61-90 y 90+."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/suppliers/{id}/statement",
+    summary: "Estado de cuenta del proveedor con antigüedad y retenido (permiso ap.read)",
+    security: [{ bearerAuth: [] }],
+    request: { params: idParam, headers: companyHeader },
+    responses: { 200: okJson(estadoProveedor, "El estado de cuenta."), ...erroresComunes },
   });
 
   const generator = new OpenApiGeneratorV3(registry.definitions);

@@ -748,3 +748,80 @@ export async function transferStock(
   });
   return ok({ transfer_id: ids!.transferencia, out, in: into });
 }
+
+/**
+ * REVALORIZACIÓN: sube el valor de una posición sin añadir unidades (ADR-0040
+ * §6, migración 23). Es lo que hace posible que un landed cost tardío ajuste el
+ * costo sin inventar existencias.
+ *
+ * Va por el kardex y no por un UPDATE a `stock_balances` **a propósito**: el
+ * saldo es una materialización del kardex y `platform.stock_reconciliation()`
+ * comprueba que uno reproduce el otro. Tocar el saldo directamente lo
+ * desincroniza en silencio, y el descuadre solo aparecería meses después sin
+ * forma de saber qué ajuste lo causó.
+ *
+ * El trigger `apply_inventory_move()` hace el resto: suma el importe al valor,
+ * deja la cantidad igual y recalcula el costo unitario. No hubo que tocarlo —
+ * ya calculaba `valor + importe` y `cantidad + 0` correctamente; lo que faltaba
+ * era que el CHECK admitiera el caso.
+ */
+export async function revalueStock(
+  uow: UnitOfWork,
+  input: {
+    readonly company_id: string;
+    readonly warehouse_id: string;
+    readonly product_id: string;
+    readonly lot_id?: string | null;
+    /** Importe funcional a incorporar. Positivo sube el costo. */
+    readonly amount: string;
+    readonly currency: string;
+    readonly reason: string;
+    readonly sourceDocumentId?: string;
+  },
+): Promise<Result<InventoryMoveResponse, InventoryError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Revalorizar exige un usuario real." });
+  }
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "inventory.move", [
+    input.warehouse_id,
+  ]);
+  if (!ctx.ok) return ctx;
+
+  const importe = Money.of(input.amount, input.currency);
+  if (!importe.ok) return err({ code: "VALIDATION_FAILED", message: importe.error.message });
+  if (importe.value.amount.isZero()) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Una revalorización de cero no es un hecho: no se registra.",
+    });
+  }
+
+  try {
+    const fila = await sql.savepoint(async (sp) => {
+      const [m] = await sp<InventoryMoveResponse[]>`
+        insert into public.inventory_moves
+          (tenant_id, company_id, warehouse_id, product_id, lot_id, kind, quantity,
+           amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
+           functional_currency, rate_source, rate_timestamp, rounding_policy_id,
+           occurred_at, reason, source_document_id)
+        values (${ctx.value.tenantId}, ${input.company_id}, ${input.warehouse_id},
+                ${input.product_id}, ${input.lot_id ?? null}, 'revaluacion', 0,
+                ${importe.value.toAmountString()}, ${input.currency}, 1,
+                ${importe.value.toAmountString()}, ${input.currency}, 'identidad', now(),
+                'inventory:cost:8:HALF_UP', now(), ${input.reason},
+                ${input.sourceDocumentId ?? null})
+        returning ${sp.unsafe(MOVE_COLUMNS)}`;
+      return m!;
+    });
+    await auditarYPublicar(sql, fila, ctx.value.tenantId, "inventory.revalued", {
+      reason: input.reason,
+      amount: importe.value.toAmountString(),
+    });
+    return ok(fila);
+  } catch (e) {
+    const conocido = traducir(e);
+    if (conocido) return err(conocido);
+    throw e;
+  }
+}

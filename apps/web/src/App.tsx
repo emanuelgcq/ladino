@@ -6,6 +6,7 @@ import { PricingView } from "./PricingView.js";
 import { CustomersView } from "./CustomersView.js";
 import { InventoryView } from "./InventoryView.js";
 import { SalesView, ExchangeDifferenceKPI } from "./SalesView.js";
+import { PurchasesView } from "./PurchasesView.js";
 
 /**
  * La webapp de Ladino, aún sin pretensión de diseño: sesión (supabase-js SOLO
@@ -25,7 +26,7 @@ export function App() {
   const [companies, setCompanies] = useState<Company[] | null>(null);
   const [empresa, setEmpresa] = useState<Company | null>(null);
   const [modulo, setModulo] = useState<
-    "productos" | "precios" | "clientes" | "inventario" | "ventas" | "panel"
+    "productos" | "precios" | "clientes" | "inventario" | "ventas" | "compras" | "panel"
   >("productos");
   const [error, setError] = useState("");
   const [alta, setAlta] = useState({ tenant_id: "", legal_name: "", tax_id: "" });
@@ -165,6 +166,9 @@ export function App() {
             <button disabled={modulo === "ventas"} onClick={() => setModulo("ventas")}>
               Ventas
             </button>{" "}
+            <button disabled={modulo === "compras"} onClick={() => setModulo("compras")}>
+              Compras
+            </button>{" "}
             <button disabled={modulo === "panel"} onClick={() => setModulo("panel")}>
               Panel
             </button>
@@ -179,6 +183,8 @@ export function App() {
             <InventoryView session={session} companyId={empresa.id} />
           ) : modulo === "ventas" ? (
             <SalesView session={session} companyId={empresa.id} />
+          ) : modulo === "compras" ? (
+            <PurchasesView session={session} companyId={empresa.id} />
           ) : (
             <ExchangeDifferenceKPI session={session} companyId={empresa.id} />
           )}
