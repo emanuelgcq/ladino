@@ -9,6 +9,8 @@ const PURE = [
   "packages/accounting/**",
   "packages/fiscal/**",
   "packages/inventory/**",
+  "packages/pricing/**",
+  "packages/sales/**",
   "packages/schemas/**",
 ];
 
@@ -18,6 +20,8 @@ const FINANCIAL = [
   "packages/accounting/**",
   "packages/fiscal/**",
   "packages/inventory/**",
+  "packages/pricing/**",
+  "packages/sales/**",
   "packages/domain/**",
 ];
 
@@ -131,6 +135,8 @@ export default tseslint.config(
                 "@ladino/domain/*",
                 "@ladino/inventory",
                 "@ladino/inventory/*",
+                "@ladino/sales",
+                "@ladino/sales/*",
               ],
               message:
                 "Cero reglas tributarias ni contables en cliente (CLAUDE.md §7). Consume la API.",

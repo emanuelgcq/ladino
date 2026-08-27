@@ -58,6 +58,8 @@ module.exports = {
     only("accounting", ["core", "money", "schemas"], "ADR-0003, tabla de fronteras."),
     only("fiscal", ["core", "money", "accounting", "schemas"], "ADR-0003."),
     only("inventory", ["core", "money", "schemas"], "Tabla de fronteras."),
+    only("pricing", ["core", "money"], "Resolución de precio: puro, solo core y money."),
+    only("sales", ["core", "money"], "Cálculo de venta y diferencial: puro, solo core y money."),
     only("authz", ["core", "schemas"], "authz no toca dinero ni fiscal."),
     only("api-client", ["core", "schemas"], "Cliente tipado: solo contratos."),
     only("observability", ["core"], "OTel y logger. Ningún paquete de dominio."),
@@ -121,7 +123,7 @@ module.exports = {
         "un bundle de cliente es web → domain → fiscal, no un import directo que se ve en review. " +
         "CLAUDE.md §7 y regla 10.",
       from: { path: "^(apps/(web|mobile)|packages/ui)/" },
-      to: { path: "^packages/(fiscal|accounting|domain|inventory)/", reachable: true },
+      to: { path: "^packages/(fiscal|accounting|domain|inventory|sales)/", reachable: true },
     },
     {
       name: "client-money-format-only",
