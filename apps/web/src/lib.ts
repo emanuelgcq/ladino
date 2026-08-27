@@ -195,3 +195,173 @@ export interface RecipeLineView {
   /** null = falta la conversión: esta receta NO se puede consumir. */
   quantity_in_product_unit: string | null;
 }
+
+// ── Ventas (migración 21, ADR-0037/0038) ─────────────────────────────────────
+// Todos los importes son STRING y la webapp NO hace aritmética con ellos: los
+// muestra con `mostrarImporte` y los manda tal cual. El saldo, el diferencial y
+// la antigüedad los calcula el servidor y llegan calculados.
+
+export interface SalesDocument {
+  id: string;
+  company_id: string;
+  kind: "quote" | "order" | "invoice" | "credit_note" | "debit_note";
+  series: string;
+  /** null mientras es borrador: un correlativo fiscal solo existe al emitir. */
+  document_number: number | null;
+  /** null cuando el régimen no usa número de control (ADR-0037). */
+  control_number: number | null;
+  status: "draft" | "confirmed" | "issued" | "paid" | "annulled" | "cancelled";
+  issued_at: string | null;
+  annulled_at: string | null;
+  annul_reason: string | null;
+  customer_id: string;
+  vendor_id: string | null;
+  price_list_id: string | null;
+  source_document_id: string | null;
+  transaction_currency: string;
+  functional_currency: string;
+  fx_rate: string;
+  rate_source: string;
+  subtotal_amount: string;
+  tax_amount: string;
+  total_amount: string;
+  regime_version_id: string | null;
+  rules_version: string | null;
+}
+export interface SalesDocumentLine {
+  id: string;
+  line_number: number;
+  product_id: string;
+  description: string;
+  quantity: string;
+  unit_price_transaction: string;
+  unit_price_functional: string;
+  price_list_applied_id: string | null;
+  /** La regla tributaria concreta que se aplicó, congelada con la línea. */
+  tax_rule_id: string | null;
+  tax_rate_snapshot: string;
+  tax_amount: string;
+  line_subtotal_transaction: string;
+  line_total_transaction: string;
+  transaction_currency: string;
+  fx_rate: string;
+  functional_amount: string;
+  functional_currency: string;
+  rate_source: string;
+  cost_snapshot: string | null;
+}
+export interface SalesPayment {
+  id: string;
+  document_id: string;
+  paid_at: string;
+  currency: string;
+  amount: string;
+  fx_rate: string;
+  rate_source: string;
+  functional_amount: string;
+  instrument: string;
+  reference: string | null;
+  customer_credit_id: string | null;
+}
+export interface ExchangeGainLoss {
+  id: string;
+  document_id: string;
+  payment_id: string;
+  amount_transaction: string;
+  transaction_currency: string;
+  functional_at_issue: string;
+  functional_at_payment: string;
+  /** Positivo = ganancia cambiaria; negativo = pérdida. */
+  difference: string;
+  fx_rate_issue: string;
+  fx_rate_payment: string;
+  occurred_on: string;
+}
+export interface SalesDocumentDetail {
+  document: SalesDocument;
+  lines: SalesDocumentLine[];
+  payments: SalesPayment[];
+  exchange_differences: ExchangeGainLoss[];
+  /** Calculado por el servidor: total − Σ cobros. Nunca se recalcula aquí. */
+  balance: string;
+}
+export interface AgingBucketRow {
+  customer_id: string;
+  bucket: "0-30" | "31-60" | "61-90" | "90+";
+  document_count: number;
+  amount: string;
+}
+export interface Aging {
+  reference_date: string;
+  buckets: AgingBucketRow[];
+  total: string;
+}
+export interface CustomerStatement {
+  customer_id: string;
+  currency: string;
+  documents: {
+    id: string;
+    kind: string;
+    series: string;
+    document_number: number | null;
+    issued_at: string | null;
+    status: string;
+    total_amount: string;
+    paid_amount: string;
+    balance: string;
+    days_outstanding: number;
+  }[];
+  credits: {
+    id: string;
+    source_document_id: string;
+    amount: string;
+    applied_amount: string;
+    status: "available" | "applied" | "expired";
+  }[];
+  total_outstanding: string;
+  total_credit_available: string;
+  aging: Aging;
+}
+export interface SalesReturn {
+  id: string;
+  source_document_id: string;
+  credit_note_id: string | null;
+  status: "draft" | "confirmed" | "cancelled";
+  reason: string;
+  warehouse_id: string;
+  lines: {
+    source_line_id: string;
+    product_id: string;
+    quantity: string;
+    /** El costo ORIGINAL: el reingreso no usa el costo de hoy. */
+    unit_cost_original: string;
+    unit_price_transaction: string;
+  }[];
+  customer_credit_id: string | null;
+}
+export interface FiscalRange {
+  id: string;
+  kind: string;
+  series: string;
+  range_from: number;
+  range_to: number;
+  next_available: number;
+  status: "active" | "exhausted" | "cancelled";
+  printer_source: string;
+  remaining: number;
+}
+export interface ExchangeRate {
+  id: string;
+  from_currency: string;
+  to_currency: string;
+  rate: string;
+  source: string;
+  rate_date: string;
+}
+export interface ExchangeDifferenceReport {
+  currency: string;
+  ganancia: string;
+  perdida: string;
+  neto: string;
+  by_month: { month: string; amount: string }[];
+}

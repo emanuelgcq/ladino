@@ -9368,6 +9368,9 @@
                     "neto": {
                       "type": "string"
                     },
+                    "currency": {
+                      "type": "string"
+                    },
                     "by_month": {
                       "type": "array",
                       "items": {
@@ -9391,6 +9394,7 @@
                     "ganancia",
                     "perdida",
                     "neto",
+                    "currency",
                     "by_month"
                   ]
                 }

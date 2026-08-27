@@ -477,6 +477,11 @@ export function salesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler
     const desde = c.req.query("from") ?? null;
     const hasta = c.req.query("to") ?? null;
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      // La moneda viaja con el KPI: un neto sin moneda es un número que el
+      // cliente tiene que adivinar, y adivinar moneda es cómo se muestran
+      // bolívares con símbolo de dólar.
+      const [empresa] = await tx<{ moneda: string }[]>`
+        select functional_currency_code as moneda from public.companies where id = ${companyId}`;
       const [total] = await tx<{ ganancia: string; perdida: string; neto: string }[]>`
         select coalesce(sum(difference) filter (where difference > 0), 0)::text as ganancia,
                coalesce(sum(difference) filter (where difference < 0), 0)::text as perdida,
@@ -493,7 +498,7 @@ export function salesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler
            and (${desde}::date is null or occurred_on >= ${desde}::date)
            and (${hasta}::date is null or occurred_on <= ${hasta}::date)
          group by 1 order by 1`;
-      return { ...total!, by_month: porMes };
+      return { ...total!, currency: empresa?.moneda ?? "", by_month: porMes };
     });
     return c.json(cuerpo, 200);
   });

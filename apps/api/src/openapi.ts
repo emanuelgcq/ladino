@@ -1036,6 +1036,7 @@ export function buildOpenApiDocument(): object {
           ganancia: z.string(),
           perdida: z.string(),
           neto: z.string(),
+          currency: z.string(),
           by_month: z.array(z.object({ month: z.string(), amount: z.string() })),
         }),
         "Ganancia, pérdida, neto y desglose mensual.",

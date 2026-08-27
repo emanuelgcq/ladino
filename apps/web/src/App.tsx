@@ -5,6 +5,7 @@ import { ProductsView } from "./ProductsView.js";
 import { PricingView } from "./PricingView.js";
 import { CustomersView } from "./CustomersView.js";
 import { InventoryView } from "./InventoryView.js";
+import { SalesView, ExchangeDifferenceKPI } from "./SalesView.js";
 
 /**
  * La webapp de Ladino, aún sin pretensión de diseño: sesión (supabase-js SOLO
@@ -23,9 +24,9 @@ export function App() {
   const [password, setPassword] = useState("");
   const [companies, setCompanies] = useState<Company[] | null>(null);
   const [empresa, setEmpresa] = useState<Company | null>(null);
-  const [modulo, setModulo] = useState<"productos" | "precios" | "clientes" | "inventario">(
-    "productos",
-  );
+  const [modulo, setModulo] = useState<
+    "productos" | "precios" | "clientes" | "inventario" | "ventas" | "panel"
+  >("productos");
   const [error, setError] = useState("");
   const [alta, setAlta] = useState({ tenant_id: "", legal_name: "", tax_id: "" });
 
@@ -160,6 +161,12 @@ export function App() {
             </button>{" "}
             <button disabled={modulo === "inventario"} onClick={() => setModulo("inventario")}>
               Inventario
+            </button>{" "}
+            <button disabled={modulo === "ventas"} onClick={() => setModulo("ventas")}>
+              Ventas
+            </button>{" "}
+            <button disabled={modulo === "panel"} onClick={() => setModulo("panel")}>
+              Panel
             </button>
           </nav>
           {modulo === "productos" ? (
@@ -168,8 +175,12 @@ export function App() {
             <PricingView session={session} companyId={empresa.id} />
           ) : modulo === "clientes" ? (
             <CustomersView session={session} companyId={empresa.id} />
-          ) : (
+          ) : modulo === "inventario" ? (
             <InventoryView session={session} companyId={empresa.id} />
+          ) : modulo === "ventas" ? (
+            <SalesView session={session} companyId={empresa.id} />
+          ) : (
+            <ExchangeDifferenceKPI session={session} companyId={empresa.id} />
           )}
         </>
       )}
