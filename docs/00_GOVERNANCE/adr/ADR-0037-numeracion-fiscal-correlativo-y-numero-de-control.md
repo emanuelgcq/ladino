@@ -106,6 +106,27 @@ lo que cambia es una fila de catálogo, no el esquema.
 **Revertir:** mientras no haya documentos emitidos, `drop`. Con documentos, no — es numeración
 fiscal.
 
+## Nota de implementación: `set_row_provenance()` exige `version`
+
+Escrito aquí porque esta migración chocó con ello y la próxima tabla con forma propia volvería a
+chocar. `platform.set_row_provenance()` escribe **`created_by`, `created_at` y `version` — las
+tres**. Una tabla con el trigger y sin la columna `version` muere en el primer `INSERT` con
+`record "new" has no field "version"`, y eso no se ve leyendo la definición de la tabla.
+
+**No se deriva una variante `set_row_provenance_no_version()`**, y la razón ya estaba decidida en
+S0.4: `audit_events.version` es una columna muerta —esa tabla no admite `UPDATE`— y se conservó
+igualmente porque *«cuatro bytes cuestan menos que una excepción en un trigger compartido, y un
+trigger con casos especiales se aplica mal»* (ADR-0026). Dos funciones de procedencia serían dos
+sitios donde la política puede divergir, y elegir la equivocada **no falla**: escribe una fila con
+procedencia incompleta, en silencio. Ese es peor modo de fallo que el error ruidoso de hoy.
+
+La regla queda al revés de lo que parece: **toda tabla con trigger de procedencia lleva
+`version integer not null`, aunque nunca se actualice. Si no puede llevarla, lo que no debe llevar
+es el trigger** — como `fiscal_regimes`, que es catálogo del operador y solo tiene `created_at`.
+
+Está también en `comment on function platform.set_row_provenance()`, para que se lea desde `psql`
+sin abrir este ADR.
+
 ## Verificación
 
 pgTAP 021: dos peticiones concurrentes del siguiente número obtienen números **distintos** y ambas
