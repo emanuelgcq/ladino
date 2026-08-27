@@ -42,6 +42,8 @@ Usa la skill `adr` de Claude Code.
 | [0034](adr/ADR-0034-inventario-costeo-promedio-y-kardex-materializado.md) | Inventario: promedio ponderado móvil, kardex append-only materializado y transferencia atómica | Aceptado | NO |
 | [0035](adr/ADR-0035-recetas-y-unidades-fraccionadas.md) | Productos compuestos: recetas de ingredientes y unidades fraccionadas | Aceptado | NO |
 | [0036](adr/ADR-0036-variantes-como-productos-derivados.md) | Variantes de producto como productos derivados, no como dimensión de existencias | Aceptado | NO |
+| [0037](adr/ADR-0037-numeracion-fiscal-correlativo-y-numero-de-control.md) | Numeración fiscal: el correlativo del emisor y el número de control son dos campos | Aceptado | SÍ |
+| [0038](adr/ADR-0038-motor-tributario-con-catalogo-vacio.md) | Motor tributario: reglas como dato, catálogo vacío, sin emisión sin regla | Aceptado | SÍ |
 
 ## Decisiones aún abiertas
 
