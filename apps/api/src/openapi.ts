@@ -46,6 +46,23 @@ import {
   SetStockThresholdRequest,
   LowStockResponse,
   ExpiringLotsResponse,
+  CreateQuoteRequest,
+  CreateOrderRequest,
+  ConfirmOrderRequest,
+  CreateInvoiceRequest,
+  AnnulInvoiceRequest,
+  RegisterPaymentRequest,
+  CreateReturnRequest,
+  DocumentResponse,
+  DocumentDetailResponse,
+  ListDocumentsResponse,
+  RegisterPaymentResponse,
+  ReturnResponse,
+  AgingResponse,
+  CustomerStatementResponse,
+  CreateFiscalRangeRequest,
+  FiscalRangeResponse,
+  CreateExchangeRateRequest,
 } from "@ladino/schemas";
 
 /**
@@ -727,6 +744,301 @@ export function buildOpenApiDocument(): object {
       200: okJson(
         z.object({ lot_id: z.string().uuid().nullable() }),
         "El lote sugerido, o null si no hay ninguno con existencia.",
+      ),
+      ...erroresComunes,
+    },
+  });
+
+  // ── Ventas (migración 21, ADR-0037/0038) ──────────────────────────────────
+  const documento = registry.register("DocumentResponse", DocumentResponse);
+  const detalleDoc = registry.register("DocumentDetailResponse", DocumentDetailResponse);
+  const listaDocs = registry.register("ListDocumentsResponse", ListDocumentsResponse);
+  const crearCotizacion = registry.register("CreateQuoteRequest", CreateQuoteRequest);
+  const crearPedido = registry.register("CreateOrderRequest", CreateOrderRequest);
+  const confirmarPedido = registry.register("ConfirmOrderRequest", ConfirmOrderRequest);
+  const crearFactura = registry.register("CreateInvoiceRequest", CreateInvoiceRequest);
+  const anularFactura = registry.register("AnnulInvoiceRequest", AnnulInvoiceRequest);
+  const registrarCobro = registry.register("RegisterPaymentRequest", RegisterPaymentRequest);
+  const respuestaCobro = registry.register("RegisterPaymentResponse", RegisterPaymentResponse);
+  const crearDevolucion = registry.register("CreateReturnRequest", CreateReturnRequest);
+  const devolucion = registry.register("ReturnResponse", ReturnResponse);
+  const antiguedad = registry.register("AgingResponse", AgingResponse);
+  const estadoCuenta = registry.register("CustomerStatementResponse", CustomerStatementResponse);
+  const crearRango = registry.register("CreateFiscalRangeRequest", CreateFiscalRangeRequest);
+  const rango = registry.register("FiscalRangeResponse", FiscalRangeResponse);
+  const crearTasa = registry.register("CreateExchangeRateRequest", CreateExchangeRateRequest);
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/documents",
+    summary: "Listar documentos de venta (filtros por tipo, estado, cliente y fechas)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        kind: z.string().optional(),
+        status: z.string().optional(),
+        customer_id: z.string().uuid().optional(),
+        from: z.string().optional(),
+        to: z.string().optional(),
+        page: z.coerce.number().int().min(1).optional(),
+        per_page: z.coerce.number().int().min(1).max(100).optional(),
+      }),
+    },
+    responses: { 200: okJson(listaDocs, "Página de documentos."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/documents/{id}",
+    summary: "Detalle de un documento: líneas, cobros, diferencial y saldo",
+    description:
+      "El saldo lo calcula platform.document_balance en el esquema: nunca se lee de una columna.",
+    security: [{ bearerAuth: [] }],
+    request: { params: idParam, headers: companyHeader },
+    responses: { 200: okJson(detalleDoc, "El documento completo."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/quotes",
+    summary: "Crear cotización (permiso sales.quote.manage)",
+    description:
+      "Una cotización no compromete stock ni consume correlativo fiscal, pero SÍ resuelve la " +
+      "alícuota vigente: sin regla en tax_rules no hay cotización (ADR-0038, LAD50).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearCotizacion } } },
+    },
+    responses: { 201: okJson(documento, "Cotización creada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/orders",
+    summary: "Crear pedido (permiso sales.order.manage)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearPedido } } },
+    },
+    responses: { 201: okJson(documento, "Pedido creado en borrador."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/orders/{id}/confirm",
+    summary: "Confirmar pedido y reservar existencias",
+    description:
+      "La reserva NO es un movimiento de kardex: es un compromiso con caducidad " +
+      "(inventory_settings.reservation_ttl_days). El disponible descuenta lo ya reservado.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: confirmarPedido } } },
+    },
+    responses: {
+      200: okJson(documento, "Pedido confirmado con las reservas hechas."),
+      ...erroresComunes,
+      409: errorRef("No hay disponible suficiente para reservar (LAD39)."),
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/invoices",
+    summary: "Emitir factura (permiso sales.invoice.issue)",
+    description:
+      "Asigna correlativo del emisor y, si el régimen lo exige, número de control de la " +
+      "imprenta (ADR-0037). Genera el kardex al costo del momento en la misma transacción: " +
+      "si el stock no alcanza, la factura entera no ocurrió.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearFactura } } },
+    },
+    responses: {
+      201: okJson(documento, "Factura emitida con sus dos números."),
+      ...erroresComunes,
+      409: errorRef(
+        "Numeración inválida o rango agotado (LAD49); sin regla tributaria (LAD50); sin existencia (LAD39).",
+      ),
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/invoices/{id}/annul",
+    summary: "Anular una factura emitida (permiso sales.invoice.annul)",
+    description:
+      "Anular no es borrar: el documento y su correlativo SE CONSERVAN (regla 1, ADR-0037). " +
+      "El número anulado sigue ocupado y no se reutiliza.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: anularFactura } } },
+    },
+    responses: { 200: okJson(documento, "Factura anulada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/payments",
+    summary: "Registrar cobro (permiso sales.payment.register)",
+    description:
+      "Si el documento se emitió en otra moneda y la tasa cambió, registra además el " +
+      "DIFERENCIAL CAMBIARIO. Si no hubo diferencia no se escribe una fila de cero.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: registrarCobro } } },
+    },
+    responses: {
+      201: okJson(respuestaCobro, "Cobro aplicado, con saldo y diferencial."),
+      ...erroresComunes,
+      409: errorRef("Sin tasa vigente para la fecha del cobro, o saldo a favor insuficiente."),
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/returns",
+    summary: "Registrar devolución contra su factura (permiso sales.return.manage)",
+    description: "No hay devolución sin documento origen, y nunca por más de lo vendido.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearDevolucion } } },
+    },
+    responses: { 201: okJson(devolucion, "Devolución en borrador."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/returns/{id}/confirm",
+    summary: "Confirmar devolución: reingreso al COSTO ORIGINAL, nota de crédito y saldo a favor",
+    description:
+      "Los tres en una transacción. El reingreso usa el cost_snapshot de la línea de origen, " +
+      "no el costo de hoy: devolver no puede revalorizar el inventario.",
+    security: [{ bearerAuth: [] }],
+    request: { params: idParam, headers: idemHeader },
+    responses: { 200: okJson(devolucion, "Devolución confirmada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/customers/{id}/aging",
+    summary: "Antigüedad de saldos de un cliente (permiso ar.read)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: companyHeader,
+      query: z.object({ reference_date: z.string().optional() }),
+    },
+    responses: { 200: okJson(antiguedad, "Tramos 0-30, 31-60, 61-90 y 90+."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/customers/{id}/statement",
+    summary: "Estado de cuenta con antigüedad y saldos a favor (permiso ar.read)",
+    security: [{ bearerAuth: [] }],
+    request: { params: idParam, headers: companyHeader },
+    responses: { 200: okJson(estadoCuenta, "El estado de cuenta."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-number-ranges",
+    summary: "Rangos de número de control autorizados",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(z.array(rango), "Los rangos de la empresa."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal-number-ranges",
+    summary: "Cargar un rango autorizado (permiso fiscal.range.manage)",
+    description: "El rango viene de la imprenta digital con su autorización; aquí no se inventa.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearRango } } },
+    },
+    responses: { 201: okJson(rango, "Rango cargado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-number-ranges/exhaustion",
+    summary: "Rangos por agotarse — la alerta llega antes de que la caja se pare",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(
+        z.array(
+          z.object({
+            range_id: z.string().uuid(),
+            kind: z.string(),
+            series: z.string(),
+            remaining: z.number().int(),
+            total: z.number().int(),
+            pct_remaining: z.string(),
+          }),
+        ),
+        "Rangos bajo su umbral de alerta.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/exchange-rates",
+    summary: "Últimas tasas cargadas para un par de monedas",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ from: z.string().optional(), to: z.string().optional() }),
+    },
+    responses: {
+      200: okJson(
+        z.array(
+          z.object({
+            id: z.string().uuid(),
+            from_currency: z.string(),
+            to_currency: z.string(),
+            rate: z.string(),
+            source: z.string(),
+            rate_date: z.string(),
+          }),
+        ),
+        "Hasta 60 tasas, de la más reciente hacia atrás.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/exchange-rates",
+    summary: "Cargar tasa manualmente (permiso fx.rate.manage)",
+    description:
+      "Camino manual del adaptador BCV (ADR-0028): hoy el adaptador es NullBCVAdapter y no " +
+      "trae nada. Sin fuente citada no se persiste, y la fuente viaja en cada documento.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearTasa } } },
+    },
+    responses: { 201: okJson(crearTasa, "Tasa cargada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/reports/exchange-difference",
+    summary: "Diferencial cambiario acumulado del período (KPI del panel)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ from: z.string().optional(), to: z.string().optional() }),
+    },
+    responses: {
+      200: okJson(
+        z.object({
+          ganancia: z.string(),
+          perdida: z.string(),
+          neto: z.string(),
+          by_month: z.array(z.object({ month: z.string(), amount: z.string() })),
+        }),
+        "Ganancia, pérdida, neto y desglose mensual.",
       ),
       ...erroresComunes,
     },

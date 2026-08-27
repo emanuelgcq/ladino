@@ -149,6 +149,12 @@ importers:
       '@ladino/money':
         specifier: workspace:*
         version: link:../money
+      '@ladino/pricing':
+        specifier: workspace:*
+        version: link:../pricing
+      '@ladino/sales':
+        specifier: workspace:*
+        version: link:../sales
       '@ladino/schemas':
         specifier: workspace:*
         version: link:../schemas

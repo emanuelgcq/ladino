@@ -34,3 +34,14 @@ export {
   setCustomerBlocked,
   type CustomerError,
 } from "./customers.js";
+export {
+  createQuote,
+  createOrder,
+  confirmOrder,
+  createInvoice,
+  annulInvoice,
+  registerPayment,
+  createReturn,
+  confirmReturn,
+  type SalesError,
+} from "./sales.js";

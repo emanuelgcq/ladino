@@ -25,6 +25,8 @@
     "@ladino/db": "workspace:*",
     "@ladino/inventory": "workspace:*",
     "@ladino/money": "workspace:*",
-    "@ladino/schemas": "workspace:*"
+    "@ladino/schemas": "workspace:*",
+    "@ladino/pricing": "workspace:*",
+    "@ladino/sales": "workspace:*"
   }
 }

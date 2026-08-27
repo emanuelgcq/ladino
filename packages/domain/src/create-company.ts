@@ -186,9 +186,18 @@ export async function createCompany(
   }
 
   // ── 7. IMPACTAR CONTABILIDAD / INVENTARIO ────────────────────────────────
-  // No-op DECLARADO: crear una empresa no mueve dinero ni stock. En ventas,
-  // compras o tesorería este paso es obligatorio y va ANTES de auditar, para
-  // que la auditoría cubra también el impacto.
+  // No mueve dinero ni stock, pero sí siembra las DOS listas de precios que el
+  // mercado venezolano da por supuestas: detal y mayor. Se siembran aquí y no
+  // en la migración porque son de la empresa, no del esquema, y porque una
+  // empresa sin ninguna lista no puede vender: el alta dejaría un agujero que
+  // la primera venta descubre. Ambas en la moneda funcional; que sean dos y no
+  // una es lo que hace que `sales.price_list.override` signifique algo.
+  await sql`
+    insert into public.price_lists (tenant_id, company_id, name, currency_code)
+    select ${fila.tenant_id}, ${fila.id}, l.nombre, c.functional_currency_code
+      from public.companies c, (values ('detal'), ('mayor')) as l(nombre)
+     where c.id = ${fila.id}
+    on conflict (company_id, name) do nothing`;
 
   // ── 8. AUDITAR ────────────────────────────────────────────────────────────
   // El caso de uso escribe el HECHO DE NEGOCIO: company.created. El trigger M4

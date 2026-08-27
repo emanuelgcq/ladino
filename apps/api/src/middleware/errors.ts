@@ -58,6 +58,13 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   LAD45: { code: "UNIT_CONVERSION_MISSING", status: 422 },
   LAD46: { code: "PERMISSION_REQUIRED", status: 403 },
   LAD47: { code: "VARIANT_ATTRIBUTES_INVALID", status: 422 },
+  // Migración 21 (ADR-0037/0038). Los levanta el ESQUEMA —el trigger de emisión
+  // y `platform.resolve_tax`—, así que llegan aquí aunque el caso de uso no los
+  // haya traducido. Es la red que hace que «sin regla no se emite» valga también
+  // para el camino que nadie previó.
+  LAD49: { code: "FISCAL_NUMBERING_INVALID", status: 409 },
+  LAD50: { code: "TAX_RULE_MISSING", status: 409 },
+  LAD51: { code: "EXCHANGE_RATE_MISSING", status: 409 },
 
   // --- estándar
   "23505": { code: "DUPLICATE", status: 409 },
@@ -102,6 +109,14 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   RECIPE_INVALID: 409,
   UNIT_CONVERSION_MISSING: 422,
   VARIANT_ATTRIBUTES_INVALID: 422,
+  // Ventas (migración 21, ADR-0037/0038). Los tres son «lo que pides no se
+  // puede hacer AHORA con lo que hay cargado», no un dato malformado: 409 y el
+  // cliente arregla el estado (carga la regla, la tasa, el rango) y reintenta.
+  // Un 422 diría que el cuerpo está mal, y no lo está.
+  FISCAL_NUMBERING_INVALID: 409, // LAD49
+  TAX_RULE_MISSING: 409, // LAD50
+  EXCHANGE_RATE_MISSING: 409, // LAD51
+  APPEND_ONLY_VIOLATION: 409, // LAD06 por la vía del caso de uso
 };
 
 export class DominioError extends Error {

@@ -64,9 +64,12 @@ la migración 20) y `LAD52` (migración 21: que `tax_rules` NAZCA VACÍA, que ni
 en `per_document`, que ninguno vaya sin norma citada, y que `payments`/`exchange_gain_loss` no
 tengan privilegio de mutación) son de una sola ejecución: abortan la migración, no llegan a la API.
 
-`LAD51` queda **reservado y sin usar todavía**: es «no hay tasa de cambio vigente para la fecha».
-Hoy `platform.rate_at()` devuelve `NULL` y quien la consume decide; el día que la emisión lo
-convierta en rechazo duro, ese es su código. Se reserva antes de usarlo, que es la regla de arriba.
+`LAD51` **ya está en uso desde los casos de uso de ventas**: «no hay tasa de cambio vigente para la
+fecha». Se reservó antes de usarse, que es la regla de abajo, y el día que llegó su caso —emitir o
+cobrar un documento cuya lista está en otra moneda— pasó a ser rechazo duro con `409`
+(`EXCHANGE_RATE_MISSING`). `platform.rate_at()` sigue devolviendo `NULL` y quien la consume decide;
+lo que cambió es que el consumidor de ventas **decide parar**, porque una factura emitida a una
+tasa inventada no se corrige con un `UPDATE`.
 
 **Regla para migraciones futuras:** un `LADxx` nuevo se reserva en esta tabla **antes** de usarse,
 incluso para una aserción de una sola ejecución. Reutilizar un número «porque solo corre una vez»
