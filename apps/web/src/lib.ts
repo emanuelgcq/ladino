@@ -582,3 +582,167 @@ export interface RetentionConcept {
   name: string;
   description: string;
 }
+
+// ── Contabilidad (migración 25, ADR-0041/0042/0043) ──────────────────────────
+// Todos los importes son STRING y la webapp NO hace aritmética con ellos. El
+// saldo, el balance y los estados llegan calculados por el esquema.
+
+export interface Account {
+  id: string;
+  company_id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  parent_id: string | null;
+  kind: "activo" | "pasivo" | "patrimonio" | "ingreso" | "gasto" | "orden";
+  nature: "deudora" | "acreedora";
+  /** Solo las hojas activas reciben asientos. */
+  is_leaf: boolean;
+  is_active: boolean;
+  currency_code: string | null;
+  requires_analytical: boolean;
+  level: number;
+  path: string;
+}
+export interface ChartTemplate {
+  code: string;
+  name: string;
+  /** Lleva VALIDAR-CONTABLE dentro: se muestra tal cual, sin recortar. */
+  description: string;
+  framework: string;
+  legal_source: string;
+  account_count: number;
+}
+export interface AccountPurposeRow {
+  purpose: string;
+  name: string;
+  description: string;
+  /** null = papel sin cuenta asignada. Es lo que impide generar su asiento. */
+  account_id: string | null;
+  account_code: string | null;
+  account_name: string | null;
+}
+export interface JournalEntry {
+  id: string;
+  company_id: string;
+  period_id: string;
+  entry_number: number | null;
+  posting_date: string;
+  source_kind: string;
+  source_id: string | null;
+  source_event: string | null;
+  description: string;
+  memo: string | null;
+  status: "draft" | "posted" | "reversed";
+  posted_at: string | null;
+  is_reversal_of: string | null;
+  reversed_by_entry_id: string | null;
+  rules_version: string | null;
+  total_debit: string;
+  total_credit: string;
+}
+export interface JournalLine {
+  id: string;
+  line_number: number;
+  account_id: string;
+  account_code: string;
+  account_name: string;
+  debit_amount: string;
+  credit_amount: string;
+  transaction_currency: string;
+  fx_rate: string;
+  functional_debit: string;
+  functional_credit: string;
+  functional_currency: string;
+  rate_source: string;
+  analytical_dimensions: Record<string, string> | null;
+  description: string | null;
+}
+export interface JournalEntryDetail {
+  entry: JournalEntry;
+  lines: JournalLine[];
+}
+export interface LedgerView {
+  account_id: string;
+  account_code: string;
+  account_name: string;
+  nature: "deudora" | "acreedora";
+  currency: string;
+  opening_balance: string;
+  closing_balance: string;
+  movements: {
+    entry_id: string;
+    entry_number: number | null;
+    posting_date: string;
+    description: string;
+    debit: string;
+    credit: string;
+    running_delta: string;
+    source_kind: string;
+    source_id: string | null;
+  }[];
+}
+export interface TrialBalance {
+  as_of: string;
+  from_date: string | null;
+  currency: string;
+  rows: {
+    account_id: string;
+    account_code: string;
+    account_name: string;
+    nature: string;
+    opening_balance: string;
+    period_debit: string;
+    period_credit: string;
+    closing_balance: string;
+  }[];
+  total_debit: string;
+  total_credit: string;
+  /** Σ débitos == Σ créditos. Falso significa un asiento roto en la base. */
+  balanced: boolean;
+}
+export interface FiscalPeriod {
+  id: string;
+  year: number;
+  month: number;
+  status: string;
+  closed_at: string | null;
+  reopened_at: string | null;
+  reopened_reason: string | null;
+  /** Lo que impide cerrar. Se muestra en la pantalla de cierre. */
+  draft_entry_count: number;
+  pending_queue_count: number;
+}
+export interface PendingJournal {
+  items: {
+    id: string;
+    source_kind: string;
+    source_id: string;
+    source_event: string;
+    reason: string;
+    created_at: string;
+  }[];
+  total: number;
+}
+export interface IncomeStatement {
+  from_date: string;
+  to_date: string;
+  currency: string;
+  income: { account_code: string; account_name: string; amount: string }[];
+  expenses: { account_code: string; account_name: string; amount: string }[];
+  total_income: string;
+  total_expenses: string;
+  result: string;
+}
+export interface BalanceSheet {
+  as_of: string;
+  currency: string;
+  assets: { account_code: string; account_name: string; amount: string }[];
+  liabilities: { account_code: string; account_name: string; amount: string }[];
+  equity: { account_code: string; account_name: string; amount: string }[];
+  total_assets: string;
+  total_liabilities: string;
+  total_equity: string;
+  /** activo == pasivo + patrimonio. Lo comprueba el servidor, no el cliente. */
+  balanced: boolean;
+}

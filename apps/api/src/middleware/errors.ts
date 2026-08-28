@@ -65,6 +65,11 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   LAD49: { code: "FISCAL_NUMBERING_INVALID", status: 409 },
   LAD50: { code: "TAX_RULE_MISSING", status: 409 },
   LAD51: { code: "EXCHANGE_RATE_MISSING", status: 409 },
+  // Contabilidad (migración 25). Los tres los levanta el ESQUEMA, que es donde
+  // vive el invariante: llegan aquí aunque el caso de uso no los traduzca.
+  LAD59: { code: "ENTRY_UNBALANCED", status: 409 },
+  LAD61: { code: "PERIOD_CLOSED", status: 409 },
+  LAD62: { code: "ACCOUNT_NOT_POSTABLE", status: 409 },
   // Migración 22 (ADR-0039). Los levanta el ESQUEMA —resolve_retention y el
   // trigger del comprobante—, así que llegan aquí aunque el caso de uso no los
   // traduzca: la red que hace valer «sin regla no se retiene» en cualquier ruta.
@@ -122,6 +127,13 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   TAX_RULE_MISSING: 409, // LAD50
   EXCHANGE_RATE_MISSING: 409, // LAD51
   APPEND_ONLY_VIOLATION: 409, // LAD06 por la vía del caso de uso
+  // Contabilidad. Los cuatro son «lo que pides es imposible con el estado
+  // actual del libro», no un cuerpo malformado: 409 y el cliente arregla el
+  // estado (cuadra el asiento, reabre el período, elige una hoja) y reintenta.
+  ENTRY_UNBALANCED: 409, // LAD59
+  PERIOD_CLOSED: 409, // LAD61
+  ACCOUNT_NOT_POSTABLE: 409, // LAD62
+  ACCOUNT_PURPOSE_MISSING: 409,
   // Compras (migración 22, ADR-0039/0040). RETENTION_RULE_MISSING es «no puedo
   // retener porque nadie cargó la norma»: 409, se arregla cargándola.
   // PRICE_ABOVE_TOLERANCE es «lo que pides excede lo pactado y hace falta otra

@@ -28,6 +28,7 @@
     "@ladino/schemas": "workspace:*",
     "@ladino/pricing": "workspace:*",
     "@ladino/sales": "workspace:*",
-    "@ladino/purchases": "workspace:*"
+    "@ladino/purchases": "workspace:*",
+    "@ladino/accounting": "workspace:*"
   }
 }

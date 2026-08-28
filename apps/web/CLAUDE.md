@@ -9,6 +9,14 @@ Es la experiencia principal para administración, contabilidad y configuración.
   Todo cálculo con valor legal viene del servidor.
 - Montos: llegan como `string`, se formatean con el helper de `packages/money`.
   Prohibida la aritmética monetaria en el cliente, incluso para "previsualizar un total".
+
+  **Una excepción, y solo una: el formulario de asiento manual** (`AccountingView.tsx`) compara
+  débitos contra créditos mientras se teclea, para deshabilitar el botón hasta que cuadre.
+  Se admite porque cumple las tres condiciones que la hacen inofensiva: **no persiste nada**,
+  **no decide nada** —el servidor lo repite con un trigger de Postgres y rechaza igual— y
+  **compara enteros de céntimos**, no importes. Si alguna de las tres deja de ser cierta, la
+  excepción deja de valer. Ninguna otra pantalla suma dinero: los totales del balance, del mayor
+  y de los estados financieros los calcula el esquema en `numeric`.
 - Nunca `service_role`. Solo la anon key y el token del usuario.
 - Estado de servidor con TanStack Query. Nada de duplicar la caché en un store global.
 - Accesibilidad objetivo WCAG 2.2 AA: foco visible, labels reales, navegación por teclado en

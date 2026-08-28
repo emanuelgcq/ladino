@@ -148,6 +148,9 @@ importers:
 
   packages/domain:
     dependencies:
+      '@ladino/accounting':
+        specifier: workspace:*
+        version: link:../accounting
       '@ladino/core':
         specifier: workspace:*
         version: link:../core

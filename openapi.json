@@ -5733,6 +5733,1236 @@
           "aging"
         ],
         "additionalProperties": false
+      },
+      "AccountResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "parent_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "activo",
+              "pasivo",
+              "patrimonio",
+              "ingreso",
+              "gasto",
+              "orden"
+            ]
+          },
+          "nature": {
+            "type": "string",
+            "enum": [
+              "deudora",
+              "acreedora"
+            ]
+          },
+          "is_leaf": {
+            "type": "boolean"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "currency_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "requires_analytical": {
+            "type": "boolean"
+          },
+          "level": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "company_id",
+          "code",
+          "name",
+          "description",
+          "parent_id",
+          "kind",
+          "nature",
+          "is_leaf",
+          "is_active",
+          "currency_code",
+          "requires_analytical",
+          "level",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "CreateAccountRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "parent_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "activo",
+              "pasivo",
+              "patrimonio",
+              "ingreso",
+              "gasto",
+              "orden"
+            ]
+          },
+          "nature": {
+            "type": "string",
+            "enum": [
+              "deudora",
+              "acreedora"
+            ]
+          },
+          "currency_code": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "requires_analytical": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "company_id",
+          "code",
+          "name",
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "UpdateAccountRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "requires_analytical": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "company_id"
+        ],
+        "additionalProperties": false
+      },
+      "ImportChartTemplateRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template_code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "apply_suggested_purposes": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "company_id",
+          "template_code"
+        ],
+        "additionalProperties": false
+      },
+      "JournalEntryResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "period_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entry_number": {
+            "type": "integer",
+            "nullable": true
+          },
+          "posting_date": {
+            "type": "string"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "source_event": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string"
+          },
+          "memo": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "posted",
+              "reversed"
+            ]
+          },
+          "posted_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "is_reversal_of": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "reversed_by_entry_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "rules_version": {
+            "type": "string",
+            "nullable": true
+          },
+          "total_debit": {
+            "type": "string"
+          },
+          "total_credit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "company_id",
+          "period_id",
+          "entry_number",
+          "posting_date",
+          "source_kind",
+          "source_id",
+          "source_event",
+          "description",
+          "memo",
+          "status",
+          "posted_at",
+          "is_reversal_of",
+          "reversed_by_entry_id",
+          "rules_version",
+          "total_debit",
+          "total_credit"
+        ],
+        "additionalProperties": false
+      },
+      "JournalEntryDetailResponse": {
+        "type": "object",
+        "properties": {
+          "entry": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "company_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "period_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "entry_number": {
+                "type": "integer",
+                "nullable": true
+              },
+              "posting_date": {
+                "type": "string"
+              },
+              "source_kind": {
+                "type": "string"
+              },
+              "source_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "source_event": {
+                "type": "string",
+                "nullable": true
+              },
+              "description": {
+                "type": "string"
+              },
+              "memo": {
+                "type": "string",
+                "nullable": true
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "posted",
+                  "reversed"
+                ]
+              },
+              "posted_at": {
+                "type": "string",
+                "nullable": true,
+                "format": "date-time"
+              },
+              "is_reversal_of": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "reversed_by_entry_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "rules_version": {
+                "type": "string",
+                "nullable": true
+              },
+              "total_debit": {
+                "type": "string"
+              },
+              "total_credit": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "company_id",
+              "period_id",
+              "entry_number",
+              "posting_date",
+              "source_kind",
+              "source_id",
+              "source_event",
+              "description",
+              "memo",
+              "status",
+              "posted_at",
+              "is_reversal_of",
+              "reversed_by_entry_id",
+              "rules_version",
+              "total_debit",
+              "total_credit"
+            ],
+            "additionalProperties": false
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "line_number": {
+                  "type": "integer"
+                },
+                "account_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "account_code": {
+                  "type": "string"
+                },
+                "account_name": {
+                  "type": "string"
+                },
+                "debit_amount": {
+                  "type": "string"
+                },
+                "credit_amount": {
+                  "type": "string"
+                },
+                "transaction_currency": {
+                  "type": "string"
+                },
+                "fx_rate": {
+                  "type": "string"
+                },
+                "functional_debit": {
+                  "type": "string"
+                },
+                "functional_credit": {
+                  "type": "string"
+                },
+                "functional_currency": {
+                  "type": "string"
+                },
+                "rate_source": {
+                  "type": "string"
+                },
+                "analytical_dimensions": {
+                  "type": "object",
+                  "nullable": true,
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "description": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "id",
+                "line_number",
+                "account_id",
+                "account_code",
+                "account_name",
+                "debit_amount",
+                "credit_amount",
+                "transaction_currency",
+                "fx_rate",
+                "functional_debit",
+                "functional_credit",
+                "functional_currency",
+                "rate_source",
+                "analytical_dimensions",
+                "description"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "entry",
+          "lines"
+        ],
+        "additionalProperties": false
+      },
+      "ListJournalEntriesResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "company_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "period_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "entry_number": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "posting_date": {
+                  "type": "string"
+                },
+                "source_kind": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "source_event": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "description": {
+                  "type": "string"
+                },
+                "memo": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "draft",
+                    "posted",
+                    "reversed"
+                  ]
+                },
+                "posted_at": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "date-time"
+                },
+                "is_reversal_of": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "reversed_by_entry_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "rules_version": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "total_debit": {
+                  "type": "string"
+                },
+                "total_credit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "company_id",
+                "period_id",
+                "entry_number",
+                "posting_date",
+                "source_kind",
+                "source_id",
+                "source_event",
+                "description",
+                "memo",
+                "status",
+                "posted_at",
+                "is_reversal_of",
+                "reversed_by_entry_id",
+                "rules_version",
+                "total_debit",
+                "total_credit"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "CreateJournalEntryRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "posting_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
+          },
+          "memo": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "debit": {
+                  "type": "string",
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "credit": {
+                  "type": "string",
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                "analytical_dimensions": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "account_id"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 2,
+            "maxItems": 500
+          }
+        },
+        "required": [
+          "company_id",
+          "posting_date",
+          "description",
+          "lines"
+        ],
+        "additionalProperties": false
+      },
+      "PostJournalEntryRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "company_id"
+        ],
+        "additionalProperties": false
+      },
+      "ReverseJournalEntryRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
+          },
+          "posting_date": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "required": [
+          "company_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "LedgerResponse": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_code": {
+            "type": "string"
+          },
+          "account_name": {
+            "type": "string"
+          },
+          "nature": {
+            "type": "string",
+            "enum": [
+              "deudora",
+              "acreedora"
+            ]
+          },
+          "currency": {
+            "type": "string"
+          },
+          "opening_balance": {
+            "type": "string"
+          },
+          "closing_balance": {
+            "type": "string"
+          },
+          "movements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entry_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "entry_number": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "posting_date": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "debit": {
+                  "type": "string"
+                },
+                "credit": {
+                  "type": "string"
+                },
+                "running_balance": {
+                  "type": "string"
+                },
+                "source_kind": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "entry_id",
+                "entry_number",
+                "posting_date",
+                "description",
+                "debit",
+                "credit",
+                "running_balance",
+                "source_kind",
+                "source_id"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "account_id",
+          "account_code",
+          "account_name",
+          "nature",
+          "currency",
+          "opening_balance",
+          "closing_balance",
+          "movements"
+        ],
+        "additionalProperties": false
+      },
+      "TrialBalanceResponse": {
+        "type": "object",
+        "properties": {
+          "as_of": {
+            "type": "string"
+          },
+          "from_date": {
+            "type": "string",
+            "nullable": true
+          },
+          "currency": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "account_code": {
+                  "type": "string"
+                },
+                "account_name": {
+                  "type": "string"
+                },
+                "nature": {
+                  "type": "string",
+                  "enum": [
+                    "deudora",
+                    "acreedora"
+                  ]
+                },
+                "opening_balance": {
+                  "type": "string"
+                },
+                "period_debit": {
+                  "type": "string"
+                },
+                "period_credit": {
+                  "type": "string"
+                },
+                "closing_balance": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "account_id",
+                "account_code",
+                "account_name",
+                "nature",
+                "opening_balance",
+                "period_debit",
+                "period_credit",
+                "closing_balance"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total_debit": {
+            "type": "string"
+          },
+          "total_credit": {
+            "type": "string"
+          },
+          "balanced": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "as_of",
+          "from_date",
+          "currency",
+          "rows",
+          "total_debit",
+          "total_credit",
+          "balanced"
+        ],
+        "additionalProperties": false
+      },
+      "FiscalPeriodResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "year": {
+            "type": "integer"
+          },
+          "month": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "closed_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "reopened_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "reopened_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "draft_entry_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pending_queue_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "year",
+          "month",
+          "status",
+          "closed_at",
+          "reopened_at",
+          "reopened_reason",
+          "draft_entry_count",
+          "pending_queue_count"
+        ],
+        "additionalProperties": false
+      },
+      "ClosePeriodRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "company_id"
+        ],
+        "additionalProperties": false
+      },
+      "ReopenPeriodRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "company_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "YearEndCloseRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "year": {
+            "type": "integer",
+            "minimum": 2000,
+            "maximum": 2200
+          }
+        },
+        "required": [
+          "company_id",
+          "year"
+        ],
+        "additionalProperties": false
+      },
+      "SetAccountPurposeRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 50
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "company_id",
+          "purpose",
+          "account_id"
+        ],
+        "additionalProperties": false
+      },
+      "PendingJournalResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "source_kind": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "source_event": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "id",
+                "source_kind",
+                "source_id",
+                "source_event",
+                "reason",
+                "created_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "IncomeStatementResponse": {
+        "type": "object",
+        "properties": {
+          "from_date": {
+            "type": "string"
+          },
+          "to_date": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "income": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_code": {
+                  "type": "string"
+                },
+                "account_name": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "account_code",
+                "account_name",
+                "amount"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "expenses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_code": {
+                  "type": "string"
+                },
+                "account_name": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "account_code",
+                "account_name",
+                "amount"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total_income": {
+            "type": "string"
+          },
+          "total_expenses": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_date",
+          "to_date",
+          "currency",
+          "income",
+          "expenses",
+          "total_income",
+          "total_expenses",
+          "result"
+        ],
+        "additionalProperties": false
+      },
+      "BalanceSheetResponse": {
+        "type": "object",
+        "properties": {
+          "as_of": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_code": {
+                  "type": "string"
+                },
+                "account_name": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "account_code",
+                "account_name",
+                "amount"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "liabilities": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_code": {
+                  "type": "string"
+                },
+                "account_name": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "account_code",
+                "account_name",
+                "amount"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "equity": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_code": {
+                  "type": "string"
+                },
+                "account_name": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "account_code",
+                "account_name",
+                "amount"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total_assets": {
+            "type": "string"
+          },
+          "total_liabilities": {
+            "type": "string"
+          },
+          "total_equity": {
+            "type": "string"
+          },
+          "balanced": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "as_of",
+          "currency",
+          "assets",
+          "liabilities",
+          "equity",
+          "total_assets",
+          "total_liabilities",
+          "total_equity",
+          "balanced"
+        ],
+        "additionalProperties": false
       }
     },
     "parameters": {}
@@ -13019,6 +14249,2221 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SupplierStatementResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts": {
+      "get": {
+        "summary": "Plan de cuentas de la empresa, en orden de árbol",
+        "description": "Nace VACÍO (ADR-0043): el plan de cuentas no se hard-codea. Se llena creando cuentas o importando una plantilla con un acto explícito.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "leaves_only",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Las cuentas, ordenadas por path.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AccountResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Crear cuenta (permiso accounting.account.manage)",
+        "description": "La naturaleza la impone el tipo: activo y gasto son deudoras; pasivo, patrimonio e ingreso, acreedoras. Un padre deja de ser hoja al recibir un hijo.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAccountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Cuenta creada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{id}": {
+      "patch": {
+        "summary": "Editar una cuenta: SOLO lo no estructural",
+        "description": "Nombre, descripción y si exige analíticas. El código, el tipo y el padre no se tocan: renumerar una cuenta con movimientos reescribiría el pasado del mayor sin tocar un asiento.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cuenta actualizada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{id}/deactivate": {
+      "post": {
+        "summary": "Desactivar una cuenta — nunca borrarla",
+        "description": "Desactivar no borra histórico: los asientos anteriores siguen apuntando a ella.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cuenta desactivada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chart-templates": {
+      "get": {
+        "summary": "Plantillas GLOBALES de plan de cuentas (VALIDAR-CONTABLE)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Las plantillas disponibles. Ladino no afirma que ninguna sea correcta para una empresa concreta.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "framework": {
+                        "type": "string"
+                      },
+                      "legal_source": {
+                        "type": "string"
+                      },
+                      "account_count": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "name",
+                      "description",
+                      "framework",
+                      "legal_source",
+                      "account_count"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/import-template": {
+      "post": {
+        "summary": "Importar una plantilla al plan de la empresa (acto explícito)",
+        "description": "Copia las cuentas y las DESLIGA: a partir de aquí son de la empresa. Solo sobre un plan vacío — importar sobre uno existente mezclaría dos planes.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportChartTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Cuentas importadas y papeles aplicados.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "imported": {
+                      "type": "integer"
+                    },
+                    "purposes": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "imported",
+                    "purposes"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/company-account-settings": {
+      "get": {
+        "summary": "Qué cuenta cumple cada PAPEL contable, y cuáles están sin asignar",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Los papeles, con su cuenta o null si falta.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "purpose": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "account_id": {
+                        "type": "string",
+                        "nullable": true,
+                        "format": "uuid"
+                      },
+                      "account_code": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "account_name": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    },
+                    "required": [
+                      "purpose",
+                      "name",
+                      "description",
+                      "account_id",
+                      "account_code",
+                      "account_name"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Asignar la cuenta de un papel (permiso accounting.template.manage)",
+        "description": "La vigencia anterior se CIERRA, no se borra (ADR-0029): los asientos que resolvieron con la cuenta antigua siguen siendo explicables.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAccountPurposeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Papel asignado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "purpose": {
+                      "type": "string"
+                    },
+                    "account_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  },
+                  "required": [
+                    "purpose",
+                    "account_id"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/journal-entries": {
+      "get": {
+        "summary": "Diario: asientos con filtros (permiso accounting.read)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "source_kind",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "required": false,
+            "name": "per_page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Página de asientos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListJournalEntriesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Crear asiento manual en BORRADOR (permiso accounting.entry.create)",
+        "description": "No postea: postear es un acto propio con su permiso, porque es el que lo hace inmutable. El balance se comprueba aquí para dar la diferencia exacta, pero el invariante real es un trigger de Postgres.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateJournalEntryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Asiento en borrador.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalEntryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "La partida doble no cuadra (LAD59), con la diferencia exacta en el mensaje.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/journal-entries/{id}": {
+      "get": {
+        "summary": "Un asiento con sus líneas y el documento origen",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El asiento completo.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalEntryDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/journal-entries/{id}/post": {
+      "post": {
+        "summary": "Postear un asiento (permiso accounting.entry.post)",
+        "description": "El acto que lo hace inmutable y lo lleva al mayor. Valida partida doble en moneda funcional, período abierto, y que cada cuenta sea hoja, activa y con las dimensiones que exija.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostJournalEntryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Asiento posteado, con su correlativo.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalEntryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Desbalanceado (LAD59), período cerrado (LAD61) o cuenta no postable (LAD62).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/journal-entries/{id}/reverse": {
+      "post": {
+        "summary": "Reversar con un contra-asiento vinculado (permiso accounting.entry.reverse)",
+        "description": "No borra ni edita: los dos asientos quedan visibles y el saldo neto por cuenta es cero. El contra-asiento consume SU propio correlativo; el original conserva el suyo.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReverseJournalEntryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Contra-asiento posteado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalEntryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ledger": {
+      "get": {
+        "summary": "Mayor de una cuenta: saldo inicial, movimientos y saldo final",
+        "description": "La fecha final es OBLIGATORIA: un mayor sin corte no se puede reproducir mañana.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "account",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El mayor de la cuenta.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/trial-balance": {
+      "get": {
+        "summary": "Balance de comprobación A FECHA (nunca «hoy»)",
+        "description": "Cinco columnas por cuenta con saldo o movimiento. Σ débitos == Σ créditos; si sale falso, hay un asiento roto en la base.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El balance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrialBalanceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-periods": {
+      "get": {
+        "summary": "Períodos contables, con lo que impide cerrarlos",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Los períodos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FiscalPeriodResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-periods/{id}/close": {
+      "post": {
+        "summary": "Cerrar período (permiso accounting.period.close)",
+        "description": "Rechaza si quedan borradores o documentos pendientes de contabilizar: un borrador es una decisión no tomada, y una cola sin procesar es contabilidad que falta.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClosePeriodRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Período cerrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiscalPeriodResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-periods/{id}/reopen": {
+      "post": {
+        "summary": "Reabrir período (permiso accounting.period.reopen, motivo OBLIGATORIO)",
+        "description": "El motivo tiene mínimo de longitud y queda en fiscal_periods y en auditoría: «¿por qué se reabrió febrero?» tiene que tener respuesta seis meses después.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReopenPeriodRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Período reabierto, con traza.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiscalPeriodResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-periods/year-end-close": {
+      "post": {
+        "summary": "Cierre anual: ingresos y gastos a resultado, y el resultado a acumuladas",
+        "description": "Exige las cuentas de year_result y retained_earnings configuradas. Sin ellas no cierra: adivinar cuál es el resultado del ejercicio sería inventar el patrimonio de la empresa.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/YearEndCloseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Asiento de cierre posteado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalEntryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounting/pending": {
+      "get": {
+        "summary": "Documentos emitidos sin plantilla de mapeo (ADR-0042)",
+        "description": "La cola de contabilización pendiente. Una cola que nadie mira es una contabilidad que no existe, y por eso su contador aparece en la pantalla de cierre.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Los pendientes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingJournalResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounting/coverage-gaps": {
+      "get": {
+        "summary": "El invariante de ADR-0042, consultable",
+        "description": "Documentos posteados SIN asiento y SIN fila pendiente (missing), o con las dos cosas (duplicated). Vacío es lo correcto.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Los huecos de cobertura contable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "gaps": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source_kind": {
+                            "type": "string"
+                          },
+                          "source_id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "problem": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "source_kind",
+                          "source_id",
+                          "problem"
+                        ]
+                      }
+                    },
+                    "healthy": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "gaps",
+                    "healthy"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounting/reports/income-statement": {
+      "get": {
+        "summary": "Estado de resultados del período",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ingresos, gastos y resultado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncomeStatementResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounting/reports/balance-sheet": {
+      "get": {
+        "summary": "Balance general a una fecha",
+        "description": "Comprueba activo == pasivo + patrimonio; si sale falso, hay un asiento roto.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "date",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "La situación financiera.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceSheetResponse"
                 }
               }
             }

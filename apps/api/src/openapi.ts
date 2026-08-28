@@ -83,6 +83,26 @@ import {
   CreateRetentionRuleRequest,
   ApAgingResponse,
   SupplierStatementResponse,
+  CreateAccountRequest,
+  UpdateAccountRequest,
+  AccountResponse,
+  ImportChartTemplateRequest,
+  CreateJournalEntryRequest,
+  PostJournalEntryRequest,
+  ReverseJournalEntryRequest,
+  JournalEntryResponse,
+  JournalEntryDetailResponse,
+  ListJournalEntriesResponse,
+  LedgerResponse,
+  TrialBalanceResponse,
+  FiscalPeriodResponse,
+  ClosePeriodRequest,
+  ReopenPeriodRequest,
+  YearEndCloseRequest,
+  SetAccountPurposeRequest,
+  PendingJournalResponse,
+  IncomeStatementResponse,
+  BalanceSheetResponse,
 } from "@ladino/schemas";
 
 /**
@@ -1414,6 +1434,391 @@ export function buildOpenApiDocument(): object {
     security: [{ bearerAuth: [] }],
     request: { params: idParam, headers: companyHeader },
     responses: { 200: okJson(estadoProveedor, "El estado de cuenta."), ...erroresComunes },
+  });
+
+  // ── Contabilidad (migración 25, ADR-0041/0042/0043) ───────────────────────
+  const cuenta = registry.register("AccountResponse", AccountResponse);
+  const crearCuenta = registry.register("CreateAccountRequest", CreateAccountRequest);
+  const editarCuenta = registry.register("UpdateAccountRequest", UpdateAccountRequest);
+  const importarPlan = registry.register("ImportChartTemplateRequest", ImportChartTemplateRequest);
+  const asiento = registry.register("JournalEntryResponse", JournalEntryResponse);
+  const detalleAsiento = registry.register(
+    "JournalEntryDetailResponse",
+    JournalEntryDetailResponse,
+  );
+  const listaAsientos = registry.register("ListJournalEntriesResponse", ListJournalEntriesResponse);
+  const crearAsiento = registry.register("CreateJournalEntryRequest", CreateJournalEntryRequest);
+  const postearAsiento = registry.register("PostJournalEntryRequest", PostJournalEntryRequest);
+  const reversarAsiento = registry.register(
+    "ReverseJournalEntryRequest",
+    ReverseJournalEntryRequest,
+  );
+  const mayor = registry.register("LedgerResponse", LedgerResponse);
+  const balanceComprobacion = registry.register("TrialBalanceResponse", TrialBalanceResponse);
+  const periodo = registry.register("FiscalPeriodResponse", FiscalPeriodResponse);
+  const cerrarPeriodo = registry.register("ClosePeriodRequest", ClosePeriodRequest);
+  const reabrirPeriodo = registry.register("ReopenPeriodRequest", ReopenPeriodRequest);
+  const cierreAnual = registry.register("YearEndCloseRequest", YearEndCloseRequest);
+  const fijarPapel = registry.register("SetAccountPurposeRequest", SetAccountPurposeRequest);
+  const pendientes = registry.register("PendingJournalResponse", PendingJournalResponse);
+  const resultados = registry.register("IncomeStatementResponse", IncomeStatementResponse);
+  const situacion = registry.register("BalanceSheetResponse", BalanceSheetResponse);
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/accounts",
+    summary: "Plan de cuentas de la empresa, en orden de árbol",
+    description:
+      "Nace VACÍO (ADR-0043): el plan de cuentas no se hard-codea. Se llena creando cuentas " +
+      "o importando una plantilla con un acto explícito.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ leaves_only: z.string().optional() }),
+    },
+    responses: {
+      200: okJson(z.array(cuenta), "Las cuentas, ordenadas por path."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/accounts",
+    summary: "Crear cuenta (permiso accounting.account.manage)",
+    description:
+      "La naturaleza la impone el tipo: activo y gasto son deudoras; pasivo, patrimonio e " +
+      "ingreso, acreedoras. Un padre deja de ser hoja al recibir un hijo.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearCuenta } } },
+    },
+    responses: { 201: okJson(cuenta, "Cuenta creada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "patch",
+    path: "/v1/accounts/{id}",
+    summary: "Editar una cuenta: SOLO lo no estructural",
+    description:
+      "Nombre, descripción y si exige analíticas. El código, el tipo y el padre no se tocan: " +
+      "renumerar una cuenta con movimientos reescribiría el pasado del mayor sin tocar un asiento.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: editarCuenta } } },
+    },
+    responses: { 200: okJson(cuenta, "Cuenta actualizada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/accounts/{id}/deactivate",
+    summary: "Desactivar una cuenta — nunca borrarla",
+    description: "Desactivar no borra histórico: los asientos anteriores siguen apuntando a ella.",
+    security: [{ bearerAuth: [] }],
+    request: { params: idParam, headers: idemHeader },
+    responses: { 200: okJson(cuenta, "Cuenta desactivada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/chart-templates",
+    summary: "Plantillas GLOBALES de plan de cuentas (VALIDAR-CONTABLE)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(
+        z.array(
+          z.object({
+            code: z.string(),
+            name: z.string(),
+            description: z.string(),
+            framework: z.string(),
+            legal_source: z.string(),
+            account_count: z.number().int(),
+          }),
+        ),
+        "Las plantillas disponibles. Ladino no afirma que ninguna sea correcta para una empresa concreta.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/accounts/import-template",
+    summary: "Importar una plantilla al plan de la empresa (acto explícito)",
+    description:
+      "Copia las cuentas y las DESLIGA: a partir de aquí son de la empresa. Solo sobre un plan " +
+      "vacío — importar sobre uno existente mezclaría dos planes.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: importarPlan } } },
+    },
+    responses: {
+      201: okJson(
+        z.object({ imported: z.number().int(), purposes: z.number().int() }),
+        "Cuentas importadas y papeles aplicados.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/company-account-settings",
+    summary: "Qué cuenta cumple cada PAPEL contable, y cuáles están sin asignar",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(
+        z.array(
+          z.object({
+            purpose: z.string(),
+            name: z.string(),
+            description: z.string(),
+            account_id: z.string().uuid().nullable(),
+            account_code: z.string().nullable(),
+            account_name: z.string().nullable(),
+          }),
+        ),
+        "Los papeles, con su cuenta o null si falta.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/company-account-settings",
+    summary: "Asignar la cuenta de un papel (permiso accounting.template.manage)",
+    description:
+      "La vigencia anterior se CIERRA, no se borra (ADR-0029): los asientos que resolvieron con " +
+      "la cuenta antigua siguen siendo explicables.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: fijarPapel } } },
+    },
+    responses: {
+      200: okJson(
+        z.object({ purpose: z.string(), account_id: z.string().uuid() }),
+        "Papel asignado.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/journal-entries",
+    summary: "Diario: asientos con filtros (permiso accounting.read)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        status: z.string().optional(),
+        source_kind: z.string().optional(),
+        from: z.string().optional(),
+        to: z.string().optional(),
+        page: z.coerce.number().int().min(1).optional(),
+        per_page: z.coerce.number().int().min(1).max(100).optional(),
+      }),
+    },
+    responses: { 200: okJson(listaAsientos, "Página de asientos."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/journal-entries/{id}",
+    summary: "Un asiento con sus líneas y el documento origen",
+    security: [{ bearerAuth: [] }],
+    request: { params: idParam, headers: companyHeader },
+    responses: { 200: okJson(detalleAsiento, "El asiento completo."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/journal-entries",
+    summary: "Crear asiento manual en BORRADOR (permiso accounting.entry.create)",
+    description:
+      "No postea: postear es un acto propio con su permiso, porque es el que lo hace inmutable. " +
+      "El balance se comprueba aquí para dar la diferencia exacta, pero el invariante real es un " +
+      "trigger de Postgres.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearAsiento } } },
+    },
+    responses: {
+      201: okJson(asiento, "Asiento en borrador."),
+      ...erroresComunes,
+      409: errorRef("La partida doble no cuadra (LAD59), con la diferencia exacta en el mensaje."),
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/journal-entries/{id}/post",
+    summary: "Postear un asiento (permiso accounting.entry.post)",
+    description:
+      "El acto que lo hace inmutable y lo lleva al mayor. Valida partida doble en moneda " +
+      "funcional, período abierto, y que cada cuenta sea hoja, activa y con las dimensiones que exija.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: postearAsiento } } },
+    },
+    responses: {
+      200: okJson(asiento, "Asiento posteado, con su correlativo."),
+      ...erroresComunes,
+      409: errorRef("Desbalanceado (LAD59), período cerrado (LAD61) o cuenta no postable (LAD62)."),
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/journal-entries/{id}/reverse",
+    summary: "Reversar con un contra-asiento vinculado (permiso accounting.entry.reverse)",
+    description:
+      "No borra ni edita: los dos asientos quedan visibles y el saldo neto por cuenta es cero. " +
+      "El contra-asiento consume SU propio correlativo; el original conserva el suyo.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: reversarAsiento } } },
+    },
+    responses: { 201: okJson(asiento, "Contra-asiento posteado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/ledger",
+    summary: "Mayor de una cuenta: saldo inicial, movimientos y saldo final",
+    description: "La fecha final es OBLIGATORIA: un mayor sin corte no se puede reproducir mañana.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        account: z.string().uuid(),
+        from: z.string().optional(),
+        to: z.string(),
+      }),
+    },
+    responses: { 200: okJson(mayor, "El mayor de la cuenta."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/trial-balance",
+    summary: "Balance de comprobación A FECHA (nunca «hoy»)",
+    description:
+      "Cinco columnas por cuenta con saldo o movimiento. Σ débitos == Σ créditos; si sale falso, " +
+      "hay un asiento roto en la base.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ date: z.string(), from: z.string().optional() }),
+    },
+    responses: { 200: okJson(balanceComprobacion, "El balance."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-periods",
+    summary: "Períodos contables, con lo que impide cerrarlos",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(z.array(periodo), "Los períodos."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal-periods/{id}/close",
+    summary: "Cerrar período (permiso accounting.period.close)",
+    description:
+      "Rechaza si quedan borradores o documentos pendientes de contabilizar: un borrador es una " +
+      "decisión no tomada, y una cola sin procesar es contabilidad que falta.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: cerrarPeriodo } } },
+    },
+    responses: { 200: okJson(periodo, "Período cerrado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal-periods/{id}/reopen",
+    summary: "Reabrir período (permiso accounting.period.reopen, motivo OBLIGATORIO)",
+    description:
+      "El motivo tiene mínimo de longitud y queda en fiscal_periods y en auditoría: «¿por qué se " +
+      "reabrió febrero?» tiene que tener respuesta seis meses después.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: reabrirPeriodo } } },
+    },
+    responses: { 200: okJson(periodo, "Período reabierto, con traza."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal-periods/year-end-close",
+    summary: "Cierre anual: ingresos y gastos a resultado, y el resultado a acumuladas",
+    description:
+      "Exige las cuentas de year_result y retained_earnings configuradas. Sin ellas no cierra: " +
+      "adivinar cuál es el resultado del ejercicio sería inventar el patrimonio de la empresa.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: cierreAnual } } },
+    },
+    responses: { 201: okJson(asiento, "Asiento de cierre posteado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/accounting/pending",
+    summary: "Documentos emitidos sin plantilla de mapeo (ADR-0042)",
+    description:
+      "La cola de contabilización pendiente. Una cola que nadie mira es una contabilidad que no " +
+      "existe, y por eso su contador aparece en la pantalla de cierre.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(pendientes, "Los pendientes."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/accounting/coverage-gaps",
+    summary: "El invariante de ADR-0042, consultable",
+    description:
+      "Documentos posteados SIN asiento y SIN fila pendiente (missing), o con las dos cosas " +
+      "(duplicated). Vacío es lo correcto.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(
+        z.object({
+          gaps: z.array(
+            z.object({
+              source_kind: z.string(),
+              source_id: z.string().uuid(),
+              problem: z.string(),
+            }),
+          ),
+          healthy: z.boolean(),
+        }),
+        "Los huecos de cobertura contable.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/accounting/reports/income-statement",
+    summary: "Estado de resultados del período",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, query: z.object({ from: z.string(), to: z.string() }) },
+    responses: { 200: okJson(resultados, "Ingresos, gastos y resultado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/accounting/reports/balance-sheet",
+    summary: "Balance general a una fecha",
+    description: "Comprueba activo == pasivo + patrimonio; si sale falso, hay un asiento roto.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, query: z.object({ date: z.string() }) },
+    responses: { 200: okJson(situacion, "La situación financiera."), ...erroresComunes },
   });
 
   const generator = new OpenApiGeneratorV3(registry.definitions);

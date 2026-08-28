@@ -6,6 +6,7 @@ import { PricingView } from "./PricingView.js";
 import { CustomersView } from "./CustomersView.js";
 import { InventoryView } from "./InventoryView.js";
 import { SalesView, ExchangeDifferenceKPI } from "./SalesView.js";
+import { AccountingView } from "./AccountingView.js";
 import { PurchasesView } from "./PurchasesView.js";
 
 /**
@@ -26,7 +27,14 @@ export function App() {
   const [companies, setCompanies] = useState<Company[] | null>(null);
   const [empresa, setEmpresa] = useState<Company | null>(null);
   const [modulo, setModulo] = useState<
-    "productos" | "precios" | "clientes" | "inventario" | "ventas" | "compras" | "panel"
+    | "productos"
+    | "precios"
+    | "clientes"
+    | "inventario"
+    | "ventas"
+    | "contabilidad"
+    | "compras"
+    | "panel"
   >("productos");
   const [error, setError] = useState("");
   const [alta, setAlta] = useState({ tenant_id: "", legal_name: "", tax_id: "" });
@@ -169,6 +177,9 @@ export function App() {
             <button disabled={modulo === "compras"} onClick={() => setModulo("compras")}>
               Compras
             </button>{" "}
+            <button disabled={modulo === "contabilidad"} onClick={() => setModulo("contabilidad")}>
+              Contabilidad
+            </button>{" "}
             <button disabled={modulo === "panel"} onClick={() => setModulo("panel")}>
               Panel
             </button>
@@ -183,6 +194,8 @@ export function App() {
             <InventoryView session={session} companyId={empresa.id} />
           ) : modulo === "ventas" ? (
             <SalesView session={session} companyId={empresa.id} />
+          ) : modulo === "contabilidad" ? (
+            <AccountingView session={session} companyId={empresa.id} />
           ) : modulo === "compras" ? (
             <PurchasesView session={session} companyId={empresa.id} />
           ) : (

@@ -56,3 +56,17 @@ export {
   registerSupplierPayment,
   type PurchaseError,
 } from "./purchases.js";
+export {
+  createAccount,
+  updateAccount,
+  deactivateAccount,
+  importChartTemplate,
+  setAccountPurpose,
+  createManualJournalEntry,
+  postJournalEntry,
+  reverseJournalEntry,
+  closeFiscalPeriod,
+  reopenFiscalPeriod,
+  executeYearEndClose,
+  type AccountingError,
+} from "./accounting.js";

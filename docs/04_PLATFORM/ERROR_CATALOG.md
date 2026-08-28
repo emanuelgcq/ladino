@@ -50,6 +50,10 @@ Comprobado sobre las funciones realmente instaladas. **Cada uno es único en tie
 | `LAD06` | *(también)* `platform.assert_document_immutable()` · `assert_document_lines_immutable()` · `assert_purchase_doc_immutable()` · `assert_purchase_lines_immutable()` | editar o borrar un documento **emitido** o una compra **confirmada**, mover su correlativo o su control, o una transición de estado no permitida. Se corrige con nota de crédito o débito | `APPEND_ONLY_VIOLATION` | `409` |
 | `LAD53` | `platform.resolve_retention()` · `compute_retention()` | no hay regla de retención vigente para esa fecha/jurisdicción/concepto, hay **dos con la misma prioridad**, o la `formula_kind` no está en el vocabulario cerrado. ADR-0039: nunca devuelve cero — un cero deja pasar el pago completo y deja a la empresa debiendo al fisco | `RETENTION_RULE_MISSING` | `409` |
 | `LAD54` | `platform.assert_retention_receipt_number()` | cambiar el correlativo de un comprobante de retención emitido, o reemitir uno anulado. El número se conserva al anular (ADR-0039 §5) | `FISCAL_NUMBERING_INVALID` | `409` |
+| `LAD59` | `platform.assert_entry_balanced()` | la partida doble no cuadra EN MONEDA FUNCIONAL, el asiento tiene menos de dos líneas, o su importe es cero. El mensaje lleva la diferencia exacta: sin ella hay que volver a sumar, y quien vuelve a sumar suma distinto | `ENTRY_UNBALANCED` | `409` |
+| `LAD60` | `platform.set_account_path()` | ciclo en la jerarquía de cuentas: el padre ya desciende del hijo | `VALIDATION_FAILED` | `422` |
+| `LAD61` | `platform.assert_entry_balanced()` | asiento con fecha en un período CERRADO. Reabrirlo exige permiso propio y motivo escrito | `PERIOD_CLOSED` | `409` |
+| `LAD62` | `platform.assert_entry_balanced()` | la cuenta agrupa (no es hoja), está desactivada, o exige dimensiones analíticas y la línea no las trae | `ACCOUNT_NOT_POSTABLE` | `409` |
 | `LAD55` | *caso de uso* (`applyLandedCost`) | prorrateo `by_weight` con alguna línea sin peso. **No lo lanza la base**: el esquema admite `unit_weight` nulo porque no todo producto lo tiene; lo que no admite es repartir un flete solo entre lo que sí pesa, y eso lo decide el caso de uso. Mismo patrón que LAD45 | `MISSING_WEIGHT` | `422` |
 
 ## Códigos de una sola ejecución — NO llegan a la API
@@ -63,7 +67,7 @@ al hacer `grep` sobre las migraciones y crea que el mapeo 1:1 es imposible.
 `LAD32` (atributos de los roles de servicio, migración 14), `LAD34` (seeds del catálogo de
 productos, migración 16), `LAD37` (seeds de clientes, migración 18), `LAD42` (permisos, capas
 append-only y RLS de inventario, migración 19), `LAD48` (permisos, conversiones de unidad y RLS de
-la migración 20), `LAD56` (migración 22: que `retention_rules` NAZCA VACÍA, que el vocabulario de
+la migración 20), `LAD63` (migración 25: que journal_templates y accounts NAZCAN VACÍAS, que la plantilla de plan vaya marcada VALIDAR-CONTABLE, que las doce tablas tengan RLS forzada, que journal_lines EXISTA con ese nombre —CLAUDE.md §2 la prohíbe por él— y que el trigger de partida doble esté montado), `LAD56` (migración 22: que `retention_rules` NAZCA VACÍA, que el vocabulario de
 conceptos esté sembrado, que `purchase.receive` sea acotado por almacén, que las diecinueve tablas
 de compras tengan RLS forzada, que ninguna append-only tenga privilegio de mutación, y que
 `fiscal_number_ranges` admita `retention_receipt`) y `LAD52` (migración 21: que `tax_rules` NAZCA VACÍA, que ningún régimen se siembre
