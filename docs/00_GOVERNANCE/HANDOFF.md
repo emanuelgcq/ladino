@@ -2,18 +2,70 @@
 
 ## Estado
 
-**Sprint 0 cerrado y SEIS módulos de negocio construidos de extremo a extremo: productos,
-precios, clientes, inventario (con su segunda vuelta), VENTAS y COMPRAS.** Flujo trunk-based:
-todo en `main`, `verify` en verde antes de cada commit.
+**Sprint 0 cerrado y SIETE módulos de negocio construidos de extremo a extremo: productos,
+precios, clientes, inventario (con su segunda vuelta), ventas, compras y CONTABILIDAD.** Flujo
+trunk-based: todo en `main`, `verify` en verde antes de cada commit.
 
 S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅ ·
-Inventario ✅ · Ventas ✅ · Compras ✅** · S0.6b ⏸️
+Inventario ✅ · Ventas ✅ · Compras ✅ · Contabilidad ✅** · S0.6b ⏸️
 
-Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **las 24 migraciones aplicadas** (2026-08-27, vía
+Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **las 25 migraciones aplicadas** (2026-08-27, vía
 Management API, registradas en `supabase_migrations.schema_migrations` con la forma de la CLI para
 que un `db push` futuro las reconozca). Paridad verificada por huella, **idéntica en las seis
-clases**: 898 columnas · 625 constraints · 238 índices · 450 policies · 70 funciones · 157
+clases**: 1060 columnas · 732 constraints · 277 índices · 534 policies · 80 funciones · 183
 triggers. Local y remoto no divergen.
+
+## Módulo de contabilidad — construido entero (2026-08-27)
+
+Migración 25 · ADR-0041 (mapeo cerrado) · ADR-0042 (cola de pendientes) · ADR-0043 (plantillas de
+plan) · pgTAP 025 (53 aserciones) · `packages/accounting` (puro, 15 tests con 5 propiedades) ·
+once casos de uso · veintidós endpoints · siete paneles de pantalla.
+
+| Pieza | Dónde | Qué gobierna |
+|---|---|---|
+| **La partida doble** | `platform.assert_entry_balanced()` (LAD59) | En Postgres, en moneda funcional, en INSERT **y** UPDATE. No vive en la API |
+| Plan de cuentas | `accounts` + `set_account_path()` | Jerarquía con path materializado; solo las hojas activas reciben asientos |
+| Papeles contables | `company_account_settings` | La plantilla nombra un PAPEL; qué cuenta lo cumple lo dice la empresa, con vigencia |
+| Mapeo | `journal_templates` + `journal_template_lines` | Vocabulario CERRADO: nada se evalúa en runtime |
+| Cola de pendientes | `journal_generation_queue` | Sin plantilla, el documento se emite y encola. Bloquea el cierre |
+| El invariante | `platform.accounting_coverage_gaps()` | Asiento **o** pendiente, nunca ninguno, nunca los dos |
+| Mayor | `ledger_balances` + `recompute_ledger()` | Materializado por trigger, reproducible desde los asientos |
+| Balance | `platform.trial_balance(company, fecha)` | La fecha es PARÁMETRO, nunca `now()` |
+| Idempotencia | `UNIQUE (company, source_kind, source_id, source_event)` | El eje es el EVENTO del outbox, no el documento |
+| Inmutabilidad | `assert_entry_immutable()` · `assert_line_immutable()` | Cabecera y líneas, en las dos capas de ADR-0006 |
+
+**Decisiones que conviene no volver a discutir** (ADR-0041/0042/0043): el mapeo contable es dato
+con vocabulario cerrado —ocho predicados, doce orígenes de importe, y ninguna cadena evaluada—; la
+contabilización es síncrona **con cola** porque estricta dejaría el sistema inservible hasta que un
+contador configure catorce papeles; el plan de cuentas nace vacío y la plantilla `ve_basico` es
+global, marcada `VALIDAR-CONTABLE`, y se importa con un acto explícito; la tabla se llama
+`journal_lines` porque así la nombra la prohibición de CLAUDE.md §2 — el modelo se acomoda a la
+regla escrita, no al revés.
+
+**El hallazgo, y lo encontró un test, no una revisión:**
+
+**El mayor materializado estaba SIEMPRE vacío.** El trigger colgaba de un `AFTER INSERT` en
+`journal_lines` y salía en la primera línea porque el asiento todavía era un borrador — que es la
+única forma de construirlo. Ningún asiento habría llegado nunca al mayor, y nada habría fallado:
+`recompute_ledger()` seguía dando el número correcto, así que las consultas «lentas» funcionaban y
+solo la tabla rápida mentía. Lo destapó la aserción que compara el materializado con el
+recalculado, que existe exactamente para esto y que es el mismo par que `stock_balances` ↔
+`recompute_stock` de ADR-0034. El hecho contable es POSTEAR, no escribir una línea; ahí es donde
+va ahora.
+
+Y dos que no llegan a hallazgo pero se pagan: el estado de resultados y el balance general sumaban
+con `Number()` —float sobre dinero, en el servidor, en los dos reportes donde menos se admite— y
+pasaron a SQL sobre `numeric`; y `apps/web/CLAUDE.md` prohíbe la aritmética monetaria en el cliente
+«incluso para previsualizar un total», lo que choca con el formulario de asiento manual. La
+excepción está ahora **escrita donde vive la regla**, acotada por las tres condiciones que la hacen
+inofensiva (no persiste, no decide, compara céntimos enteros); si alguna deja de ser cierta, la
+excepción deja de valer.
+
+**No construido, y dicho:** la conciliación subledger ↔ cuenta de control (puntos 6-8 de
+`ACCOUNTING_INVARIANTS_TESTS`) queda fuera de alcance y es el test natural siguiente; el ajuste por
+inflación es su propio módulo y solo se deja la cuenta de reexpresión en la plantilla; los asientos
+automáticos desde ventas y compras tienen el esquema, la cola y el invariante montados, pero
+**ningún módulo los invoca todavía** — es lo primero que hay que enganchar y por eso está en R-20.
 
 ## Módulo de compras — construido entero (2026-08-27)
 
@@ -628,6 +680,34 @@ va a tomar; lo que falta es que la pantalla lo explique cuando llegue el `NEGATI
 la empresa que de verdad venda sin stock use la bandera `allow_negative_stock` con su permiso, que
 para eso existe.
 
+### R-20 · La contabilidad está montada y NADIE la invoca todavía
+
+Es el riesgo más importante que deja este módulo, y es de omisión. La migración 25 tiene el
+esquema, el trigger de partida doble, la cola de pendientes y la función que comprueba el
+invariante de cobertura. Lo que **no** existe es la llamada: ni `createInvoice`, ni
+`registerPayment`, ni `registerSupplierInvoice`, ni `applyLandedCost` invocan a
+`generate_journal_entry_from_source`.
+
+Consecuencia hoy: `platform.accounting_coverage_gaps()` devuelve **todos** los documentos como
+`missing` en cuanto haya uno emitido, porque no tienen asiento ni fila en la cola. El invariante de
+ADR-0042 no se cumple todavía — está *comprobable*, que es distinto de estar *cumplido*.
+
+Enganchar el generador es lo primero de la siguiente sesión, sea cual sea el módulo elegido. Hasta
+entonces, ninguna empresa debería cerrar un período creyendo que su contabilidad está completa, y
+la pantalla de cierre **no puede avisarlo** porque la cola está vacía por la razón equivocada.
+
+### R-21 · Una plantilla marcada `VALIDAR-CONTABLE` que nadie valida acaba siendo el plan real
+
+`chart_templates.ve_basico` existe para que arrancar sea posible en un minuto en vez de dos días.
+El marcado se muestra entero en la pantalla de importación y las cuentas quedan editables desde el
+primer momento, pero **el esquema no puede impedir** que alguien importe, no revise, y opere un año
+con un plan que Ladino nunca afirmó que fuera correcto.
+
+No hay mitigación técnica que sirva: obligar a una confirmación más solo entrena a pulsar dos
+veces. Lo que hay es que esté escrito aquí y en ADR-0043, y que el `suggested_purpose` no se
+esconda — la pantalla de papeles muestra siempre qué cuenta cumple cada uno, que es donde un error
+de la plantilla se ve antes de que produzca un asiento.
+
 ## Estado en git
 
 `main`, al día y empujado. Últimos commits del módulo de ventas:
@@ -638,11 +718,17 @@ para eso existe.
 - `5ccce55` pantallas de ventas y el KPI de diferencial
 - `5026282` compras: ADR-0039/0040, migración 22 y el paquete puro
 - `dbefc0d` compras: casos de uso, API, pantallas, migraciones 23 y 24
+- `7755dba` contabilidad: ADR-0041/0042/0043, migración 25 y `packages/accounting`
+- `5900245` contabilidad: casos de uso, API, OpenAPI y pantallas
 
-`verify` en verde antes de cada uno; el último: `VERIFY EXIT=0`, 546 pasos, `All tests successful`
-(746 aserciones pgTAP en 22 ficheros).
+`verify` en verde antes de cada uno; el último: `VERIFY EXIT=0`, **551 pasos**,
+`All tests successful` (799 aserciones pgTAP en 23 ficheros).
 
-**Siguiente módulo: lo decide el usuario entre tesorería y el adaptador Cashea.**
+**Lo primero de la siguiente sesión, sea cual sea el módulo: enganchar el generador de asientos
+(R-20).** Sin eso, la contabilidad existe y no se llena.
+
+**Siguiente módulo: lo decide el usuario entre ajuste por inflación, libros fiscales,
+reportes/analítica o retomar la UX multisede transversal.**
 
 ## Histórico
 
