@@ -359,3 +359,78 @@ obviamente correcta.
 **Deja de ser aceptable:** cuando `packages/accounting` o `packages/inventory` encadenen
 operaciones sobre intermedios (valoración de inventario, prorrateos anidados). Hoy no hay
 consumidores.
+
+### R-22 · El layout oficial del libro no está cargado: se exporta un CSV que NO es el fichero de presentación
+
+- **Severidad:** Alta · **Disparador:** aparece la norma con el layout, o el asesor lo aporta
+- **Dónde:** `public.book_format_adapters`, `packages/domain/src/fiscal-books.ts` →
+  `ADAPTADORES_IMPLEMENTADOS`, ADR-0044 §5
+
+El único adaptador sembrado es `csv_columnas_legales`, marcado `is_official = false`. Trae las
+columnas que PA SNAT/2011/00071 y PA 102 **nombran** —entregable hoy a un contador para revisión y
+archivo— pero **no es el fichero que la administración tributaria exige**, y ese layout no está en
+el repositorio. Inventarlo a partir de ejemplos de internet sería inventar una obligación legal
+(CLAUDE.md §2), y un archivo con el layout equivocado se rechaza entero.
+
+**Lo que ya está defendido:** la exportación de un adaptador presente en el catálogo pero sin
+implementación falla con **LAD65** y no escribe la generación; la pantalla lo deshabilita. El E2E
+carga un adaptador falso a propósito para que ese camino no sea código muerto. O sea que el riesgo
+no es que se exporte un fichero equivocado creyendo que es el bueno: es que **hoy no hay forma de
+presentar por el canal oficial desde Ladino**.
+
+**Cuando llegue:** es una fila más y otra implementación de la misma interfaz — un enchufe, no una
+reescritura. Se añade a `book_format_adapters` con `is_official = true` **y** a
+`ADAPTADORES_IMPLEMENTADOS`, en ese orden, y nunca solo lo primero.
+
+**Deja de ser aceptable:** ante el primer cliente contribuyente especial que tenga que presentar
+por el canal oficial. **No bloquea operar**: el libro se consulta, se concilia y se exporta para el
+contador desde hoy.
+
+### R-23 · IGTF no aparece en ningún libro porque Ladino no lo calcula en ninguna parte
+
+- **Severidad:** Alta · **Disparador:** se construye el módulo de IGTF
+- **Dónde:** ausencia deliberada en `platform.sales_book` / `purchases_book`, ADR-0044
+  §Consecuencias
+
+No hay columna de IGTF en los libros, y no la hay porque **no hay motor**: ningún caso de uso lo
+calcula, no existe su tabla de reglas y `IGTF_SPEC.md` advierte además de que **no toda operación
+en divisa lo causa**. Una columna hoy tendría que rellenarse con algo, y ese algo sería inventado.
+
+El orden correcto es el de ADR-0038 y ADR-0039: primero la regla como dato con su fuente citada,
+después el cálculo, después la columna del libro. Al revés se obtiene un libro que declara una
+cifra que nadie puede justificar.
+
+**Ojo al construirlo:** el IGTF de una venta afecta al libro de ventas del período en que se
+percibió, no al de la emisión de la factura. Añadirlo como columna de la fila del documento sin
+mirar eso repetiría el error que ADR-0044 §1 vino a arreglar.
+
+**Deja de ser aceptable:** cuando el primer cliente opere cobrando en divisas y tenga que
+declararlo. **No bloquea operar** ni la emisión: hoy Ladino simplemente no participa en ese
+impuesto y no aparenta hacerlo.
+
+### R-24 · `operation_type` queda sin clasificar para el cliente no domiciliado y el proveedor extranjero
+
+- **Severidad:** Media · **Disparador:** el asesor confirma la regla de clasificación
+- **Dónde:** `packages/domain/src/sales.ts` y `purchases.ts` (marcados `VALIDAR-SENIAT` en el
+  punto donde se aplica), columna `operation_type` de las dos tablas de líneas
+
+El gancho de emisión escribe `interna` cuando el cliente **no** es `no_domiciliado` y cuando el
+proveedor **es** `nacional`. En los dos casos contrarios deja **NULL**, porque Ladino no implementa
+el régimen de exportación ni el de importación y **escribir «interna» sobre una operación que quizá
+no lo es, en un libro que se entrega al fisco, es declarar mal**.
+
+Que el cliente sea no domiciliado no basta para concluir exportación, ni que el proveedor sea
+extranjero para concluir importación: son indicios, no la regla. Derivarla sin fuente citada
+entraría de lleno en la prohibición de inventar obligaciones legales.
+
+**Lo que ya está defendido:** la columna existe, es nullable, y ningún libro reparte el NULL en una
+categoría que no le toca. El resto del snapshot —categoría y tratamiento— sí se congela en esas
+operaciones, así que la base sale bien clasificada por naturaleza aunque el tipo de operación falte.
+
+**Deja de ser aceptable:** ante el primer cliente que exporte o importe y tenga que presentarlo.
+**No bloquea operar** ni distorsiona ninguna cifra: hoy `operation_type` no alimenta ninguna columna
+del libro; está capturado para cuando la regla exista.
+
+> **Sobre la numeración.** R-16 a R-21 nacieron en `HANDOFF.md` durante los módulos de ventas,
+> compras y contabilidad y siguen ahí. Este registro salta de R-15 a R-22 por eso, no porque se
+> hayan perdido entradas. Consolidarlos aquí está pendiente y es trabajo de una sesión, no de esta.

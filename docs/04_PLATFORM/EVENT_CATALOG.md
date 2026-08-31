@@ -15,6 +15,33 @@
 - period.closed
 - period.reopened
 
+## Libros fiscales (migración 27, ADR-0044)
+
+**`fiscal.book.exported` — implementado, `schema_version` 1.** Lo emite `exportFiscalBook()` con
+`aggregate_type = 'fiscal_book_run'` y `aggregate_id` = el id de la fila de `fiscal_book_runs`, en
+la misma transacción que la escribe. El payload lleva `{book_kind, period_from, period_to,
+format_code, timezone, unclassified_rows, dataset_hash}` — **el hash va dentro a propósito**: un
+consumidor que algún día transmita una generación oficial tiene que poder decir *qué* dataset se
+transmitió, y sin el hash el evento solo diría que alguien exportó algo.
+
+`unclassified_rows` viaja también por la misma razón: si una generación posterior del mismo período
+trae otro número, el consumidor lo ve sin tener que recalcular el libro.
+
+**Consultar un libro NO emite evento.** Es una lectura, no un hecho. Emitirlo llenaría el outbox de
+ruido y haría que el rastro de presentaciones dejara de probar nada — el mismo argumento por el que
+consultar tampoco deja fila en `fiscal_book_runs` (ADR-0044 §2).
+
+**`fiscal.book.reconciled` — RESERVADO, hoy no lo emite nadie.** La conciliación
+`libro = mayor + cola` es una consulta (`platform.book_ledger_reconciliation()`), y una consulta no
+es un hecho: no hay caso de uso que lo emita y el nombre queda apartado, no implementado.
+
+> Queda escrito **contra la política de esta misma sección** —«los eventos se añaden cuando exista
+> el caso de uso que los emite, no por anticipado»— por encargo explícito, para reservar el nombre
+> de cara a la transmisión de generaciones oficiales. Va marcado así justamente para que el
+> catálogo no mienta sobre lo que existe. El día que un caso de uso lo emita, se mueve arriba con
+> su payload; si nunca lo emite, **se borra**, porque un nombre reservado que envejece sin dueño es
+> exactamente la adivinación que la política evita.
+
 ## Inventory
 - stock.received
 - stock.shipped

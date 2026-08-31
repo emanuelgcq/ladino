@@ -9,9 +9,9 @@ FISCALES.** Flujo trunk-based: todo en `main`, `verify` en verde antes de cada c
 S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅ ·
 Inventario ✅ · Ventas ✅ · Compras ✅ · Contabilidad ✅ · Libros fiscales ✅** · S0.6b ⏸️
 
-> ⚠️ **La migración 27 está en `main` y NO en el remoto.** Las 26 anteriores sí. Aplicarla es un
-> deploy y exige aprobación explícita (CLAUDE.md §2); no se pidió en el mensaje que encargó este
-> módulo. **Local y remoto divergen en una migración hasta que se apruebe.**
+> ✅ **La migración 27 está aplicada en el remoto** (2026-08-31, con aprobación explícita, vía
+> Management API y registrada en `supabase_migrations.schema_migrations` con la forma de la CLI).
+> **27/27. Local y remoto no divergen.**
 
 ## Libros fiscales — el módulo entero (2026-08-31)
 
@@ -87,11 +87,16 @@ mal. VALIDAR-SENIAT.
 - **La máscara de 14 caracteres del comprobante de retención** (PA 102) sigue sin implementarse,
   como ya decía el módulo de compras.
 
-Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **las 26 primeras migraciones aplicadas** (2026-08-27, vía
+Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **las 27 migraciones aplicadas** (las 26 primeras el 2026-08-27 y la 27 el 2026-08-31, vía
 Management API, registradas en `supabase_migrations.schema_migrations` con la forma de la CLI para
 que un `db push` futuro las reconozca). Paridad verificada por huella, **idéntica en las seis
-clases**: 1078 columnas · 746 constraints · 282 índices · 546 policies · 80 funciones · 183
+clases**: 1106 columnas · 765 constraints · 287 índices · 562 policies · 86 funciones · 187
 triggers. Local y remoto no divergen.
+
+Y se comprueba en el remoto lo que la migración 27 garantiza sobre sí misma: **0 adaptadores
+oficiales, 0 generaciones sembradas, 0 líneas con tratamiento backfilleado, 0 columnas nuevas con
+`NOT NULL` o default, RLS forzada en las dos tablas.** Un seed que se cuela en producción es
+indistinguible de un dato real seis meses después.
 
 ## El gancho contable — R-20 cerrado (2026-08-28)
 

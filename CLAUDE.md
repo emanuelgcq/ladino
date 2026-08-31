@@ -174,6 +174,31 @@ Por eso esta categoría de test se escribe aparte y a propósito. Los que ya exi
 módulo con los anteriores, y quién lo mira?».** Si la respuesta es «nadie», ese es el trabajo que
 falta.
 
+### La primera excepción documentada convierte el gate compuesto en decoración
+
+Al escribir la migración 27, `fiscal_book_runs` nació con `tenant_id` y sin trigger de ancla, y el
+test 006 lo cazó. El razonamiento para dejarlo así estaba disponible y era correcto de puertas
+adentro: **la tabla es append-only, no admite UPDATE por ninguna vía, luego el ancla es
+redundante.** Se puso el trigger igual.
+
+El motivo no es que el ancla haga falta en esa tabla. Es que el test 006 no pregunta por una tabla:
+pregunta *«¿toda tabla de `public` con `tenant_id` lleva su ancla?»* y su respuesta útil es un
+**cero**. En cuanto una tabla se excluye por buenas razones, la consulta deja de poder devolver
+cero y pasa a devolver «uno, pero es el conocido». Y a partir de ahí ya no afirma nada: quien la
+lea dentro de seis meses no distinguirá la excepción razonada de la que se coló, y el coste de
+revisar cuál es cuál lo paga cada vez que el gate se pone ámbar. Un gate que exige interpretación
+no es un gate.
+
+Esto vale para toda regla de familia y para todos sus gates compuestos:
+`accounting_coverage_gaps()`, `stock_reconciliation()`, la propiedad del ancla, el `api-surface`,
+`boundaries`. Su valor entero está en que la respuesta correcta sea **cero, sin lista de perdones**.
+
+Regla: **si el invariante se cumple para toda la familia, las tablas donde parece redundante lo
+cumplen igual.** El coste de cumplirlo de más es un trigger que nunca dispara; el coste de la
+primera excepción es el gate entero. Y si de verdad hay un caso que no puede cumplirlo, entonces no
+se apunta en una lista de exclusiones: **se cambia el invariante para que lo diga en su enunciado**,
+y vuelve a valer cero.
+
 ### Qué leer según la tarea
 
 | Si tocas… | Lee obligatoriamente |
