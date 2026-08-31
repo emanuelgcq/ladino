@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   // `strictPort` se mantiene: si el puerto está ocupado queremos que FALLE, no
   // que vite escoja otro en silencio y la webapp aparezca donde nadie la busca.
   // El puerto se elige con LADINO_WEB_PORT para poder convivir con otro

@@ -1,0 +1,247 @@
+/**
+ * Ladino — EL archivo de tema. Dirección «Esmeralda contable».
+ *
+ * Todo token visual del sistema vive aquí y solo aquí: colores, radios,
+ * tipografía, sombras. Los componentes consumen utilidades de Tailwind v4
+ * mapeadas a estos tokens (@theme inline), así que cambiar la identidad es
+ * cambiar este archivo — ningún componente lleva un hex propio.
+ *
+ * Principios (levantamiento 2026, familia Mercury/Ramp, densidad Linear):
+ *   · UN acento: esmeralda. Acciones primarias, éxito y dinero positivo.
+ *   · Semánticos con papel fijo: ámbar = advertencia y pérdida cambiaria,
+ *     rojo = SOLO destructivo, azul = información.
+ *   · La jerarquía la hacen tipografía y espaciado, no decoraciones:
+ *     bordes sutiles, radios 6–8 px, sombras mínimas.
+ *   · Dark mode por CLASE (.dark en <html>): light por defecto,
+ *     prefers-color-scheme como arranque, toggle manual persistido
+ *     (ver theme.ts). Nunca negro puro: slate-900 en adelante.
+ */
+@import "tailwindcss";
+
+/* La variante dark responde a la CLASE, no al media query: el toggle manda. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* ── Base light: blancos y gris-perla sobre escala slate ── */
+  --background: #f8fafc; /* slate-50: el lienzo de la app */
+  --surface: #ffffff; /* tarjetas y paneles */
+  --surface-muted: #f1f5f9; /* slate-100: cabeceras de tabla, wells */
+  --border: #e2e8f0; /* slate-200 */
+  --border-strong: #cbd5e1; /* slate-300: inputs, separadores con peso */
+
+  --foreground: #0f172a; /* slate-900 */
+  --muted-foreground: #64748b; /* slate-500: etiquetas, metadatos */
+  --faint-foreground: #94a3b8; /* slate-400: placeholders, deshabilitado */
+
+  /* ── El acento único ── */
+  --accent: #059669; /* emerald-600 */
+  --accent-hover: #047857; /* emerald-700 */
+  --accent-foreground: #ffffff;
+  --accent-soft: #ecfdf5; /* emerald-50: fondos de éxito/positivo */
+  --accent-soft-foreground: #047857;
+
+  /* ── Semánticos ── */
+  --warning: #d97706; /* amber-600: advertencias y pérdida cambiaria */
+  --warning-soft: #fffbeb; /* amber-50 */
+  --warning-soft-foreground: #b45309; /* amber-700 */
+  --destructive: #dc2626; /* red-600: SOLO errores destructivos */
+  --destructive-hover: #b91c1c;
+  --destructive-foreground: #ffffff;
+  --destructive-soft: #fef2f2; /* red-50 */
+  --destructive-soft-foreground: #b91c1c;
+  --info: #2563eb; /* blue-600 */
+  --info-soft: #eff6ff; /* blue-50 */
+  --info-soft-foreground: #1d4ed8;
+
+  --ring: #05966955; /* anillo de foco: esmeralda translúcida */
+
+  /* Sombra única y mínima: la elevación real la da el borde. */
+  --shadow-soft: 0 1px 2px 0 rgb(15 23 42 / 0.05);
+  --shadow-overlay: 0 8px 30px -6px rgb(15 23 42 / 0.16);
+}
+
+.dark {
+  /* ── Base dark: slate-900 en adelante, nunca negro puro ── */
+  --background: #0f172a; /* slate-900 */
+  --surface: #1e293b; /* slate-800 */
+  --surface-muted: #24334a; /* entre slate-800 y 700 */
+  --border: #334155; /* slate-700 */
+  --border-strong: #475569; /* slate-600 */
+
+  --foreground: #f1f5f9; /* slate-100 */
+  --muted-foreground: #94a3b8; /* slate-400 */
+  --faint-foreground: #64748b; /* slate-500 */
+
+  --accent: #10b981; /* emerald-500: más luz sobre fondo oscuro */
+  --accent-hover: #34d399; /* emerald-400 */
+  --accent-foreground: #052e22; /* texto oscuro sobre esmeralda clara */
+  --accent-soft: rgb(16 185 129 / 0.12);
+  --accent-soft-foreground: #34d399;
+
+  --warning: #f59e0b; /* amber-500 */
+  --warning-soft: rgb(245 158 11 / 0.12);
+  --warning-soft-foreground: #fbbf24;
+  --destructive: #ef4444; /* red-500 */
+  --destructive-hover: #f87171;
+  --destructive-foreground: #ffffff;
+  --destructive-soft: rgb(239 68 68 / 0.12);
+  --destructive-soft-foreground: #f87171;
+  --info: #3b82f6;
+  --info-soft: rgb(59 130 246 / 0.12);
+  --info-soft-foreground: #60a5fa;
+
+  --ring: #10b98166;
+
+  --shadow-soft: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow-overlay: 0 8px 30px -6px rgb(0 0 0 / 0.55);
+}
+
+@theme inline {
+  /* Los tokens semánticos, expuestos como utilidades (bg-surface, text-accent…). */
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-faint-foreground: var(--faint-foreground);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-foreground: var(--accent-soft-foreground);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-soft-foreground: var(--warning-soft-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-hover: var(--destructive-hover);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-destructive-soft-foreground: var(--destructive-soft-foreground);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-info-soft-foreground: var(--info-soft-foreground);
+  --color-ring: var(--ring);
+
+  /* Tipografía: Inter para UI, JetBrains Mono para columnas numéricas. */
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Radios: 6–8 px. Nada más grande salvo el pill de los badges. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+
+  --shadow-soft: var(--shadow-soft);
+  --shadow-overlay: var(--shadow-overlay);
+}
+
+@layer base {
+  html {
+    /* Escala compacta de ERP (densidad Linear): 14 px de base. */
+    font-size: 14px;
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    /* tnum SIEMPRE: en un ERP cualquier texto puede contener una cifra, y las
+       columnas solo se alinean si TODOS los dígitos ocupan lo mismo. */
+    font-feature-settings:
+      "tnum" 1,
+      "cv11" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background-color: var(--accent-soft);
+    color: var(--accent-soft-foreground);
+  }
+  /* Foco visible SIEMPRE (WCAG 2.2): anillo esmeralda, nunca outline:none sin más. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+/* ── Vistas heredadas (Fase B las rediseña) ──────────────────────────────────
+   Las 10 pantallas anteriores no tienen clases. Este bloque les da una base
+   legible DENTRO del shell nuevo sin tocar sus ficheros: es andamiaje declarado,
+   no parte del sistema de diseño, y muere cuando Fase B termine. */
+.legacy {
+  font-size: 0.92rem;
+}
+.legacy table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.legacy th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: var(--surface-muted);
+  padding: 0.4rem 0.65rem;
+  border-bottom: 1px solid var(--border);
+}
+.legacy td {
+  padding: 0.4rem 0.65rem;
+  border-bottom: 1px solid var(--border);
+}
+.legacy button {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--foreground);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+}
+.legacy button:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+.legacy button:disabled {
+  color: var(--faint-foreground);
+  cursor: default;
+}
+.legacy input,
+.legacy select,
+.legacy textarea {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--foreground);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.5rem;
+  margin: 0.1rem 0.15rem 0.1rem 0;
+}
+.legacy fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  margin: 0.75rem 0;
+  background: var(--surface);
+}
+.legacy legend {
+  color: var(--muted-foreground);
+  padding: 0 0.35rem;
+}
+.legacy h2,
+.legacy h3,
+.legacy h4 {
+  font-weight: 600;
+  margin: 0.8rem 0 0.4rem;
+}
+.legacy p[role="alert"] {
+  color: var(--destructive-soft-foreground);
+  background: var(--destructive-soft);
+  border: 1px solid var(--destructive);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.6rem;
+}
+.legacy p[role="status"] {
+  color: var(--accent-soft-foreground);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.6rem;
+}
