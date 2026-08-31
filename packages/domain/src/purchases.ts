@@ -693,6 +693,7 @@ export async function registerSupplierInvoice(
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
   let facturaId = "";
+  let falloRetencion: PurchaseError | null = null;
   try {
     facturaId = await sql.savepoint(async (sp) => {
       const [f] = await sp<{ id: string }[]>`
@@ -795,42 +796,60 @@ export async function registerSupplierInvoice(
                amount_transaction_currency = ${sub.plus(imp).toFixed(8)},
                functional_amount = ${sub.plus(imp).times(tasa.value.rate).toDecimalPlaces(8, 4).toFixed(8)}
          where id = ${f!.id}`;
+
+      /**
+       * Las retenciones, DENTRO del mismo savepoint que la factura. Al
+       * proveedor EXTRANJERO no se le practican: no le aplican las locales, y
+       * el eje `supplier_person_type` de retention_rules está para cuando
+       * exista la norma de no domiciliados (ADR-0039 §6, VALIDAR-TRIBUTARIO).
+       *
+       * Estaban fuera, y eso dejaba un documento fantasma: `withTransaction`
+       * COMMITEA aunque el caso de uso devuelva `err` —solo revierte si algo
+       * LANZA—, así que devolver el error de la retención escribía la factura
+       * después de haber respondido 409, sin asiento y sin fila en la cola. Lo
+       * destapó `accounting_coverage_gaps()` contándolo como `missing`; el
+       * defecto llevaba ahí desde que se construyó compras y ningún test de
+       * compras lo veía, porque todos miraban la respuesta y no la tabla.
+       *
+       * Una factura cuya retención no se pudo calcular NO EXISTE: la retención
+       * es parte de registrarla, no un paso posterior.
+       */
+      if (prov.supplier_kind === "nacional" && (input.retention_concepts?.length ?? 0) > 0) {
+        for (const concepto of input.retention_concepts!) {
+          const r = await practicarRetencion(sp, ctx.value, {
+            companyId: input.company_id,
+            supplierId: input.supplier_id,
+            invoiceId: f!.id,
+            conceptCode: concepto,
+            taxpayerType: prov.taxpayer_type_code,
+            personType: prov.person_type_code,
+            fecha: input.invoice_date,
+            baseIva: imp.toFixed(8),
+          });
+          if (!r.ok) {
+            // Se guarda ANTES de lanzar: lo que sale del savepoint es el error
+            // de Postgres, no este, y sin guardarlo el 409 perdería su mensaje.
+            falloRetencion = r.error;
+            throw new Error("retención rechazada");
+          }
+        }
+        const [suma] = await sp<{ t: string }[]>`
+          select coalesce(sum(retained_amount), 0)::text as t from public.supplier_retentions
+           where supplier_invoice_id = ${f!.id} and status <> 'cancelled'`;
+        await sp`
+          update public.supplier_invoices set retention_total = ${suma?.t ?? "0"}
+           where id = ${f!.id}`;
+      }
       return f!.id;
     });
   } catch (e) {
+    if (falloRetencion !== null) return err(falloRetencion);
     const conocido = traducir(e);
     if (conocido) return err(conocido);
     if (e instanceof Error && !("code" in e)) {
       return err({ code: "VALIDATION_FAILED", message: e.message });
     }
     throw e;
-  }
-
-  // Las retenciones. Al proveedor EXTRANJERO no se le practican: no le aplican
-  // las locales, y el eje `supplier_person_type` de retention_rules está para
-  // cuando exista la norma de no domiciliados (ADR-0039 §6, VALIDAR-TRIBUTARIO).
-  if (prov.supplier_kind === "nacional" && (input.retention_concepts?.length ?? 0) > 0) {
-    const [totales] = await sql<{ base_iva: string }[]>`
-      select tax_amount::text as base_iva from public.supplier_invoices where id = ${facturaId}`;
-    for (const concepto of input.retention_concepts!) {
-      const r = await practicarRetencion(sql, ctx.value, {
-        companyId: input.company_id,
-        supplierId: input.supplier_id,
-        invoiceId: facturaId,
-        conceptCode: concepto,
-        taxpayerType: prov.taxpayer_type_code,
-        personType: prov.person_type_code,
-        fecha: input.invoice_date,
-        baseIva: totales?.base_iva ?? "0",
-      });
-      if (!r.ok) return r;
-    }
-    const [suma] = await sql<{ t: string }[]>`
-      select coalesce(sum(retained_amount), 0)::text as t from public.supplier_retentions
-       where supplier_invoice_id = ${facturaId} and status <> 'cancelled'`;
-    await sql`
-      update public.supplier_invoices set retention_total = ${suma?.t ?? "0"}
-       where id = ${facturaId}`;
   }
 
   const detalle = await leerFactura(sql, input.company_id, facturaId);

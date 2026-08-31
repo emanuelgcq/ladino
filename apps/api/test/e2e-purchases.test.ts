@@ -642,10 +642,25 @@ describe("compras de extremo a extremo", () => {
   });
 
   it("el matching muestra los tres vértices y su diferencia de precio", async () => {
-    const facturas = await pedir("GET", "/v1/supplier-invoices?status=posted", COMPRADOR);
-    const lista = (await facturas.json()) as { items: Record<string, string>[] };
-    const conOrden = lista.items.find((i) => i["purchase_order_id"] !== null);
-    expect(conOrden).toBeDefined();
+    // La factura del matching se CREA aquí en vez de buscar una que ya exista.
+    // Antes se rebuscaba entre las posteadas la primera con orden, y la que
+    // encontraba era una que NUNCA debió existir: una factura cuya retención
+    // había sido rechazada y que se quedaba escrita igual. Arreglado ese
+    // defecto, el test se quedó sin su documento — o sea que estaba pasando
+    // gracias al fallo que otro test creía estar demostrando.
+    const propia = await pedir("POST", "/v1/supplier-invoices", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      purchase_order_id: ORDEN,
+      supplier_document_number: `FAC-${RUN}-MATCH`,
+      supplier_control_number: "00-7777777",
+      invoice_date: HOY,
+      currency: "VES",
+      lines: [{ product_id: PROD_A, quantity: "10", unit_price: "4000" }],
+    });
+    expect(propia.status).toBe(201);
+    const conOrden = (await propia.json()) as Record<string, string>;
+    expect(conOrden["purchase_order_id"]).toBe(ORDEN);
     const m = await pedir(
       "GET",
       `/v1/purchases/matching?supplier_invoice_id=${conOrden!["id"]}`,
