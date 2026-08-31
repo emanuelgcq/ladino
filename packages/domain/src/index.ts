@@ -76,3 +76,11 @@ export {
   type GenerationOutcome,
   type JournalGenerationError,
 } from "./journal-generator.js";
+export {
+  readFiscalBook,
+  exportFiscalBook,
+  BOOK_GENERATOR_VERSION,
+  type LibroLeido,
+  type ExportacionHecha,
+  type FiscalBookError,
+} from "./fiscal-books.js";

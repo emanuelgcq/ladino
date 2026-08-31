@@ -16,6 +16,7 @@ import { inventoryRoutes, inventoryExtensionsRoutes } from "./routes/inventory.j
 import { salesRoutes } from "./routes/sales.js";
 import { accountingRoutes } from "./routes/accounting.js";
 import { purchasesRoutes } from "./routes/purchases.js";
+import { fiscalBooksRoutes } from "./routes/fiscal-books.js";
 
 export interface AppConfig {
   readonly sql: Sql;
@@ -143,6 +144,7 @@ export function buildApp(cfg: AppConfig): Hono {
   salesRoutes(app, cfg.sql, idempotencia);
   accountingRoutes(app, cfg.sql, idempotencia);
   purchasesRoutes(app, cfg.sql, idempotencia);
+  fiscalBooksRoutes(app, cfg.sql, idempotencia);
   inventoryExtensionsRoutes(app, cfg.sql, idempotencia);
 
   return app;

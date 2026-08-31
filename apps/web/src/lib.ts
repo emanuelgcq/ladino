@@ -746,3 +746,65 @@ export interface BalanceSheet {
   /** activo == pasivo + patrimonio. Lo comprueba el servidor, no el cliente. */
   balanced: boolean;
 }
+
+// ── Libros fiscales (ADR-0044) ──────────────────────────────────────────────
+
+export type BookKind = "ventas" | "compras" | "retenciones_iva" | "retenciones_islr";
+
+export interface FiscalBook {
+  book_kind: BookKind;
+  period_from: string;
+  period_to: string;
+  currency: string;
+  row_count: number;
+  /**
+   * Las filas van sin tipar columna a columna a propósito: son cuatro libros
+   * con cuatro formas, las columnas las fija la migración 27 y la pantalla las
+   * enseña tal como llegan. Tipar aquí las cuatro sería una quinta definición
+   * que se desincroniza con las otras cuatro.
+   */
+  rows: Record<string, unknown>[];
+  /** Renglones con base que el sistema NO puede clasificar. Se enseñan, no se reparten. */
+  unclassified_rows: number;
+}
+export interface BookReconciliation {
+  period_from: string;
+  period_to: string;
+  currency: string;
+  rows: {
+    concepto: string;
+    libro: string;
+    mayor: string;
+    en_cola: string;
+    diferencia: string;
+    cuadra: boolean;
+  }[];
+  balanced: boolean;
+}
+export interface BookFormatAdapter {
+  code: string;
+  book_kind: string;
+  name: string;
+  description: string;
+  /** Hoy NINGUNO: el layout del SENIAT no está en el repositorio y no se inventa. */
+  is_official: boolean;
+  legal_source: string;
+  status: string;
+  /** Si este release sabe escribirlo. Estar en el catálogo no es tener implementación. */
+  implemented: boolean;
+}
+export interface FiscalBookRun {
+  id: string;
+  company_id: string;
+  book_kind: BookKind;
+  period_from: string;
+  period_to: string;
+  parameters: Record<string, unknown>;
+  timezone: string;
+  generator_version: string;
+  dataset_hash: string;
+  row_count: number;
+  format_code: string;
+  created_by: string | null;
+  created_at: string;
+}

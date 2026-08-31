@@ -774,7 +774,7 @@ export async function registerSupplierInvoice(
              tax_rule_id, tax_rate_snapshot, tax_amount, line_subtotal_transaction,
              line_total_transaction, amount_transaction_currency, transaction_currency, fx_rate,
              functional_amount, functional_currency, rate_source, rate_timestamp,
-             rounding_policy_id)
+             rounding_policy_id, tax_category_snapshot, tax_treatment, operation_type)
           values (${ctx.value.tenantId}, ${input.company_id}, ${f!.id}, ${n},
                   ${l.goods_receipt_line_id ?? null}, ${l.product_id},
                   ${l.description ?? producto.name}, ${l.quantity},
@@ -783,7 +783,16 @@ export async function registerSupplierInvoice(
                   ${base.value.toAmountString()}, ${totalLinea.toFixed(8)},
                   ${base.value.toAmountString()}, ${input.currency},
                   ${tasa.value.rate.toFixed()}, ${totalFunc.value.toAmountString()},
-                  ${ctx.value.functionalCurrency}, ${tasa.value.source}, now(), ${POLICY.id})`;
+                  ${ctx.value.functionalCurrency}, ${tasa.value.source}, now(), ${POLICY.id},
+                  -- ADR-0044 §1. El tratamiento lo deriva la función de la base
+                  -- —una sola definición para los dos libros— y el tipo de
+                  -- operación queda SIN CLASIFICAR en el proveedor extranjero:
+                  -- Ladino no implementa el régimen de importación, y escribir
+                  -- «interna» sobre una importación es declarar mal.
+                  -- VALIDAR-SENIAT.
+                  ${producto.tax_category_code},
+                  platform.tax_treatment_of(${producto.tax_category_code}),
+                  ${prov.supplier_kind === "nacional" ? "interna" : null})`;
       }
 
       // Y aquí pasa a `posted`: hasta este UPDATE es un borrador editable, y

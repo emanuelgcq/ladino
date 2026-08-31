@@ -136,3 +136,18 @@ export {
   IncomeStatementResponse,
   BalanceSheetResponse,
 } from "./accounting.js";
+export {
+  BookKind,
+  TaxTreatment,
+  SalesBookRow,
+  PurchasesBookRow,
+  IvaRetentionBookRow,
+  IslrRetentionBookRow,
+  FiscalBookResponse,
+  BookReconciliationResponse,
+  BookFormatAdapterResponse,
+  ExportFiscalBookRequest,
+  FiscalBookRunResponse,
+  ExportFiscalBookResponse,
+  ListFiscalBookRunsResponse,
+} from "./fiscal-books.js";

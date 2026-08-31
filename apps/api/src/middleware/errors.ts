@@ -142,6 +142,12 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   RETENTION_RULE_MISSING: 409, // LAD53
   PRICE_ABOVE_TOLERANCE: 409,
   MISSING_WEIGHT: 422, // LAD55
+  // Libros fiscales (migración 27, ADR-0044 §5). El adaptador pedido está en el
+  // catálogo pero no tiene implementación en este release, o no la tiene todavía
+  // porque el layout del SENIAT no está cargado. Es 409 y no 422 por lo de
+  // siempre: el cuerpo está bien, lo que falta es en el sistema. Y no es 501,
+  // porque el recurso sí existe — lo que no existe es ese formato concreto.
+  BOOK_FORMAT_UNAVAILABLE: 409, // LAD65
 };
 
 export class DominioError extends Error {

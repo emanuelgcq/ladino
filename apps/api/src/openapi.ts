@@ -103,6 +103,12 @@ import {
   PendingJournalResponse,
   IncomeStatementResponse,
   BalanceSheetResponse,
+  FiscalBookResponse,
+  BookReconciliationResponse,
+  BookFormatAdapterResponse,
+  ExportFiscalBookRequest,
+  ExportFiscalBookResponse,
+  ListFiscalBookRunsResponse,
 } from "@ladino/schemas";
 
 /**
@@ -1819,6 +1825,93 @@ export function buildOpenApiDocument(): object {
     security: [{ bearerAuth: [] }],
     request: { headers: companyHeader, query: z.object({ date: z.string() }) },
     responses: { 200: okJson(situacion, "La situación financiera."), ...erroresComunes },
+  });
+
+  // ── Libros fiscales (migración 27, ADR-0044) ───────────────────────────────
+  const libro = registry.register("FiscalBookResponse", FiscalBookResponse);
+  const conciliacionLibro = registry.register(
+    "BookReconciliationResponse",
+    BookReconciliationResponse,
+  );
+  const adaptador = registry.register("BookFormatAdapterResponse", BookFormatAdapterResponse);
+  const exportarLibro = registry.register("ExportFiscalBookRequest", ExportFiscalBookRequest);
+  const libroExportado = registry.register("ExportFiscalBookResponse", ExportFiscalBookResponse);
+  const generaciones = registry.register("ListFiscalBookRunsResponse", ListFiscalBookRunsResponse);
+  const periodoQuery = z.object({ from: z.string(), to: z.string() });
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-books/reports/reconciliation",
+    summary: "Conciliación libro ↔ mayor, con la cola a la vista (permiso fiscal_book.read)",
+    description:
+      "El invariante de ADR-0044 §3: `libro = mayor + pendientes en cola`. Devuelve las TRES " +
+      "cifras, no la diferencia sola — mientras exista la cola de ADR-0042 un documento correcto " +
+      "puede estar sin contabilizar, y un reporte que solo dijera «no cuadra» convertiría eso en " +
+      "un falso positivo diario.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, query: periodoQuery },
+    responses: { 200: okJson(conciliacionLibro, "Libro, mayor y cola."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-books/formats",
+    summary: "Catálogo de adaptadores de formato (permiso fiscal_book.read)",
+    description:
+      "Ninguno es OFICIAL hoy: el layout que exige el SENIAT no está en el repositorio y no se " +
+      "inventa (ADR-0044 §5). `implemented` dice cuáles sabe escribir este release, que es cosa " +
+      "distinta de estar en el catálogo.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(z.array(adaptador), "Los formatos."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-books/runs",
+    summary: "Generaciones oficiales ya hechas (permiso fiscal_book.read)",
+    description:
+      "Una fila por EXPORTACIÓN, con su hash. Consultar en pantalla no aparece aquí: es una " +
+      "lectura, y no hay nada que demostrar sobre ella.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, query: z.object({ kind: z.string().optional() }) },
+    responses: { 200: okJson(generaciones, "Las generaciones."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal-books/export",
+    summary: "Exportar un libro dejando su rastro reproducible (permiso fiscal_book.export)",
+    description:
+      "Escribe una fila en `fiscal_book_runs` con los siete campos y el SHA-256 del dataset. " +
+      "Pedir un adaptador que está en el catálogo pero sin implementación responde 409 " +
+      "BOOK_FORMAT_UNAVAILABLE (LAD65): un fichero con nombre de oficial que no lo es sería peor " +
+      "que no exportar.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: exportarLibro } } },
+    },
+    responses: {
+      201: okJson(libroExportado, "El libro, su serialización y el rastro."),
+      409: errorRef("El adaptador de formato no tiene implementación cargada."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-books/{kind}",
+    summary: "El libro de ventas, compras o retenciones (permiso fiscal_book.read)",
+    description:
+      "Se calcula desde los documentos cada vez, que es lo que garantiza que cuadre con ellos. " +
+      "Las bases van separadas por tratamiento; `base_sin_clasificar` recoge lo emitido antes de " +
+      "la migración 27, que no tiene el tratamiento congelado y NO se adivina.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      params: z.object({
+        kind: z.enum(["ventas", "compras", "retenciones_iva", "retenciones_islr"]),
+      }),
+      query: periodoQuery,
+    },
+    responses: { 200: okJson(libro, "El libro del período."), ...erroresComunes },
   });
 
   const generator = new OpenApiGeneratorV3(registry.definitions);

@@ -128,6 +128,23 @@ interface LineaCalculada {
   readonly unitPriceList: Money;
   readonly taxRuleId: string | null;
   readonly costSnapshot: string | null;
+  /**
+   * ADR-0044 §1: la categoría tributaria del producto AL EMITIR. Se congela en
+   * la línea porque el libro de ventas separa exento, exonerado y no sujeto en
+   * columnas legalmente distintas, y la alícuota —que sí se guardaba— vale `0`
+   * en las tres. Leer la categoría del producto al generar el libro sería
+   * reinterpretar el pasado con el catálogo de hoy.
+   */
+  readonly taxCategory: string;
+  /**
+   * `interna` | `exportacion` | `importacion`, o NULL si no se sabe.
+   *
+   * VALIDAR-SENIAT: Ladino no implementa el régimen de exportación, y una venta
+   * a un cliente NO DOMICILIADO puede serlo. Antes que escribir «interna» sobre
+   * una operación que quizá no lo es —en un libro que se entrega al fisco—, se
+   * deja sin clasificar y el libro lo dice.
+   */
+  readonly operationType: string | null;
 }
 
 /**
@@ -305,6 +322,8 @@ async function calcularLineas(
       unitPriceList: resuelto.value.unitPriceListCurrency,
       taxRuleId,
       costSnapshot,
+      taxCategory: producto.tax_category_code,
+      operationType: contraparte.taxpayer_type_code === "no_domiciliado" ? null : "interna",
     });
   }
   return ok({
@@ -443,7 +462,8 @@ async function insertarDocumento(
          line_subtotal_transaction, line_subtotal_functional,
          line_total_transaction, line_total_functional,
          amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
-         functional_currency, rate_source, rate_timestamp, rounding_policy_id, cost_snapshot)
+         functional_currency, rate_source, rate_timestamp, rounding_policy_id, cost_snapshot,
+         tax_category_snapshot, tax_treatment, operation_type)
       values (${ctx.tenantId}, ${d.companyId}, ${doc!.id}, ${n}, ${l.productId}, ${l.description},
               ${l.calc.quantity.toFixed()},
               ${l.calc.unitPrice.toAmountString()}, ${precioFunc.value.toAmountString()},
@@ -455,7 +475,12 @@ async function insertarDocumento(
               ${l.calc.total.toAmountString()}, ${d.transactionCurrency},
               ${d.fxRate.toFixed()}, ${f.tot.value.toAmountString()},
               ${ctx.functionalCurrency}, ${d.rateSource}, now(), ${DOC_POLICY.id},
-              ${l.costSnapshot})`;
+              ${l.costSnapshot},
+              -- El tratamiento se deriva con la función de la base y NO aquí:
+              -- una segunda definición en TypeScript es exactamente cómo dos
+              -- libros acaban clasificando distinto la misma línea.
+              ${l.taxCategory}, platform.tax_treatment_of(${l.taxCategory}),
+              ${l.operationType})`;
   }
   return ok(doc!);
 }
@@ -1434,6 +1459,8 @@ async function createInvoiceLike(
       unitPriceList: precio.value,
       taxRuleId,
       costSnapshot: null,
+      taxCategory: producto!.tax_category_code,
+      operationType: cliente!.taxpayer_type_code === "no_domiciliado" ? null : "interna",
     });
   }
 

@@ -6963,6 +6963,1142 @@
           "balanced"
         ],
         "additionalProperties": false
+      },
+      "FiscalBookResponse": {
+        "type": "object",
+        "properties": {
+          "book_kind": {
+            "type": "string",
+            "enum": [
+              "ventas",
+              "compras",
+              "retenciones_iva",
+              "retenciones_islr"
+            ]
+          },
+          "period_from": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "period_to": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "row_count": {
+            "type": "integer"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "document_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "issued_on": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "series": {
+                      "type": "string"
+                    },
+                    "document_number": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "control_number": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "customer_tax_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "customer_name": {
+                      "type": "string"
+                    },
+                    "customer_taxpayer_type": {
+                      "type": "string"
+                    },
+                    "transaction_currency": {
+                      "type": "string"
+                    },
+                    "fx_rate": {
+                      "type": "string"
+                    },
+                    "base_gravada": {
+                      "type": "string"
+                    },
+                    "base_exenta": {
+                      "type": "string"
+                    },
+                    "base_exonerada": {
+                      "type": "string"
+                    },
+                    "base_no_sujeta": {
+                      "type": "string"
+                    },
+                    "base_sin_clasificar": {
+                      "type": "string"
+                    },
+                    "iva_debito": {
+                      "type": "string"
+                    },
+                    "total_amount": {
+                      "type": "string"
+                    },
+                    "journal_entry_id": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uuid"
+                    }
+                  },
+                  "required": [
+                    "document_id",
+                    "issued_on",
+                    "kind",
+                    "series",
+                    "document_number",
+                    "control_number",
+                    "status",
+                    "customer_tax_id",
+                    "customer_name",
+                    "customer_taxpayer_type",
+                    "transaction_currency",
+                    "fx_rate",
+                    "base_gravada",
+                    "base_exenta",
+                    "base_exonerada",
+                    "base_no_sujeta",
+                    "base_sin_clasificar",
+                    "iva_debito",
+                    "total_amount",
+                    "journal_entry_id"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "invoice_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "invoice_date": {
+                      "type": "string"
+                    },
+                    "supplier_tax_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "supplier_name": {
+                      "type": "string"
+                    },
+                    "supplier_kind": {
+                      "type": "string"
+                    },
+                    "supplier_document_number": {
+                      "type": "string"
+                    },
+                    "supplier_control_number": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "supplier_document_ref": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "base_gravada": {
+                      "type": "string"
+                    },
+                    "base_exenta": {
+                      "type": "string"
+                    },
+                    "base_exonerada": {
+                      "type": "string"
+                    },
+                    "base_no_sujeta": {
+                      "type": "string"
+                    },
+                    "base_sin_clasificar": {
+                      "type": "string"
+                    },
+                    "iva_credito": {
+                      "type": "string"
+                    },
+                    "iva_al_costo": {
+                      "type": "string"
+                    },
+                    "tax_is_recoverable": {
+                      "type": "boolean"
+                    },
+                    "retenido_iva": {
+                      "type": "string"
+                    },
+                    "retenido_islr": {
+                      "type": "string"
+                    },
+                    "total_amount": {
+                      "type": "string"
+                    },
+                    "journal_entry_id": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uuid"
+                    }
+                  },
+                  "required": [
+                    "invoice_id",
+                    "invoice_date",
+                    "supplier_tax_id",
+                    "supplier_name",
+                    "supplier_kind",
+                    "supplier_document_number",
+                    "supplier_control_number",
+                    "supplier_document_ref",
+                    "status",
+                    "base_gravada",
+                    "base_exenta",
+                    "base_exonerada",
+                    "base_no_sujeta",
+                    "base_sin_clasificar",
+                    "iva_credito",
+                    "iva_al_costo",
+                    "tax_is_recoverable",
+                    "retenido_iva",
+                    "retenido_islr",
+                    "total_amount",
+                    "journal_entry_id"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "retention_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "receipt_number": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "receipt_series": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "fiscal_period": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "issued_on": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "supplier_tax_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "supplier_name": {
+                      "type": "string"
+                    },
+                    "supplier_document_number": {
+                      "type": "string"
+                    },
+                    "supplier_control_number": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "invoice_date": {
+                      "type": "string"
+                    },
+                    "base_amount": {
+                      "type": "string"
+                    },
+                    "rate": {
+                      "type": "string"
+                    },
+                    "retained_amount": {
+                      "type": "string"
+                    },
+                    "legal_source": {
+                      "type": "string"
+                    },
+                    "receipt_status": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "retention_id",
+                    "receipt_number",
+                    "receipt_series",
+                    "fiscal_period",
+                    "issued_on",
+                    "supplier_tax_id",
+                    "supplier_name",
+                    "supplier_document_number",
+                    "supplier_control_number",
+                    "invoice_date",
+                    "base_amount",
+                    "rate",
+                    "retained_amount",
+                    "legal_source",
+                    "receipt_status"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "retention_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "receipt_number": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "receipt_series": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "fiscal_period": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "issued_on": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "supplier_tax_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "supplier_name": {
+                      "type": "string"
+                    },
+                    "concept_code": {
+                      "type": "string"
+                    },
+                    "concept_name": {
+                      "type": "string"
+                    },
+                    "formula_kind": {
+                      "type": "string"
+                    },
+                    "supplier_document_number": {
+                      "type": "string"
+                    },
+                    "invoice_date": {
+                      "type": "string"
+                    },
+                    "base_amount": {
+                      "type": "string"
+                    },
+                    "rate": {
+                      "type": "string"
+                    },
+                    "subtrahend": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "retained_amount": {
+                      "type": "string"
+                    },
+                    "legal_source": {
+                      "type": "string"
+                    },
+                    "receipt_status": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "retention_id",
+                    "receipt_number",
+                    "receipt_series",
+                    "fiscal_period",
+                    "issued_on",
+                    "supplier_tax_id",
+                    "supplier_name",
+                    "concept_code",
+                    "concept_name",
+                    "formula_kind",
+                    "supplier_document_number",
+                    "invoice_date",
+                    "base_amount",
+                    "rate",
+                    "subtrahend",
+                    "retained_amount",
+                    "legal_source",
+                    "receipt_status"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "unclassified_rows": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "book_kind",
+          "period_from",
+          "period_to",
+          "currency",
+          "row_count",
+          "rows",
+          "unclassified_rows"
+        ],
+        "additionalProperties": false
+      },
+      "BookReconciliationResponse": {
+        "type": "object",
+        "properties": {
+          "period_from": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "period_to": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "concepto": {
+                  "type": "string"
+                },
+                "libro": {
+                  "type": "string"
+                },
+                "mayor": {
+                  "type": "string"
+                },
+                "en_cola": {
+                  "type": "string"
+                },
+                "diferencia": {
+                  "type": "string"
+                },
+                "cuadra": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "concepto",
+                "libro",
+                "mayor",
+                "en_cola",
+                "diferencia",
+                "cuadra"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "balanced": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "period_from",
+          "period_to",
+          "currency",
+          "rows",
+          "balanced"
+        ],
+        "additionalProperties": false
+      },
+      "BookFormatAdapterResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "book_kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "is_official": {
+            "type": "boolean"
+          },
+          "legal_source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "implemented": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "book_kind",
+          "name",
+          "description",
+          "is_official",
+          "legal_source",
+          "status",
+          "implemented"
+        ],
+        "additionalProperties": false
+      },
+      "ExportFiscalBookRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "book_kind": {
+            "type": "string",
+            "enum": [
+              "ventas",
+              "compras",
+              "retenciones_iva",
+              "retenciones_islr"
+            ]
+          },
+          "period_from": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "period_to": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "format_code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,39}$"
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          }
+        },
+        "required": [
+          "company_id",
+          "book_kind",
+          "period_from",
+          "period_to",
+          "format_code",
+          "timezone"
+        ],
+        "additionalProperties": false
+      },
+      "ExportFiscalBookResponse": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "company_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "book_kind": {
+                "type": "string",
+                "enum": [
+                  "ventas",
+                  "compras",
+                  "retenciones_iva",
+                  "retenciones_islr"
+                ]
+              },
+              "period_from": {
+                "type": "string"
+              },
+              "period_to": {
+                "type": "string"
+              },
+              "parameters": {
+                "type": "object",
+                "additionalProperties": {
+                  "nullable": true
+                }
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "generator_version": {
+                "type": "string"
+              },
+              "dataset_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "row_count": {
+                "type": "integer"
+              },
+              "format_code": {
+                "type": "string"
+              },
+              "created_by": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "created_at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "company_id",
+              "book_kind",
+              "period_from",
+              "period_to",
+              "parameters",
+              "timezone",
+              "generator_version",
+              "dataset_hash",
+              "row_count",
+              "format_code",
+              "created_by",
+              "created_at"
+            ],
+            "additionalProperties": false
+          },
+          "book": {
+            "type": "object",
+            "properties": {
+              "book_kind": {
+                "type": "string",
+                "enum": [
+                  "ventas",
+                  "compras",
+                  "retenciones_iva",
+                  "retenciones_islr"
+                ]
+              },
+              "period_from": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "period_to": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "row_count": {
+                "type": "integer"
+              },
+              "rows": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "document_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "issued_on": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string"
+                        },
+                        "series": {
+                          "type": "string"
+                        },
+                        "document_number": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "control_number": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "customer_tax_id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "customer_name": {
+                          "type": "string"
+                        },
+                        "customer_taxpayer_type": {
+                          "type": "string"
+                        },
+                        "transaction_currency": {
+                          "type": "string"
+                        },
+                        "fx_rate": {
+                          "type": "string"
+                        },
+                        "base_gravada": {
+                          "type": "string"
+                        },
+                        "base_exenta": {
+                          "type": "string"
+                        },
+                        "base_exonerada": {
+                          "type": "string"
+                        },
+                        "base_no_sujeta": {
+                          "type": "string"
+                        },
+                        "base_sin_clasificar": {
+                          "type": "string"
+                        },
+                        "iva_debito": {
+                          "type": "string"
+                        },
+                        "total_amount": {
+                          "type": "string"
+                        },
+                        "journal_entry_id": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "uuid"
+                        }
+                      },
+                      "required": [
+                        "document_id",
+                        "issued_on",
+                        "kind",
+                        "series",
+                        "document_number",
+                        "control_number",
+                        "status",
+                        "customer_tax_id",
+                        "customer_name",
+                        "customer_taxpayer_type",
+                        "transaction_currency",
+                        "fx_rate",
+                        "base_gravada",
+                        "base_exenta",
+                        "base_exonerada",
+                        "base_no_sujeta",
+                        "base_sin_clasificar",
+                        "iva_debito",
+                        "total_amount",
+                        "journal_entry_id"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "invoice_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "invoice_date": {
+                          "type": "string"
+                        },
+                        "supplier_tax_id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "supplier_name": {
+                          "type": "string"
+                        },
+                        "supplier_kind": {
+                          "type": "string"
+                        },
+                        "supplier_document_number": {
+                          "type": "string"
+                        },
+                        "supplier_control_number": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "supplier_document_ref": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "base_gravada": {
+                          "type": "string"
+                        },
+                        "base_exenta": {
+                          "type": "string"
+                        },
+                        "base_exonerada": {
+                          "type": "string"
+                        },
+                        "base_no_sujeta": {
+                          "type": "string"
+                        },
+                        "base_sin_clasificar": {
+                          "type": "string"
+                        },
+                        "iva_credito": {
+                          "type": "string"
+                        },
+                        "iva_al_costo": {
+                          "type": "string"
+                        },
+                        "tax_is_recoverable": {
+                          "type": "boolean"
+                        },
+                        "retenido_iva": {
+                          "type": "string"
+                        },
+                        "retenido_islr": {
+                          "type": "string"
+                        },
+                        "total_amount": {
+                          "type": "string"
+                        },
+                        "journal_entry_id": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "uuid"
+                        }
+                      },
+                      "required": [
+                        "invoice_id",
+                        "invoice_date",
+                        "supplier_tax_id",
+                        "supplier_name",
+                        "supplier_kind",
+                        "supplier_document_number",
+                        "supplier_control_number",
+                        "supplier_document_ref",
+                        "status",
+                        "base_gravada",
+                        "base_exenta",
+                        "base_exonerada",
+                        "base_no_sujeta",
+                        "base_sin_clasificar",
+                        "iva_credito",
+                        "iva_al_costo",
+                        "tax_is_recoverable",
+                        "retenido_iva",
+                        "retenido_islr",
+                        "total_amount",
+                        "journal_entry_id"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "retention_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "receipt_number": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "receipt_series": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "fiscal_period": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "issued_on": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "supplier_tax_id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "supplier_name": {
+                          "type": "string"
+                        },
+                        "supplier_document_number": {
+                          "type": "string"
+                        },
+                        "supplier_control_number": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "invoice_date": {
+                          "type": "string"
+                        },
+                        "base_amount": {
+                          "type": "string"
+                        },
+                        "rate": {
+                          "type": "string"
+                        },
+                        "retained_amount": {
+                          "type": "string"
+                        },
+                        "legal_source": {
+                          "type": "string"
+                        },
+                        "receipt_status": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "retention_id",
+                        "receipt_number",
+                        "receipt_series",
+                        "fiscal_period",
+                        "issued_on",
+                        "supplier_tax_id",
+                        "supplier_name",
+                        "supplier_document_number",
+                        "supplier_control_number",
+                        "invoice_date",
+                        "base_amount",
+                        "rate",
+                        "retained_amount",
+                        "legal_source",
+                        "receipt_status"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "retention_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "receipt_number": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "receipt_series": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "fiscal_period": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "issued_on": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "supplier_tax_id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "supplier_name": {
+                          "type": "string"
+                        },
+                        "concept_code": {
+                          "type": "string"
+                        },
+                        "concept_name": {
+                          "type": "string"
+                        },
+                        "formula_kind": {
+                          "type": "string"
+                        },
+                        "supplier_document_number": {
+                          "type": "string"
+                        },
+                        "invoice_date": {
+                          "type": "string"
+                        },
+                        "base_amount": {
+                          "type": "string"
+                        },
+                        "rate": {
+                          "type": "string"
+                        },
+                        "subtrahend": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "retained_amount": {
+                          "type": "string"
+                        },
+                        "legal_source": {
+                          "type": "string"
+                        },
+                        "receipt_status": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "retention_id",
+                        "receipt_number",
+                        "receipt_series",
+                        "fiscal_period",
+                        "issued_on",
+                        "supplier_tax_id",
+                        "supplier_name",
+                        "concept_code",
+                        "concept_name",
+                        "formula_kind",
+                        "supplier_document_number",
+                        "invoice_date",
+                        "base_amount",
+                        "rate",
+                        "subtrahend",
+                        "retained_amount",
+                        "legal_source",
+                        "receipt_status"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "unclassified_rows": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "book_kind",
+              "period_from",
+              "period_to",
+              "currency",
+              "row_count",
+              "rows",
+              "unclassified_rows"
+            ],
+            "additionalProperties": false
+          },
+          "content": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "book",
+          "content",
+          "content_type",
+          "filename"
+        ],
+        "additionalProperties": false
+      },
+      "ListFiscalBookRunsResponse": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "company_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "book_kind": {
+                  "type": "string",
+                  "enum": [
+                    "ventas",
+                    "compras",
+                    "retenciones_iva",
+                    "retenciones_islr"
+                  ]
+                },
+                "period_from": {
+                  "type": "string"
+                },
+                "period_to": {
+                  "type": "string"
+                },
+                "parameters": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "nullable": true
+                  }
+                },
+                "timezone": {
+                  "type": "string"
+                },
+                "generator_version": {
+                  "type": "string"
+                },
+                "dataset_hash": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "row_count": {
+                  "type": "integer"
+                },
+                "format_code": {
+                  "type": "string"
+                },
+                "created_by": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "created_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "company_id",
+                "book_kind",
+                "period_from",
+                "period_to",
+                "parameters",
+                "timezone",
+                "generator_version",
+                "dataset_hash",
+                "row_count",
+                "format_code",
+                "created_by",
+                "created_at"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "additionalProperties": false
       }
     },
     "parameters": {}
@@ -16464,6 +17600,461 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BalanceSheetResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-books/reports/reconciliation": {
+      "get": {
+        "summary": "Conciliación libro ↔ mayor, con la cola a la vista (permiso fiscal_book.read)",
+        "description": "El invariante de ADR-0044 §3: `libro = mayor + pendientes en cola`. Devuelve las TRES cifras, no la diferencia sola — mientras exista la cola de ADR-0042 un documento correcto puede estar sin contabilizar, y un reporte que solo dijera «no cuadra» convertiría eso en un falso positivo diario.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Libro, mayor y cola.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookReconciliationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-books/formats": {
+      "get": {
+        "summary": "Catálogo de adaptadores de formato (permiso fiscal_book.read)",
+        "description": "Ninguno es OFICIAL hoy: el layout que exige el SENIAT no está en el repositorio y no se inventa (ADR-0044 §5). `implemented` dice cuáles sabe escribir este release, que es cosa distinta de estar en el catálogo.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Los formatos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BookFormatAdapterResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-books/runs": {
+      "get": {
+        "summary": "Generaciones oficiales ya hechas (permiso fiscal_book.read)",
+        "description": "Una fila por EXPORTACIÓN, con su hash. Consultar en pantalla no aparece aquí: es una lectura, y no hay nada que demostrar sobre ella.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Las generaciones.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListFiscalBookRunsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-books/export": {
+      "post": {
+        "summary": "Exportar un libro dejando su rastro reproducible (permiso fiscal_book.export)",
+        "description": "Escribe una fila en `fiscal_book_runs` con los siete campos y el SHA-256 del dataset. Pedir un adaptador que está en el catálogo pero sin implementación responde 409 BOOK_FORMAT_UNAVAILABLE (LAD65): un fichero con nombre de oficial que no lo es sería peor que no exportar.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportFiscalBookRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El libro, su serialización y el rastro.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportFiscalBookResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "El adaptador de formato no tiene implementación cargada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-books/{kind}": {
+      "get": {
+        "summary": "El libro de ventas, compras o retenciones (permiso fiscal_book.read)",
+        "description": "Se calcula desde los documentos cada vez, que es lo que garantiza que cuadre con ellos. Las bases van separadas por tratamiento; `base_sin_clasificar` recoge lo emitido antes de la migración 27, que no tiene el tratamiento congelado y NO se adivina.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ventas",
+                "compras",
+                "retenciones_iva",
+                "retenciones_islr"
+              ]
+            },
+            "required": true,
+            "name": "kind",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El libro del período.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiscalBookResponse"
                 }
               }
             }

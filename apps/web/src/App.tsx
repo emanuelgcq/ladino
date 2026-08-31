@@ -8,6 +8,7 @@ import { InventoryView } from "./InventoryView.js";
 import { SalesView, ExchangeDifferenceKPI } from "./SalesView.js";
 import { AccountingView } from "./AccountingView.js";
 import { PurchasesView } from "./PurchasesView.js";
+import { FiscalBooksView } from "./FiscalBooksView.js";
 
 /**
  * La webapp de Ladino, aún sin pretensión de diseño: sesión (supabase-js SOLO
@@ -33,6 +34,7 @@ export function App() {
     | "inventario"
     | "ventas"
     | "contabilidad"
+    | "libros"
     | "compras"
     | "panel"
   >("productos");
@@ -180,6 +182,9 @@ export function App() {
             <button disabled={modulo === "contabilidad"} onClick={() => setModulo("contabilidad")}>
               Contabilidad
             </button>{" "}
+            <button disabled={modulo === "libros"} onClick={() => setModulo("libros")}>
+              Libros fiscales
+            </button>{" "}
             <button disabled={modulo === "panel"} onClick={() => setModulo("panel")}>
               Panel
             </button>
@@ -198,6 +203,8 @@ export function App() {
             <AccountingView session={session} companyId={empresa.id} />
           ) : modulo === "compras" ? (
             <PurchasesView session={session} companyId={empresa.id} />
+          ) : modulo === "libros" ? (
+            <FiscalBooksView session={session} companyId={empresa.id} />
           ) : (
             <ExchangeDifferenceKPI session={session} companyId={empresa.id} />
           )}
