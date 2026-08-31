@@ -1,15 +1,93 @@
-# Handoff — 2026-08-27
+# Handoff — 2026-08-31
 
 ## Estado
 
-**Sprint 0 cerrado y SIETE módulos de negocio construidos de extremo a extremo: productos,
-precios, clientes, inventario (con su segunda vuelta), ventas, compras y CONTABILIDAD.** Flujo
-trunk-based: todo en `main`, `verify` en verde antes de cada commit.
+**Sprint 0 cerrado y OCHO módulos de negocio construidos de extremo a extremo: productos,
+precios, clientes, inventario (con su segunda vuelta), ventas, compras, contabilidad y LIBROS
+FISCALES.** Flujo trunk-based: todo en `main`, `verify` en verde antes de cada commit.
 
 S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅ ·
-Inventario ✅ · Ventas ✅ · Compras ✅ · Contabilidad ✅** · S0.6b ⏸️
+Inventario ✅ · Ventas ✅ · Compras ✅ · Contabilidad ✅ · Libros fiscales ✅** · S0.6b ⏸️
 
-Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **las 26 migraciones aplicadas** (2026-08-27, vía
+> ⚠️ **La migración 27 está en `main` y NO en el remoto.** Las 26 anteriores sí. Aplicarla es un
+> deploy y exige aprobación explícita (CLAUDE.md §2); no se pidió en el mensaje que encargó este
+> módulo. **Local y remoto divergen en una migración hasta que se apruebe.**
+
+## Libros fiscales — el módulo entero (2026-08-31)
+
+Migración 27 · ADR-0044 · pgTAP 027 (35 aserciones) · `packages/domain/src/fiscal-books.ts` ·
+cinco endpoints · E2E de 13 casos · pantalla de tres paneles.
+
+**Por qué ahora:** el libro de ventas y el de compras son obligación legal HOY bajo PA 071 y
+PA 102. No dependen de homologación, no dependen de la PA 121 derogada, y no dependen de ningún
+trámite externo. Sin ellos Ladino no puede vender a contribuyentes especiales.
+
+**El defecto de datos que destapó construirlos.** `document_lines` congelaba la ALÍCUOTA pero no
+el TRATAMIENTO, y una alícuota de cero no distingue exento de exonerado de no sujeto — que son
+tres columnas legalmente distintas del libro. Leer hoy `products.tax_category_code` sería
+reinterpretar el pasado con el catálogo de ahora; derivarlo de `tax_rules` tampoco vale, porque su
+`product_tax_category` es nullable y entonces la regla no identifica el tratamiento.
+
+| Decisión | Dónde | Por qué |
+|---|---|---|
+| Snapshot ampliado, **nullable y sin default** | `document_lines`, `supplier_invoice_lines` | Un default backfillea, y un backfill es una inferencia sobre el pasado disfrazada de valor por omisión |
+| Una sola derivación categoría → tratamiento | `platform.tax_treatment_of()` | Dos `case` repetidos son dos libros que clasifican distinto la misma línea |
+| Lo desconocido devuelve **NULL, no «gravado»** | misma función | Meterlo en la columna equivocada produce una declaración falsa |
+| El libro es una CONSULTA, no una tabla | las cuatro funciones de la 27 | Un libro que se escribe puede divergir de sus documentos, y la única forma de saberlo sería calcularlo |
+| El IVA sale de la **cabecera**, las bases de las líneas | `sales_book` / `purchases_book` | Así el libro cuadra con el mayor incluso para documentos anteriores a la 27, que no tienen tratamiento |
+| `libro = mayor + pendientes`, las TRES cifras | `book_ledger_reconciliation()` | Con la cola de ADR-0042 viva, un «no cuadra» pelado sería un falso positivo diario |
+| Ningún adaptador OFICIAL sembrado | `book_format_adapters` | El layout del SENIAT no está en el repositorio. Misma regla que ADR-0038 y ADR-0039 |
+| Consultar no deja rastro; exportar sí | `fiscal_book_runs` | Una presentación hay que poder demostrarla; una mirada en pantalla no |
+
+**`base_sin_clasificar` es una columna del contrato, visible en pantalla y en rojo.** Recoge lo
+emitido antes de la migración 27. No se reparte y no se adivina: un libro que reparte en silencio
+lo que no sabe clasificar produce una declaración falsa sin avisar a nadie.
+
+**`operation_type` queda sin clasificar** en el cliente `no_domiciliado` y en el proveedor
+`extranjero`. Ladino no implementa el régimen de exportación ni el de importación, y escribir
+«interna» sobre una operación que quizá no lo es —en un libro que se entrega al fisco— es declarar
+mal. VALIDAR-SENIAT.
+
+### Lo que encontró el ejercicio, no una revisión
+
+1. **El test 006 —la propiedad del catálogo— cazó un hueco de la migración 27 mientras se
+   escribía:** `fiscal_book_runs` llevaba `tenant_id` y no llevaba trigger de ancla. Es append-only,
+   así que el ancla es redundante… y se puso igual. En cuanto una tabla se salta la regla «porque
+   en su caso no hace falta», la consulta que vigila el catálogo entero deja de poder afirmar nada.
+   Es el cuarto módulo en que un invariante estructural encuentra algo que su propio módulo no veía.
+2. **El `join` del libro de retenciones podía DUPLICAR filas.** `retention_receipts` no tenía
+   unicidad por factura; el caso de uso emitía uno solo, pero eso vivía en el código. Dos
+   comprobantes habrían convertido una retención en dos renglones — el doble de impuesto retenido en
+   un documento legal. Ahora hay índice único parcial: ausencia de mecanismo no es prohibición.
+3. **El `left join` de la conciliación no filtraba.** Las condiciones de período y estado del
+   asiento estaban en un segundo `left join`, así que las líneas cuyo asiento no cumplía no se
+   descartaban: se sumaban con `e` en NULL. Habría comparado el libro del mes contra el mayor
+   ENTERO. Se pasó a un `exists` dentro del `ON`.
+
+### Las dos variantes rotas
+
+- **pgTAP:** 40 Bs de IVA en el mayor que ningún documento respalda → la conciliación se pone en
+  rojo y dice **cuánto sobra, con signo**. Un «no cuadra» pelado obliga a volver a sumar, y quien
+  vuelve a sumar suma distinto.
+- **E2E:** se carga a propósito un adaptador de formato SIN implementación → 409 LAD65 y **no
+  escribe** la generación. Sin cargarlo, ese camino sería código muerto que parece funcionar; y es
+  exactamente el camino que el día que llegue el layout del SENIAT tiene que impedir exportar un
+  CSV con nombre de fichero oficial. Se asevera el **mensaje**, no solo el código: el adaptador
+  ausente del catálogo y el presente sin implementación producen el mismo 409.
+
+### VALIDAR-SENIAT abiertos de este módulo
+
+- **El formato del fichero de presentación.** El único adaptador sembrado es
+  `csv_columnas_legales`, marcado `is_official = false`. Trae las columnas que PA 071 y PA 102
+  **nombran** — entregable hoy a un contador — pero no es el layout que exige la administración.
+  Cuando aparezca es otra fila y otra implementación de la misma interfaz: un enchufe, no una
+  reescritura.
+- **IGTF no aparece en ningún libro.** Ladino no lo calcula en ninguna parte, y `IGTF_SPEC` avisa
+  además de que no toda operación en divisa lo causa. Una columna de IGTF hoy sería inventada.
+- **La máscara de 14 caracteres del comprobante de retención** (PA 102) sigue sin implementarse,
+  como ya decía el módulo de compras.
+
+Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **las 26 primeras migraciones aplicadas** (2026-08-27, vía
 Management API, registradas en `supabase_migrations.schema_migrations` con la forma de la CLI para
 que un `db push` futuro las reconozca). Paridad verificada por huella, **idéntica en las seis
 clases**: 1078 columnas · 746 constraints · 282 índices · 546 policies · 80 funciones · 183
