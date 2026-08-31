@@ -61,6 +61,7 @@ export {
   updateAccount,
   deactivateAccount,
   importChartTemplate,
+  importJournalTemplates,
   setAccountPurpose,
   createManualJournalEntry,
   postJournalEntry,
@@ -70,3 +71,8 @@ export {
   executeYearEndClose,
   type AccountingError,
 } from "./accounting.js";
+export {
+  generateJournalFromDocument,
+  type GenerationOutcome,
+  type JournalGenerationError,
+} from "./journal-generator.js";

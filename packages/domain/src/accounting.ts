@@ -939,3 +939,99 @@ export async function executeYearEndClose(
     throw e;
   }
 }
+
+/**
+ * Importa un PRESET de mapeo contable al de la empresa (migración 26,
+ * ADR-0041/0043). Copia las plantillas y las desliga: a partir de aquí son
+ * suyas y las edita.
+ *
+ * Es lo que convierte la contabilidad de «montada» a «viva». Sin esto, cada
+ * documento emitido entra en la cola de pendientes con razón «no hay plantilla»
+ * — que es correcto, pero no es un sistema que asiente.
+ */
+export async function importJournalTemplates(
+  uow: UnitOfWork,
+  input: { readonly company_id: string; readonly preset_code: string },
+): Promise<Result<{ imported: number; lines: number }, AccountingError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Importar exige un usuario real." });
+  }
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "accounting.template.manage");
+  if (!ctx.ok) return ctx;
+
+  const entradas = await sql<
+    { id: string; source_kind: string; source_event: string; description: string }[]
+  >`select id, source_kind, source_event, description
+      from public.journal_template_preset_entries
+     where preset_code = ${input.preset_code} order by source_kind, source_event`;
+  if (entradas.length === 0) {
+    return err({ code: "NOT_FOUND", message: "Ese preset de mapeo contable no existe." });
+  }
+
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  let plantillas = 0;
+  let lineas = 0;
+  try {
+    for (const e of entradas) {
+      // Si la empresa YA tiene plantilla activa para ese hecho, no se pisa: el
+      // preset es un punto de partida, no una sobreescritura. Reemplazar una
+      // plantilla que ya está generando asientos cambiaría a qué cuenta van
+      // los siguientes sin que nadie lo pidiera.
+      const [existe] = await sql<{ id: string }[]>`
+        select id from public.journal_templates
+         where company_id = ${input.company_id} and source_kind = ${e.source_kind}
+           and source_event = ${e.source_event} and is_active`;
+      if (existe) continue;
+
+      const [t] = await sql<{ id: string }[]>`
+        insert into public.journal_templates
+          (tenant_id, company_id, source_kind, source_event, description)
+        values (${ctx.value.tenantId}, ${input.company_id}, ${e.source_kind}, ${e.source_event},
+                ${e.description})
+        returning id`;
+      plantillas += 1;
+
+      const ls = await sql<
+        {
+          line_number: number;
+          account_purpose: string;
+          amount_source: string;
+          side: string;
+          condition_kind: string;
+          description: string | null;
+        }[]
+      >`select line_number, account_purpose, amount_source, side, condition_kind, description
+          from public.journal_template_preset_lines
+         where entry_id = ${e.id} order by line_number`;
+      for (const l of ls) {
+        await sql`
+          insert into public.journal_template_lines
+            (tenant_id, company_id, template_id, line_number, account_purpose, amount_source,
+             side, condition_kind, description)
+          values (${ctx.value.tenantId}, ${input.company_id}, ${t!.id}, ${l.line_number},
+                  ${l.account_purpose}, ${l.amount_source}, ${l.side}, ${l.condition_kind},
+                  ${l.description})`;
+        lineas += 1;
+      }
+    }
+  } catch (e) {
+    const conocido = traducir(e);
+    if (conocido) return err(conocido);
+    throw e;
+  }
+
+  await auditar(
+    sql,
+    ctx.value.tenantId,
+    input.company_id,
+    input.company_id,
+    "accounting.templates_imported",
+    {
+      preset_code: input.preset_code,
+      imported: plantillas,
+      lines: lineas,
+    },
+  );
+  return ok({ imported: plantillas, lines: lineas });
+}

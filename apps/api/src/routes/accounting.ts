@@ -17,6 +17,7 @@ import {
   updateAccount,
   deactivateAccount,
   importChartTemplate,
+  importJournalTemplates,
   setAccountPurpose,
   createManualJournalEntry,
   postJournalEntry,
@@ -162,6 +163,48 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
     coherente(companyId, parsed.data.company_id);
     const { actor } = c.get("ladino.auth");
     const r = await withTransaction(sql, actor, (uow) => importChartTemplate(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
+  app.get("/v1/journal-template-presets", async (c) => {
+    const { actor } = c.get("ladino.auth");
+    const filas = await withTransaction(
+      sql,
+      actor,
+      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+        select p.code, p.name, p.description, p.legal_source,
+               (select count(*)::int from public.journal_template_preset_entries e
+                 where e.preset_code = p.code) as entry_count
+          from public.journal_template_presets p
+         where p.status = 'active' order by p.code`,
+    );
+    return c.json(filas, 200);
+  });
+
+  /**
+   * Importar el preset es lo que convierte la contabilidad de MONTADA a VIVA:
+   * sin plantillas, cada documento emitido entra en la cola de pendientes con
+   * razón «no hay plantilla» — correcto, pero no es un sistema que asiente.
+   */
+  app.post("/v1/journal-templates/import-preset", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const cuerpo = (await c.req.json().catch(() => null)) as {
+      company_id?: string;
+      preset_code?: string;
+    } | null;
+    if (cuerpo?.company_id === undefined || cuerpo.preset_code === undefined) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Hacen falta company_id y preset_code.",
+      });
+    }
+    coherente(companyId, cuerpo.company_id);
+    const { actor } = c.get("ladino.auth");
+    const preset = cuerpo.preset_code;
+    const r = await withTransaction(sql, actor, (uow) =>
+      importJournalTemplates(uow, { company_id: companyId, preset_code: preset }),
+    );
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
   });

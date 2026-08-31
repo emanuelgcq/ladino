@@ -27,6 +27,7 @@ import type {
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { receiveStock, revalueStock } from "./inventory.js";
+import { generateJournalFromDocument } from "./journal-generator.js";
 
 /**
  * Casos de uso de COMPRAS — RIGOR MÁXIMO. Es la contraparte de ventas y toca el
@@ -850,6 +851,34 @@ export async function registerSupplierInvoice(
       tax_is_recoverable: ivaRecuperable,
     },
   );
+
+  // El asiento de la compra. `taxRecoverable` es la bandera que decide si el
+  // IVA va a crédito fiscal o al costo (ADR-0040 §7): la plantilla tiene las
+  // dos ramas y este booleano elige, sin que nadie escriba una cuenta aquí.
+  const contable = await generateJournalFromDocument(sql, {
+    tenantId: ctx.value.tenantId,
+    companyId: input.company_id,
+    sourceKind: "purchase_invoice",
+    sourceEvent: "ap.invoice_posted",
+    sourceId: facturaId,
+    postingDate: input.invoice_date,
+    postedBy: actor.userId,
+    description: `Factura de compra ${input.supplier_document_number}`,
+    functionalCurrency: ctx.value.functionalCurrency,
+    amounts: {
+      subtotal: detalle.value.subtotal_amount,
+      tax_amount: detalle.value.tax_amount,
+      total: detalle.value.total_amount,
+    },
+    conditions: {
+      taxRecoverable: ivaRecuperable,
+      supplierForeign: prov.supplier_kind === "extranjero",
+    },
+    backlink: { table: "supplier_invoices", id: facturaId },
+  });
+  if (!contable.ok) {
+    return err({ code: "VALIDATION_FAILED", message: contable.error.message });
+  }
   return detalle;
 }
 
@@ -1212,6 +1241,30 @@ export async function applyLandedCost(
     },
   );
 
+  // El asiento del landed cost. Las dos partes van por separado —lo que
+  // capitaliza y lo que es gasto del período— porque son dos hechos distintos
+  // (ADR-0040 §6) y meterlos en una sola línea los volvería indistinguibles.
+  const contableLanded = await generateJournalFromDocument(sql, {
+    tenantId: ctx.value.tenantId,
+    companyId: input.company_id,
+    sourceKind: "landed_cost",
+    sourceEvent: "purchase.landed_cost_applied",
+    sourceId: costo!.id,
+    postingDate: input.incurred_on,
+    postedBy: actor.userId,
+    description: `Landed cost: ${input.concept}`,
+    functionalCurrency: ctx.value.functionalCurrency,
+    amounts: {
+      landed_to_inventory: reparto.value.totalToInventory.toAmountString(),
+      landed_to_variance: reparto.value.totalToVariance.toAmountString(),
+      functional_amount: gastoFunc.value.toAmountString(),
+    },
+    backlink: { table: "landed_costs", id: costo!.id },
+  });
+  if (!contableLanded.ok) {
+    return err({ code: "VALIDATION_FAILED", message: contableLanded.error.message });
+  }
+
   const asignaciones = await sql<Record<string, unknown>[]>`
     select goods_receipt_line_id, allocated_functional::text as allocated_functional,
            to_inventory_functional::text as to_inventory_functional,
@@ -1571,6 +1624,37 @@ export async function registerSupplierPayment(
       retention_receipt_id: comprobante === null ? null : (comprobante["id"] as string),
     },
   );
+
+  // El asiento del pago. El BRUTO cancela la deuda, el NETO sale del banco y
+  // la diferencia son dos deudas con el fisco. Las retenciones van desglosadas
+  // por tributo porque se enteran por separado y con formularios distintos.
+  const [porTributo] = await sql<{ iva: string; islr: string }[]>`
+    select coalesce(sum(retained_amount) filter (where retention_code = 'iva'), 0)::text as iva,
+           coalesce(sum(retained_amount) filter (where retention_code = 'islr'), 0)::text as islr
+      from public.supplier_retentions
+     where supplier_invoice_id = ${input.supplier_invoice_id} and status = 'applied'`;
+  const contablePago = await generateJournalFromDocument(sql, {
+    tenantId: ctx.value.tenantId,
+    companyId: input.company_id,
+    sourceKind: "payment_made",
+    sourceEvent: "ap.payment_made",
+    sourceId: pago["id"] as string,
+    postingDate: fecha.slice(0, 10),
+    postedBy: actor.userId,
+    description: "Pago a proveedor",
+    functionalCurrency: ctx.value.functionalCurrency,
+    amounts: {
+      total: funcional.value.toAmountString(),
+      net_amount: neto.toFixed(8),
+      retained_iva: cancelaTodo ? (porTributo?.iva ?? "0") : "0",
+      retained_islr: cancelaTodo ? (porTributo?.islr ?? "0") : "0",
+      retained_total: aRetener.toFixed(8),
+    },
+    backlink: { table: "supplier_payments", id: pago["id"] as string },
+  });
+  if (!contablePago.ok) {
+    return err({ code: "VALIDATION_FAILED", message: contablePago.error.message });
+  }
 
   return ok({
     payment: pago as never,

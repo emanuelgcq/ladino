@@ -29,6 +29,7 @@ import type {
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
+import { generateJournalFromDocument } from "./journal-generator.js";
 
 /**
  * Casos de uso de inventario (ADR-0034) — RIGOR MÁXIMO: dinero en una tabla
@@ -598,6 +599,25 @@ export async function adjustStock(
     const conocido = traducir(e);
     if (conocido) return err(conocido);
     throw e;
+  }
+  // El asiento del ajuste. `functional_amount` llega CON SIGNO —positivo si
+  // entra valor, negativo si sale— y la plantilla elige el lado con
+  // `if_positive`/`if_negative`. Una línea de asiento no lleva negativos: el
+  // signo es información sobre la dirección, no sobre el importe.
+  const contable = await generateJournalFromDocument(sql, {
+    tenantId: ctx.value.tenantId,
+    companyId: input.company_id,
+    sourceKind: "inventory_move",
+    sourceEvent: "stock.adjusted",
+    sourceId: fila.id,
+    postingDate: (input.occurred_at ?? new Date().toISOString()).slice(0, 10),
+    postedBy: actor.userId,
+    description: `Ajuste de existencias: ${input.reason}`,
+    functionalCurrency: ctx.value.functionalCurrency,
+    amounts: { functional_amount: fila.functional_amount },
+  });
+  if (!contable.ok) {
+    return err({ code: "VALIDATION_FAILED", message: contable.error.message });
   }
   await auditarYPublicar(sql, fila, ctx.value.tenantId, "stock.adjusted", {
     reason: input.reason,

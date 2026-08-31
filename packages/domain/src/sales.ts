@@ -23,6 +23,8 @@ import type {
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { issueStock, receiveStock } from "./inventory.js";
+import { generateJournalFromDocument } from "./journal-generator.js";
+import { reverseJournalEntry } from "./accounting.js";
 
 /**
  * Casos de uso de VENTAS — RIGOR MÁXIMO. Aquí convergen dinero, fiscal,
@@ -765,6 +767,31 @@ export async function createInvoice(
       warehouse_id: input.warehouse_id,
       line_count: calculadas.value.lineas.length,
     });
+
+    // EL ASIENTO, en la misma transacción (ADR-0042). Los importes que van son
+    // los FUNCIONALES del pie: es la moneda en la que se lleva la contabilidad
+    // y en la que se comprueba la partida doble. Sin plantilla configurada, el
+    // generador encola y la factura se emite igual.
+    const contable = await generateJournalFromDocument(sql, {
+      tenantId: ctx.value.tenantId,
+      companyId: input.company_id,
+      sourceKind: "sales_invoice",
+      sourceEvent: "fiscal.invoice.issued",
+      sourceId: doc.value.id,
+      postingDate: fecha.slice(0, 10),
+      postedBy: actor.userId,
+      description: `Factura ${doc.value.series}-${doc.value.document_number ?? ""}`,
+      functionalCurrency: ctx.value.functionalCurrency,
+      amounts: {
+        subtotal: doc.value.subtotal_amount,
+        tax_amount: doc.value.tax_amount,
+        total: doc.value.total_amount,
+      },
+      backlink: { table: "documents", id: doc.value.id },
+    });
+    if (!contable.ok) {
+      return err({ code: "VALIDATION_FAILED", message: contable.error.message });
+    }
     return ok(doc.value);
   } catch (e) {
     const conocido = traducir(e);
@@ -812,6 +839,29 @@ export async function annulInvoice(
     await auditar(sql, ctx.value.tenantId, anulada!, "fiscal.invoice.annulled", {
       reason: input.reason,
     });
+
+    // La anulación NO genera un asiento nuevo desde plantilla: REVERSA el que
+    // la emisión creó. Reutiliza el caso de uso que ya está probado, deja los
+    // dos asientos visibles y el neto por cuenta en cero, que es lo que hace
+    // auditable la corrección. Si la factura estaba en la cola sin asentar, no
+    // hay nada que reversar y la cola se descarta.
+    const [conAsiento] = await sql<{ journal_entry_id: string | null }[]>`
+      select journal_entry_id from public.documents where id = ${documentId}`;
+    if (conAsiento?.journal_entry_id != null) {
+      const reverso = await reverseJournalEntry(uow, conAsiento.journal_entry_id, {
+        company_id: input.company_id,
+        reason: `Anulación de la factura: ${input.reason}`,
+      });
+      if (!reverso.ok) {
+        return err({ code: "VALIDATION_FAILED", message: reverso.error.message });
+      }
+    } else {
+      await sql`
+        update public.journal_generation_queue
+           set status = 'discarded', processed_at = now()
+         where company_id = ${input.company_id} and source_id = ${documentId}
+           and status = 'pending'`;
+    }
     return ok(anulada!);
   } catch (e) {
     const conocido = traducir(e);
@@ -1024,6 +1074,39 @@ export async function registerPayment(
     balance_after: saldoDespues?.saldo ?? null,
     exchange_difference: diferencial === null ? null : (diferencial["difference"] as string),
   });
+
+  /**
+   * El asiento del cobro. Los tres importes que necesita la plantilla son
+   * DISTINTOS y esa es toda la gracia:
+   *   · lo que entra en caja, a la tasa DEL COBRO;
+   *   · lo que deja de deberse, a la tasa DE LA EMISIÓN;
+   *   · la diferencia, que es el diferencial cambiario y se reconoce aparte.
+   * Cuando no hay diferencial —misma moneda, o la funcional— los dos primeros
+   * coinciden y la tercera línea no se genera por su condición de signo.
+   */
+  const entrado = funcionalRedondeado.value.toAmountString();
+  const cancelado = diferencial === null ? entrado : (diferencial["functional_at_issue"] as string);
+  const diferencia = diferencial === null ? "0" : (diferencial["difference"] as string);
+  const contable = await generateJournalFromDocument(sql, {
+    tenantId: ctx.value.tenantId,
+    companyId: input.company_id,
+    sourceKind: "payment_received",
+    sourceEvent: "ar.payment_applied",
+    sourceId: pago["id"] as string,
+    postingDate: fecha.slice(0, 10),
+    postedBy: actor.userId,
+    description: `Cobro de la factura ${docActual!.series}-${docActual!.document_number ?? ""}`,
+    functionalCurrency: ctx.value.functionalCurrency,
+    amounts: {
+      functional_amount: entrado,
+      total: cancelado,
+      exchange_difference: diferencia,
+    },
+    backlink: { table: "payments", id: pago["id"] as string },
+  });
+  if (!contable.ok) {
+    return err({ code: "VALIDATION_FAILED", message: contable.error.message });
+  }
 
   return ok({
     payment: pago as never,
