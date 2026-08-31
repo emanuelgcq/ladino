@@ -20,11 +20,17 @@ import { Money } from "@ladino/money";
  */
 const URL_LOCAL = "postgres://postgres:postgres@127.0.0.1:54322/postgres";
 
-const TENANT = "5e10c0de-0000-4000-8000-000000000001";
-const COMPANY = "5e10c0de-0000-4000-8000-000000000002";
-const USUARIO = "5e10c0de-0000-4000-8000-00000000000a";
-const LISTA = "5e10c0de-0000-4000-8000-000000000003";
-const PRODUCTO = "5e10c0de-0000-4000-8000-000000000004";
+// IDs NUEVOS por corrida. Con ids fijos, la segunda ejecución sobre la misma
+// base chocaba contra el append-only de precios (ADR-0032): el fixture borraba
+// el precio anterior para volver a insertarlo, y `price_list_items` no se
+// borra. Es la cuarta vez que el estado compartido muerde en este repo, y el
+// modo de fallo es siempre el mismo — verde en limpio, rojo en la segunda.
+const TENANT = crypto.randomUUID();
+const COMPANY = crypto.randomUUID();
+const USUARIO = crypto.randomUUID();
+const LISTA = crypto.randomUUID();
+const PRODUCTO = crypto.randomUUID();
+const SUFIJO = TENANT.slice(0, 8);
 const LIMITE = "1234567890123456.12345678";
 
 let sql: ReturnType<typeof createClient>;
@@ -36,16 +42,15 @@ beforeAll(async () => {
     await tx`insert into public.tenants (id, name) values (${TENANT}, 'Tenant roundtrip')
              on conflict (id) do nothing`;
     await tx`insert into public.companies (id, tenant_id, tax_id, legal_name)
-             values (${COMPANY}, ${TENANT}, 'J-ROUND', 'Empresa roundtrip')
+             values (${COMPANY}, ${TENANT}, ${"J-ROUND-" + SUFIJO}, 'Empresa roundtrip')
              on conflict (id) do nothing`;
     await tx`insert into public.products (id, tenant_id, company_id, sku, name, kind, unit_code, tax_category_code)
-             values (${PRODUCTO}, ${TENANT}, ${COMPANY}, 'ROUND-1', 'Producto roundtrip',
+             values (${PRODUCTO}, ${TENANT}, ${COMPANY}, ${"ROUND-" + SUFIJO}, 'Producto roundtrip',
                      'good', 'unidad', 'gravado_general')
              on conflict (id) do nothing`;
     await tx`insert into public.price_lists (id, tenant_id, company_id, name, currency_code)
              values (${LISTA}, ${TENANT}, ${COMPANY}, 'Lista roundtrip', 'VES')
              on conflict (id) do nothing`;
-    await tx`delete from public.price_list_items where price_list_id = ${LISTA}`;
     await tx`insert into public.price_list_items
                (tenant_id, company_id, price_list_id, product_id, amount, effective_from)
              values (${TENANT}, ${COMPANY}, ${LISTA}, ${PRODUCTO}, ${LIMITE}, '2026-01-01T00:00:00Z')`;

@@ -123,6 +123,57 @@ asertar lo que **solo** produce el camino que dice probar. Y su pariente: un err
 Hono pasó lo equivalente (`next()` no propaga excepciones). Dos frameworks, dos semánticas de
 error contraintuitivas, y **ninguna la vio un test unitario: las vio el E2E real.**
 
+### Una fecha comparada contra un punto de reloj, sin normalizar, es un bug con horario
+
+Tres veces en este proyecto, y la tercera fue idéntica a la primera:
+
+- `occurred_at` por omisión tomaba el reloj de Node, y `created_at` sale de `now()`, que es la hora
+  de INICIO DE TRANSACCIÓN. Cualquier instante calculado después es posterior, y el `CHECK`
+  `occurred_at <= created_at` lo rechazaba **siempre** (inventario, migración 19);
+- la vigencia de una plantilla contable se comparaba con `fecha::timestamptz`, que es la
+  **medianoche** de ese día. Una plantilla configurada a las cinco de la tarde no aplicaba a un
+  documento fechado hoy, y el sistema encolaba «no hay plantilla» teniéndola delante
+  (contabilidad, migración 26);
+- lo mismo, dos veces más, en las vigencias de `company_account_settings`.
+
+**La señal para reconocerlo: si el test pasa a las tres de la tarde y falla a las 23:59, es este
+bug.** Y su forma general es siempre la misma — un `date` y un `timestamptz` en el mismo operador,
+donde uno de los dos se convierte en un instante que nadie eligió.
+
+Regla: **toda comparación de fechas declara la granularidad que asume.** O se comparan dos `date`
+(`x::date <= y::date`), o se comparan dos instantes explícitos, o la fecha se recibe como parámetro
+y quien la pasa decide. Lo que no vale es dejar que el cast la ponga a medianoche por su cuenta.
+
+### Los tests que cruzan módulos por un invariante estructural son irreemplazables
+
+`accounting_coverage_gaps()` pregunta una sola cosa sobre el catálogo entero: *¿todo documento
+posteado tiene su asiento o su fila en cola?* Con esa pregunta encontró un defecto **de compras**
+que llevaba semanas: `registerSupplierInvoice` devolvía `err` tras escribir la factura, y
+`withTransaction` commiteaba igual. Un 409 con la factura dentro.
+
+Ningún test de compras lo veía. El E2E miraba la RESPUESTA —que era correcta—, y los pgTAP miraban
+tablas aisladas —que también—. **Todos observaban la superficie que el bug controlaba.** Y un test
+del propio E2E estaba pasando *gracias* al defecto: buscaba la primera factura posteada con orden
+de compra, y la que encontraba era el documento fantasma. Un test que pasa gracias a un bug es un
+antitest.
+
+Es el patrón de ADR-0023 —ausencia de fallo leída como éxito— a escala de sistema, y solo lo rompe
+un observador que no dependa de la pieza observada.
+
+Por eso esta categoría de test se escribe aparte y a propósito. Los que ya existen:
+
+| Invariante | Consulta | Qué cruza |
+|---|---|---|
+| El kardex reproduce el saldo | `stock_reconciliation()` · `recompute_stock()` | inventario ↔ materialización |
+| El mayor reproduce los asientos | `recompute_ledger()` vs `ledger_balances` | contabilidad ↔ materialización |
+| Documento posteado ⇒ asiento **o** cola | `accounting_coverage_gaps()` | ventas y compras ↔ contabilidad |
+| Toda tabla con `tenant_id` lleva su ancla | test 006 sobre el catálogo | esquema entero |
+| Σ débitos = Σ créditos | `trial_balance()` | contabilidad entera |
+
+**Al cerrar un módulo, la pregunta no es «¿pasan sus tests?» sino «¿qué invariante cruza este
+módulo con los anteriores, y quién lo mira?».** Si la respuesta es «nadie», ese es el trabajo que
+falta.
+
 ### Qué leer según la tarea
 
 | Si tocas… | Lee obligatoriamente |

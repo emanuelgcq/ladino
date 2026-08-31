@@ -36,6 +36,29 @@ export interface UnitOfWork {
 }
 
 /**
+ * Envuelve el `err` devuelto por un caso de uso para forzar el ROLLBACK, y lo
+ * transporta intacto al otro lado. No es un error de programa: es el mecanismo.
+ */
+class RollbackPorError extends Error {
+  constructor(readonly resultado: unknown) {
+    super("el caso de uso devolvió err: se revierte la transacción");
+  }
+}
+
+/**
+ * ¿Es un `Result` en fallo? Se comprueba por FORMA y no importando `Result` de
+ * `@ladino/core`: `packages/db` no depende de core (tabla de fronteras), y
+ * hacerlo por una comprobación de tipo sería invertir esa dependencia.
+ *
+ * La comprobación es estrecha a propósito —`ok === false` **y** propiedad
+ * `error`— para no confundirla con una fila de consulta que traiga `ok`, como
+ * las de `ladino_user_has_permission(...) as ok`.
+ */
+function esErr(v: unknown): boolean {
+  return typeof v === "object" && v !== null && "ok" in v && v.ok === false && "error" in v;
+}
+
+/**
  * Abre una transacción y fija el GUC de procedencia como PRIMERA sentencia.
  *
  * ═══════════════════════════════════════════════════════════════════════════
@@ -70,24 +93,60 @@ export interface UnitOfWork {
  * Un contrato documentado no basta —`CLAUDE.md` §2: ausencia de mecanismo no es
  * prohibición—. Al ser este helper la única forma de llegar a la base, olvidar
  * el GUC deja de ser improbable y pasa a ser imposible.
+ *
+ * ── Y DESDE 2026-08-28, ADEMÁS ────────────────────────────────────────────
+ *
+ * ⚠ UN CASO DE USO QUE DEVUELVE `err` NO OCURRIÓ: se revierte.
+ *
+ * Hasta 2026-08-28 esto no era así, y es el defecto más caro que ha tenido el
+ * proyecto. `sql.begin()` COMMITEA cuando la promesa resuelve, sin mirar el
+ * valor; devolver `err` resolvía la promesa. O sea que un caso de uso podía
+ * responder 409 y dejar escrito lo que había hecho antes del fallo.
+ *
+ * Pasó de verdad: `registerSupplierInvoice` creaba la factura, la retención se
+ * rechazaba, la API contestaba 409 y **la factura quedaba en la tabla**. El
+ * E2E de compras miraba la respuesta y cuadraba. Los pgTAP miraban tablas
+ * aisladas y también. Lo cazó una consulta cross-módulo —el invariante de
+ * cobertura de ADR-0042— preguntando «¿todos los documentos tienen asiento o
+ * fila en cola?». Una auditoría posterior encontró el MISMO patrón en otras
+ * treinta y cinco funciones: factura emitida sin kardex, recepción confirmada
+ * sin movimiento, devolución sin líneas.
+ *
+ * Que un caso de uso pueda decir «hubo error» y aun así commitear es lo
+ * contrario de lo que significa «transacción». Ahora `err` revierte.
+ *
+ * **Consecuencia deliberada:** lo escrito antes del fallo desaparece, incluida
+ * la auditoría de un hecho que no ocurrió — que es lo correcto. Si algún caso
+ * de uso necesitara de verdad persistir algo pese a fallar, tiene que hacerlo
+ * en OTRA transacción y decir por qué; no puede conseguirlo por descuido.
  */
 export async function withTransaction<T>(
   sql: Sql,
   actor: Actor,
   fn: (uow: UnitOfWork) => Promise<T>,
 ): Promise<T> {
-  return sql.begin(async (tx) => {
-    // PRIMERA sentencia de la transacción, sin excepción. Cualquier cosa que
-    // escriba antes de esto queda sin autor.
-    //
-    // `set_config(..., true)` es el equivalente de `SET LOCAL` en forma de
-    // función, que es lo que permite parametrizar el valor sin interpolarlo en
-    // el texto del SQL: `SET LOCAL` no admite parámetros de bind.
-    const actorId = actor.kind === "user" ? actor.userId : SYSTEM_ACTOR_ID;
-    await tx`select set_config('ladino.actor_id', ${actorId}, true)`;
+  try {
+    return (await sql.begin(async (tx) => {
+      // PRIMERA sentencia de la transacción, sin excepción. Cualquier cosa que
+      // escriba antes de esto queda sin autor.
+      //
+      // `set_config(..., true)` es el equivalente de `SET LOCAL` en forma de
+      // función, que es lo que permite parametrizar el valor sin interpolarlo en
+      // el texto del SQL: `SET LOCAL` no admite parámetros de bind.
+      const actorId = actor.kind === "user" ? actor.userId : SYSTEM_ACTOR_ID;
+      await tx`select set_config('ladino.actor_id', ${actorId}, true)`;
 
-    return fn({ sql: tx, actor });
-  }) as Promise<T>;
+      const resultado = await fn({ sql: tx, actor });
+      // Lanzar es lo ÚNICO que revierte en postgres.js. El valor viaja dentro
+      // de la excepción para devolverlo tal cual: el llamante ve su `err`
+      // original, con su código y su mensaje, y no sabe que hubo un rollback.
+      if (esErr(resultado)) throw new RollbackPorError(resultado);
+      return resultado;
+    })) as T;
+  } catch (e) {
+    if (e instanceof RollbackPorError) return e.resultado as T;
+    throw e;
+  }
 }
 
 /**
