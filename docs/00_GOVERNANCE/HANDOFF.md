@@ -9,11 +9,55 @@ trunk-based: todo en `main`, `verify` en verde antes de cada commit.
 S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅ ·
 Inventario ✅ · Ventas ✅ · Compras ✅ · Contabilidad ✅** · S0.6b ⏸️
 
-Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **las 25 migraciones aplicadas** (2026-08-27, vía
+Remoto: proyecto `udacvwnhwpsdzbouhqhl` con **las 26 migraciones aplicadas** (2026-08-27, vía
 Management API, registradas en `supabase_migrations.schema_migrations` con la forma de la CLI para
 que un `db push` futuro las reconozca). Paridad verificada por huella, **idéntica en las seis
-clases**: 1060 columnas · 732 constraints · 277 índices · 534 policies · 80 funciones · 183
+clases**: 1078 columnas · 746 constraints · 282 índices · 546 policies · 80 funciones · 183
 triggers. Local y remoto no divergen.
+
+## El gancho contable — R-20 cerrado (2026-08-28)
+
+Migración 26 · pgTAP 026 (26 aserciones) · `packages/domain/src/journal-generator.ts` · E2E de 12
+casos · seis hechos enganchados.
+
+| Hecho | Evento del outbox | Asiento |
+|---|---|---|
+| Factura de venta | `fiscal.invoice.issued` | CxC / ingresos + IVA débito fiscal |
+| Cobro | `ar.payment_applied` | Banco / CxC + diferencial cambiario, por signo |
+| Anulación de venta | — | **Reversa** el asiento de la emisión, no genera uno nuevo |
+| Factura de compra | `ap.invoice_posted` | Inventario + IVA crédito fiscal / CxP, con las dos ramas |
+| Pago a proveedor | `ap.payment_made` | CxP / banco + retenciones por pagar, desglosadas |
+| Landed cost | `purchase.landed_cost_applied` | Inventario y variación / transitoria |
+| Ajuste de existencias | `stock.adjusted` | Inventario / ajuste, por signo |
+
+**Los presets de mapeo son un catálogo GLOBAL importable**, con la forma de `chart_templates`
+(ADR-0043). `journal_templates` sigue naciendo vacía. La alternativa era sembrar las plantillas
+dentro de los E2E, y entonces «lo que hace que la contabilidad funcione» viviría solo en los tests
+mientras el sistema real seguiría sin poder asentar nada.
+
+**Tres defectos que encontraron los tests, no una revisión:**
+
+1. **La vigencia de la plantilla se comparaba contra medianoche.** `effective_from` iba contra
+   `postingDate::timestamptz`, que son las 00:00 de ese día; una plantilla configurada esta tarde no
+   aplicaba a un documento fechado hoy, y el sistema encolaba con «no hay plantilla» teniéndola
+   delante. Es la misma trampa que `occurred_at` contra `now()` en inventario. Ahora se compara por
+   DÍA.
+2. **`auth.uid()` desde `ladino_api`**: no tiene USAGE sobre el esquema `auth`. El actor se pasa
+   explícito desde cada caso de uso, que es como lo hacen todos los demás.
+3. **Una factura de compra con retención rechazada se escribía igual.** `withTransaction` COMMITEA
+   cuando el caso de uso devuelve `err` —solo revierte si algo LANZA—, y la retención se calculaba
+   fuera del savepoint de la factura. Se respondía 409 y el documento quedaba escrito: sin asiento y
+   sin fila en la cola. **El defecto llevaba ahí desde que se construyó compras y ningún test de
+   compras lo veía, porque todos miraban la respuesta y ninguno la tabla.** Lo destapó
+   `accounting_coverage_gaps()` contándolo como `missing`.
+
+Y un detalle que dice algo del valor de esa consulta: al arreglarlo, **un test del E2E de compras se
+puso rojo porque estaba pasando gracias al defecto** — buscaba entre las facturas posteadas la
+primera con orden de compra, y la que encontraba era el documento fantasma.
+
+**`payments`, `supplier_payments` y `retention_receipts` no llevan enlace de vuelta escrito.** Son
+append-only sin GRANT de UPDATE para nadie, y debilitar eso para guardar una comodidad de lectura
+era el peor de los dos tratos: `journal_entries.source_id` ya contesta esa pregunta, con índice.
 
 ## Módulo de contabilidad — construido entero (2026-08-27)
 
@@ -680,21 +724,33 @@ va a tomar; lo que falta es que la pantalla lo explique cuando llegue el `NEGATI
 la empresa que de verdad venda sin stock use la bandera `allow_negative_stock` con su permiso, que
 para eso existe.
 
-### R-20 · La contabilidad está montada y NADIE la invoca todavía
+### R-20 · ~~La contabilidad está montada y NADIE la invoca~~ **CERRADO (2026-08-28)**
 
-Es el riesgo más importante que deja este módulo, y es de omisión. La migración 25 tiene el
-esquema, el trigger de partida doble, la cola de pendientes y la función que comprueba el
-invariante de cobertura. Lo que **no** existe es la llamada: ni `createInvoice`, ni
-`registerPayment`, ni `registerSupplierInvoice`, ni `applyLandedCost` invocan a
-`generate_journal_entry_from_source`.
+El generador está enganchado en los seis hechos que los módulos ya emiten, síncrono y en la misma
+transacción del documento. Sobre los datos de TODOS los E2E: **11 documentos emitidos · 0 huecos de
+cobertura · 6 asientos · 14 en cola · 0 asientos descuadrados.** El invariante de ADR-0042 pasó de
+*comprobable* a *cumplido*.
 
-Consecuencia hoy: `platform.accounting_coverage_gaps()` devuelve **todos** los documentos como
-`missing` en cuanto haya uno emitido, porque no tienen asiento ni fila en la cola. El invariante de
-ADR-0042 no se cumple todavía — está *comprobable*, que es distinto de estar *cumplido*.
+Lo que queda de este riesgo, y no es lo mismo: **la cola es real y hay que mirarla.** Los 14
+pendientes salen de los E2E porque no todas sus empresas importan el preset de mapeo. En una
+empresa de verdad significa lo mismo: documentos correctos, contabilidad por hacer, y el cierre de
+período bloqueado hasta que se haga.
 
-Enganchar el generador es lo primero de la siguiente sesión, sea cual sea el módulo elegido. Hasta
-entonces, ninguna empresa debería cerrar un período creyendo que su contabilidad está completa, y
-la pantalla de cierre **no puede avisarlo** porque la cola está vacía por la razón equivocada.
+Cuatro hechos siguen sin plantilla, y cada uno por su razón:
+
+- `purchase.goods_received` — **deliberado**: en el preset `ve_basico` el inventario se capitaliza
+  contra la FACTURA de compra, no contra la recepción. Una empresa que lleve «mercancía recibida no
+  facturada» necesita su propia plantilla y un papel contable que todavía no existe. Está en la
+  cabecera de la migración 26 para que no se descubra cuadrando.
+- `sales_credit_note` y `purchase_credit_note` — las notas de crédito de ventas se emiten
+  (devoluciones) y las de compra se reciben, y las dos entran en la cola. Es el siguiente hueco a
+  cerrar, y **se ve solo**: está en la cola con su motivo.
+- `retention_receipt` — el comprobante se emite, pero el movimiento de «retenciones por pagar» a
+  «retenciones enteradas» no tiene evento propio todavía. Los papeles `retention_iva_paid` y
+  `retention_islr_paid` existen esperándolo.
+
+Y dos papeles están en el catálogo **sin uso**: `retention_iva_receivable` y
+`retention_islr_receivable`. Ventas no calcula todavía las retenciones que nos practican a nosotros.
 
 ### R-21 · Una plantilla marcada `VALIDAR-CONTABLE` que nadie valida acaba siendo el plan real
 
@@ -720,15 +776,14 @@ de la plantilla se ve antes de que produzca un asiento.
 - `dbefc0d` compras: casos de uso, API, pantallas, migraciones 23 y 24
 - `7755dba` contabilidad: ADR-0041/0042/0043, migración 25 y `packages/accounting`
 - `5900245` contabilidad: casos de uso, API, OpenAPI y pantallas
+- `897b67e` **el gancho**: migración 26, generador y seis módulos enganchados
+- `0014dc6` el defecto de compras que destapó la consulta de cobertura
 
-`verify` en verde antes de cada uno; el último: `VERIFY EXIT=0`, **551 pasos**,
-`All tests successful` (799 aserciones pgTAP en 23 ficheros).
+`verify` en verde antes de cada uno; el último: `VERIFY EXIT=0`, **561 pasos**,
+`All tests successful` (825 aserciones pgTAP en 24 ficheros, 145 tests de API).
 
-**Lo primero de la siguiente sesión, sea cual sea el módulo: enganchar el generador de asientos
-(R-20).** Sin eso, la contabilidad existe y no se llena.
-
-**Siguiente módulo: lo decide el usuario entre ajuste por inflación, libros fiscales,
-reportes/analítica o retomar la UX multisede transversal.**
+**Siguiente módulo: LIBROS FISCALES** (libro de ventas, libro de compras, formato SENIAT). Con la
+contabilidad conectada es lectura estructurada de datos que ya existen.
 
 ## Histórico
 
