@@ -98,7 +98,7 @@ export function Clientes(): React.JSX.Element {
         enableSorting: false,
         cell: (c) => (
           <Link
-            to={`/cuentas?cliente=${c.row.original.id}`}
+            to={`/admin/cuentas?cliente=${c.row.original.id}`}
             onClick={(e) => e.stopPropagation()}
             className="inline-flex items-center gap-1 text-[0.82rem] text-accent-soft-foreground hover:underline"
           >
@@ -462,7 +462,7 @@ function DetalleCliente({
                 Teléfono: <span className="text-foreground">{cliente.phone ?? "—"}</span>
               </p>
               <Link
-                to={`/cuentas?cliente=${cliente.id}`}
+                to={`/admin/cuentas?cliente=${cliente.id}`}
                 className="inline-flex items-center gap-1.5 text-accent-soft-foreground hover:underline"
               >
                 <Banknote className="size-4" /> Estado de cuenta y aging

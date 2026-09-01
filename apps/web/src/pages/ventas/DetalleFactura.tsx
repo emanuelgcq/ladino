@@ -396,7 +396,7 @@ export function DetalleFactura(): React.JSX.Element {
                   <Skeleton className="h-6 w-40" />
                 ) : asiento.data?.estado === "posted" ? (
                   <Link
-                    to="/contabilidad"
+                    to="/admin/contabilidad"
                     className="inline-flex items-center gap-1.5 font-medium text-accent-soft-foreground hover:underline"
                   >
                     <BookOpenCheck className="size-4" /> Asiento n.º{" "}

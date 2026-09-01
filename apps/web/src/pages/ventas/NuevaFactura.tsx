@@ -171,7 +171,7 @@ export function NuevaFactura(): React.JSX.Element {
         `Factura ${doc.series}-${String(doc.document_number ?? "")} emitida`,
         "Kardex descargado y asiento generado en la misma transacción.",
       );
-      void navigate(`/ventas/${doc.id}`);
+      void navigate(`/admin/ventas/${doc.id}`);
     } catch (e) {
       setError(e);
       toast.error("No se pudo emitir");

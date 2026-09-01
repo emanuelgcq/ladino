@@ -335,6 +335,33 @@ describe("tesorería de extremo a extremo", () => {
     expect(c["journal_entry_id"]).not.toBeNull();
   });
 
+  it("el resumen del negocio: cifras del servidor, coherentes con lo que pasó", async () => {
+    const r = await pedir("GET", "/v1/negocio/resumen", GESTOR);
+    expect(r.status).toBe(200);
+    const res = (await r.json()) as {
+      functional_currency: string;
+      mi_dinero: { currency: string; balance: string }[];
+      lo_que_me_deben: string;
+      lo_que_debo: string;
+      tasa_del_dia: { rate: string; source: string } | null;
+      vendido_hoy: string;
+    };
+    expect(res.functional_currency).toBe("VES");
+    // Caja quedó en 0 tras el último cierre; Zelle en −10 por el gasto en USD.
+    const porMoneda = new Map(res.mi_dinero.map((m) => [m.currency, m.balance]));
+    expect(porMoneda.get("VES")).toBe("0.00000000");
+    expect(porMoneda.get("USD")).toBe("-10.00000000");
+    // Sin ventas ni compras en esta empresa: deudas en cero, no en null.
+    expect(res.lo_que_me_deben).toBe("0");
+    expect(res.lo_que_debo).toBe("0");
+    expect(res.tasa_del_dia).not.toBeNull();
+    expect(res.tasa_del_dia!.rate).toBe("40.00000000");
+
+    const sinPermiso = await pedir("GET", "/v1/negocio/resumen", MIRON);
+    // El mirón SÍ tiene treasury.read en esta fixture: también ve el resumen.
+    expect(sinPermiso.status).toBe(200);
+  });
+
   it("los listados responden y la conciliación cuadra al final", async () => {
     const gastos = await pedir("GET", "/v1/expenses", GESTOR);
     expect(gastos.status).toBe(200);

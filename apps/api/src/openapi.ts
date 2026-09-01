@@ -119,6 +119,7 @@ import {
   CreateProductSimpleRequest,
   ProductSimpleResponse,
   ImportProductsResponse,
+  NegocioResumenResponse,
   CreateCompanyAccountRequest,
   UpdateCompanyAccountRequest,
   CompanyAccountResponse,
@@ -1058,6 +1059,20 @@ export function buildOpenApiDocument(): object {
     },
   });
 
+  const resumenNegocio = registry.register("NegocioResumenResponse", NegocioResumenResponse);
+  registry.registerPath({
+    method: "get",
+    path: "/v1/negocio/resumen",
+    summary: "Los números de Inicio y Mi dinero, calculados TODOS en el servidor",
+    description:
+      "Vendido y ganado (hoy/mes, con el corte del día de VENEZUELA y el margen desde el costo " +
+      "CONGELADO de cada línea), lo que me deben y lo que debo (saldos del esquema), el dinero " +
+      "por moneda, los productos por agotarse, la tasa del día con su fuente y las últimas " +
+      "ventas. La pantalla no suma ni un céntimo (permiso treasury.read).",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(resumenNegocio, "El resumen."), ...erroresComunes },
+  });
   registry.registerPath({
     method: "get",
     path: "/v1/branches",

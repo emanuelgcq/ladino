@@ -1,4 +1,4 @@
-import { createBrowserRouter } from "react-router";
+import { createBrowserRouter, Navigate } from "react-router";
 import { AppShell } from "./shell.js";
 import { Configuracion } from "../pages/Configuracion.js";
 import { Clientes } from "../pages/clientes/Clientes.js";
@@ -16,31 +16,51 @@ import { DetalleFactura } from "../pages/ventas/DetalleFactura.js";
 import { Cuentas } from "../pages/ventas/Cuentas.js";
 import { ChecklistFiscal } from "../pages/setup/ChecklistFiscal.js";
 import { DemoComponentes } from "../pages/dev/DemoComponentes.js";
+import { Dinero } from "../pages/negocio/Dinero.js";
+import { PantallaEnCamino } from "../pages/negocio/comunes.js";
 
 /**
- * React Router en data mode. FASE B COMPLETA: las doce superficies usan el
- * sistema de diseño; no queda ninguna pantalla heredada montada.
+ * DOS MUNDOS, UNA APP (Fase C).
+ *
+ * Arriba del árbol, las pantallas de la PERSONA: /inicio, /vender, /productos,
+ * /inventario, /clientes, /compras, /dinero, /empezar. Debajo, INTACTA, la
+ * Fase B bajo /admin/* — el mundo del contador y de quien configura, con
+ * «Facturación fiscal» como casa del checklist técnico.
+ *
+ * Las PantallaEnCamino son provisionales y desaparecen pantalla a pantalla
+ * dentro de esta misma fase.
  */
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <AppShell />,
     children: [
-      { index: true, element: <Dashboard /> },
-      { path: "ventas", element: <Ventas /> },
-      { path: "ventas/nueva", element: <NuevaFactura /> },
-      { path: "ventas/:id", element: <DetalleFactura /> },
-      { path: "cuentas", element: <Cuentas /> },
-      { path: "clientes", element: <Clientes /> },
-      { path: "productos", element: <Productos /> },
-      { path: "precios", element: <Precios /> },
-      { path: "inventario", element: <Inventario /> },
-      { path: "compras", element: <Compras /> },
-      { path: "contabilidad", element: <Contabilidad /> },
-      { path: "libros", element: <Libros /> },
-      { path: "reportes", element: <Reportes /> },
-      { path: "configuracion", element: <Configuracion /> },
-      { path: "configuracion/fiscal", element: <ChecklistFiscal /> },
+      { index: true, element: <Navigate to="/inicio" replace /> },
+      // ── El mundo de la persona ─────────────────────────────────────────
+      { path: "inicio", element: <PantallaEnCamino titulo="Inicio" /> },
+      { path: "vender", element: <PantallaEnCamino titulo="Vender" /> },
+      { path: "productos", element: <PantallaEnCamino titulo="Productos" /> },
+      { path: "inventario", element: <PantallaEnCamino titulo="Inventario" /> },
+      { path: "clientes", element: <PantallaEnCamino titulo="Clientes" /> },
+      { path: "compras", element: <PantallaEnCamino titulo="Compras y gastos" /> },
+      { path: "dinero", element: <Dinero /> },
+      { path: "empezar", element: <PantallaEnCamino titulo="Empezar" /> },
+      // ── Administración: la Fase B, intacta, bajo /admin/* ──────────────
+      { path: "admin", element: <Dashboard /> },
+      { path: "admin/ventas", element: <Ventas /> },
+      { path: "admin/ventas/nueva", element: <NuevaFactura /> },
+      { path: "admin/ventas/:id", element: <DetalleFactura /> },
+      { path: "admin/cuentas", element: <Cuentas /> },
+      { path: "admin/clientes", element: <Clientes /> },
+      { path: "admin/productos", element: <Productos /> },
+      { path: "admin/precios", element: <Precios /> },
+      { path: "admin/inventario", element: <Inventario /> },
+      { path: "admin/compras", element: <Compras /> },
+      { path: "admin/contabilidad", element: <Contabilidad /> },
+      { path: "admin/libros", element: <Libros /> },
+      { path: "admin/reportes", element: <Reportes /> },
+      { path: "admin/configuracion", element: <Configuracion /> },
+      { path: "admin/facturacion-fiscal", element: <ChecklistFiscal /> },
       { path: "dev/components", element: <DemoComponentes /> },
     ],
   },

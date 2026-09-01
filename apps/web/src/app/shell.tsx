@@ -4,11 +4,11 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Building2,
   Check,
+  ChevronDown,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   LogOut,
-  MapPin,
   Moon,
   Search,
   Sun,
@@ -19,18 +19,21 @@ import { Button } from "../ui/button.js";
 import { Tooltip } from "../ui/tooltip.js";
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu.js";
 import { useSesion } from "./session.js";
-import { NAV, CRUMBS, type NavItem } from "./nav.js";
+import { NAV_NEGOCIO, NAV_ADMIN, NAV_EMPEZAR, CRUMBS, type NavItem } from "./nav.js";
 import { CommandPalette } from "./palette.js";
 import { esOscuroAhora, setTema, temaActual } from "../theme.js";
 
 /**
- * El shell: sidebar de 256 px colapsable a iconos, top bar con empresa, sede,
- * búsqueda (Ctrl/Cmd+K), tema y usuario; breadcrumbs debajo; contenido en
- * grid de 12 columnas con ancho máximo. Desktop primero, tablet funcional.
+ * El shell de los DOS MUNDOS (Fase C): arriba, sin nombre, las pantallas de
+ * la persona — objetivos táctiles grandes, siete entradas y ya. Debajo,
+ * plegado, «ADMINISTRACIÓN»: la Fase B intacta bajo /admin/*, visible solo
+ * para quien tiene permisos técnicos (la visibilidad es cortesía; el permiso
+ * real lo exige el servidor en cada endpoint).
  */
 
 const CLAVE_SIDEBAR = "ladino.sidebar";
 const CLAVE_TODOS = "ladino.modulos.todos";
+const CLAVE_ADMIN_ABIERTO = "ladino.admin.abierto";
 
 export function mostrarTodosLosModulos(): boolean {
   try {
@@ -49,8 +52,7 @@ export function setMostrarTodos(v: boolean): void {
 
 /**
  * Divulgación progresiva con DATOS, no con un flag: un módulo avanzado aparece
- * si la empresa tiene filas o configuración en él. Las tres consultas son
- * baratas (per_page=1) y se cachean 5 minutos por empresa.
+ * si la empresa tiene filas o configuración en él.
  */
 export function useModulosActivos(): { compras: boolean; contabilidad: boolean; libros: boolean } {
   const { empresa, llamar } = useSesion();
@@ -67,8 +69,6 @@ export function useModulosActivos(): { compras: boolean; contabilidad: boolean; 
       return {
         compras: proveedores.total > 0,
         contabilidad,
-        // Libros: con contabilidad activa la obligación ya existe aunque no se
-        // haya exportado nunca — esconderla sería esconder un deber legal.
         libros: contabilidad || generaciones.runs.length > 0,
       };
     },
@@ -76,19 +76,62 @@ export function useModulosActivos(): { compras: boolean; contabilidad: boolean; 
   return q.data ?? { compras: false, contabilidad: false, libros: false };
 }
 
+/**
+ * ¿Este usuario ve el mundo de ADMINISTRACIÓN? Se sondea con dos permisos
+ * técnicos reales (contable y fiscal): si el servidor deja pasar cualquiera,
+ * el grupo aparece. Sin endpoint de «mis permisos», la sonda ES la verdad.
+ */
+function useMundoAdmin(): boolean {
+  const { empresa, llamar } = useSesion();
+  const q = useQuery({
+    queryKey: ["mundo-admin", empresa.id],
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const sondas = await Promise.allSettled([
+        llamar("/v1/accounts"),
+        llamar("/v1/fiscal-books/formats"),
+      ]);
+      return sondas.some((s) => s.status === "fulfilled");
+    },
+  });
+  return q.data ?? false;
+}
+
+/** ¿Falta la puesta a punto? Sin cuentas de dinero, el negocio no ha empezado. */
+function useEmpezarPendiente(): boolean {
+  const { empresa, llamar } = useSesion();
+  const q = useQuery({
+    queryKey: ["empezar-pendiente", empresa.id],
+    staleTime: 60_000,
+    queryFn: async () => {
+      const r = await llamar<{ accounts: unknown[] }>("/v1/treasury/accounts").catch(() => null);
+      if (r === null) return false; // sin permiso de dinero no se le ofrece el asistente
+      return r.accounts.length === 0;
+    },
+  });
+  return q.data ?? false;
+}
+
 export function AppShell(): React.JSX.Element {
   const [colapsada, setColapsada] = useState(() => localStorage.getItem(CLAVE_SIDEBAR) === "1");
   const [paleta, setPaleta] = useState(false);
+  const [adminAbierto, setAdminAbierto] = useState(
+    () => localStorage.getItem(CLAVE_ADMIN_ABIERTO) === "1",
+  );
   const activos = useModulosActivos();
+  const admin = useMundoAdmin();
+  const empezar = useEmpezarPendiente();
   const [todos, setTodos] = useState(mostrarTodosLosModulos);
   const location = useLocation();
+  const enAdmin = location.pathname.startsWith("/admin");
 
-  // «Mostrar todos» se cambia en Configuración; aquí se relee al navegar.
   useEffect(() => setTodos(mostrarTodosLosModulos()), [location.pathname]);
-
   useEffect(() => {
     localStorage.setItem(CLAVE_SIDEBAR, colapsada ? "1" : "0");
   }, [colapsada]);
+  useEffect(() => {
+    localStorage.setItem(CLAVE_ADMIN_ABIERTO, adminAbierto ? "1" : "0");
+  }, [adminAbierto]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -106,6 +149,10 @@ export function AppShell(): React.JSX.Element {
     if (item.advanced === undefined) return true;
     return todos || activos[item.advanced];
   };
+
+  // Dentro de /admin el grupo se muestra abierto aunque estuviera plegado:
+  // plegarte el menú de donde estás parado sería esconderte el piso.
+  const adminVisible = adminAbierto || enAdmin;
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -125,23 +172,50 @@ export function AppShell(): React.JSX.Element {
           {!colapsada && <span className="truncate font-semibold">Ladino</span>}
         </div>
         <nav className="flex-1 overflow-y-auto px-2 pb-2" aria-label="Navegación principal">
-          {NAV.map((grupo) => {
-            const items = grupo.items.filter(visible);
-            if (items.length === 0) return null;
-            return (
-              <div key={grupo.label ?? "raiz"} className="mb-1">
-                {grupo.label !== null && !colapsada && (
-                  <p className="px-2 pb-1 pt-3 text-[0.72rem] font-medium uppercase tracking-wider text-faint-foreground">
-                    {grupo.label}
-                  </p>
-                )}
-                {grupo.label !== null && colapsada && <div className="my-2 h-px bg-border" />}
-                {items.map((item) => (
-                  <ItemNav key={item.to} item={item} colapsada={colapsada} />
-                ))}
-              </div>
-            );
-          })}
+          {/* El grupo SIN nombre: la app. Objetivos táctiles de 44 px. */}
+          <div className="mb-1 space-y-0.5">
+            {(empezar ? [NAV_EMPEZAR, ...NAV_NEGOCIO] : NAV_NEGOCIO).map((item) => (
+              <ItemNav key={item.to} item={item} colapsada={colapsada} grande />
+            ))}
+          </div>
+
+          {admin && (
+            <div className="mt-3 border-t border-border pt-2">
+              {!colapsada ? (
+                <button
+                  className="flex w-full items-center gap-1 px-2 pb-1 pt-1 text-[0.72rem] font-medium uppercase tracking-wider text-faint-foreground hover:text-muted-foreground"
+                  onClick={() => setAdminAbierto((v) => !v)}
+                  aria-expanded={adminVisible}
+                >
+                  {adminVisible ? (
+                    <ChevronDown className="size-3.5" />
+                  ) : (
+                    <ChevronRight className="size-3.5" />
+                  )}
+                  Administración
+                </button>
+              ) : (
+                <div className="my-1 h-px bg-border" />
+              )}
+              {adminVisible &&
+                NAV_ADMIN.map((grupo) => {
+                  const items = grupo.items.filter(visible);
+                  if (items.length === 0) return null;
+                  return (
+                    <div key={grupo.label ?? "raiz"} className="mb-1">
+                      {grupo.label !== null && !colapsada && (
+                        <p className="px-2 pb-0.5 pt-2 text-[0.7rem] font-medium uppercase tracking-wider text-faint-foreground/80">
+                          {grupo.label}
+                        </p>
+                      )}
+                      {items.map((item) => (
+                        <ItemNav key={item.to} item={item} colapsada={colapsada} />
+                      ))}
+                    </div>
+                  );
+                })}
+            </div>
+          )}
         </nav>
         <div className="border-t border-border p-2">
           <Button
@@ -159,7 +233,7 @@ export function AppShell(): React.JSX.Element {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar onBuscar={() => setPaleta(true)} />
-        <Migas />
+        {enAdmin && <Migas />}
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 pb-10 pt-4 md:px-6">
           <Outlet />
         </main>
@@ -170,15 +244,23 @@ export function AppShell(): React.JSX.Element {
   );
 }
 
-function ItemNav({ item, colapsada }: { item: NavItem; colapsada: boolean }): React.JSX.Element {
+function ItemNav({
+  item,
+  colapsada,
+  grande = false,
+}: {
+  item: NavItem;
+  colapsada: boolean;
+  grande?: boolean;
+}): React.JSX.Element {
   const Icono = item.icon;
   const enlace = (
     <NavLink
       to={item.to}
-      end={item.to === "/"}
       className={({ isActive }) =>
         cn(
-          "flex items-center gap-2.5 rounded-sm px-2 py-1.5 text-[0.9rem] transition-colors",
+          "flex items-center gap-2.5 rounded-md px-2 transition-colors",
+          grande ? "min-h-11 py-2 text-[0.95rem]" : "py-1.5 text-[0.9rem]",
           colapsada && "justify-center px-0",
           isActive
             ? "bg-accent-soft font-medium text-accent-soft-foreground"
@@ -186,7 +268,7 @@ function ItemNav({ item, colapsada }: { item: NavItem; colapsada: boolean }): Re
         )
       }
     >
-      <Icono className="size-4 shrink-0" />
+      <Icono className={cn("shrink-0", grande ? "size-4.5" : "size-4")} />
       {!colapsada && <span className="truncate">{item.label}</span>}
     </NavLink>
   );
@@ -204,7 +286,6 @@ function TopBar({ onBuscar }: { onBuscar: () => void }): React.JSX.Element {
   return (
     <header className="sticky top-0 z-30 flex h-12 items-center gap-2 border-b border-border bg-surface/95 px-4 backdrop-blur">
       <CompanySwitcher />
-      <BranchSwitcher />
       <div className="flex-1" />
       <Button
         variant="secondary"
@@ -263,7 +344,6 @@ function CompanySwitcher(): React.JSX.Element {
         <span className="truncate">{empresa.legal_name}</span>
       </MenuTrigger>
       <MenuContent align="start" className="w-72">
-        {/* Búsqueda si hay más de 5 opciones — el requisito, literal. */}
         {companies.length > 5 && (
           <div className="px-2 pb-1.5 pt-1">
             <input
@@ -290,27 +370,6 @@ function CompanySwitcher(): React.JSX.Element {
   );
 }
 
-/**
- * Sede activa. La tabla `branches` existe pero la API aún no la expone
- * (`/v1/branches` no está en el contrato, y añadir un endpoint es cambio
- * estructural con aprobación aparte). El switcher está DISEÑADO y montado,
- * deshabilitado con la explicación a la vista — mejor que fingirlo con otra
- * cosa o esconderlo y que nadie recuerde por qué falta.
- */
-function BranchSwitcher(): React.JSX.Element {
-  return (
-    <Tooltip content="Las sedes existen en el modelo, pero la API todavía no expone su listado (pendiente /v1/branches).">
-      <button
-        disabled
-        className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-[0.85rem] text-faint-foreground"
-        aria-label="Selector de sede (pendiente de API)"
-      >
-        <MapPin className="size-3.5" /> Sede única
-      </button>
-    </Tooltip>
-  );
-}
-
 function ThemeToggle(): React.JSX.Element {
   const [oscuro, setOscuro] = useState(esOscuroAhora);
   return (
@@ -319,8 +378,6 @@ function ThemeToggle(): React.JSX.Element {
       size="iconSm"
       aria-label={oscuro ? "Cambiar a tema claro" : "Cambiar a tema oscuro"}
       onClick={() => {
-        // El toggle fija una elección EXPLÍCITA (persistida); «system» se
-        // recupera borrando la preferencia desde Configuración.
         const siguiente = esOscuroAhora() ? "light" : "dark";
         setTema(siguiente);
         setOscuro(siguiente === "dark");
@@ -332,16 +389,16 @@ function ThemeToggle(): React.JSX.Element {
   );
 }
 
+/** Migas SOLO en /admin: el mundo de la persona no necesita ruta de regreso. */
 function Migas(): React.JSX.Element {
   const { pathname } = useLocation();
   const partes = pathname.split("/").filter(Boolean);
-  // Un id en la ruta no es una miga legible: se enseña «Detalle», no el uuid.
   const etiqueta = (r: string, seg: string | undefined): string =>
     CRUMBS[r] ?? (seg !== undefined && /^[0-9a-f-]{20,}$/i.test(seg) ? "Detalle" : (seg ?? ""));
   const rutas = partes.map((_, i) => "/" + partes.slice(0, i + 1).join("/"));
   return (
     <div className="flex h-8 items-center gap-1 border-b border-border bg-background px-4 text-[0.82rem] text-muted-foreground md:px-6">
-      <Link to="/" className="hover:text-foreground">
+      <Link to="/inicio" className="hover:text-foreground">
         Inicio
       </Link>
       {rutas.map((r, i) => (

@@ -28,7 +28,7 @@ export function MensajeError({ error }: { error: unknown }): React.JSX.Element {
         <p className="mt-0.5 text-muted-foreground">{error.body.message}</p>
         {guia !== undefined && (
           <Link
-            to="/configuracion/fiscal"
+            to="/admin/facturacion-fiscal"
             className="mt-1.5 inline-flex items-center gap-1.5 font-medium text-accent-soft-foreground hover:underline"
           >
             <ClipboardCheck className="size-3.5" /> Ir a la puesta a punto fiscal

@@ -32,7 +32,15 @@ select 'deade001-0000-4000-8000-00000000ee01', k from (values
   ('accounting.account.manage'), ('accounting.template.manage'),
   ('accounting.entry.create'), ('accounting.entry.post'),
   ('accounting.entry.reverse'), ('accounting.read'), ('accounting.period.close'),
-  ('fiscal_book.read'), ('fiscal_book.export')
+  ('fiscal_book.read'), ('fiscal_book.export'),
+  -- Compras (el flujo completo detrás de la compra simple de Fase C).
+  ('supplier.manage'), ('purchase.order.manage'), ('purchase.receive'),
+  ('purchase.invoice.register'), ('purchase.payment.register'), ('ap.read'),
+  -- Fase C: el mundo de la persona.
+  ('product.manage'), ('price_list.manage'), ('customer.manage'),
+  ('treasury.read'), ('treasury.account.manage'), ('treasury.reassign'),
+  ('expense.register'), ('expense.read'), ('cash.close'),
+  ('company.settings.manage')
 ) as t(k)
 on conflict do nothing;
 

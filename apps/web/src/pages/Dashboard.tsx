@@ -210,7 +210,7 @@ export function Dashboard(): React.JSX.Element {
         title={`Hola — ${empresa.legal_name}`}
         description="Las cinco respuestas del dueño, con cada cifra calculada por el servidor."
         actions={
-          <Button variant="primary" onClick={() => void navigate("/ventas/nueva")}>
+          <Button variant="primary" onClick={() => void navigate("/admin/ventas/nueva")}>
             <Receipt /> Nueva factura
           </Button>
         }
@@ -270,7 +270,7 @@ export function Dashboard(): React.JSX.Element {
             </span>
           }
           footer={
-            <Link to="/cuentas" className="text-accent-soft-foreground hover:underline">
+            <Link to="/admin/cuentas" className="text-accent-soft-foreground hover:underline">
               Ver aging por cliente →
             </Link>
           }
@@ -331,7 +331,7 @@ export function Dashboard(): React.JSX.Element {
           <CardHeader>
             <CardTitle>Últimos documentos</CardTitle>
             <Link
-              to="/ventas"
+              to="/admin/ventas"
               className="text-[0.85rem] text-accent-soft-foreground hover:underline"
             >
               Ver todos →
@@ -344,7 +344,7 @@ export function Dashboard(): React.JSX.Element {
               error={ultimos.error instanceof Error ? ultimos.error.message : null}
               onRetry={() => void ultimos.refetch()}
               density="compact"
-              onRowClick={(d) => void navigate(`/ventas/${d.id}`)}
+              onRowClick={(d) => void navigate(`/admin/ventas/${d.id}`)}
               empty={{
                 title: "Todavía no hay documentos",
                 description: "La primera factura aparecerá aquí en cuanto se emita.",
@@ -352,7 +352,7 @@ export function Dashboard(): React.JSX.Element {
                   <Button
                     variant="primary"
                     size="sm"
-                    onClick={() => void navigate("/ventas/nueva")}
+                    onClick={() => void navigate("/admin/ventas/nueva")}
                   >
                     Emitir la primera
                   </Button>

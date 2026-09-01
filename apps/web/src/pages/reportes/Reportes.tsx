@@ -53,20 +53,20 @@ export function Reportes(): React.JSX.Element {
 
   const OTROS = [
     {
-      to: "/contabilidad",
+      to: "/admin/contabilidad",
       icono: <Calculator className="size-4" />,
       titulo: "Comprobación y estados financieros",
       detalle:
         "Balance de comprobación, estado de resultados y balance general — pestañas de Contabilidad.",
     },
     {
-      to: "/libros",
+      to: "/admin/libros",
       icono: <BookOpenCheck className="size-4" />,
       titulo: "Libros fiscales",
       detalle: "Ventas, compras y retenciones con exportación auditable (hash por generación).",
     },
     {
-      to: "/cuentas",
+      to: "/admin/cuentas",
       icono: <Scale className="size-4" />,
       titulo: "Antigüedad de cuentas por cobrar",
       detalle: "Aging por cliente, con cada documento y su saldo.",

@@ -16,7 +16,11 @@ import type { MoneyJSON } from "@ladino/money/format";
  * eso jamás se produce aquí). Antes el fallback soltaba el string crudo con
  * ocho decimales y el componente de firma parecía un volcado de base de datos.
  */
-const PREFIJO: Record<string, string> = { VES: "Bs.S", USD: "USD" };
+/**
+ * «Bs.» a secas — NUNCA «Bs.S» (Fase C, PARTE 16): la reconversión ya pasó y
+ * el sufijo solo confunde. Vale para toda la app, /admin incluido.
+ */
+const PREFIJO: Record<string, string> = { VES: "Bs.", USD: "USD" };
 
 function exactoVestido(value: MoneyJSON): string {
   const neg = value.amount.startsWith("-");
@@ -31,7 +35,9 @@ function exactoVestido(value: MoneyJSON): string {
 
 export function mostrarImporte(value: MoneyJSON): string {
   try {
-    return formatMoney(value, { locale: "es-VE" });
+    // El reemplazo es de ETIQUETA, no de número: el CLDR de es-VE todavía
+    // dice «Bs.S» y la fase lo prohíbe en toda la app.
+    return formatMoney(value, { locale: "es-VE" }).replace("Bs.S", "Bs.");
   } catch {
     return exactoVestido(value);
   }
@@ -44,5 +50,6 @@ export function mostrarImporte(value: MoneyJSON): string {
 export function mostrarCantidad(v: string): string {
   const [ent = "0", dec = ""] = v.split(".");
   const d = dec.replace(/0+$/, "");
-  return d === "" ? ent : `${ent}.${d}`;
+  // Coma decimal: es la convención venezolana en TODA la app (Fase C).
+  return d === "" ? ent : `${ent},${d}`;
 }

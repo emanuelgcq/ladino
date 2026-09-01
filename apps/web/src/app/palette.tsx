@@ -5,7 +5,7 @@ import { Dialog as BaseDialog } from "@base-ui-components/react/dialog";
 import { CornerDownLeft, Package, Sparkles, Users } from "lucide-react";
 import { cn } from "../ui/cn.js";
 import { useSesion } from "./session.js";
-import { NAV, type NavItem } from "./nav.js";
+import { NAV_NEGOCIO, NAV_ADMIN, type NavItem } from "./nav.js";
 
 /**
  * Command palette (Ctrl/Cmd+K). Hoy hace dos cosas: NAVEGAR (todas las rutas
@@ -45,7 +45,7 @@ export function CommandPalette({
   }, [open]);
 
   const rutas = useMemo<Accion[]>(() => {
-    const items: NavItem[] = NAV.flatMap((g) => g.items).filter(
+    const items: NavItem[] = [...NAV_NEGOCIO, ...NAV_ADMIN.flatMap((g) => g.items)].filter(
       (i) => !i.devOnly || import.meta.env.DEV,
     );
     const filtradas =
@@ -88,7 +88,7 @@ export function CommandPalette({
       etiqueta: c.legal_name,
       ...(c.tax_id === null ? {} : { detalle: c.tax_id }),
       icono: <Users className="size-4 text-muted-foreground" />,
-      to: `/cuentas?cliente=${c.id}`,
+      to: `/admin/cuentas?cliente=${c.id}`,
     }));
     const deProductos: Accion[] = (entidades.data?.productos ?? []).map((p) => ({
       id: `producto:${p.id}`,

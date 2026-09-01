@@ -4519,6 +4519,130 @@
         ],
         "additionalProperties": false
       },
+      "NegocioResumenResponse": {
+        "type": "object",
+        "properties": {
+          "functional_currency": {
+            "type": "string"
+          },
+          "vendido_hoy": {
+            "type": "string"
+          },
+          "vendido_mes": {
+            "type": "string"
+          },
+          "ganado_hoy": {
+            "type": "string"
+          },
+          "ganado_mes": {
+            "type": "string"
+          },
+          "lineas_sin_costo_mes": {
+            "type": "integer"
+          },
+          "lo_que_me_deben": {
+            "type": "string"
+          },
+          "lo_que_debo": {
+            "type": "string"
+          },
+          "mi_dinero": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "currency": {
+                  "type": "string"
+                },
+                "balance": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "currency",
+                "balance"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "por_agotarse": {
+            "type": "integer"
+          },
+          "tasa_del_dia": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "rate": {
+                "type": "string"
+              },
+              "rate_date": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "es_de_hoy": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "rate",
+              "rate_date",
+              "source",
+              "es_de_hoy"
+            ],
+            "additionalProperties": false
+          },
+          "ultimas_ventas": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "issued_at": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "customer_name": {
+                  "type": "string"
+                },
+                "total_functional": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "issued_at",
+                "customer_name",
+                "total_functional",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "functional_currency",
+          "vendido_hoy",
+          "vendido_mes",
+          "ganado_hoy",
+          "ganado_mes",
+          "lineas_sin_costo_mes",
+          "lo_que_me_deben",
+          "lo_que_debo",
+          "mi_dinero",
+          "por_agotarse",
+          "tasa_del_dia",
+          "ultimas_ventas"
+        ],
+        "additionalProperties": false
+      },
       "PosQuoteRequest": {
         "type": "object",
         "properties": {
@@ -15375,6 +15499,80 @@
           },
           "409": {
             "description": "Sin tasa vigente para la fecha del cobro, o saldo a favor insuficiente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/negocio/resumen": {
+      "get": {
+        "summary": "Los números de Inicio y Mi dinero, calculados TODOS en el servidor",
+        "description": "Vendido y ganado (hoy/mes, con el corte del día de VENEZUELA y el margen desde el costo CONGELADO de cada línea), lo que me deben y lo que debo (saldos del esquema), el dinero por moneda, los productos por agotarse, la tasa del día con su fuente y las últimas ventas. La pantalla no suma ni un céntimo (permiso treasury.read).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El resumen.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NegocioResumenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
             "content": {
               "application/json": {
                 "schema": {

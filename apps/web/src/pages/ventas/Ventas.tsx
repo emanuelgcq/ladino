@@ -142,7 +142,7 @@ export function Ventas(): React.JSX.Element {
         title="Ventas"
         description="Cotizaciones, pedidos, facturas y notas — con su estado fiscal a la vista."
         actions={
-          <Button variant="primary" onClick={() => void navigate("/ventas/nueva")}>
+          <Button variant="primary" onClick={() => void navigate("/admin/ventas/nueva")}>
             <Receipt /> Nueva factura
           </Button>
         }
@@ -152,7 +152,7 @@ export function Ventas(): React.JSX.Element {
         data={documentos.data?.items}
         error={documentos.error instanceof Error ? documentos.error.message : null}
         onRetry={() => void documentos.refetch()}
-        onRowClick={(d) => void navigate(`/ventas/${d.id}`)}
+        onRowClick={(d) => void navigate(`/admin/ventas/${d.id}`)}
         getRowId={(d) => d.id}
         exportCsv={{ filename: `ventas-${empresa.tax_id}.csv` }}
         pagination={{
@@ -234,7 +234,11 @@ export function Ventas(): React.JSX.Element {
           description:
             "Cambia el filtro o emite la primera factura — aparecerá aquí con su estado fiscal.",
           action: (
-            <Button variant="primary" size="sm" onClick={() => void navigate("/ventas/nueva")}>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void navigate("/admin/ventas/nueva")}
+            >
               Nueva factura
             </Button>
           ),

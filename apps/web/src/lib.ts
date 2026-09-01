@@ -19,6 +19,8 @@ export const supabase = createClient(supabaseUrl, publishableKey);
 export interface ApiError {
   readonly code: string;
   readonly message: string;
+  /** La misma verdad en voz de persona (Fase C): qué pasó y qué hacer. */
+  readonly person_message?: string;
   readonly request_id?: string | null;
 }
 
@@ -29,6 +31,22 @@ export class LlamadaApiError extends Error {
   ) {
     super(`${body.code}: ${body.message}`);
   }
+}
+
+/**
+ * El error EN VOZ DE PERSONA, para las pantallas de negocio: primero el
+ * `person_message` del servidor; si el dominio mandó un mensaje más concreto
+ * que el genérico, ese (ya viene en español y dice qué hacer); y si no hay
+ * nada usable, una frase honesta. Nunca un código, nunca un SQLSTATE.
+ */
+export function errorDePersona(e: unknown): string {
+  if (e instanceof LlamadaApiError) {
+    return e.body.person_message ?? e.body.message;
+  }
+  if (e instanceof TypeError) {
+    return "No hay conexión con el servidor. Revisa tu internet y vuelve a intentar.";
+  }
+  return "Algo salió mal de nuestro lado. Vuelve a intentar; si sigue, avísanos.";
 }
 
 export interface Company {
@@ -152,7 +170,11 @@ export async function api<T>(
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${session.access_token}`);
-  if (init.body !== undefined) headers.set("Content-Type", "application/json");
+  // FormData pone su propio Content-Type con el boundary: fijarlo aquí lo
+  // rompería (las subidas de foto y de Excel van en multipart).
+  if (init.body !== undefined && !(init.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
   if (init.companyId) headers.set("X-Company-Id", init.companyId);
   const res = await fetch(`${API_URL}${path}`, { ...init, headers });
   const body: unknown = await res.json().catch(() => null);

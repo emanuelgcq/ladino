@@ -123,7 +123,7 @@ export function Cuentas(): React.JSX.Element {
       ) : (
         <EstadoDeCuenta
           data={statement.data}
-          onAbrirDocumento={(id) => void navigate(`/ventas/${id}`)}
+          onAbrirDocumento={(id) => void navigate(`/admin/ventas/${id}`)}
         />
       )}
     </div>
