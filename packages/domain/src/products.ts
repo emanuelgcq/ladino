@@ -1,13 +1,20 @@
 import { err, ok, type Result } from "@ladino/core";
 import type { UnitOfWork } from "@ladino/db";
+import { parseDecimal } from "@ladino/money";
 import type {
   CreateProductRequest,
+  CreateProductSimpleRequest,
+  ProductSimpleResponse,
+  MoneyInput,
+  PriceItemResponse,
   UpdateProductRequest,
   SetProductTaxCategoryRequest,
   ProductResponse,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
+import { createPriceList, setPrice } from "./pricing.js";
+import { receiveStock } from "./inventory.js";
 
 /**
  * Casos de uso del catálogo de productos — la plantilla de create-company.ts
@@ -29,7 +36,7 @@ export type ProductError =
   | { code: "VALIDATION_FAILED"; message: string };
 
 const PRODUCT_COLUMNS = `id, tenant_id, company_id, sku, name, kind, status,
-  unit_code, tax_category_code, category_id, barcode,
+  unit_code, tax_category_code, category_id, barcode, image_path,
   is_composed, tracks_lots, tracks_serials, is_manufactured, tracks_expiry,
   template_id, attributes` as const;
 
@@ -45,6 +52,7 @@ interface ProductRow {
   tax_category_code: string;
   category_id: string | null;
   barcode: string | null;
+  image_path: string | null;
   // Banderas de existencia (migraciones 19-20). Las gobierna inventario; el
   // catálogo solo las lleva puestas.
   is_composed: boolean;
@@ -292,4 +300,274 @@ export async function setProductTaxCategory(
             ${sql.json({ product_id: fila.id, from: fila.anterior, to: input.tax_category_code })})`;
 
   return ok(aRespuesta(fila));
+}
+
+// ── El ALTA SIMPLE de la Fase C ─────────────────────────────────────────────
+
+/**
+ * Un producto en UNA pantalla: nombre, precio y ya. Compone los casos de uso
+ * existentes DENTRO de la misma transacción: crear → activar → precio de detal
+ * (y de mayor si aplica) → inventario inicial con su costo. Cada pieza valida
+ * sus propios permisos; si algo falla, no queda nada.
+ *
+ * Lo que este caso decide y el formulario no pregunta:
+ *   · el SKU se GENERA (`P-0001`…) si no vino: la persona piensa en «Harina
+ *     pan», no en códigos. Si choca con uno existente, prueba el siguiente;
+ *   · la clasificación fiscal sale de company_settings (y el contador la
+ *     corrige por producto en /admin — nunca se pregunta en el mostrador);
+ *   · el precio va a la lista «detal» de SU moneda, que se crea si no existe;
+ *   · el stock inicial es una ENTRADA de kardex con costo y referencia
+ *     `inventario-inicial`, no un número suelto en una columna.
+ */
+export async function createProductSimple(
+  uow: UnitOfWork,
+  input: CreateProductSimpleRequest,
+): Promise<Result<ProductSimpleResponse, ProductError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Los maestros exigen un usuario real." });
+  }
+  const scope = await companyScope(sql, actor.userId, input.company_id, "product.manage");
+  if (!scope.ok) return scope;
+  if (scope.value.companyStatus === "suspended") {
+    return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
+  }
+
+  const esServicio = input.is_service === true;
+  if (esServicio && input.initial_stock !== undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Un servicio no tiene existencias: quita el inventario inicial.",
+    });
+  }
+
+  const [ajustes] = await sql<
+    { default_tax_category_code: string; default_warehouse_id: string | null }[]
+  >`select default_tax_category_code, default_warehouse_id
+      from public.company_settings where company_id = ${input.company_id}`;
+  const clasificacion = ajustes?.default_tax_category_code ?? "gravado_general";
+  const [empresa] = await sql<{ moneda: string }[]>`
+    select functional_currency_code as moneda from public.companies where id = ${input.company_id}`;
+  const funcional = empresa!.moneda;
+
+  // La categoría por NOMBRE, creada al vuelo. El único (company, name) decide
+  // los empates; si otro la creó hace un milisegundo, se relee.
+  let categoryId: string | undefined;
+  const nombreCategoria = input.category_name;
+  if (nombreCategoria !== undefined) {
+    const [existente] = await sql<{ id: string }[]>`
+      select id from public.product_categories
+       where company_id = ${input.company_id} and name = ${nombreCategoria}`;
+    if (existente) {
+      categoryId = existente.id;
+    } else {
+      try {
+        const creada = await sql.savepoint(async (sp) => {
+          const [c] = await sp<{ id: string }[]>`
+            insert into public.product_categories (tenant_id, company_id, name)
+            values (${scope.value.tenantId}, ${input.company_id}, ${nombreCategoria})
+            returning id`;
+          return c!;
+        });
+        categoryId = creada.id;
+      } catch (e) {
+        if ((e as { code?: string }).code !== "23505") throw e;
+        const [otra] = await sql<{ id: string }[]>`
+          select id from public.product_categories
+           where company_id = ${input.company_id} and name = ${nombreCategoria}`;
+        categoryId = otra?.id;
+      }
+    }
+  }
+
+  // El SKU: el de la persona, o el siguiente `P-NNNN` libre.
+  const skuManual = input.sku !== undefined;
+  const [conteo] = await sql<{ n: number }[]>`
+    select count(*)::int as n from public.products where company_id = ${input.company_id}`;
+  let producto: ProductResponse | null = null;
+  for (let intento = 0; intento < 5 && producto === null; intento++) {
+    const candidato = skuManual
+      ? input.sku!
+      : `P-${String((conteo?.n ?? 0) + 1 + intento).padStart(4, "0")}`;
+    const creado = await createProduct(uow, {
+      company_id: input.company_id,
+      sku: candidato,
+      name: input.name,
+      kind: esServicio ? "service" : "good",
+      unit_code: input.unit_code ?? "unidad",
+      tax_category_code: clasificacion,
+      ...(categoryId === undefined ? {} : { category_id: categoryId }),
+      ...(input.barcode === undefined ? {} : { barcode: input.barcode }),
+    });
+    if (creado.ok) {
+      producto = creado.value;
+      break;
+    }
+    if (creado.error.code === "DUPLICATE" && !skuManual) continue;
+    return creado;
+  }
+  if (producto === null) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "No se encontró un código libre para el producto. Intenta con uno manual.",
+    });
+  }
+
+  // Nace vendible: el alta simple es el mostrador, no un borrador de catálogo.
+  const activado = await updateProduct(uow, producto.id, {
+    company_id: input.company_id,
+    status: "active",
+  });
+  if (!activado.ok) return activado;
+  producto = activado.value;
+
+  // El precio de detal en SU moneda; la lista se crea si no existe.
+  const precio = await ponerPrecioEnLista(
+    uow,
+    input.company_id,
+    funcional,
+    "detal",
+    producto.id,
+    input.price,
+  );
+  if (!precio.ok) return precio;
+  let mayor: PriceItemResponse | null = null;
+  if (input.wholesale_price !== undefined) {
+    const r = await ponerPrecioEnLista(
+      uow,
+      input.company_id,
+      funcional,
+      "mayor",
+      producto.id,
+      input.wholesale_price,
+    );
+    if (!r.ok) return r;
+    mayor = r.value;
+  }
+
+  // El inventario inicial: una ENTRADA de kardex con costo, no un número suelto.
+  let stockInicial: ProductSimpleResponse["initial_stock"] = null;
+  if (input.initial_stock !== undefined) {
+    const costoUnit = parseDecimal(input.initial_stock.unit_cost.amount);
+    const cantidad = parseDecimal(input.initial_stock.quantity);
+    if (!costoUnit.ok || !cantidad.ok) {
+      return err({ code: "VALIDATION_FAILED", message: "Cantidad o costo no interpretables." });
+    }
+    let almacen = input.initial_stock.warehouse_id ?? ajustes?.default_warehouse_id ?? null;
+    if (almacen === null) {
+      const almacenes = await sql<{ id: string }[]>`
+        select id from public.warehouses where company_id = ${input.company_id} limit 2`;
+      if (almacenes.length === 1) {
+        almacen = almacenes[0]!.id;
+      } else {
+        return err({
+          code: "VALIDATION_FAILED",
+          message: "Hay más de un almacén: indica en cuál entra la mercancía.",
+        });
+      }
+    }
+    const monedaCosto = input.initial_stock.unit_cost.currency;
+    let fx: { rate: string; source: string; at: string } | undefined;
+    if (monedaCosto !== funcional) {
+      const [t] = await sql<{ rate: string | null; source: string | null }[]>`
+        select r.rate::text as rate, r.source from public.exchange_rates r
+         where r.from_currency = ${monedaCosto} and r.to_currency = ${funcional}
+           and r.rate_date <= current_date
+         order by r.rate_date desc, r.created_at desc limit 1`;
+      if (!t?.rate) {
+        return err({
+          code: "VALIDATION_FAILED",
+          message: `No hay tasa de ${monedaCosto} a ${funcional}: carga la tasa del día antes de costear en divisa.`,
+        });
+      }
+      fx = { rate: t.rate, source: t.source ?? "manual", at: new Date().toISOString() };
+    }
+    const total = costoUnit.value.times(cantidad.value).toDecimalPlaces(8, 4);
+    const recibido = await receiveStock(uow, {
+      company_id: input.company_id,
+      warehouse_id: almacen,
+      product_id: producto.id,
+      quantity: input.initial_stock.quantity,
+      amount: total.toFixed(8),
+      currency: monedaCosto,
+      ...(fx === undefined ? {} : { fx }),
+      reference: "inventario-inicial",
+      note: "Inventario inicial del alta simple",
+    });
+    if (!recibido.ok) {
+      const e = recibido.error;
+      if (e.code === "PERMISSION_REQUIRED" || e.code === "NOT_FOUND") {
+        return err({ code: e.code, message: e.message });
+      }
+      return err({ code: "VALIDATION_FAILED", message: e.message });
+    }
+    stockInicial = {
+      quantity: input.initial_stock.quantity,
+      unit_cost: input.initial_stock.unit_cost.amount,
+      currency: monedaCosto,
+      warehouse_id: almacen,
+    };
+  }
+
+  return ok({
+    product: producto,
+    price: precio.value,
+    wholesale_price: mayor,
+    initial_stock: stockInicial,
+  });
+}
+
+/**
+ * La lista «detal»/«mayor» de la MONEDA pedida. Si la del nombre base vive en
+ * otra moneda (createCompany las siembra en la funcional), se usa o se crea la
+ * variante `detal USD` — cambiarle la moneda a una lista con precios puestos
+ * reinterpretaría todos sus importes de golpe.
+ */
+async function ponerPrecioEnLista(
+  uow: UnitOfWork,
+  companyId: string,
+  funcional: string,
+  base: "detal" | "mayor",
+  productId: string,
+  precio: MoneyInput,
+): Promise<Result<PriceItemResponse, ProductError>> {
+  const { sql } = uow;
+  const nombre = precio.currency === funcional ? base : `${base} ${precio.currency}`;
+  const [lista] = await sql<{ id: string; currency_code: string }[]>`
+    select id, currency_code from public.price_lists
+     where company_id = ${companyId} and name = ${nombre} and status = 'active'`;
+  let listaId = lista?.id;
+  if (lista !== undefined && lista.currency_code !== precio.currency) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `La lista «${nombre}» vive en ${lista.currency_code} y el precio vino en ${precio.currency}.`,
+    });
+  }
+  if (listaId === undefined) {
+    const creada = await createPriceList(uow, {
+      company_id: companyId,
+      name: nombre,
+      currency_code: precio.currency,
+    });
+    if (!creada.ok) {
+      if (creada.error.code === "PERMISSION_REQUIRED" || creada.error.code === "NOT_FOUND") {
+        return err({ code: creada.error.code, message: creada.error.message });
+      }
+      return err({ code: "VALIDATION_FAILED", message: creada.error.message });
+    }
+    listaId = creada.value.id;
+  }
+  const puesto = await setPrice(uow, listaId, {
+    company_id: companyId,
+    product_id: productId,
+    amount: precio.amount,
+    effective_from: new Date().toISOString(),
+  });
+  if (!puesto.ok) {
+    if (puesto.error.code === "PERMISSION_REQUIRED" || puesto.error.code === "NOT_FOUND") {
+      return err({ code: puesto.error.code, message: puesto.error.message });
+    }
+    return err({ code: "VALIDATION_FAILED", message: puesto.error.message });
+  }
+  return ok(puesto.value);
 }

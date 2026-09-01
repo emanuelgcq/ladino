@@ -8,7 +8,10 @@ export {
 } from "./companies.js";
 export {
   AmountString,
+  MoneyInput,
   CreateProductRequest,
+  CreateProductSimpleRequest,
+  ProductSimpleResponse,
   UpdateProductRequest,
   SetProductTaxCategoryRequest,
   ProductResponse,

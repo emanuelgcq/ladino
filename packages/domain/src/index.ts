@@ -11,6 +11,7 @@ export { tenantVisible } from "./tenant-visibility.js";
 export { companyScope, type CompanyScopeError } from "./company-scope.js";
 export {
   createProduct,
+  createProductSimple,
   updateProduct,
   setProductTaxCategory,
   type ProductError,

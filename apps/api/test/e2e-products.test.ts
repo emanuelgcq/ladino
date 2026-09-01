@@ -72,13 +72,21 @@ beforeAll(async () => {
              on conflict (id) do nothing`;
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values
              ('e2ee2e00-0000-4000-8000-0000000000e1', null, 'e2e_gestor', 'Gestor', false),
-             ('e2ee2e00-0000-4000-8000-0000000000e2', null, 'e2e_contador', 'Contador', false)
+             ('e2ee2e00-0000-4000-8000-0000000000e2', null, 'e2e_contador', 'Contador', false),
+             ('e2ee2e00-0000-4000-8000-0000000000e3', null, 'e2e_almacen', 'Almacenista', true)
              on conflict (id) do nothing`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
              ('e2ee2e00-0000-4000-8000-0000000000e1', 'product.manage'),
              ('e2ee2e00-0000-4000-8000-0000000000e1', 'price_list.manage'),
+             ('e2ee2e00-0000-4000-8000-0000000000e3', 'inventory.move'),
              ('e2ee2e00-0000-4000-8000-0000000000e2', 'product.tax_category.set')
              on conflict do nothing`;
+    // El almacén del ALTA SIMPLE: uno solo, para que el default «el único que
+    // hay» funcione sin preguntar.
+    await tx`insert into public.warehouses (id, tenant_id, company_id, code, name)
+             values ('e2ee2e00-0000-4000-8000-0000000000f1', ${TENANT}, ${COMPANY},
+                     'E2E-PW1', 'Principal')
+             on conflict (id) do nothing`;
     await tx`insert into public.memberships (id, tenant_id, user_id) values
              ('e2ee2e00-0000-4000-8000-0000000000a1', ${TENANT}, ${GESTOR}),
              ('e2ee2e00-0000-4000-8000-0000000000b1', ${TENANT}, ${CONTADOR})
@@ -86,9 +94,16 @@ beforeAll(async () => {
     await tx`insert into public.user_role_assignments (id, tenant_id, membership_id, role_id, company_id) values
              ('e2ee2e00-0000-4000-8000-0000000000a2', ${TENANT},
               'e2ee2e00-0000-4000-8000-0000000000a1', 'e2ee2e00-0000-4000-8000-0000000000e1', null),
+             ('e2ee2e00-0000-4000-8000-0000000000a3', ${TENANT},
+              'e2ee2e00-0000-4000-8000-0000000000a1', 'e2ee2e00-0000-4000-8000-0000000000e3', null),
              ('e2ee2e00-0000-4000-8000-0000000000b2', ${TENANT},
               'e2ee2e00-0000-4000-8000-0000000000b1', 'e2ee2e00-0000-4000-8000-0000000000e2', null)
              on conflict (id) do nothing`;
+    await tx`insert into public.scope_bindings (tenant_id, company_id, assignment_id, scope_type, scope_id)
+             select ${TENANT}, ${COMPANY}, 'e2ee2e00-0000-4000-8000-0000000000a3', 'warehouse',
+                    'e2ee2e00-0000-4000-8000-0000000000f1'
+              where not exists (select 1 from public.scope_bindings
+                                 where assignment_id = 'e2ee2e00-0000-4000-8000-0000000000a3')`;
   });
 });
 
@@ -282,5 +297,93 @@ describe("productos de extremo a extremo", () => {
       company: "e2ee2e00-0000-4000-8000-00000000dead",
     });
     expect(res.status).toBe(404);
+  });
+
+  // ── El ALTA SIMPLE y la cuadrícula (Fase C) ───────────────────────────────
+
+  it("el alta simple: nombre + precio (+ stock) → producto ACTIVO con SKU generado y kardex", async () => {
+    const token = await tokenDe(GESTOR);
+    const r = await pedir("POST", "/v1/products/simple", {
+      token,
+      key: crypto.randomUUID(),
+      body: {
+        company_id: COMPANY,
+        name: `Harina simple ${RUN}`,
+        price: { amount: "2.50000000", currency: "USD" },
+        category_name: "Alimentos",
+        initial_stock: {
+          quantity: "10.00000000",
+          unit_cost: { amount: "100.00000000", currency: "VES" },
+        },
+      },
+    });
+    expect(r.status).toBe(201);
+    const s = (await r.json()) as {
+      product: Record<string, unknown>;
+      price: Record<string, string>;
+      initial_stock: Record<string, string>;
+    };
+    expect(s.product["status"]).toBe("active");
+    expect(String(s.product["sku"]).startsWith("P-")).toBe(true);
+    expect(s.product["category_id"]).not.toBeNull();
+    expect(s.price["amount"]).toBe("2.50000000");
+    expect(s.price["currency"]).toBe("USD");
+    expect(s.initial_stock["warehouse_id"]).toBe("e2ee2e00-0000-4000-8000-0000000000f1");
+
+    // El stock inicial es KARDEX, no una columna: el saldo materializado lo dice.
+    const [saldo] = await sql<{ q: string }[]>`
+      select quantity::text as q from public.stock_balances
+       where company_id = ${COMPANY} and product_id = ${s.product["id"] as string}`;
+    expect(saldo?.q).toBe("10.00000000");
+  });
+
+  it("un servicio con stock inicial se rechaza: un servicio no tiene existencias", async () => {
+    const token = await tokenDe(GESTOR);
+    const r = await pedir("POST", "/v1/products/simple", {
+      token,
+      key: crypto.randomUUID(),
+      body: {
+        company_id: COMPANY,
+        name: `Delivery ${RUN}`,
+        is_service: true,
+        price: { amount: "1.00000000", currency: "USD" },
+        initial_stock: {
+          quantity: "1.00000000",
+          unit_cost: { amount: "1.00000000", currency: "VES" },
+        },
+      },
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it("la cuadrícula: búsqueda por código de barras con precio y stock del servidor", async () => {
+    const token = await tokenDe(GESTOR);
+    const alta = await pedir("POST", "/v1/products/simple", {
+      token,
+      key: crypto.randomUUID(),
+      body: {
+        company_id: COMPANY,
+        name: `Café simple ${RUN}`,
+        barcode: `759${RUN}`,
+        price: { amount: "4.00000000", currency: "USD" },
+      },
+    });
+    expect(alta.status).toBe(201);
+
+    const res = await pedir(
+      "GET",
+      `/v1/products?search=759${RUN}&only_active=1&with_price=1&with_stock=1`,
+      { token },
+    );
+    expect(res.status).toBe(200);
+    const lista = (await res.json()) as { items: Record<string, unknown>[]; total: number };
+    expect(lista.total).toBe(1);
+    const item = lista.items[0]!;
+    expect(item["name"]).toBe(`Café simple ${RUN}`);
+    // El precio viene de la lista «detal USD» resuelta por el SERVIDOR, y el
+    // stock del saldo materializado: la cuadrícula no calcula nada.
+    expect(item["price_amount"]).toBe("4.00000000");
+    expect(item["price_currency"]).toBe("USD");
+    expect(item["stock_quantity"]).toBe("0");
   });
 });

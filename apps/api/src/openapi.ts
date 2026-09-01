@@ -109,6 +109,8 @@ import {
   ExportFiscalBookRequest,
   ExportFiscalBookResponse,
   ListFiscalBookRunsResponse,
+  CreateProductSimpleRequest,
+  ProductSimpleResponse,
   CreateCompanyAccountRequest,
   UpdateCompanyAccountRequest,
   CompanyAccountResponse,
@@ -205,6 +207,11 @@ export function buildOpenApiDocument(): object {
   const producto = registry.register("ProductResponse", ProductResponse);
   const listaProductos = registry.register("ListProductsResponse", ListProductsResponse);
   const crearProducto = registry.register("CreateProductRequest", CreateProductRequest);
+  const crearProductoSimple = registry.register(
+    "CreateProductSimpleRequest",
+    CreateProductSimpleRequest,
+  );
+  const productoSimple = registry.register("ProductSimpleResponse", ProductSimpleResponse);
   const actualizarProducto = registry.register("UpdateProductRequest", UpdateProductRequest);
   const setTaxCat = registry.register("SetProductTaxCategoryRequest", SetProductTaxCategoryRequest);
   const crearLista = registry.register("CreatePriceListRequest", CreatePriceListRequest);
@@ -229,6 +236,11 @@ export function buildOpenApiDocument(): object {
     method: "get",
     path: "/v1/products",
     summary: "Listar productos (búsqueda y paginación en servidor)",
+    description:
+      "La búsqueda cubre SKU, nombre y código de barras (la cuadrícula de Vender tiene lector). " +
+      "`with_price=1` añade el precio vigente de la lista pedida — o de la lista «detal» de la " +
+      "empresa si no se indica —, `with_stock=1` el total en existencia, `only_active=1` filtra " +
+      "el catálogo vendible.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
@@ -236,11 +248,35 @@ export function buildOpenApiDocument(): object {
         search: z.string().optional(),
         page: z.coerce.number().int().min(1).optional(),
         per_page: z.coerce.number().int().min(1).max(100).optional(),
+        only_active: z.enum(["1"]).optional(),
+        with_price: z.enum(["1"]).optional(),
+        with_stock: z.enum(["1"]).optional(),
+        price_list_id: z.string().uuid().optional(),
       }),
     },
     responses: {
       200: okJson(listaProductos, "Página de productos con el total."),
       ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/products/simple",
+    summary: "El alta simple de la Fase C: nombre + precio (+ stock inicial) en un paso",
+    description:
+      "El SKU se genera si no viene, la clasificación fiscal sale de company_settings, el precio " +
+      "va a la lista «detal» de su moneda (creada si hace falta) y el stock inicial es una " +
+      "ENTRADA de kardex con costo y referencia `inventario-inicial`. Todo o nada, en una " +
+      "transacción.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader.extend({ "Idempotency-Key": z.string().max(255) }),
+      body: { content: { "application/json": { schema: crearProductoSimple } } },
+    },
+    responses: {
+      201: okJson(productoSimple, "El producto activo, con su precio y su stock inicial."),
+      ...erroresComunes,
+      409: errorRef("SKU o código de barras duplicado en la empresa."),
     },
   });
   registry.registerPath({

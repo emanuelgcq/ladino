@@ -160,6 +160,10 @@
             "type": "string",
             "nullable": true
           },
+          "image_path": {
+            "type": "string",
+            "nullable": true
+          },
           "is_composed": {
             "type": "boolean"
           },
@@ -190,6 +194,28 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "image_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "price_amount": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "price_currency": {
+            "type": "string",
+            "nullable": true
+          },
+          "price_list_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "stock_quantity": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -204,6 +230,7 @@
           "tax_category_code",
           "category_id",
           "barcode",
+          "image_path",
           "is_composed",
           "tracks_lots",
           "tracks_serials",
@@ -271,6 +298,10 @@
                   "type": "string",
                   "nullable": true
                 },
+                "image_path": {
+                  "type": "string",
+                  "nullable": true
+                },
                 "is_composed": {
                   "type": "boolean"
                 },
@@ -301,6 +332,28 @@
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "image_url": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "price_amount": {
+                  "type": "string",
+                  "nullable": true,
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "price_currency": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "price_list_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "stock_quantity": {
+                  "type": "string",
+                  "nullable": true
                 }
               },
               "required": [
@@ -315,6 +368,7 @@
                 "tax_category_code",
                 "category_id",
                 "barcode",
+                "image_path",
                 "is_composed",
                 "tracks_lots",
                 "tracks_serials",
@@ -387,6 +441,379 @@
           "kind",
           "unit_code",
           "tax_category_code"
+        ],
+        "additionalProperties": false
+      },
+      "CreateProductSimpleRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "is_service": {
+            "type": "boolean"
+          },
+          "price": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              }
+            },
+            "required": [
+              "amount",
+              "currency"
+            ],
+            "additionalProperties": false
+          },
+          "wholesale_price": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              }
+            },
+            "required": [
+              "amount",
+              "currency"
+            ],
+            "additionalProperties": false
+          },
+          "initial_stock": {
+            "type": "object",
+            "properties": {
+              "quantity": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "unit_cost": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "string",
+                    "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                  },
+                  "currency": {
+                    "type": "string",
+                    "pattern": "^[A-Z]{3}$"
+                  }
+                },
+                "required": [
+                  "amount",
+                  "currency"
+                ],
+                "additionalProperties": false
+              },
+              "warehouse_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "quantity",
+              "unit_cost"
+            ],
+            "additionalProperties": false
+          },
+          "sku": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "barcode": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "category_name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "unit_code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,39}$"
+          }
+        },
+        "required": [
+          "company_id",
+          "name",
+          "price"
+        ],
+        "additionalProperties": false
+      },
+      "ProductSimpleResponse": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "tenant_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "company_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "sku": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "good",
+                  "service"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "active",
+                  "inactive"
+                ]
+              },
+              "unit_code": {
+                "type": "string"
+              },
+              "tax_category_code": {
+                "type": "string"
+              },
+              "category_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "barcode": {
+                "type": "string",
+                "nullable": true
+              },
+              "image_path": {
+                "type": "string",
+                "nullable": true
+              },
+              "is_composed": {
+                "type": "boolean"
+              },
+              "tracks_lots": {
+                "type": "boolean"
+              },
+              "tracks_serials": {
+                "type": "boolean"
+              },
+              "is_manufactured": {
+                "type": "boolean"
+              },
+              "tracks_expiry": {
+                "type": "boolean"
+              },
+              "template_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "attributes": {
+                "type": "object",
+                "nullable": true,
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "image_url": {
+                "type": "string",
+                "nullable": true
+              },
+              "price_amount": {
+                "type": "string",
+                "nullable": true,
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "price_currency": {
+                "type": "string",
+                "nullable": true
+              },
+              "price_list_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "stock_quantity": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "id",
+              "tenant_id",
+              "company_id",
+              "sku",
+              "name",
+              "kind",
+              "status",
+              "unit_code",
+              "tax_category_code",
+              "category_id",
+              "barcode",
+              "image_path",
+              "is_composed",
+              "tracks_lots",
+              "tracks_serials",
+              "is_manufactured",
+              "tracks_expiry",
+              "template_id",
+              "attributes",
+              "created_at"
+            ],
+            "additionalProperties": false
+          },
+          "price": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "price_list_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "product_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "effective_from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "effective_to": {
+                "type": "string",
+                "nullable": true,
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "price_list_id",
+              "product_id",
+              "amount",
+              "currency",
+              "effective_from",
+              "effective_to"
+            ],
+            "additionalProperties": false
+          },
+          "wholesale_price": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "price_list_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "product_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "effective_from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "effective_to": {
+                "type": "string",
+                "nullable": true,
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "price_list_id",
+              "product_id",
+              "amount",
+              "currency",
+              "effective_from",
+              "effective_to"
+            ],
+            "additionalProperties": false
+          },
+          "initial_stock": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "quantity": {
+                "type": "string"
+              },
+              "unit_cost": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "warehouse_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "quantity",
+              "unit_cost",
+              "currency",
+              "warehouse_id"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "product",
+          "price",
+          "wholesale_price",
+          "initial_stock"
         ],
         "additionalProperties": false
       },
@@ -9065,6 +9492,7 @@
     "/v1/products": {
       "get": {
         "summary": "Listar productos (búsqueda y paginación en servidor)",
+        "description": "La búsqueda cubre SKU, nombre y código de barras (la cuadrícula de Vender tiene lector). `with_price=1` añade el precio vigente de la lista pedida — o de la lista «detal» de la empresa si no se indica —, `with_stock=1` el total en existencia, `only_active=1` filtra el catálogo vendible.",
         "security": [
           {
             "bearerAuth": []
@@ -9096,6 +9524,48 @@
             },
             "required": false,
             "name": "per_page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "required": false,
+            "name": "only_active",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "required": false,
+            "name": "with_price",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "required": false,
+            "name": "with_stock",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "price_list_id",
             "in": "query"
           },
           {
@@ -9205,6 +9675,108 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "SKU o código de barras duplicado en la empresa.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/products/simple": {
+      "post": {
+        "summary": "El alta simple de la Fase C: nombre + precio (+ stock inicial) en un paso",
+        "description": "El SKU se genera si no viene, la clasificación fiscal sale de company_settings, el precio va a la lista «detal» de su moneda (creada si hace falta) y el stock inicial es una ENTRADA de kardex con costo y referencia `inventario-inicial`. Todo o nada, en una transacción.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProductSimpleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El producto activo, con su precio y su stock inicial.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductSimpleResponse"
                 }
               }
             }
