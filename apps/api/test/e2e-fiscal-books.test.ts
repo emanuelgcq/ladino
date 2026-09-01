@@ -180,6 +180,9 @@ beforeAll(async () => {
     // Reglas de IVA de prueba, guardadas porque `tax_rules` es global. La del
     // exento existe y vale CERO: es una regla, no una ausencia — sin ella la
     // emisión fallaría con TAX_RULE_MISSING, que es lo correcto (ADR-0038).
+    // El advisory lock serializa a los CUATRO ficheros E2E que siembran en
+    // paralelo: dos guards not-exists simultáneos cuelan el duplicado.
+    await tx`select pg_advisory_xact_lock(hashtext('ladino-e2e-tax-rules'))`;
     for (const [cat, tasa] of [
       ["gravado_general", 0.16],
       ["exento", 0],

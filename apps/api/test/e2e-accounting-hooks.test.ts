@@ -154,7 +154,11 @@ beforeAll(async () => {
                (tenant_id, company_id, regime_code, effective_from)
              values (${TENANT}, ${COMPANY}, 'formatos_libres', ${AYER}::timestamptz)`;
     // La regla de IVA, de prueba y con la fuente que lo dice. Guardada porque
-    // tax_rules es global: si ya está, no se duplica (catálogo ambiguo).
+    // tax_rules es global: si ya está, no se duplica (catálogo ambiguo). Y con
+    // ADVISORY LOCK: cuatro ficheros E2E siembran esta regla EN PARALELO y dos
+    // guards simultáneos no se ven entre sí — el duplicado intermitente del
+    // 2026-08-31 fue exactamente eso.
+    await tx`select pg_advisory_xact_lock(hashtext('ladino-e2e-tax-rules'))`;
     await tx`
       insert into public.tax_rules (jurisdiction, tax_code, taxpayer_type, product_tax_category,
                                     rate, effective_from, legal_source, priority, transaction_type)

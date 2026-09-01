@@ -252,7 +252,14 @@ describe("ventas de extremo a extremo", () => {
     // duplicado inofensivo, es un CATÁLOGO AMBIGUO, y resolve_tax lo rechaza a
     // propósito (ADR-0038). Por eso el insert va guardado con un NOT EXISTS; un
     // "on conflict" aquí no existiría.
-    await sql`
+    // Y el NOT EXISTS solo, tampoco basta: vitest corre los FICHEROS E2E en
+    // paralelo y cuatro de ellos siembran esta misma regla — dos guards
+    // simultáneos no se ven entre sí y cuelan el duplicado (pasó el 2026-08-31:
+    // «catálogo ambiguo» intermitente). El advisory lock por transacción
+    // serializa a los sembradores; el guard decide.
+    await sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext('ladino-e2e-tax-rules'))`;
+      await tx`
       insert into public.tax_rules (jurisdiction, tax_code, taxpayer_type, product_tax_category,
                                     rate, effective_from, legal_source, priority)
       select 'VE', 'iva', 'ordinario', 'gravado_general', 0.16, ${AYER}::date,
@@ -261,6 +268,7 @@ describe("ventas de extremo a extremo", () => {
                           where jurisdiction = 'VE' and tax_code = 'iva'
                             and taxpayer_type = 'ordinario'
                             and product_tax_category = 'gravado_general')`;
+    });
     const r = await pedir("POST", "/v1/quotes", VENDEDOR, {
       company_id: COMPANY,
       customer_id: CLIENTE,

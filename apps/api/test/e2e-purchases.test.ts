@@ -151,7 +151,10 @@ beforeAll(async () => {
               'unidad', 'gravado_general')
       returning id`;
     PROD_B = pb!.id;
-    // La alícuota de COMPRA. De prueba, y el legal_source lo dice.
+    // La alícuota de COMPRA. De prueba, y el legal_source lo dice. El advisory
+    // lock serializa a los cuatro ficheros E2E que siembran tax_rules en
+    // paralelo: el guard not-exists no es atómico entre sesiones.
+    await tx`select pg_advisory_xact_lock(hashtext('ladino-e2e-tax-rules'))`;
     await tx`
       insert into public.tax_rules (jurisdiction, tax_code, taxpayer_type, transaction_type,
                                     product_tax_category, rate, effective_from, legal_source,

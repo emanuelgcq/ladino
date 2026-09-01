@@ -157,24 +157,34 @@ select throws_ok(
   '42501', null, 'cargar un precio en la lista de OTRO tenant: 42501 (RLS de ladino_api)');
 
 -- close_price(): el retiro sin sustituto, el único UPDATE sancionado para la API.
+--
+-- El cierre va en 2126, NO en una fecha cercana, y la ironía merece quedar
+-- escrita: este fichero cerraba aquí el 2026-09-01 y la VARIANTE ROTA de abajo
+-- —la que demuestra el bug de now()— asumía que now() caía DENTRO del período.
+-- El 1 de septiembre de 2026 a las 00:01 UTC, now() cruzó la frontera que el
+-- propio fixture había escrito y el test se puso rojo: el test que documenta
+-- «una fecha comparada contra un punto de reloj es un bug con horario»
+-- (CLAUDE.md §3) tenía ese bug en su propio fixture. Con el cierre a un siglo,
+-- la aserción sobre now() es verdadera cualquier día que este repositorio siga
+-- existiendo — y si llega a 2126, que aquel equipo lea esta nota.
 select lives_ok(
   $$ select platform.close_price(
        (select id from public.price_list_items
          where product_id = 'aaaa0017-0000-4000-8000-0000000000d1' and effective_to is null),
-       '2026-09-01T00:00:00Z') $$,
+       '2126-09-01T00:00:00Z') $$,
   'close_price cierra la vigencia abierta desde la API');
 select is(
   (select effective_to from public.price_list_items
     where product_id = 'aaaa0017-0000-4000-8000-0000000000d1' and effective_from = '2026-08-05T00:00:00Z'),
-  '2026-09-01T00:00:00Z'::timestamptz, 'y el cierre quedó en el dato');
+  '2126-09-01T00:00:00Z'::timestamptz, 'y el cierre quedó en el dato');
 select is(platform.price_at('aaaa0017-0000-4000-8000-0000000000c1', 'aaaa0017-0000-4000-8000-0000000000d1',
-                            '2026-09-02T00:00:00Z'), null::numeric,
+                            '2126-09-02T00:00:00Z'), null::numeric,
   'retirado sin sustituto: después del cierre no hay precio');
 select throws_ok(
   $$ select platform.close_price(
        (select id from public.price_list_items
          where product_id = 'aaaa0017-0000-4000-8000-0000000000d1' and effective_from = '2026-08-05T00:00:00Z'),
-       '2026-10-01T00:00:00Z') $$,
+       '2126-10-01T00:00:00Z') $$,
   'LAD35', null, 'cerrar dos veces: LAD35 — una vigencia cerrada no se reabre ni se mueve');
 reset role;
 
