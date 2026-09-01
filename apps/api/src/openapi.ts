@@ -84,6 +84,8 @@ import {
   RegisterSupplierCreditNoteRequest,
   RegisterSupplierPaymentRequest,
   SupplierPaymentResponse,
+  SimplePurchaseRequest,
+  SimplePurchaseResponse,
   RetentionReceiptResponse,
   CreateRetentionRuleRequest,
   ApAgingResponse,
@@ -1494,6 +1496,28 @@ export function buildOpenApiDocument(): object {
     responses: {
       201: okJson(respuestaPago, "Pago aplicado, con el comprobante si se pidió."),
       ...erroresComunes,
+    },
+  });
+  const compraSimple = registry.register("SimplePurchaseRequest", SimplePurchaseRequest);
+  const compraSimpleResp = registry.register("SimplePurchaseResponse", SimplePurchaseResponse);
+  registry.registerPath({
+    method: "post",
+    path: "/v1/purchases/simple",
+    summary: "La compra simple: orden + recepción + factura (+ pago) en UN paso",
+    description:
+      "«Llegó mercancía con su factura»: crea la orden, la recibe completa al costo de la " +
+      "recepción, registra la factura del proveedor (matching de tres vías, IVA por regla, " +
+      "asiento o cola) y — si se pide — la paga entera. Nada se salta: es el flujo completo de " +
+      "compras preguntado una sola vez. Todo o nada, en una transacción.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: compraSimple } } },
+    },
+    responses: {
+      201: okJson(compraSimpleResp, "Orden, recepción, factura y pago (si lo hubo)."),
+      ...erroresComunes,
+      409: errorRef("Factura duplicada del proveedor, sin tasa, o sin regla de IVA."),
     },
   });
   registry.registerPath({

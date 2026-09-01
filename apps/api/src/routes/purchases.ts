@@ -8,6 +8,7 @@ import {
   ApplyLandedCostRequest,
   RegisterSupplierCreditNoteRequest,
   RegisterSupplierPaymentRequest,
+  SimplePurchaseRequest,
   CreateRetentionRuleRequest,
 } from "@ladino/schemas";
 import {
@@ -18,6 +19,7 @@ import {
   applyLandedCost,
   registerSupplierCreditNote,
   registerSupplierPayment,
+  simplePurchase,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -379,6 +381,18 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     coherente(companyId, parsed.data.company_id);
     const { actor } = c.get("ladino.auth");
     const r = await withTransaction(sql, actor, (uow) => registerSupplierPayment(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
+  /** La COMPRA SIMPLE de la Fase C: orden + recepción + factura (+ pago) en un paso. */
+  app.post("/v1/purchases/simple", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = SimplePurchaseRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => simplePurchase(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
   });

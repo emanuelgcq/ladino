@@ -105,6 +105,8 @@ export {
   ApplyLandedCostRequest,
   RegisterSupplierCreditNoteRequest,
   RegisterSupplierPaymentRequest,
+  SimplePurchaseRequest,
+  SimplePurchaseResponse,
   CreateRetentionRuleRequest,
   PurchaseOrderResponse,
   GoodsReceiptResponse,

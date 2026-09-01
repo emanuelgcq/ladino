@@ -23,6 +23,8 @@ import type {
   RegisterSupplierCreditNoteRequest,
   RegisterSupplierPaymentRequest,
   SupplierPaymentResponse,
+  SimplePurchaseRequest,
+  SimplePurchaseResponse,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
@@ -1552,16 +1554,43 @@ export async function registerSupplierPayment(
   const funcional = aFuncional(bruto.value, tasa.value.rate, ctx.value.functionalCurrency);
   if (!funcional.ok) return funcional;
 
-  // La cuenta de la que SALE el efectivo (migración 29): forma de pago
-  // configurada → «Sin asignar». Una nota de crédito no mueve efectivo y va
-  // sin cuenta, que es lo que el CHECK de la tabla exige.
-  const cuentaId = await resolverCuentaEfectivo(
-    sql,
-    ctx.value.tenantId,
-    input.company_id,
-    input.instrument,
-    input.currency,
-  );
+  // La cuenta de la que SALE el efectivo (migración 29): la explícita si el
+  // llamante la eligió, si no la forma de pago configurada → «Sin asignar».
+  // Una nota de crédito no mueve efectivo y va sin cuenta (CHECK de la tabla).
+  let cuentaId: string | null;
+  if (input.account_id !== undefined) {
+    if (input.instrument === "nota_credito") {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "Aplicar una nota de crédito no saca dinero de ninguna cuenta: quita la cuenta.",
+      });
+    }
+    const [cuenta] = await sql<{ currency: string; name: string; is_active: boolean }[]>`
+      select currency, name, is_active from public.company_accounts
+       where id = ${input.account_id} and company_id = ${input.company_id}`;
+    if (!cuenta) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    if (!cuenta.is_active) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `La cuenta «${cuenta.name}» está desactivada.`,
+      });
+    }
+    if (cuenta.currency !== input.currency) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `El pago es en ${input.currency} y la cuenta «${cuenta.name}» vive en ${cuenta.currency}.`,
+      });
+    }
+    cuentaId = input.account_id;
+  } else {
+    cuentaId = await resolverCuentaEfectivo(
+      sql,
+      ctx.value.tenantId,
+      input.company_id,
+      input.instrument,
+      input.currency,
+    );
+  }
 
   let pago: Record<string, unknown>;
   try {
@@ -1702,5 +1731,106 @@ export async function registerSupplierPayment(
     retention_receipt: comprobante as never,
     balance: saldoDespues?.s ?? "0",
     invoice_status: estado,
+  });
+}
+
+// ── La COMPRA SIMPLE de la Fase C ───────────────────────────────────────────
+
+/**
+ * «Llegó mercancía con su factura», en UN paso: orden → recepción completa →
+ * factura del proveedor → pago del total (si se pidió). El detrás de cámaras
+ * es el flujo COMPLETO de compras — matching, costeo a la tasa de recepción,
+ * IVA por regla, asiento o cola — con cada pieza validando sus permisos.
+ * Una transacción: si la factura falla, tampoco quedan orden ni recepción.
+ */
+export async function simplePurchase(
+  uow: UnitOfWork,
+  input: SimplePurchaseRequest,
+): Promise<Result<SimplePurchaseResponse, PurchaseError>> {
+  const { sql } = uow;
+
+  const orden = await createPurchaseOrder(uow, {
+    company_id: input.company_id,
+    supplier_id: input.supplier_id,
+    warehouse_id: input.warehouse_id,
+    branch_id: input.branch_id ?? null,
+    currency: input.currency,
+    lines: input.lines,
+  });
+  if (!orden.ok) return orden;
+
+  // Las líneas de la orden, con su id: la recepción y la factura se atan a
+  // ellas para que el matching de tres vías tenga contra qué comparar.
+  const lineasOrden = await sql<
+    { id: string; product_id: string; quantity: string; unit_price: string }[]
+  >`
+    select id, product_id, quantity::text as quantity,
+           unit_price_transaction::text as unit_price
+      from public.purchase_order_lines
+     where purchase_order_id = ${orden.value.id} and company_id = ${input.company_id}
+     order by line_number`;
+
+  const recibo = await receiveGoods(uow, {
+    company_id: input.company_id,
+    supplier_id: input.supplier_id,
+    purchase_order_id: orden.value.id,
+    warehouse_id: input.warehouse_id,
+    currency: input.currency,
+    lines: lineasOrden.map((l) => ({
+      purchase_order_line_id: l.id,
+      product_id: l.product_id,
+      quantity: l.quantity,
+      unit_price: l.unit_price,
+    })),
+  });
+  if (!recibo.ok) return recibo;
+
+  // La fecha de la factura: la del papel si vino; si no, el día de Venezuela
+  // (a las 8 pm de Caracas el UTC ya va por mañana — CLAUDE.md §3).
+  let fechaFactura = input.invoice_date;
+  if (fechaFactura === undefined) {
+    const [hoy] = await sql<{ d: string }[]>`
+      select (now() at time zone 'America/Caracas')::date::text as d`;
+    fechaFactura = hoy!.d;
+  }
+
+  const factura = await registerSupplierInvoice(uow, {
+    company_id: input.company_id,
+    supplier_id: input.supplier_id,
+    purchase_order_id: orden.value.id,
+    supplier_document_number: input.supplier_document_number,
+    ...(input.supplier_control_number === undefined
+      ? {}
+      : { supplier_control_number: input.supplier_control_number }),
+    invoice_date: fechaFactura,
+    currency: input.currency,
+    lines: input.lines.map((l) => ({
+      product_id: l.product_id,
+      quantity: l.quantity,
+      unit_price: l.unit_price,
+    })),
+  });
+  if (!factura.ok) return factura;
+
+  let pago: SupplierPaymentResponse | null = null;
+  if (input.payment !== undefined) {
+    const pagado = await registerSupplierPayment(uow, {
+      company_id: input.company_id,
+      supplier_invoice_id: factura.value.id,
+      gross_amount: factura.value.total_amount,
+      currency: input.currency,
+      instrument: input.payment.instrument,
+      ...(input.payment.reference === undefined ? {} : { reference: input.payment.reference }),
+      ...(input.payment.account_id === undefined ? {} : { account_id: input.payment.account_id }),
+    });
+    if (!pagado.ok) return pagado;
+    pago = pagado.value;
+  }
+
+  return ok({
+    order: orden.value,
+    receipt: recibo.value,
+    invoice: factura.value,
+    payment: pago,
   });
 }

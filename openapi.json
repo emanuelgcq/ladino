@@ -6341,6 +6341,10 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 10
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
@@ -6797,6 +6801,554 @@
           "total_outstanding",
           "total_retained",
           "aging"
+        ],
+        "additionalProperties": false
+      },
+      "SimplePurchaseRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "supplier_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "branch_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "supplier_document_number": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "supplier_control_number": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "invoice_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "product_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                "quantity": {
+                  "type": "string",
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "unit_price": {
+                  "type": "string",
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "unit_weight": {
+                  "type": "string",
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                }
+              },
+              "required": [
+                "product_id",
+                "quantity",
+                "unit_price"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "payment": {
+            "type": "object",
+            "properties": {
+              "instrument": {
+                "type": "string",
+                "enum": [
+                  "efectivo_bs",
+                  "efectivo_usd",
+                  "zelle",
+                  "usdt",
+                  "transferencia",
+                  "cheque",
+                  "nota_credito",
+                  "otro"
+                ]
+              },
+              "reference": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "account_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "instrument"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "company_id",
+          "supplier_id",
+          "warehouse_id",
+          "currency",
+          "supplier_document_number",
+          "lines"
+        ],
+        "additionalProperties": false
+      },
+      "SimplePurchaseResponse": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "company_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "supplier_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "warehouse_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "order_number": {
+                "type": "integer",
+                "nullable": true
+              },
+              "status": {
+                "type": "string"
+              },
+              "ordered_at": {
+                "type": "string",
+                "nullable": true,
+                "format": "date-time"
+              },
+              "expected_at": {
+                "type": "string",
+                "nullable": true
+              },
+              "transaction_currency": {
+                "type": "string"
+              },
+              "functional_currency": {
+                "type": "string"
+              },
+              "fx_rate": {
+                "type": "string"
+              },
+              "rate_source": {
+                "type": "string"
+              },
+              "amount_transaction_currency": {
+                "type": "string"
+              },
+              "functional_amount": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "company_id",
+              "supplier_id",
+              "warehouse_id",
+              "order_number",
+              "status",
+              "ordered_at",
+              "expected_at",
+              "transaction_currency",
+              "functional_currency",
+              "fx_rate",
+              "rate_source",
+              "amount_transaction_currency",
+              "functional_amount"
+            ],
+            "additionalProperties": false
+          },
+          "receipt": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "company_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "supplier_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "purchase_order_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "warehouse_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "receipt_number": {
+                "type": "integer",
+                "nullable": true
+              },
+              "status": {
+                "type": "string"
+              },
+              "received_at": {
+                "type": "string",
+                "nullable": true,
+                "format": "date-time"
+              },
+              "delivery_note_ref": {
+                "type": "string",
+                "nullable": true
+              },
+              "transaction_currency": {
+                "type": "string"
+              },
+              "functional_currency": {
+                "type": "string"
+              },
+              "fx_rate": {
+                "type": "string"
+              },
+              "rate_source": {
+                "type": "string"
+              },
+              "functional_amount": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "company_id",
+              "supplier_id",
+              "purchase_order_id",
+              "warehouse_id",
+              "receipt_number",
+              "status",
+              "received_at",
+              "delivery_note_ref",
+              "transaction_currency",
+              "functional_currency",
+              "fx_rate",
+              "rate_source",
+              "functional_amount"
+            ],
+            "additionalProperties": false
+          },
+          "invoice": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "company_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "supplier_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "purchase_order_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "supplier_document_number": {
+                "type": "string"
+              },
+              "supplier_control_number": {
+                "type": "string",
+                "nullable": true
+              },
+              "supplier_document_ref": {
+                "type": "string",
+                "nullable": true
+              },
+              "invoice_date": {
+                "type": "string"
+              },
+              "due_date": {
+                "type": "string",
+                "nullable": true
+              },
+              "status": {
+                "type": "string"
+              },
+              "subtotal_amount": {
+                "type": "string"
+              },
+              "tax_amount": {
+                "type": "string"
+              },
+              "total_amount": {
+                "type": "string"
+              },
+              "tax_is_recoverable": {
+                "type": "boolean"
+              },
+              "retention_total": {
+                "type": "string"
+              },
+              "transaction_currency": {
+                "type": "string"
+              },
+              "functional_currency": {
+                "type": "string"
+              },
+              "fx_rate": {
+                "type": "string"
+              },
+              "rate_source": {
+                "type": "string"
+              },
+              "retentions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "retention_code": {
+                      "type": "string"
+                    },
+                    "concept_code": {
+                      "type": "string"
+                    },
+                    "formula_kind": {
+                      "type": "string"
+                    },
+                    "rate_snapshot": {
+                      "type": "string"
+                    },
+                    "subtrahend_snapshot": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "base_amount": {
+                      "type": "string"
+                    },
+                    "retained_amount": {
+                      "type": "string"
+                    },
+                    "legal_source_snapshot": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "retention_code",
+                    "concept_code",
+                    "formula_kind",
+                    "rate_snapshot",
+                    "subtrahend_snapshot",
+                    "base_amount",
+                    "retained_amount",
+                    "legal_source_snapshot",
+                    "status"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "id",
+              "company_id",
+              "supplier_id",
+              "purchase_order_id",
+              "supplier_document_number",
+              "supplier_control_number",
+              "supplier_document_ref",
+              "invoice_date",
+              "due_date",
+              "status",
+              "subtotal_amount",
+              "tax_amount",
+              "total_amount",
+              "tax_is_recoverable",
+              "retention_total",
+              "transaction_currency",
+              "functional_currency",
+              "fx_rate",
+              "rate_source",
+              "retentions"
+            ],
+            "additionalProperties": false
+          },
+          "payment": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "payment": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "supplier_invoice_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "paid_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "instrument": {
+                    "type": "string"
+                  },
+                  "gross_amount": {
+                    "type": "string"
+                  },
+                  "retained_amount": {
+                    "type": "string"
+                  },
+                  "net_amount": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "reference": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                },
+                "required": [
+                  "id",
+                  "supplier_invoice_id",
+                  "paid_at",
+                  "instrument",
+                  "gross_amount",
+                  "retained_amount",
+                  "net_amount",
+                  "currency",
+                  "reference"
+                ],
+                "additionalProperties": false
+              },
+              "retention_receipt": {
+                "type": "object",
+                "nullable": true,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "supplier_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "supplier_invoice_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "series": {
+                    "type": "string"
+                  },
+                  "receipt_number": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "control_number": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "issued_at": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "date-time"
+                  },
+                  "fiscal_period": {
+                    "type": "string"
+                  },
+                  "total_retained": {
+                    "type": "string"
+                  },
+                  "functional_currency": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "supplier_id",
+                  "supplier_invoice_id",
+                  "series",
+                  "receipt_number",
+                  "control_number",
+                  "status",
+                  "issued_at",
+                  "fiscal_period",
+                  "total_retained",
+                  "functional_currency"
+                ],
+                "additionalProperties": false
+              },
+              "balance": {
+                "type": "string"
+              },
+              "invoice_status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "payment",
+              "retention_receipt",
+              "balance",
+              "invoice_status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "order",
+          "receipt",
+          "invoice",
+          "payment"
         ],
         "additionalProperties": false
       },
@@ -17262,6 +17814,108 @@
           },
           "404": {
             "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/purchases/simple": {
+      "post": {
+        "summary": "La compra simple: orden + recepción + factura (+ pago) en UN paso",
+        "description": "«Llegó mercancía con su factura»: crea la orden, la recibe completa al costo de la recepción, registra la factura del proveedor (matching de tres vías, IVA por regla, asiento o cola) y — si se pide — la paga entera. Nada se salta: es el flujo completo de compras preguntado una sola vez. Todo o nada, en una transacción.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimplePurchaseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Orden, recepción, factura y pago (si lo hubo).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimplePurchaseResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Factura duplicada del proveedor, sin tasa, o sin regla de IVA.",
             "content": {
               "application/json": {
                 "schema": {

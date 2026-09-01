@@ -230,9 +230,47 @@ export const RegisterSupplierPaymentRequest = z
     /** Emitir el comprobante de retención con este pago. */
     issue_retention_receipt: z.boolean().optional(),
     retention_receipt_series: z.string().trim().min(1).max(10).optional(),
+    /**
+     * De qué cuenta SALE el dinero (migración 29). Opcional: sin ella el
+     * servidor resuelve por la forma de pago del instrumento y en último
+     * término por «Sin asignar (<moneda>)». Con `nota_credito` no se admite.
+     */
+    account_id: uuid.optional(),
   })
   .strict();
 export type RegisterSupplierPaymentRequest = z.infer<typeof RegisterSupplierPaymentRequest>;
+
+/**
+ * La COMPRA SIMPLE de la Fase C: «llegó mercancía con su factura» en UN paso.
+ * Crea la orden, la recepción completa, la factura del proveedor y —si se
+ * indica— el pago del total. El detrás de cámaras es el flujo completo de
+ * compras: nada se salta, solo se pregunta una vez.
+ */
+export const SimplePurchaseRequest = z
+  .object({
+    company_id: uuid,
+    supplier_id: uuid,
+    warehouse_id: uuid,
+    branch_id: uuid.nullable().optional(),
+    /** Moneda del proveedor: la de los costos unitarios. */
+    currency,
+    /** El correlativo DEL PROVEEDOR, tal como él lo emitió. */
+    supplier_document_number: z.string().trim().min(1).max(60),
+    supplier_control_number: z.string().trim().min(1).max(60).optional(),
+    invoice_date: z.string().date().optional(),
+    lines: z.array(PurchaseLineRequest).min(1).max(200),
+    /** Pagarla completa ya mismo, con esta forma. Ausente = queda por pagar. */
+    payment: z
+      .object({
+        instrument: PurchaseInstrument,
+        reference: z.string().trim().min(1).max(100).optional(),
+        account_id: uuid.optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type SimplePurchaseRequest = z.infer<typeof SimplePurchaseRequest>;
 
 export const CreateRetentionRuleRequest = z
   .object({
@@ -477,3 +515,13 @@ export const ListPurchaseOrdersResponse = z
   })
   .strict();
 export type ListPurchaseOrdersResponse = z.infer<typeof ListPurchaseOrdersResponse>;
+
+export const SimplePurchaseResponse = z
+  .object({
+    order: PurchaseOrderResponse,
+    receipt: GoodsReceiptResponse,
+    invoice: SupplierInvoiceResponse,
+    payment: SupplierPaymentResponse.nullable(),
+  })
+  .strict();
+export type SimplePurchaseResponse = z.infer<typeof SimplePurchaseResponse>;

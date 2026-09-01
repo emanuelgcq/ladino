@@ -773,4 +773,71 @@ describe("compras de extremo a extremo", () => {
     expect(e.invoices.length).toBeGreaterThan(0);
     expect(Number(e.total_retained)).toBeGreaterThanOrEqual(4800);
   });
+
+  // ── La COMPRA SIMPLE (Fase C) ─────────────────────────────────────────────
+
+  it("la compra simple: orden + recepción + factura + pago en UN paso, y el kardex lo siente", async () => {
+    const [stockAntes] = await sql<{ q: string }[]>`
+      select coalesce(sum(quantity), 0)::text as q from public.stock_balances
+       where company_id = ${COMPANY} and product_id = ${PROD_A}`;
+
+    const r = await pedir("POST", "/v1/purchases/simple", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      warehouse_id: W1,
+      currency: "USD",
+      supplier_document_number: `FS-${RUN}`,
+      supplier_control_number: `CTRL-FS-${RUN}`,
+      lines: [{ product_id: PROD_A, quantity: "2", unit_price: "50" }],
+      payment: { instrument: "transferencia", reference: `TRF-${RUN}` },
+    });
+    expect(r.status).toBe(201);
+    const s = (await r.json()) as {
+      order: Record<string, unknown>;
+      receipt: Record<string, unknown>;
+      invoice: Record<string, string>;
+      payment: { payment: Record<string, string>; invoice_status: string } | null;
+    };
+    // 2 × 50 = 100 + IVA 16% = 116, en la moneda del proveedor.
+    expect(s.invoice["subtotal_amount"]).toBe("100.00000000");
+    expect(s.invoice["total_amount"]).toBe("116.00000000");
+    expect(s.invoice["transaction_currency"]).toBe("USD");
+    // Pagada ENTERA en el mismo paso: bruto = total, sin retenciones aquí.
+    expect(s.payment).not.toBeNull();
+    expect(s.payment!.payment["gross_amount"]).toBe("116.00000000");
+    expect(s.payment!.invoice_status).toBe("paid");
+
+    // Las 2 unidades entraron al kardex de verdad (recepción, no columna).
+    const [stockDespues] = await sql<{ q: string }[]>`
+      select coalesce(sum(quantity), 0)::text as q from public.stock_balances
+       where company_id = ${COMPANY} and product_id = ${PROD_A}`;
+    expect(Number(stockDespues!.q) - Number(stockAntes!.q)).toBe(2);
+
+    // Y el dinero SALIÓ de una cuenta: sin forma de pago configurada, la de
+    // sistema «Sin asignar (USD)» aparece sola con el neto en negativo.
+    const [cuenta] = await sql<{ balance: string }[]>`
+      select b.balance::text as balance
+        from public.company_accounts ca
+        join public.company_account_balances b on b.account_id = ca.id
+       where ca.company_id = ${COMPANY} and ca.is_system and ca.currency = 'USD'`;
+    expect(Number(cuenta?.balance)).toBeLessThanOrEqual(-116);
+  });
+
+  it("la compra simple sin pago queda POR PAGAR, que es un estado normal", async () => {
+    const r = await pedir("POST", "/v1/purchases/simple", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      warehouse_id: W1,
+      currency: "USD",
+      supplier_document_number: `FS-CREDITO-${RUN}`,
+      supplier_control_number: `CTRL-FSC-${RUN}`,
+      lines: [{ product_id: PROD_A, quantity: "1", unit_price: "50" }],
+    });
+    expect(r.status).toBe(201);
+    const s = (await r.json()) as { invoice: Record<string, string>; payment: unknown };
+    expect(s.payment).toBeNull();
+    const [saldo] = await sql<{ s: string }[]>`
+      select platform.supplier_invoice_balance(${COMPANY}, ${s.invoice["id"]})::text as s`;
+    expect(saldo!.s).toBe("58.00000000");
+  });
 });
