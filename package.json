@@ -33,7 +33,8 @@
     "test:concurrency": "node scripts/outbox-concurrency.mjs",
     "test:concurrency:selftest": "node scripts/outbox-concurrency.mjs --roto --seconds 4",
     "db:verify": "node scripts/require-local-db.mjs && pnpm run db:reset && pnpm run test:rls",
-    "verify": "pnpm run format:check && pnpm run boundaries && turbo run lint typecheck test build && turbo run api-surface && pnpm run openapi:check && pnpm run release:manifest:check && pnpm run db:verify"
+    "verify": "pnpm run format:check && pnpm run boundaries && turbo run lint typecheck test build && turbo run api-surface && pnpm run openapi:check && pnpm run release:manifest:check && pnpm run db:verify",
+    "demo:seed": "node scripts/demo/seed-demo-run.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
