@@ -820,6 +820,63 @@
         ],
         "additionalProperties": false
       },
+      "ImportProductsResponse": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "created": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "row": {
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "creado",
+                    "error"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "product_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "sku": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "row",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "total",
+          "created",
+          "failed",
+          "rows"
+        ],
+        "additionalProperties": false
+      },
       "UpdateProductRequest": {
         "type": "object",
         "properties": {
@@ -10997,6 +11054,98 @@
           },
           "409": {
             "description": "SKU o código de barras duplicado en la empresa.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/products/import": {
+      "post": {
+        "summary": "Importar productos desde Excel, con errores POR FILA en voz de persona",
+        "description": "Multipart con `file` (.xlsx, hasta 500 filas). Bastan las columnas «Nombre» y «Precio»; «Moneda», «Código», «Código de barras», «Categoría», «Existencia», «Costo», «Moneda costo» y «Es servicio» son opcionales. Cada fila es SU transacción: las buenas entran, las malas se explican con su número de fila. Los importes se leen del TEXTO de la celda (coma decimal venezolana incluida), nunca del float de Excel.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El resultado fila por fila.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportProductsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
             "content": {
               "application/json": {
                 "schema": {

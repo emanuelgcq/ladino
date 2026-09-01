@@ -12,6 +12,8 @@ export {
   CreateProductRequest,
   CreateProductSimpleRequest,
   ProductSimpleResponse,
+  ImportProductsRowResult,
+  ImportProductsResponse,
   UpdateProductRequest,
   SetProductTaxCategoryRequest,
   ProductResponse,

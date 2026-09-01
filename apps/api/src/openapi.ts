@@ -118,6 +118,7 @@ import {
   ListFiscalBookRunsResponse,
   CreateProductSimpleRequest,
   ProductSimpleResponse,
+  ImportProductsResponse,
   CreateCompanyAccountRequest,
   UpdateCompanyAccountRequest,
   CompanyAccountResponse,
@@ -219,6 +220,7 @@ export function buildOpenApiDocument(): object {
     CreateProductSimpleRequest,
   );
   const productoSimple = registry.register("ProductSimpleResponse", ProductSimpleResponse);
+  const importProductos = registry.register("ImportProductsResponse", ImportProductsResponse);
   const actualizarProducto = registry.register("UpdateProductRequest", UpdateProductRequest);
   const setTaxCat = registry.register("SetProductTaxCategoryRequest", SetProductTaxCategoryRequest);
   const crearLista = registry.register("CreatePriceListRequest", CreatePriceListRequest);
@@ -284,6 +286,32 @@ export function buildOpenApiDocument(): object {
       201: okJson(productoSimple, "El producto activo, con su precio y su stock inicial."),
       ...erroresComunes,
       409: errorRef("SKU o código de barras duplicado en la empresa."),
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/products/import",
+    summary: "Importar productos desde Excel, con errores POR FILA en voz de persona",
+    description:
+      "Multipart con `file` (.xlsx, hasta 500 filas). Bastan las columnas «Nombre» y «Precio»; " +
+      "«Moneda», «Código», «Código de barras», «Categoría», «Existencia», «Costo», «Moneda " +
+      "costo» y «Es servicio» son opcionales. Cada fila es SU transacción: las buenas entran, " +
+      "las malas se explican con su número de fila. Los importes se leen del TEXTO de la celda " +
+      "(coma decimal venezolana incluida), nunca del float de Excel.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: {
+        content: {
+          "multipart/form-data": {
+            schema: z.object({ file: z.string().openapi({ format: "binary" }) }),
+          },
+        },
+      },
+    },
+    responses: {
+      201: okJson(importProductos, "El resultado fila por fila."),
+      ...erroresComunes,
     },
   });
   registry.registerPath({

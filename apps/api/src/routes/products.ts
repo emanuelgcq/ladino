@@ -288,6 +288,201 @@ export function productsRoutes(
     return c.json(resultado.value, 201);
   });
 
+  /**
+   * IMPORT de Excel (Fase C): un archivo con Nombre y Precio por fila alcanza;
+   * lo demás tiene default. Cada fila es SU PROPIA transacción — el import es
+   * parcial por diseño: las buenas entran, las malas se explican con su número
+   * de fila en voz de persona, y nadie repite un archivo entero por una celda.
+   * Los importes se leen como TEXTO de la celda, nunca como el float de Excel.
+   */
+  app.post("/v1/products/import", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const cuerpo = await c.req.parseBody();
+    const archivo = cuerpo["file"];
+    if (!(archivo instanceof File)) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Manda el Excel en el campo `file` (multipart/form-data).",
+      });
+    }
+
+    const { Workbook } = await import("exceljs");
+    const libro = new Workbook();
+    try {
+      await libro.xlsx.load(await archivo.arrayBuffer());
+    } catch {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Ese archivo no se pudo leer como Excel (.xlsx). Guárdalo de nuevo y reintenta.",
+      });
+    }
+    const hoja = libro.worksheets[0];
+    if (!hoja || hoja.rowCount < 2) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "El archivo no tiene filas de productos: la primera fila son los títulos.",
+      });
+    }
+    if (hoja.rowCount > 501) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Máximo 500 productos por archivo. Divide el Excel y sube las partes.",
+      });
+    }
+
+    // El encabezado, normalizado sin acentos ni mayúsculas: la persona escribe
+    // «Código de barras» o «codigo barras» y las dos valen.
+    const normalizar = (s: string): string =>
+      s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+    const columnas = new Map<string, number>();
+    hoja.getRow(1).eachCell((celda, n) => {
+      columnas.set(normalizar(String(celda.text ?? "")), n);
+    });
+    const col = (...nombres: string[]): number | undefined => {
+      for (const n of nombres) {
+        const c2 = columnas.get(n);
+        if (c2 !== undefined) return c2;
+      }
+      return undefined;
+    };
+    const colNombre = col("nombre", "producto", "descripcion");
+    const colPrecio = col("precio", "precio detal", "pvp");
+    if (colNombre === undefined || colPrecio === undefined) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "El archivo necesita al menos las columnas «Nombre» y «Precio» en la fila 1.",
+      });
+    }
+    const colMoneda = col("moneda", "moneda precio");
+    const colSku = col("codigo", "sku");
+    const colBarras = col("codigo de barras", "codigo barras", "barras", "ean");
+    const colCategoria = col("categoria");
+    const colExistencia = col("existencia", "cantidad", "stock");
+    const colCosto = col("costo", "costo unitario");
+    const colMonedaCosto = col("moneda costo", "moneda del costo");
+    const colServicio = col("es servicio", "servicio");
+
+    const AMOUNT_RE = /^\d{1,16}(\.\d{1,8})?$/;
+    const leerImporte = (texto: string): string | null => {
+      let t = texto.trim().replace(/\s/g, "");
+      // «2,50» y «1.234,56» son la coma decimal venezolana; «2.50» ya está bien.
+      if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(t)) t = t.replace(/\./g, "").replace(",", ".");
+      else if (/^\d+,\d+$/.test(t)) t = t.replace(",", ".");
+      return AMOUNT_RE.test(t) ? t : null;
+    };
+
+    interface FilaResultado {
+      row: number;
+      status: "creado" | "error";
+      message?: string;
+      product_id?: string;
+      sku?: string;
+      name?: string;
+    }
+    const resultados: FilaResultado[] = [];
+
+    for (let n = 2; n <= hoja.rowCount; n++) {
+      const fila = hoja.getRow(n);
+      const texto = (columna: number | undefined): string =>
+        columna === undefined ? "" : String(fila.getCell(columna).text ?? "").trim();
+
+      const nombre = texto(colNombre);
+      const precioCrudo = texto(colPrecio);
+      if (nombre === "" && precioCrudo === "") continue; // fila vacía: se ignora
+
+      if (nombre === "") {
+        resultados.push({ row: n, status: "error", message: "Falta el nombre del producto." });
+        continue;
+      }
+      const precio = leerImporte(precioCrudo);
+      if (precio === null) {
+        resultados.push({
+          row: n,
+          status: "error",
+          name: nombre,
+          message: `El precio no se entiende («${precioCrudo || "vacío"}»). Escribe solo el número, por ejemplo 2,50.`,
+        });
+        continue;
+      }
+      const moneda = (texto(colMoneda) || "USD").toUpperCase();
+      if (!/^[A-Z]{3}$/.test(moneda)) {
+        resultados.push({
+          row: n,
+          status: "error",
+          name: nombre,
+          message: `La moneda «${texto(colMoneda)}» no se entiende. Usa USD o VES.`,
+        });
+        continue;
+      }
+
+      const esServicio = /^(si|sí|x|true|1)$/i.test(texto(colServicio));
+      const existenciaCruda = texto(colExistencia);
+      const costoCrudo = texto(colCosto);
+      let inicial: { quantity: string; unit_cost: { amount: string; currency: string } } | null =
+        null;
+      if (!esServicio && existenciaCruda !== "") {
+        const cantidad = leerImporte(existenciaCruda);
+        if (cantidad === null || !/[1-9]/.test(cantidad)) {
+          resultados.push({
+            row: n,
+            status: "error",
+            name: nombre,
+            message: `La existencia no se entiende («${existenciaCruda}»).`,
+          });
+          continue;
+        }
+        const costo = leerImporte(costoCrudo);
+        if (costo === null) {
+          resultados.push({
+            row: n,
+            status: "error",
+            name: nombre,
+            message: `Para cargar existencia hace falta el costo unitario, y «${costoCrudo || "vacío"}» no se entiende.`,
+          });
+          continue;
+        }
+        const monedaCosto = (texto(colMonedaCosto) || "VES").toUpperCase();
+        inicial = { quantity: cantidad, unit_cost: { amount: costo, currency: monedaCosto } };
+      }
+
+      const skuTexto = texto(colSku);
+      const barrasTexto = texto(colBarras);
+      const categoriaTexto = texto(colCategoria);
+
+      // Cada fila en SU transacción: la fila mala no arrastra a las buenas.
+      const r = await withTransaction(sql, actor, (uow) =>
+        createProductSimple(uow, {
+          company_id: companyId,
+          name: nombre,
+          price: { amount: precio, currency: moneda },
+          ...(esServicio ? { is_service: true } : {}),
+          ...(inicial === null ? {} : { initial_stock: inicial }),
+          ...(skuTexto === "" ? {} : { sku: skuTexto }),
+          ...(barrasTexto === "" ? {} : { barcode: barrasTexto }),
+          ...(categoriaTexto === "" ? {} : { category_name: categoriaTexto }),
+        }),
+      );
+      if (r.ok) {
+        resultados.push({
+          row: n,
+          status: "creado",
+          product_id: r.value.product.id,
+          sku: r.value.product.sku,
+          name: nombre,
+        });
+      } else {
+        resultados.push({ row: n, status: "error", name: nombre, message: r.error.message });
+      }
+    }
+
+    const created = resultados.filter((r) => r.status === "creado").length;
+    return c.json(
+      { total: resultados.length, created, failed: resultados.length - created, rows: resultados },
+      201,
+    );
+  });
+
   /** El ALTA SIMPLE de la Fase C: nombre + precio (+ stock inicial) en un paso. */
   app.post("/v1/products/simple", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);

@@ -400,6 +400,53 @@ describe("productos de extremo a extremo", () => {
     expect(item["stock_quantity"]).toBe("0");
   });
 
+  it("el import de Excel: las filas buenas entran, las malas se explican con su número", async () => {
+    const { Workbook } = await import("exceljs");
+    const libro = new Workbook();
+    const hoja = libro.addWorksheet("Productos");
+    hoja.addRow(["Nombre", "Precio", "Moneda", "Categoría", "Existencia", "Costo"]);
+    hoja.addRow([`Arroz import ${RUN}`, "1,80", "USD", "Alimentos", "12", "50,00"]);
+    hoja.addRow(["", "2.00"]); // sin nombre → error con fila
+    hoja.addRow([`Aceite import ${RUN}`, "tres dólares"]); // precio ilegible
+    hoja.addRow([`Jabón import ${RUN}`, "0.90"]); // sin existencia: solo catálogo
+    const xlsx = Buffer.from(await libro.xlsx.writeBuffer());
+
+    const token = await tokenDe(GESTOR);
+    const form = new FormData();
+    form.append(
+      "file",
+      new File([new Uint8Array(xlsx)], "productos.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    );
+    const r = await app.request("/v1/products/import", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "X-Company-Id": COMPANY },
+      body: form,
+    });
+    expect(r.status).toBe(201);
+    const res = (await r.json()) as {
+      total: number;
+      created: number;
+      failed: number;
+      rows: { row: number; status: string; message?: string; product_id?: string }[];
+    };
+    expect(res.total).toBe(4);
+    expect(res.created).toBe(2);
+    expect(res.failed).toBe(2);
+    const porFila = new Map(res.rows.map((f) => [f.row, f]));
+    expect(porFila.get(2)!.status).toBe("creado");
+    expect(porFila.get(3)!.message).toContain("nombre");
+    expect(porFila.get(4)!.message).toContain("precio");
+    expect(porFila.get(5)!.status).toBe("creado");
+
+    // La fila 2 entró CON su kardex: 12 unidades a 50 Bs.
+    const [saldo] = await sql<{ q: string }[]>`
+      select coalesce(sum(quantity), 0)::text as q from public.stock_balances
+       where company_id = ${COMPANY} and product_id = ${porFila.get(2)!.product_id}`;
+    expect(saldo!.q).toBe("12.00000000");
+  });
+
   it("la foto: subir genera original + miniaturas y la cuadrícula recibe la URL FIRMADA", async () => {
     const token = await tokenDe(GESTOR);
     const alta = await pedir("POST", "/v1/products/simple", {

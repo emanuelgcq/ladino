@@ -75,14 +75,14 @@ export function buildApp(cfg: AppConfig): Hono {
   const limiteJson: MiddlewareHandler = bodyLimit({ maxSize: 1024 * 1024 });
   const limiteImagen: MiddlewareHandler = bodyLimit({ maxSize: 6 * 1024 * 1024 });
   app.use("*", (c, next) => {
-    const esSubidaImagen =
+    const esSubidaArchivo =
       c.req.method === "POST" &&
-      c.req.path.startsWith("/v1/products/") &&
-      c.req.path.endsWith("/image");
+      ((c.req.path.startsWith("/v1/products/") && c.req.path.endsWith("/image")) ||
+        c.req.path === "/v1/products/import");
     // El Context de un `app.use("*")` colapsa su tercer genérico a `any`; los
     // dos handlers son bodyLimit reales y el dispatch es solo por tamaño.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    return esSubidaImagen ? limiteImagen(c, next) : limiteJson(c, next);
+    return esSubidaArchivo ? limiteImagen(c, next) : limiteJson(c, next);
   });
   // CORS con UN origen explícito, nunca "*": la webapp manda Authorization y
   // headers propios, y el navegador exige el preflight. En producción es el

@@ -207,3 +207,32 @@ export const ProductSimpleResponse = z
   })
   .strict();
 export type ProductSimpleResponse = z.infer<typeof ProductSimpleResponse>;
+
+/**
+ * El resultado del IMPORT de Excel (Fase C): fila por fila, en voz de persona.
+ * El import es PARCIAL por diseño — cada fila es su propia transacción: las
+ * buenas entran, las malas se explican con su número de fila, y nadie repite
+ * un archivo de 200 productos porque la fila 137 tenía el precio vacío.
+ */
+export const ImportProductsRowResult = z
+  .object({
+    /** Número de FILA del archivo (contando el encabezado como 1). */
+    row: z.number().int(),
+    status: z.enum(["creado", "error"]),
+    message: z.string().optional(),
+    product_id: uuid.optional(),
+    sku: z.string().optional(),
+    name: z.string().optional(),
+  })
+  .strict();
+export type ImportProductsRowResult = z.infer<typeof ImportProductsRowResult>;
+
+export const ImportProductsResponse = z
+  .object({
+    total: z.number().int(),
+    created: z.number().int(),
+    failed: z.number().int(),
+    rows: z.array(ImportProductsRowResult),
+  })
+  .strict();
+export type ImportProductsResponse = z.infer<typeof ImportProductsResponse>;
