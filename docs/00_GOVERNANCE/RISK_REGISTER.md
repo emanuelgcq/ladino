@@ -200,22 +200,14 @@ por IP de Traefik sí es común a las réplicas.
 
 **Deja de ser aceptable:** antes de `deploy.replicas: 2` o de un segundo host.
 
-### R-10 · `apps/worker/src/main.ts` no tiene test
+### R-10 · ~~`apps/worker/src/main.ts` no tiene test~~ **CERRADO (2026-09-01)**
 
-- **Severidad:** Media · **Dueño:** S0.6b o el primer job nuevo del worker
-- **Disparador:** el primer cambio a `main.ts` (un job nuevo, otro intervalo, otro transmisor)
-- **Dónde:** `apps/worker/src/main.ts`
-
-El bucle, el latido, el suicidio tras 5 ciclos fallidos, el plazo por ciclo y el apagado están
-escritos y sin test: `procesarLote`, los reapers y la purga sí lo tienen (13 tests), pero la
-composición que los llama no. Un cambio que rompa el latido o el `process.exit(1)` deja un
-contenedor vivo y `unhealthy` que Docker no reinicia (F-11) — exactamente lo que el diseño evita.
-
-**Mitigación:** extraer `bucle()`/`ciclo()` a un módulo que reciba `sql`, `transmitter`, reloj
-y `salir()` inyectables, y probar: latido escrito por ciclo sano, no escrito por ciclo roto,
-`salir(1)` al 5.º fallo, señal → parada. Es una tarde, no una fase.
-
-**Deja de ser aceptable:** con el primer job que no sea el consumo del outbox.
+Cerrado exactamente con la mitigación que este riesgo dictaba: la máquina del bucle vive en
+`apps/worker/src/loop.ts` con `ciclo`, `latir`, `salir`, `dormir` y el reloj inyectados, y
+`loop.test.ts` prueba las cinco frases — latido SOLO tras vuelta sana, vuelta rota no late,
+`salir(1)` al 5.º fallo seguido, un éxito reinicia el contador, un ciclo colgado cae por el
+plazo, y `parar()` termina sin salida forzada. `main.ts` quedó como cableado puro (sql real,
+fichero de latido real, `process.exit` real). 19 tests en el worker.
 
 ### R-11 · `pnpm verify` en la máquina de desarrollo solo pasa con `TURBO_CONCURRENCY=1`
 

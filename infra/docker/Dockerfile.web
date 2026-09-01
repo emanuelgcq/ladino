@@ -1,0 +1,54 @@
+# ladino-web — la webapp como estático detrás del Traefik existente.
+#
+# Se construye desde la RAÍZ del monorepo, y las variables VITE_* entran como
+# BUILD ARGS porque Vite las hornea en el bundle — no existen en runtime:
+#
+#   docker build -f infra/docker/Dockerfile.web \
+#     --build-arg VITE_SUPABASE_URL=https://udacvwnhwpsdzbouhqhl.supabase.co \
+#     --build-arg VITE_SUPABASE_PUBLISHABLE_KEY=<publishable/anon del proyecto> \
+#     --build-arg VITE_API_URL=https://api.ladino.<dominio> \
+#     -t ladino-web:<version> .
+#
+# NINGUNO de esos valores es secreto (URL pública, clave publishable, host de
+# la API): pueden vivir en un build arg y en el bundle. La service_role JAMÁS
+# pasa por aquí — el hook de fronteras y esta nota existen para lo mismo.
+#
+# Base runtime: nginx SIN privilegios (usuario 101, puerto 8080), por digest,
+# igual que la base de la API (F-20: sin digest, dos builds del mismo commit
+# pueden diferir). Se actualiza a mano y se anota en releases/manifest.json.
+
+ARG NODE_IMAGE=node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+ARG NGINX_IMAGE=nginxinc/nginx-unprivileged@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+
+# ── build ────────────────────────────────────────────────────────────────────
+FROM ${NODE_IMAGE} AS build
+RUN corepack enable
+WORKDIR /repo
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* tsconfig*.json turbo.json ./
+COPY apps ./apps
+COPY packages ./packages
+RUN pnpm install --frozen-lockfile --ignore-scripts
+
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_PUBLISHABLE_KEY
+ARG VITE_API_URL
+# Sin estos tres, la imagen resultante apuntaría a localhost: mejor no existir.
+RUN test -n "$VITE_SUPABASE_URL" && test -n "$VITE_SUPABASE_PUBLISHABLE_KEY" \
+  && test -n "$VITE_API_URL" \
+  || (echo "faltan build args VITE_* (ver cabecera de este Dockerfile)" && exit 1)
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
+    VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY \
+    VITE_API_URL=$VITE_API_URL
+# El build de la web es `vite build` (apps/web/package.json), con sus
+# dependencias del workspace construidas antes por turbo.
+RUN pnpm turbo run build --filter=@ladino/web...
+
+# ── runtime ──────────────────────────────────────────────────────────────────
+FROM ${NGINX_IMAGE}
+COPY infra/docker/nginx-web.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /repo/apps/web/dist /usr/share/nginx/html
+# La imagen unprivileged ya corre como uid 101 y escucha en 8080; el compose la
+# monta read-only con /tmp en tmpfs (ahí escribe nginx su pid y su caché).
+EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8080/ > /dev/null || exit 1

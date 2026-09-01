@@ -120,7 +120,7 @@ if (cmd === "check") {
     version,
     date: new Date().toISOString().slice(0, 10),
     git_sha: git("rev-parse", "HEAD"),
-    images: { "ladino-api": null, "ladino-worker": null },
+    images: { "ladino-api": null, "ladino-worker": null, "ladino-web": null },
     migrations: {
       from: migs[0]?.version ?? null,
       to: migs[migs.length - 1]?.version ?? null,
@@ -141,7 +141,9 @@ if (cmd === "check") {
 } else if (cmd === "digest") {
   const [, version, servicio, digest] = args;
   if (!version || !servicio || !/^sha256:[0-9a-f]{64}$/.test(digest ?? "")) {
-    console.error("uso: release-manifest digest <version> <ladino-api|ladino-worker> <sha256:...>");
+    console.error(
+      "uso: release-manifest digest <version> <ladino-api|ladino-worker|ladino-web> <sha256:...>",
+    );
     process.exit(2);
   }
   const m = leer();

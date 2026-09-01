@@ -47,12 +47,12 @@ services:
     cap_drop: [ALL]
     read_only: true
     tmpfs: [/tmp]
-    pids_limit: 256
     deploy:
       resources:
         limits:
           cpus: "1.0"
           memory: 512M
+          pids: 256
         reservations:
           cpus: "0.25"
           memory: 128M
@@ -103,12 +103,12 @@ services:
     cap_drop: [ALL]
     read_only: true
     tmpfs: [/tmp] # el latido del healthcheck se escribe aquí
-    pids_limit: 128
     deploy:
       resources:
         limits:
           cpus: "0.5"
           memory: 256M
+          pids: 128
         reservations:
           cpus: "0.1"
           memory: 64M
@@ -125,6 +125,51 @@ services:
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "5" }
+
+  web:
+    image: ${LADINO_WEB_IMAGE:?falta LADINO_WEB_IMAGE (digest, ver releases/manifest.json)}
+    container_name: ladino-web
+    restart: unless-stopped
+    # Estático puro: sin secretos, sin env_file. Las VITE_* se hornearon en el
+    # build (ver Dockerfile.web) y ninguna es secreta.
+    networks:
+      - proxy
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    # nginx-unprivileged escribe pid y caché bajo /tmp.
+    tmpfs: [/tmp]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+          pids: 64
+        reservations:
+          cpus: "0.05"
+          memory: 32M
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:?falta TRAEFIK_NETWORK}
+      traefik.http.routers.ladino-web.rule: Host(`${LADINO_WEB_HOST:?falta LADINO_WEB_HOST}`)
+      traefik.http.routers.ladino-web.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.ladino-web.tls: "true"
+      traefik.http.routers.ladino-web.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:?falta TRAEFIK_CERT_RESOLVER}
+      traefik.http.services.ladino-web.loadbalancer.server.port: "8080"
+      traefik.http.routers.ladino-web.middlewares: ladino-web-headers
+      traefik.http.middlewares.ladino-web-headers.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.ladino-web-headers.headers.contentTypeNosniff: "true"
+      # frameDeny NO va aquí: lo pone el propio nginx (X-Frame-Options DENY) y
+      # así protege también a quien llegue por dentro de la red compartida.
 
 networks:
   ladino-net:

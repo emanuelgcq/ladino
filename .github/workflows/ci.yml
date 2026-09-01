@@ -5,9 +5,15 @@
 # el artefacto.
 #
 # Los pasos van como jobs separados y no como un solo `pnpm verify`, para que la matriz diga
-# cuál falló sin tener que leer el log. `pnpm verify` reproduce el mismo núcleo en local.
+# cuál falló sin tener que leer el log — y ADEMÁS corre `full-gate`, que es el `pnpm verify`
+# entero con el stack local de Supabase levantado: migración desde cero, integración de la API
+# contra Postgres real, pgTAP, openapi:check y release manifest. La matriz es la señal rápida;
+# full-gate es la autoridad.
 #
-# Todavía NO están: migration test, pgTAP, integration, openapi:check. Llegan con S0.3 y S0.5.
+# HISTORIA QUE NO DEBE REPETIRSE: desde S0.5 el paso `test` incluía la integración contra
+# Postgres y este pipeline no levantaba ninguno — el job llevaba semanas en rojo en cada push
+# sin que nadie lo mirara. Un CI rojo permanente es un CI apagado (ADR-0023, otra vez): si
+# full-gate se pone rojo y no es por el cambio, se ARREGLA EL PIPELINE ese mismo día.
 
 name: CI
 
@@ -55,7 +61,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        step: ["format:check", "boundaries", "lint", "typecheck", "test", "build"]
+        # `test` NO está aquí: necesita Postgres (integración de la API,
+        # ADR-0016) y corre dentro de full-gate con el stack levantado.
+        step: ["format:check", "boundaries", "lint", "typecheck", "build"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -78,3 +86,26 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
       - run: pnpm run api-surface
+
+  full-gate:
+    name: pnpm verify (los 11 pasos, con Postgres real)
+    runs-on: ubuntu-latest
+    needs: setup
+    # El gate entero tarda; que la matriz rápida ya haya dado su señal no lo
+    # exime: este job es EL veredicto, el mismo que en la máquina de desarrollo.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Levantar el stack local de Supabase (Docker del runner)
+        run: pnpm db:start
+      - name: pnpm verify — el gate real, entero
+        run: pnpm run verify
+      - name: El veredicto se lee por pasos, no a ojo (CLAUDE.md §5)
+        # En esta máquina el log se cuenta; aquí el exit code manda, pero se
+        # deja constancia de que el pgTAP corrió de verdad.
+        run: pnpm run test:rls | grep -q "All tests successful"

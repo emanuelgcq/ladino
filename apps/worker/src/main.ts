@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { assertServiceRole, createClient } from "@ladino/db";
 import { NullTransmitter } from "@ladino/fiscal";
+import { crearBucle } from "./loop.js";
 import { procesarLote } from "./outbox.js";
 import { purgarIdempotencia, reaperIdempotencia, reaperOutbox } from "./reapers.js";
 
@@ -42,9 +43,7 @@ const MAX_FALLOS_SEGUIDOS = 5;
 // 50, pero un ciclo que supera esto está colgado, no ocupado.
 const PLAZO_CICLO_MS = 10 * 60_000;
 
-let parando = false;
 let vuelta = 0;
-let fallosSeguidos = 0;
 
 async function ciclo(): Promise<void> {
   vuelta += 1;
@@ -63,18 +62,25 @@ async function ciclo(): Promise<void> {
   if (out.publicados || out.reintentos || out.muertos || out.reservasPerdidas || mantenimiento) {
     log("info", "worker.ciclo", { vuelta, out, mantenimiento });
   }
-  writeFileSync(latido, String(Date.now()));
 }
 
-function conPlazo<T>(p: Promise<T>, ms: number): Promise<T> {
-  let temporizador: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    p,
-    new Promise<never>((_, reject) => {
-      temporizador = setTimeout(() => reject(new Error(`ciclo sin terminar en ${ms} ms`)), ms);
-    }),
-  ]).finally(() => clearTimeout(temporizador));
-}
+/**
+ * La MÁQUINA del bucle vive en loop.ts con sus dependencias inyectadas y sus
+ * tests (R-10 cerrado): latido solo tras vuelta sana, suicidio ruidoso al 5.º
+ * fallo seguido, plazo por ciclo. Aquí queda solo el CABLEADO real.
+ */
+const maquina = crearBucle({
+  ciclo,
+  latir: () => writeFileSync(latido, String(Date.now())),
+  log,
+  salir: (codigo) => process.exit(codigo),
+  dormir: (ms) => new Promise((r) => setTimeout(r, ms)),
+  intervaloMs,
+  plazoCicloMs: PLAZO_CICLO_MS,
+  maxFallosSeguidos: MAX_FALLOS_SEGUIDOS,
+});
+
+let parando = false;
 
 async function bucle(): Promise<void> {
   // ADR-0031: con un rol SUPERUSER/BYPASSRLS no se arranca. Ruidoso, no un aviso.
@@ -85,20 +91,7 @@ async function bucle(): Promise<void> {
     process.exit(1);
   }
   log("info", "worker.start", { intervaloMs, maxFallosSeguidos: MAX_FALLOS_SEGUIDOS });
-  while (!parando) {
-    try {
-      await conPlazo(ciclo(), PLAZO_CICLO_MS);
-      fallosSeguidos = 0;
-    } catch (e) {
-      fallosSeguidos += 1;
-      log("error", "worker.ciclo_failed", { fallosSeguidos, error: String(e) });
-      if (fallosSeguidos >= MAX_FALLOS_SEGUIDOS) {
-        log("error", "worker.giving_up", { fallosSeguidos });
-        process.exit(1);
-      }
-    }
-    if (!parando) await new Promise((r) => setTimeout(r, intervaloMs));
-  }
+  await maquina.run();
   await sql.end({ timeout: 5 });
   log("info", "worker.stopped");
 }
@@ -116,6 +109,7 @@ for (const señal of ["SIGTERM", "SIGINT"] as const) {
   process.on(señal, () => {
     if (parando) return;
     parando = true;
+    maquina.parar();
     log("info", "worker.shutdown", { señal });
     // Respaldo: si el ciclo en curso no termina, salir antes del SIGKILL.
     setTimeout(() => {
