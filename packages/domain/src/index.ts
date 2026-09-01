@@ -14,6 +14,7 @@ export {
   createProductSimple,
   updateProduct,
   setProductTaxCategory,
+  setProductImage,
   type ProductError,
 } from "./products.js";
 export { createPriceList, setPrice, type PricingError } from "./pricing.js";

@@ -60,7 +60,20 @@ async function pedir(
 beforeAll(async () => {
   sql = createClient(URL_LOCAL);
   sqlApi = createClient(URL_API);
-  app = buildApp({ sql: sqlApi, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
+  // La credencial de SERVICIO del stack local, acuñada aquí mismo con el
+  // secreto de demo de la CLI: es la que la API usaría en producción (desde el
+  // entorno del servidor) y NUNCA sale de este proceso.
+  const serviceKey = await new SignJWT({ role: "service_role" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuer("supabase-demo")
+    .setIssuedAt()
+    .setExpirationTime("2h")
+    .sign(JWT_SECRET);
+  app = buildApp({
+    sql: sqlApi,
+    auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER },
+    storage: { url: "http://127.0.0.1:54321/storage/v1", serviceKey },
+  });
 
   await sql`insert into auth.users (id) values (${GESTOR}), (${CONTADOR}) on conflict (id) do nothing`;
   await sql.begin(async (tx) => {
@@ -385,5 +398,48 @@ describe("productos de extremo a extremo", () => {
     expect(item["price_amount"]).toBe("4.00000000");
     expect(item["price_currency"]).toBe("USD");
     expect(item["stock_quantity"]).toBe("0");
+  });
+
+  it("la foto: subir genera original + miniaturas y la cuadrícula recibe la URL FIRMADA", async () => {
+    const token = await tokenDe(GESTOR);
+    const alta = await pedir("POST", "/v1/products/simple", {
+      token,
+      key: crypto.randomUUID(),
+      body: {
+        company_id: COMPANY,
+        name: `Con foto ${RUN}`,
+        price: { amount: "1.00000000", currency: "USD" },
+      },
+    });
+    expect(alta.status).toBe(201);
+    const producto = ((await alta.json()) as { product: { id: string } }).product;
+
+    // Un PNG de 1×1: suficiente para ejercer sharp y el bucket de verdad.
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const form = new FormData();
+    form.append("file", new File([new Uint8Array(png)], "foto.png", { type: "image/png" }));
+    const subida = await app.request(`/v1/products/${producto.id}/image`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "X-Company-Id": COMPANY },
+      body: form,
+    });
+    expect(subida.status).toBe(201);
+    const s = (await subida.json()) as { image_path: string; image_url: string | null };
+    expect(s.image_path.endsWith("/original.webp")).toBe(true);
+    expect(s.image_path.startsWith(`${COMPANY}/products/${producto.id}/`)).toBe(true);
+    expect(s.image_url).not.toBeNull();
+    expect(s.image_url).toContain("token=");
+
+    // Y el listado firma la MINIATURA de 400, no el original: la cuadrícula
+    // no descarga fotos de cámara.
+    const res = await pedir("GET", `/v1/products?search=Con foto ${RUN}&with_price=1`, { token });
+    const lista = (await res.json()) as { items: Record<string, unknown>[] };
+    const item = lista.items.find((i) => i["id"] === producto.id)!;
+    expect(item["image_path"]).toBe(s.image_path);
+    expect(String(item["image_url"])).toContain("thumb-400.webp");
+    expect(String(item["image_url"])).toContain("token=");
   });
 });

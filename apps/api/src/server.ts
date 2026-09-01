@@ -41,6 +41,7 @@ try {
 const app = buildApp({
   sql,
   auth: cfg.auth,
+  storage: cfg.storage,
   rateLimitPorMinuto: cfg.rateLimitPorMinuto,
   requestTimeoutMs: cfg.requestTimeoutMs,
   corsOrigin: cfg.corsOrigin,

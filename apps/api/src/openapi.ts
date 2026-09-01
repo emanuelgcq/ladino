@@ -288,6 +288,35 @@ export function buildOpenApiDocument(): object {
   });
   registry.registerPath({
     method: "post",
+    path: "/v1/products/{id}/image",
+    summary: "Subir la foto del producto (permiso product.manage)",
+    description:
+      "Multipart con el campo `file` (JPG/PNG/WebP, hasta 6 MB). El servidor la convierte a " +
+      "webp, genera las miniaturas de 400 y 96 px al subir, y guarda la RUTA — nunca una URL " +
+      "firmada, que caduca. La cuadrícula recibe `image_url` firmada de la miniatura; sin " +
+      "almacenamiento configurado el endpoint lo dice en vez de fingir.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      headers: companyHeader,
+      body: {
+        content: {
+          "multipart/form-data": {
+            schema: z.object({ file: z.string().openapi({ format: "binary" }) }),
+          },
+        },
+      },
+    },
+    responses: {
+      201: okJson(
+        z.object({ image_path: z.string(), image_url: z.string().nullable() }),
+        "La ruta persistida y una URL firmada para enseñarla ya.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
     path: "/v1/products",
     summary: "Crear producto (permiso product.manage)",
     description: "La clave natural es el SKU, único por empresa (case-insensitive).",

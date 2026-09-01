@@ -68,10 +68,30 @@ export function configAuth(
   throw new ConfigError(`LADINO_AUTH_MODE inválido: ${modo} (jwks | hs256)`);
 }
 
+/**
+ * Almacenamiento de objetos (fotos de producto, recibos — Fase C). La clave es
+ * la CREDENCIAL DE SERVICIO y vive SOLO aquí, en el servidor: la política del
+ * bucket no concede escritura a nadie más (migración 28). Opcional: sin las
+ * dos variables, los endpoints de imagen responden que no hay almacenamiento.
+ */
+export interface StorageConfig {
+  /** p. ej. http://127.0.0.1:54321/storage/v1 en local. */
+  readonly url: string;
+  readonly serviceKey: string;
+}
+
+export function configStorage(env: Entorno): StorageConfig | undefined {
+  const url = env["SUPABASE_STORAGE_URL"];
+  const serviceKey = env["SUPABASE_STORAGE_KEY"];
+  if (!url || !serviceKey) return undefined;
+  return { url, serviceKey };
+}
+
 export interface ServerConfig {
   readonly databaseUrl: string;
   readonly port: number;
   readonly auth: AuthConfig;
+  readonly storage?: StorageConfig | undefined;
   /** Peticiones por minuto y usuario autenticado en /v1/*. */
   readonly rateLimitPorMinuto: number;
   /** Plazo máximo de una petición a /v1/*, en ms. */
@@ -93,6 +113,7 @@ export function configServidor(env: Entorno): ServerConfig {
     databaseUrl: requerida(env, "DATABASE_URL"),
     port: entero(env, "PORT", 3000),
     auth: configAuth(env),
+    storage: configStorage(env),
     rateLimitPorMinuto: entero(env, "RATE_LIMIT_PER_MINUTE", 300),
     // 30 s: MUY por debajo de los 15 min del reaper de idempotencia (F-10):
     // ninguna petición puede seguir viva cuando el reaper libera su clave.

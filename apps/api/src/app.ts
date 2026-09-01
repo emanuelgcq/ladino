@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import type { Sql } from "@ladino/db";
@@ -18,10 +18,13 @@ import { accountingRoutes } from "./routes/accounting.js";
 import { purchasesRoutes } from "./routes/purchases.js";
 import { fiscalBooksRoutes } from "./routes/fiscal-books.js";
 import { treasuryRoutes } from "./routes/treasury.js";
+import type { StorageConfig } from "./config.js";
 
 export interface AppConfig {
   readonly sql: Sql;
   readonly auth: AuthConfig;
+  /** Almacenamiento de objetos (fotos, recibos). Sin él, esos endpoints lo dicen. */
+  readonly storage?: StorageConfig | undefined;
   /** Por defecto 300; los tests bajan la cifra para ejercer el 429. */
   readonly rateLimitPorMinuto?: number;
   /** Por defecto 30 s. Ver middleware/timeout.ts para el invariante con el reaper. */
@@ -65,12 +68,26 @@ export function buildApp(cfg: AppConfig): Hono {
   app.onError(onErrorResponder);
   // Cota de cuerpo ANTES de auth: la idempotencia lee el cuerpo entero a
   // memoria para hashearlo, y sin cota cualquiera fuerza reserva de memoria
-  // arbitraria. 1 MB sobra para todo contrato de S0.5; los ficheros no van
-  // por aquí. Observación del auditor de S0.5, fuera de su ámbito pero real.
-  app.use("*", bodyLimit({ maxSize: 1024 * 1024 }));
+  // arbitraria. 1 MB sobra para todo contrato JSON; la ÚNICA excepción es la
+  // subida de imágenes (Fase C), que va en multipart, no pasa por la
+  // idempotencia y lleva su propia cota de 6 MB.
+  const limiteJson: MiddlewareHandler = bodyLimit({ maxSize: 1024 * 1024 });
+  const limiteImagen: MiddlewareHandler = bodyLimit({ maxSize: 6 * 1024 * 1024 });
+  app.use("*", (c, next) => {
+    const esSubidaImagen =
+      c.req.method === "POST" &&
+      c.req.path.startsWith("/v1/products/") &&
+      c.req.path.endsWith("/image");
+    // El Context de un `app.use("*")` colapsa su tercer genérico a `any`; los
+    // dos handlers son bodyLimit reales y el dispatch es solo por tamaño.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    return esSubidaImagen ? limiteImagen(c, next) : limiteJson(c, next);
+  });
   // CORS con UN origen explícito, nunca "*": la webapp manda Authorization y
   // headers propios, y el navegador exige el preflight. En producción es el
   // dominio de la webapp (CORS_ORIGIN); en local, el dev server de Vite.
+  // PATCH y PUT están porque los usan tesorería y el mapeo tributario: un
+  // método que falta aquí falla en el preflight con un error que no dice CORS.
   app.use(
     "*",
     cors({
@@ -82,7 +99,7 @@ export function buildApp(cfg: AppConfig): Hono {
         "X-Company-Id",
         "X-Request-Id",
       ],
-      allowMethods: ["GET", "POST", "OPTIONS"],
+      allowMethods: ["GET", "POST", "PATCH", "PUT", "OPTIONS"],
       maxAge: 600,
     }),
   );
@@ -137,7 +154,7 @@ export function buildApp(cfg: AppConfig): Hono {
   // sus errores con su propio onError y se saltaría el errorMapper de arriba.
   // El porqué completo está en routes/companies.ts.
   companiesRoutes(app, cfg.sql, idempotencia);
-  productsRoutes(app, cfg.sql, idempotencia);
+  productsRoutes(app, cfg.sql, idempotencia, cfg.storage);
   pricingRoutes(app, cfg.sql, idempotencia);
   catalogRoutes(app, cfg.sql);
   customersRoutes(app, cfg.sql, idempotencia);

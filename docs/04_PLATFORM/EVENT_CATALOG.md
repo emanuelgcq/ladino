@@ -115,6 +115,10 @@ Emitidos por los casos de uso de `packages/domain` (products.ts, pricing.ts), `s
 - product.updated
 - product.tax_category_set — el payload lleva `{from, to}`: una reclasificación fiscal sin el
   valor anterior no se puede revisar (la lección de la migración 10)
+- product.image_set — Fase C: el payload lleva `{product_id, image_path}` (la RUTA en el
+  bucket, nunca una URL firmada). Las miniaturas 400/96 se generan AL SUBIR, en la API —
+  desviación declarada del «worker» de la spec de fase: mismo resultado, sin un consumidor
+  nuevo de outbox; si el volumen lo pide, ese es el disparador para moverlo
 - price_list.created
 - price.set — el payload lleva `{amount (string), currency, effective_from, effective_to}`;
   el autocierre del período anterior NO emite evento propio: es consecuencia del mismo hecho

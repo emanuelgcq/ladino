@@ -11,9 +11,12 @@ import {
   createProductSimple,
   updateProduct,
   setProductTaxCategory,
+  setProductImage,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { CTX } from "../middleware/context.js";
+import { subirObjeto, firmarUrls } from "../storage.js";
+import type { StorageConfig } from "../config.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -62,7 +65,23 @@ const PRODUCT_SELECT_P = `p.id, p.tenant_id, p.company_id, p.sku, p.name, p.kind
   p.template_id, p.attributes,
   to_char(p.created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
 
-export function productsRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler): void {
+const BUCKET_IMAGENES = "product-images";
+
+/**
+ * Deriva la ruta de la miniatura de cuadrícula a partir de la del original.
+ * El contrato de rutas es `<company>/products/<id>/<v>/original.webp` con sus
+ * `thumb-400.webp` y `thumb-96.webp` al lado, generados AL SUBIR.
+ */
+function rutaThumb(imagePath: string, tam: 400 | 96): string {
+  return imagePath.replace(/original\.webp$/, `thumb-${tam}.webp`);
+}
+
+export function productsRoutes(
+  app: Hono,
+  sql: Sql,
+  idempotencia: MiddlewareHandler,
+  storage?: StorageConfig,
+): void {
   // Listado con búsqueda y PAGINACIÓN EN SERVIDOR (WEBAPP_SPEC §Rendimiento):
   // filtros en el query string para que una vista sea compartible.
   app.get("/v1/products", async (c) => {
@@ -139,6 +158,19 @@ export function productsRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHand
 
     const total = filas.length > 0 ? (filas[0]!["total"] as number) : 0;
     const items = filas.map(({ total: _total, ...resto }) => resto);
+
+    // Las URLs FIRMADAS de las miniaturas, en LOTE y fuera de la transacción.
+    // Sin storage configurado (o si una ruta no firma), image_url va null y la
+    // cuadrícula enseña el placeholder de inicial — que es diseño, no error.
+    if (storage !== undefined) {
+      const conFoto = items.filter((i) => typeof i["image_path"] === "string");
+      const rutas = conFoto.map((i) => rutaThumb(i["image_path"] as string, 400));
+      const firmadas = await firmarUrls(storage, BUCKET_IMAGENES, rutas);
+      for (const i of items) {
+        const p = i["image_path"];
+        i["image_url"] = typeof p === "string" ? (firmadas.get(rutaThumb(p, 400)) ?? null) : null;
+      }
+    }
     return c.json({ items, total }, 200);
   });
 
@@ -157,7 +189,91 @@ export function productsRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHand
          where id = ${id} and company_id = ${companyId}`,
     );
     if (!fila) throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    if (storage !== undefined && typeof fila["image_path"] === "string") {
+      const firmadas = await firmarUrls(storage, BUCKET_IMAGENES, [fila["image_path"]]);
+      fila["image_url"] = firmadas.get(fila["image_path"]) ?? null;
+    }
     return c.json(fila, 200);
+  });
+
+  /**
+   * La FOTO del producto: multipart, convertida a webp y con sus miniaturas
+   * generadas AL SUBIR (400 y 96 px — la cuadrícula no carga originales). La
+   * escritura al bucket va con la credencial de servicio; el hecho de dominio
+   * (la ruta, la auditoría, el evento) lo escribe `setProductImage`.
+   *
+   * Sin `Idempotency-Key` a propósito: resubir la misma foto es idempotente
+   * por naturaleza (upsert de objeto + UPDATE de la misma columna).
+   */
+  app.post("/v1/products/:id/image", async (c) => {
+    const { companyId } = requireCompany(c);
+    const id = c.req.param("id");
+    if (!UUID_RE.test(id)) {
+      throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    }
+    if (storage === undefined) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Este servidor no tiene almacenamiento de imágenes configurado.",
+      });
+    }
+    const cuerpo = await c.req.parseBody();
+    const archivo = cuerpo["file"];
+    if (!(archivo instanceof File)) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Manda la foto en el campo `file` (multipart/form-data).",
+      });
+    }
+    if (!/^image\/(jpeg|png|webp|heic|heif)$/.test(archivo.type)) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "La foto tiene que ser JPG, PNG o WebP.",
+      });
+    }
+
+    const original = Buffer.from(await archivo.arrayBuffer());
+    const { default: sharp } = await import("sharp");
+    let grande: Buffer, t400: Buffer, t96: Buffer;
+    try {
+      const base = sharp(original).rotate(); // respeta la orientación EXIF
+      grande = await base
+        .clone()
+        .resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true })
+        .webp({ quality: 82 })
+        .toBuffer();
+      t400 = await base
+        .clone()
+        .resize({ width: 400, height: 400, fit: "cover" })
+        .webp({ quality: 78 })
+        .toBuffer();
+      t96 = await base
+        .clone()
+        .resize({ width: 96, height: 96, fit: "cover" })
+        .webp({ quality: 74 })
+        .toBuffer();
+    } catch {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Esa imagen no se pudo leer. Prueba con otra foto.",
+      });
+    }
+
+    const version = Date.now().toString(36);
+    const rutaBase = `${companyId}/products/${id}/${version}`;
+    const rutaOriginal = `${rutaBase}/original.webp`;
+    await subirObjeto(storage, BUCKET_IMAGENES, rutaOriginal, grande, "image/webp");
+    await subirObjeto(storage, BUCKET_IMAGENES, `${rutaBase}/thumb-400.webp`, t400, "image/webp");
+    await subirObjeto(storage, BUCKET_IMAGENES, `${rutaBase}/thumb-96.webp`, t96, "image/webp");
+
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      setProductImage(uow, id, { company_id: companyId, image_path: rutaOriginal }),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+
+    const firmadas = await firmarUrls(storage, BUCKET_IMAGENES, [rutaOriginal]);
+    return c.json({ image_path: rutaOriginal, image_url: firmadas.get(rutaOriginal) ?? null }, 201);
   });
 
   app.post("/v1/products", idempotencia, async (c) => {

@@ -302,6 +302,44 @@ export async function setProductTaxCategory(
   return ok(aRespuesta(fila));
 }
 
+/**
+ * Ata la FOTO al producto (migración 28). La subida al bucket es I/O de la
+ * API; aquí solo el hecho de dominio: la ruta, la auditoría y el evento. La
+ * ruta vieja no se borra del bucket a propósito — una venta impresa ayer con
+ * esa foto no tiene por qué perder su imagen; la limpieza es un job aparte.
+ */
+export async function setProductImage(
+  uow: UnitOfWork,
+  productId: string,
+  input: { company_id: string; image_path: string },
+): Promise<Result<ProductResponse, ProductError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Los maestros exigen un usuario real." });
+  }
+  const scope = await companyScope(sql, actor.userId, input.company_id, "product.manage");
+  if (!scope.ok) return scope;
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  const [fila] = await sql<ProductRow[]>`
+    update public.products set image_path = ${input.image_path}
+     where id = ${productId} and company_id = ${input.company_id}
+    returning ${sql.unsafe(PRODUCT_COLUMNS)},
+              to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
+  if (!fila) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  await sql`
+    insert into public.audit_events
+      (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+       actor_type, occurred_at, rules_version, payload)
+    values (${fila.tenant_id}, ${fila.company_id}, 'product', ${fila.id}, 'product.image_set',
+            'user', now(), ${RULES_VERSION}, ${sql.json({ image_path: input.image_path })})`;
+  await sql`
+    insert into public.outbox
+      (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
+    values (${fila.tenant_id}, ${fila.company_id}, 'product', ${fila.id}, 'product.image_set', 1,
+            ${sql.json({ product_id: fila.id, image_path: input.image_path })})`;
+  return ok(aRespuesta(fila));
+}
+
 // ── El ALTA SIMPLE de la Fase C ─────────────────────────────────────────────
 
 /**
