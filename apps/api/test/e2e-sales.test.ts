@@ -33,6 +33,7 @@ const VENDEDOR = crypto.randomUUID();
 const CAJERO = crypto.randomUUID();
 const MIRON = crypto.randomUUID();
 const CLIENTE = crypto.randomUUID();
+const CONSUMIDOR = crypto.randomUUID();
 const ROL_VENTAS = crypto.randomUUID();
 const ROL_CAJA = crypto.randomUUID();
 const ROL_MIRON = crypto.randomUUID();
@@ -54,6 +55,7 @@ let app: ReturnType<typeof buildApp>;
 let PROD = "";
 let LISTA_USD = "";
 let LISTA_VES = "";
+let LISTA_DETAL = "";
 let PROD_SIN_REGLA = "";
 
 const tokenDe = (sub: string) =>
@@ -136,6 +138,7 @@ beforeAll(async () => {
              (${ROL_VENTAS}, 'fiscal.range.manage'),
              (${ROL_VENTAS}, 'fx.rate.manage'),
              (${ROL_VENTAS}, 'ar.read'),
+             (${ROL_VENTAS}, 'sales.payment.register'),
              (${ROL_CAJA}, 'sales.payment.register'),
              (${ROL_CAJA}, 'ar.read')
              on conflict do nothing`;
@@ -159,6 +162,13 @@ beforeAll(async () => {
                                            person_type_code, taxpayer_type_code)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, ${`J-E2EVTA-${RUN}`}, 'Cliente e2e ventas',
                      'juridica', 'ordinario')
+             on conflict (id) do nothing`;
+    // El cliente de mostrador (migración 32): lo que createCompany haría. Las
+    // ventas del POS sin cliente van contra él, con las reglas GENERALES.
+    await tx`insert into public.customers (id, tenant_id, company_id, legal_name,
+                                           person_type_code, taxpayer_type_code, is_system)
+             values (${CONSUMIDOR}, ${TENANT}, ${COMPANY}, 'Consumidor final', 'natural',
+                     'consumidor_final', true)
              on conflict (id) do nothing`;
     const [p] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
@@ -185,10 +195,16 @@ beforeAll(async () => {
       insert into public.price_lists (tenant_id, company_id, name, currency_code)
       values (${TENANT}, ${COMPANY}, ${`e2e-ves-${RUN}`}, 'VES') returning id`;
     LISTA_VES = lv!.id;
+    // La lista «detal» que el POS resuelve SOLO para el Consumidor final.
+    const [ld] = await tx<{ id: string }[]>`
+      insert into public.price_lists (tenant_id, company_id, name, currency_code)
+      values (${TENANT}, ${COMPANY}, 'detal', 'USD') returning id`;
+    LISTA_DETAL = ld!.id;
     await tx`insert into public.price_list_items (tenant_id, company_id, price_list_id, product_id,
                                                   amount, effective_from)
              values (${TENANT}, ${COMPANY}, ${LISTA_USD}, ${PROD}, '100.00000000', ${AYER}::date),
                     (${TENANT}, ${COMPANY}, ${LISTA_VES}, ${PROD}, '4000.00000000', ${AYER}::date),
+                    (${TENANT}, ${COMPANY}, ${LISTA_DETAL}, ${PROD}, '100.00000000', ${AYER}::date),
                     (${TENANT}, ${COMPANY}, ${LISTA_USD}, ${PROD_SIN_REGLA}, '10.00000000',
                      ${AYER}::date)`;
     await tx`update public.customers set default_price_list_id = ${LISTA_USD}
@@ -275,6 +291,17 @@ describe("ventas de extremo a extremo", () => {
                           where jurisdiction = 'VE' and tax_code = 'iva'
                             and taxpayer_type = 'ordinario'
                             and product_tax_category = 'gravado_general')`;
+      // La regla GENERAL (taxpayer NULL, prioridad menor): la del Consumidor
+      // final. La específica de arriba gana para los ordinarios por prioridad.
+      await tx`
+      insert into public.tax_rules (jurisdiction, tax_code, taxpayer_type, product_tax_category,
+                                    rate, effective_from, legal_source, priority, transaction_type)
+      select 'VE', 'iva', null, 'gravado_general', 0.16, ${AYER}::date, ${FUENTE_REGLA}, 5, 'sale'
+       where not exists (select 1 from public.tax_rules
+                          where jurisdiction = 'VE' and tax_code = 'iva'
+                            and taxpayer_type is null
+                            and product_tax_category = 'gravado_general'
+                            and transaction_type = 'sale')`;
     });
     const r = await pedir("POST", "/v1/quotes", VENDEDOR, {
       company_id: COMPANY,
@@ -615,5 +642,117 @@ describe("ventas de extremo a extremo", () => {
     await expect(
       sql`update public.documents set total_amount = 1 where id = ${doc!.id}`,
     ).rejects.toThrow();
+  });
+
+  // ── EL PUNTO DE VENTA (Fase C) ────────────────────────────────────────────
+
+  it("el POS cotiza el carrito sin escribir NADA: mostrador, lista «detal» y regla general", async () => {
+    // La tasa de HOY quedó en 45 desde el test del diferencial (una por día).
+    const [antes] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.documents where company_id = ${COMPANY}`;
+
+    const r = await pedir("POST", "/v1/pos/quote", VENDEDOR, {
+      company_id: COMPANY,
+      lines: [{ product_id: PROD, quantity: "2" }],
+    });
+    expect(r.status).toBe(200);
+    const q = (await r.json()) as Record<string, unknown>;
+    // Sin cliente: el servidor resolvió al Consumidor final y la lista «detal».
+    expect(q["customer_id"]).toBe(CONSUMIDOR);
+    expect(q["price_list_id"]).toBe(LISTA_DETAL);
+    // 2 × 100 USD + 16% (regla GENERAL: el consumidor final no es «ordinario»).
+    expect(q["subtotal"]).toBe("200.00000000");
+    expect(q["total"]).toBe("232.00000000");
+    expect(q["currency"]).toBe("USD");
+    expect(q["functional_total"]).toBe("10440.00000000"); // 232 × 45
+
+    const [despues] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.documents where company_id = ${COMPANY}`;
+    expect(despues!.n).toBe(antes!.n);
+  });
+
+  it("la venta rápida: factura + efectivo con VUELTO del servidor, y el reintento es la MISMA venta", async () => {
+    await pedir("POST", "/v1/fiscal-number-ranges", VENDEDOR, {
+      company_id: COMPANY,
+      kind: "invoice",
+      series: "C",
+      range_from: "9000",
+      range_to: "9100",
+      printer_source: "Imprenta E2E, rango del POS",
+    });
+
+    const clave = crypto.randomUUID(); // el sale_id del CLIENTE
+    const venta = {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      series: "C",
+      lines: [{ product_id: PROD, quantity: "1" }],
+      payments: [{ instrument: "efectivo_usd", amount: "120.00000000", currency: "USD" }],
+    };
+    const r = await app.request("/v1/pos/sales", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${await tokenDe(VENDEDOR)}`,
+        "X-Company-Id": COMPANY,
+        "Idempotency-Key": clave,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(venta),
+    });
+    expect(r.status).toBe(201);
+    const v = (await r.json()) as {
+      document: Record<string, unknown>;
+      payments: { payment: Record<string, string> }[];
+      change: { amount: string; currency: string } | null;
+      document_status: string;
+      balance: string;
+    };
+    expect(v.document["status"]).toBe("paid");
+    expect(v.document["customer_id"]).toBe(CONSUMIDOR);
+    // Total 116 USD; entregó 120 → se aplican 116 y el VUELTO son 4, del servidor.
+    expect(v.payments[0]!.payment["amount"]).toBe("116.00000000");
+    expect(v.change).toEqual({ amount: "4.00000000", currency: "USD" });
+    expect(v.document_status).toBe("paid");
+    expect(v.balance).toBe("0.00000000");
+
+    // El REINTENTO con la misma clave: la MISMA venta, sin segunda factura.
+    const replay = await app.request("/v1/pos/sales", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${await tokenDe(VENDEDOR)}`,
+        "X-Company-Id": COMPANY,
+        "Idempotency-Key": clave,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(venta),
+    });
+    expect(replay.status).toBe(201);
+    const v2 = (await replay.json()) as { document: Record<string, unknown> };
+    expect(v2.document["id"]).toBe(v.document["id"]);
+  });
+
+  it("una tarjeta no da vuelto: pasarse con punto_venta es un error, no un redondeo", async () => {
+    const r = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      series: "C",
+      lines: [{ product_id: PROD, quantity: "1" }],
+      payments: [{ instrument: "punto_venta", amount: "10000.00000000", currency: "VES" }],
+    });
+    expect(r.status).toBe(422);
+  });
+
+  it("el vuelto en vivo: GET /v1/pos/change convierte con la tasa del día", async () => {
+    const r = await pedir(
+      "GET",
+      "/v1/pos/change?total=5220.00000000&currency=VES&tendered=120.00000000&tendered_currency=USD",
+      CAJERO,
+    );
+    expect(r.status).toBe(200);
+    const c = (await r.json()) as Record<string, string>;
+    // 120 − 5220/45 = 120 − 116 = 4, en la moneda con la que pagaron.
+    expect(c["change"]).toBe("4.00000000");
+    expect(c["change_currency"]).toBe("USD");
+    expect(c["rate"]).toBe("45.00000000");
   });
 });

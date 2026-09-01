@@ -45,6 +45,8 @@ export {
   registerPayment,
   createReturn,
   confirmReturn,
+  quotePos,
+  quickSale,
   type SalesError,
 } from "./sales.js";
 export {

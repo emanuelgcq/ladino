@@ -19,6 +19,10 @@ import type {
   CreateReturnRequest,
   DocumentResponse,
   ReturnResponse,
+  PosQuoteRequest,
+  PosQuoteResponse,
+  QuickSaleRequest,
+  QuickSaleResponse,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
@@ -344,8 +348,10 @@ async function resolverLista(
   customerId: string,
   pedida: string | undefined,
 ): Promise<Result<string, SalesError>> {
-  const [cliente] = await sql<{ default_price_list_id: string | null; status: string }[]>`
-    select default_price_list_id, status from public.customers
+  const [cliente] = await sql<
+    { default_price_list_id: string | null; status: string; is_system: boolean }[]
+  >`
+    select default_price_list_id, status, is_system from public.customers
      where id = ${customerId} and company_id = ${companyId}`;
   if (!cliente) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   if (cliente.status === "blocked") {
@@ -354,19 +360,34 @@ async function resolverLista(
       message: "El cliente está bloqueado por cobranzas: no se le puede vender.",
     });
   }
+
+  // El CONSUMIDOR FINAL (migración 32) no tiene lista preferida — está
+  // congelado y no puede tenerla. Su lista es la «detal» de la empresa,
+  // resuelta por el SERVIDOR: el cajero no elige, así que no hay atribución
+  // que vigilar. Pedir otra distinta sí sigue exigiendo el override.
+  const defaultEfectiva = cliente.is_system
+    ? ((
+        await sql<{ id: string }[]>`
+          select id from public.price_lists
+           where company_id = ${companyId} and status = 'active'
+           order by (name = 'detal') desc, (name like 'detal%') desc, created_at
+           limit 1`
+      )[0]?.id ?? null)
+    : cliente.default_price_list_id;
+
   if (pedida === undefined) {
-    if (cliente.default_price_list_id === null) {
+    if (defaultEfectiva === null) {
       return err({
         code: "VALIDATION_FAILED",
         message:
           "El cliente no tiene lista de precios preferida y no se indicó ninguna: elige una explícitamente.",
       });
     }
-    return ok(cliente.default_price_list_id);
+    return ok(defaultEfectiva);
   }
   // Cambiar la lista de una venta es una ATRIBUCIÓN, no una preferencia de
   // pantalla: exige permiso propio, y solo cuando de verdad cambia.
-  if (pedida !== cliente.default_price_list_id) {
+  if (pedida !== defaultEfectiva) {
     const [permiso] = await sql<{ autorizado: boolean }[]>`
       select platform.ladino_user_has_permission(${userId}, 'sales.price_list.override', ${companyId})
              as autorizado`;
@@ -1539,4 +1560,220 @@ async function createInvoiceLike(
      where id = ${creado.value.id}
     returning ${sql.unsafe(DOC_COLUMNS)}`;
   return ok(emitida!);
+}
+
+// ── EL PUNTO DE VENTA (Fase C) ──────────────────────────────────────────────
+
+/** El cliente de mostrador de la empresa (migración 32), o el que vino. */
+async function clienteEfectivo(
+  sql: TransactionSql,
+  companyId: string,
+  customerId: string | undefined,
+): Promise<Result<string, SalesError>> {
+  if (customerId !== undefined) return ok(customerId);
+  const [cf] = await sql<{ id: string }[]>`
+    select id from public.customers where company_id = ${companyId} and is_system`;
+  if (!cf) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Esta empresa no tiene su «Consumidor final» de sistema: créalo (o indica el cliente).",
+    });
+  }
+  return ok(cf.id);
+}
+
+/**
+ * COTIZA el carrito sin escribir nada: mismos precios, misma regla tributaria
+ * y misma tasa que usaría la factura — es literalmente `calcularLineas`, el
+ * corazón compartido de cotización, pedido y factura. La pantalla de Vender
+ * pregunta con debounce; el cliente jamás suma dinero.
+ */
+export async function quotePos(
+  uow: UnitOfWork,
+  input: PosQuoteRequest,
+): Promise<Result<PosQuoteResponse, SalesError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Vender exige un usuario real." });
+  }
+  const fecha = new Date().toISOString();
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "sales.invoice.issue", fecha);
+  if (!ctx.ok) return ctx;
+
+  const cliente = await clienteEfectivo(sql, input.company_id, input.customer_id);
+  if (!cliente.ok) return cliente;
+  const lista = await resolverLista(
+    sql,
+    actor.userId,
+    input.company_id,
+    cliente.value,
+    input.price_list_id,
+  );
+  if (!lista.ok) return lista;
+
+  const calculadas = await calcularLineas(sql, {
+    companyId: input.company_id,
+    customerId: cliente.value,
+    priceListId: lista.value,
+    warehouseId: null,
+    lines: input.lines,
+    fecha,
+    functionalCurrency: ctx.value.functionalCurrency,
+    conImpuesto: true,
+  });
+  if (!calculadas.ok) return calculadas;
+  const totales = calculateTotals(calculadas.value.lineas.map((l) => l.calc));
+  if (!totales.ok) return err({ code: "VALIDATION_FAILED", message: totales.error.message });
+  const totalFuncional = aFuncional(
+    totales.value.total,
+    calculadas.value.fxRate,
+    ctx.value.functionalCurrency,
+  );
+  if (!totalFuncional.ok) return totalFuncional;
+
+  return ok({
+    customer_id: cliente.value,
+    price_list_id: lista.value,
+    currency: calculadas.value.transactionCurrency,
+    fx_rate: calculadas.value.fxRate.toFixed(),
+    rate_source: calculadas.value.rateSource,
+    lines: calculadas.value.lineas.map((l) => ({
+      product_id: l.productId,
+      description: l.description,
+      quantity: l.calc.quantity.toFixed(),
+      unit_price: l.calc.unitPrice.toAmountString(),
+      subtotal: l.calc.subtotal.toAmountString(),
+      tax_rate: l.calc.taxRate.toFixed(),
+      tax_amount: l.calc.taxAmount.toAmountString(),
+      total: l.calc.total.toAmountString(),
+    })),
+    subtotal: totales.value.subtotal.toAmountString(),
+    tax_amount: totales.value.taxAmount.toAmountString(),
+    total: totales.value.total.toAmountString(),
+    functional_total: totalFuncional.value.toAmountString(),
+    functional_currency: ctx.value.functionalCurrency,
+  });
+}
+
+/** Efectivo: los únicos instrumentos con vuelto. Una tarjeta no da cambio. */
+const CON_VUELTO = new Set(["efectivo_bs", "efectivo_usd"]);
+
+/**
+ * La VENTA RÁPIDA: emite la factura (numeración, kardex, asiento — todo el
+ * camino real de `createInvoice`) y registra los cobros, con el vuelto
+ * calculado en el servidor. Una transacción: si el segundo cobro falla, no
+ * queda ni factura ni primer cobro. La idempotencia viene del middleware: la
+ * clave es el id de venta del CLIENTE, así que un reintento devuelve esta
+ * misma respuesta sin emitir una segunda factura.
+ */
+export async function quickSale(
+  uow: UnitOfWork,
+  input: QuickSaleRequest,
+): Promise<Result<QuickSaleResponse, SalesError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Vender exige un usuario real." });
+  }
+
+  const cliente = await clienteEfectivo(sql, input.company_id, input.customer_id);
+  if (!cliente.ok) return cliente;
+
+  const emitida = await createInvoice(uow, {
+    company_id: input.company_id,
+    customer_id: cliente.value,
+    warehouse_id: input.warehouse_id,
+    branch_id: input.branch_id ?? null,
+    lines: input.lines,
+    ...(input.series === undefined ? {} : { series: input.series }),
+    ...(input.price_list_id === undefined ? {} : { price_list_id: input.price_list_id }),
+  });
+  if (!emitida.ok) return emitida;
+  let documento = emitida.value;
+
+  const cobros: RegisterPaymentResponse[] = [];
+  let vuelto: { amount: string; currency: string } | null = null;
+  let balance = documento.total_amount;
+  let estado = documento.status;
+
+  for (const p of input.payments ?? []) {
+    // Lo PENDIENTE, en moneda funcional (document_balance) y convertido a la
+    // moneda del pago con la tasa de HOY: es la misma conversión que hará
+    // registerPayment, hecha antes para decidir cuánto aplicar.
+    const [pend] = await sql<{ saldo: string }[]>`
+      select platform.document_balance(${input.company_id}, ${documento.id})::text as saldo`;
+    const pendiente = parseDecimal(pend?.saldo ?? "0");
+    const entregado = parseDecimal(p.amount);
+    if (!pendiente.ok || !entregado.ok) {
+      return err({ code: "VALIDATION_FAILED", message: "Importes no interpretables." });
+    }
+    if (pendiente.value.lessThanOrEqualTo(0)) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "La venta ya quedó pagada con el cobro anterior: sobra una forma de pago.",
+      });
+    }
+
+    let tasa = parseDecimal("1");
+    if (p.currency !== documento.functional_currency) {
+      const [t] = await sql<{ rate: string | null }[]>`
+        select r.rate::text as rate from public.exchange_rates r
+         where r.from_currency = ${p.currency} and r.to_currency = ${documento.functional_currency}
+           and r.rate_date <= current_date
+         order by r.rate_date desc, r.created_at desc limit 1`;
+      if (!t?.rate) {
+        return err({
+          code: "EXCHANGE_RATE_MISSING",
+          message: `No hay tasa de ${p.currency} a ${documento.functional_currency} para cobrar en esa moneda.`,
+        });
+      }
+      tasa = parseDecimal(t.rate);
+    }
+    if (!tasa.ok) return err({ code: "VALIDATION_FAILED", message: "Tasa no interpretable." });
+
+    const pendienteEnMoneda = pendiente.value.dividedBy(tasa.value).toDecimalPlaces(8, 4);
+    let aplicado = entregado.value;
+    if (entregado.value.greaterThan(pendienteEnMoneda)) {
+      if (!CON_VUELTO.has(p.instrument)) {
+        return err({
+          code: "VALIDATION_FAILED",
+          message: `El pago supera lo pendiente (${pendienteEnMoneda.toFixed()} ${p.currency}) y ${p.instrument} no da vuelto: ajusta el monto.`,
+        });
+      }
+      aplicado = pendienteEnMoneda;
+      vuelto = {
+        amount: entregado.value.minus(pendienteEnMoneda).toFixed(8),
+        currency: p.currency,
+      };
+    }
+
+    const cobrado = await registerPayment(uow, {
+      company_id: input.company_id,
+      document_id: documento.id,
+      currency: p.currency,
+      amount: aplicado.toFixed(8),
+      instrument: p.instrument,
+      ...(p.reference === undefined ? {} : { reference: p.reference }),
+      ...(p.account_id === undefined ? {} : { account_id: p.account_id }),
+    });
+    if (!cobrado.ok) return cobrado;
+    cobros.push(cobrado.value);
+    balance = cobrado.value.balance;
+    estado = cobrado.value.document_status;
+  }
+
+  if (cobros.length > 0) {
+    const [doc] = await sql<DocumentResponse[]>`
+      select ${sql.unsafe(DOC_COLUMNS)} from public.documents
+       where id = ${documento.id} and company_id = ${input.company_id}`;
+    documento = doc ?? documento;
+  }
+
+  return ok({
+    document: documento,
+    payments: cobros,
+    change: vuelto,
+    balance,
+    document_status: estado,
+  });
 }

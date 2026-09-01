@@ -252,6 +252,120 @@ export const RegisterPaymentResponse = z
   .strict();
 export type RegisterPaymentResponse = z.infer<typeof RegisterPaymentResponse>;
 
+// ── El PUNTO DE VENTA de la Fase C ──────────────────────────────────────────
+
+/**
+ * Cotizar el carrito SIN crear nada: la pantalla de Vender pregunta con
+ * debounce y el servidor responde los totales — el cliente NUNCA calcula
+ * dinero (regla de apps/web). Sin cliente explícito, es la venta de mostrador
+ * (Consumidor final) con la lista «detal» resuelta por el servidor.
+ */
+export const PosQuoteRequest = z
+  .object({
+    company_id: uuid,
+    customer_id: uuid.optional(),
+    price_list_id: uuid.optional(),
+    lines: z.array(DocumentLineRequest).min(1).max(200),
+  })
+  .strict();
+export type PosQuoteRequest = z.infer<typeof PosQuoteRequest>;
+
+export const PosQuoteLine = z
+  .object({
+    product_id: uuid,
+    description: z.string(),
+    quantity: z.string(),
+    unit_price: z.string(),
+    subtotal: z.string(),
+    tax_rate: z.string(),
+    tax_amount: z.string(),
+    total: z.string(),
+  })
+  .strict();
+export type PosQuoteLine = z.infer<typeof PosQuoteLine>;
+
+export const PosQuoteResponse = z
+  .object({
+    customer_id: uuid,
+    price_list_id: uuid,
+    currency: z.string(),
+    fx_rate: z.string(),
+    rate_source: z.string(),
+    lines: z.array(PosQuoteLine),
+    subtotal: z.string(),
+    tax_amount: z.string(),
+    total: z.string(),
+    functional_total: z.string(),
+    functional_currency: z.string(),
+  })
+  .strict();
+export type PosQuoteResponse = z.infer<typeof PosQuoteResponse>;
+
+/**
+ * Un pago del COBRAR: `amount` es lo ENTREGADO. Si es efectivo y supera lo
+ * pendiente, el servidor registra lo aplicado y devuelve el vuelto; si no es
+ * efectivo, pasarse es un error — un punto de venta no da vuelto por tarjeta.
+ */
+export const QuickSalePaymentInput = z
+  .object({
+    instrument: PaymentInstrument.exclude(["saldo_a_favor"]),
+    amount,
+    currency: z.string().regex(/^[A-Z]{3}$/),
+    reference: z.string().trim().min(1).max(100).optional(),
+    account_id: uuid.optional(),
+  })
+  .strict();
+export type QuickSalePaymentInput = z.infer<typeof QuickSalePaymentInput>;
+
+/**
+ * La VENTA RÁPIDA: factura emitida + cobros + vuelto, en una transacción.
+ * El `Idempotency-Key` es el id de venta del cliente: reintentar con la misma
+ * clave devuelve la MISMA venta, nunca una segunda factura.
+ */
+export const QuickSaleRequest = z
+  .object({
+    company_id: uuid,
+    /** Sin cliente = venta de mostrador (el «Consumidor final» de sistema). */
+    customer_id: uuid.optional(),
+    warehouse_id: uuid,
+    branch_id: uuid.nullable().optional(),
+    series: z.string().trim().min(1).max(10).optional(),
+    price_list_id: uuid.optional(),
+    lines: z.array(DocumentLineRequest).min(1).max(200),
+    /** Hasta DOS formas de pago (decisión de la fase: más es otra pantalla). */
+    payments: z.array(QuickSalePaymentInput).max(2).optional(),
+  })
+  .strict();
+export type QuickSaleRequest = z.infer<typeof QuickSaleRequest>;
+
+export const QuickSaleResponse = z
+  .object({
+    document: DocumentResponse,
+    payments: z.array(RegisterPaymentResponse),
+    /** El vuelto de efectivo, si lo hubo. Calculado en el SERVIDOR. */
+    change: z.object({ amount: z.string(), currency: z.string() }).strict().nullable(),
+    balance: z.string(),
+    document_status: DocumentStatus,
+  })
+  .strict();
+export type QuickSaleResponse = z.infer<typeof QuickSaleResponse>;
+
+/** El vuelto en vivo, antes de confirmar: puro cálculo del servidor. */
+export const PosChangeResponse = z
+  .object({
+    total: z.string(),
+    currency: z.string(),
+    tendered: z.string(),
+    tendered_currency: z.string(),
+    rate: z.string(),
+    rate_source: z.string(),
+    /** Lo que se devuelve, en la MONEDA con la que pagaron. Negativo = falta. */
+    change: z.string(),
+    change_currency: z.string(),
+  })
+  .strict();
+export type PosChangeResponse = z.infer<typeof PosChangeResponse>;
+
 export const ReturnResponse = z
   .object({
     id: uuid,

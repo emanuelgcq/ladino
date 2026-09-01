@@ -57,6 +57,11 @@ import {
   DocumentDetailResponse,
   ListDocumentsResponse,
   RegisterPaymentResponse,
+  PosQuoteRequest,
+  PosQuoteResponse,
+  QuickSaleRequest,
+  QuickSaleResponse,
+  PosChangeResponse,
   ReturnResponse,
   AgingResponse,
   CustomerStatementResponse,
@@ -993,6 +998,74 @@ export function buildOpenApiDocument(): object {
       409: errorRef("Sin tasa vigente para la fecha del cobro, o saldo a favor insuficiente."),
     },
   });
+
+  // ── El punto de venta (Fase C) ─────────────────────────────────────────────
+  const posQuote = registry.register("PosQuoteRequest", PosQuoteRequest);
+  const posQuoteResp = registry.register("PosQuoteResponse", PosQuoteResponse);
+  const ventaRapida = registry.register("QuickSaleRequest", QuickSaleRequest);
+  const ventaRapidaResp = registry.register("QuickSaleResponse", QuickSaleResponse);
+  const vueltoResp = registry.register("PosChangeResponse", PosChangeResponse);
+
+  registry.registerPath({
+    method: "post",
+    path: "/v1/pos/quote",
+    summary: "Cotizar el carrito SIN crear nada (permiso sales.invoice.issue)",
+    description:
+      "Los mismos precios, la misma regla tributaria y la misma tasa que usaría la factura: es " +
+      "el corazón compartido de cotización, pedido y factura, sin escribir. La pantalla de " +
+      "Vender pregunta con debounce; el cliente jamás suma dinero. Sin `customer_id` es la " +
+      "venta de mostrador (Consumidor final) con la lista «detal» resuelta por el servidor.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: posQuote } } },
+    },
+    responses: {
+      200: okJson(posQuoteResp, "El carrito cotizado."),
+      ...erroresComunes,
+      409: errorRef("Sin regla tributaria o sin tasa vigente."),
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/pos/sales",
+    summary: "La venta rápida: factura + cobros + vuelto, en una transacción",
+    description:
+      "Emite por el MISMO camino que /v1/invoices (numeración gapless, kardex, asiento) y " +
+      "registra hasta dos cobros. El vuelto del efectivo lo calcula el servidor; una tarjeta " +
+      "no da vuelto. El `Idempotency-Key` es el id de venta del cliente: reintentar devuelve " +
+      "LA MISMA venta, nunca una segunda factura.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: ventaRapida } } },
+    },
+    responses: {
+      201: okJson(ventaRapidaResp, "La venta: documento, cobros, vuelto y saldo."),
+      ...erroresComunes,
+      409: errorRef("Numeración, regla tributaria, tasa o existencias: lo que impida emitir."),
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/pos/change",
+    summary: "El vuelto en vivo (permiso sales.payment.register)",
+    description:
+      "`change = tendered − total/tasa`, en la moneda con la que pagaron y con la tasa del día " +
+      "citada. Negativo significa que falta plata. Es cálculo de dinero: vive en el servidor.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        total: z.string(),
+        currency: z.string(),
+        tendered: z.string(),
+        tendered_currency: z.string().optional(),
+      }),
+    },
+    responses: { 200: okJson(vueltoResp, "El vuelto calculado."), ...erroresComunes },
+  });
+
   registry.registerPath({
     method: "post",
     path: "/v1/returns",

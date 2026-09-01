@@ -7,6 +7,8 @@ import {
   CreateInvoiceRequest,
   AnnulInvoiceRequest,
   RegisterPaymentRequest,
+  PosQuoteRequest,
+  QuickSaleRequest,
   CreateReturnRequest,
   CreateFiscalRangeRequest,
   CreateExchangeRateRequest,
@@ -20,6 +22,8 @@ import {
   registerPayment,
   createReturn,
   confirmReturn,
+  quotePos,
+  quickSale,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -234,6 +238,102 @@ export function salesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler
     const r = await withTransaction(sql, actor, (uow) => registerPayment(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
+  });
+
+  // ── El punto de venta (Fase C) ────────────────────────────────────────────
+
+  /** Cotiza el carrito SIN escribir nada. Cálculo puro: no exige idempotencia. */
+  app.post("/v1/pos/quote", async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = PosQuoteRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => quotePos(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
+
+  /**
+   * La venta rápida. El `Idempotency-Key` es el id de venta del CLIENTE: un
+   * reintento devuelve LA MISMA venta, jamás una segunda factura.
+   */
+  app.post("/v1/pos/sales", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = QuickSaleRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => quickSale(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
+  /** El vuelto EN VIVO, antes de confirmar: puro cálculo del servidor. */
+  app.get("/v1/pos/change", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const total = c.req.query("total") ?? "";
+    const currency = c.req.query("currency") ?? "";
+    const tendered = c.req.query("tendered") ?? "";
+    const tenderedCurrency = c.req.query("tendered_currency") ?? currency;
+    const AMOUNT_RE = /^\d{1,16}(\.\d{1,8})?$/;
+    const CUR_RE = /^[A-Z]{3}$/;
+    if (
+      !AMOUNT_RE.test(total) ||
+      !AMOUNT_RE.test(tendered) ||
+      !CUR_RE.test(currency) ||
+      !CUR_RE.test(tenderedCurrency)
+    ) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "El vuelto exige total, currency, tendered y tendered_currency válidos.",
+      });
+    }
+    const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      const [permiso] = await tx<{ ok: boolean }[]>`
+        select platform.ladino_user_has_permission(${actor.kind === "user" ? actor.userId : null},
+               'sales.payment.register', ${companyId}) as ok`;
+      if (!permiso?.ok) {
+        throw new DominioError({
+          code: "PERMISSION_REQUIRED",
+          message: "Calcular el vuelto exige el permiso sales.payment.register.",
+        });
+      }
+      let rate = "1";
+      let rateSource = "identidad";
+      if (tenderedCurrency !== currency) {
+        const [t] = await tx<{ rate: string | null; source: string | null }[]>`
+          select r.rate::text as rate, r.source from public.exchange_rates r
+           where r.from_currency = ${tenderedCurrency} and r.to_currency = ${currency}
+             and r.rate_date <= current_date
+           order by r.rate_date desc, r.created_at desc limit 1`;
+        if (!t?.rate) {
+          throw new DominioError({
+            code: "EXCHANGE_RATE_MISSING",
+            message: `No hay tasa de ${tenderedCurrency} a ${currency}: carga la tasa del día.`,
+          });
+        }
+        rate = t.rate;
+        rateSource = t.source ?? "manual";
+      }
+      // change = entregado − total/tasa, en la moneda con la que pagaron. El
+      // cálculo vive AQUÍ y no en el navegador: es dinero.
+      const [calc] = await tx<{ change: string }[]>`
+        select (${tendered}::numeric - round(${total}::numeric / ${rate}::numeric, 8))::text
+               as change`;
+      return {
+        total,
+        currency,
+        tendered,
+        tendered_currency: tenderedCurrency,
+        rate,
+        rate_source: rateSource,
+        change: calc!.change,
+        change_currency: tenderedCurrency,
+      };
+    });
+    return c.json(cuerpo, 200);
   });
 
   // ── Devoluciones ──────────────────────────────────────────────────────────
