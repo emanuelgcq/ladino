@@ -1,19 +1,62 @@
-# Handoff — 2026-09-01
+# Handoff — 2026-09-01 (2ª sesión)
 
 ## Estado
 
-**Sprint 0 cerrado, OCHO módulos de negocio de extremo a extremo, y la FASE A de UI/UX
-entregada: sistema de diseño, shell, componentes fundamentales y la vertical pulida
-(dashboard, ventas, cuentas por cobrar, puesta a punto fiscal).** Flujo trunk-based: todo en
-`main`, `verify` en verde antes de cada commit.
+**Sprint 0 cerrado, OCHO módulos de negocio de extremo a extremo, UI Fase A Y Fase B
+completas (las DOCE superficies sobre el sistema de diseño, cero pantallas heredadas), y la
+PREPARACIÓN DE PRODUCCIÓN entregada: las tres imágenes construyen y humean, el worker tiene su
+bucle probado (R-10 cerrado), el CI corre el gate entero con Postgres real, y el runbook de
+deploy está escrito.** Flujo trunk-based: todo en `main`, `verify` en verde antes de cada
+commit.
 
 S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅ ·
-Inventario ✅ · Ventas ✅ · Compras ✅ · Contabilidad ✅ · Libros fiscales ✅ · UI Fase A ✅** ·
-UI Fase B ⏭️ · S0.6b ⏸️
+Inventario ✅ · Ventas ✅ · Compras ✅ · Contabilidad ✅ · Libros fiscales ✅ · UI Fase A ✅ ·
+UI Fase B ✅ · Prod-ready ✅** · Deploy al VPS ⏸️ (espera el «go» explícito) · S0.6b ⏸️
 
 > ✅ **La migración 27 está aplicada en el remoto** (2026-08-31, con aprobación explícita, vía
 > Management API y registrada en `supabase_migrations.schema_migrations` con la forma de la CLI).
 > **27/27. Local y remoto no divergen.**
+
+## Preparación de producción (2026-09-01, 2ª sesión)
+
+- **La web tiene artefacto de producción**: `infra/docker/Dockerfile.web` (VITE_* como build
+  args — todos públicos; el build FALLA si falta alguno para que no exista una imagen apuntando
+  a localhost) sirviendo con nginx-unprivileged por digest, read-only. `nginx-web.conf` con SPA
+  fallback y caché partida (assets immutable un año; index.html jamás). Trampa cazada por smoke
+  test: `add_header` en un location DESCARTA los heredados — las cabeceras de seguridad van
+  repetidas por location, con la trampa documentada.
+- Compose con el servicio `web` detrás del Traefik existente (solo labels); `pids_limit` movido
+  a `deploy.resources.limits.pids` (el compose moderno rechaza tener ambos); el manifest de
+  releases conoce `ladino-web`. **Las TRES imágenes construidas y humeadas en local**: web sirve
+  con cabeceras y fallback, api arranca, worker muere RUIDOSO si la base no responde (su
+  diseño).
+- **R-10 cerrado**: la máquina del bucle en `apps/worker/src/loop.ts` con deps inyectadas;
+  `loop.test.ts` prueba latido-solo-tras-vuelta-sana, suicidio al 5º fallo seguido, plazo por
+  ciclo, reset del contador y parada por señal. 19 tests en el worker.
+- **CI dejó de mentir**: desde S0.5 el job `test` necesitaba Postgres y el pipeline no
+  levantaba ninguno — rojo permanente que nadie miraba (registrado en la cabecera del workflow).
+  Ahora `full-gate` levanta el stack local de Supabase en el runner y corre `pnpm verify`
+  entero, pgTAP incluido; la matriz rápida queda sin `test`.
+- **`infra/DEPLOY_RUNBOOK.md`**: publicar por digest → registrar en manifest → compose up bajo
+  `-p ladino` → verificación punto a punto (incluida una de SEGURIDAD: si `/healthz` responde
+  desde fuera, la regla del router está mal). La capa infra PROPONE y el operador ejecuta:
+  **nada tocó el VPS; el deploy espera el «go» explícito.** Antes del deploy: rotar `sbp_…` y
+  `sb_secret` (paso 0 del runbook).
+
+## UI Fase B — las doce superficies (2026-09-01, 2ª sesión)
+
+Capturas en `docs/08_UX/capturas-fase-b/` (12, humo real por todas las rutas con sesión viva y
+cero errores de consola). Las siete vistas heredadas reescritas como páginas del sistema y
+BORRADAS: clientes, productos, precios, inventario (kardex VIRTUALIZADO — el caso de uso para
+el que nació la virtualización del DataTable), compras (matching de tres vías; reglas de
+retención con su sello), contabilidad (los siete paneles; el asiento manual conserva su única
+excepción documentada), libros y reportes. `app/legacy.tsx` y el bloque CSS `.legacy` borrados
+— nacieron para morir hoy. Hallazgo del porte: la vista vieja de landed cost SUMABA dinero en
+el cliente (`reduce(Number(...))`) — violación de apps/web/CLAUDE.md que ninguna revisión vio;
+la nueva enseña solo lo que el servidor mandó.
+
+`pnpm demo:seed` repone la empresa de demostración tras cada verify (su paso 10 la borra — es
+el gate funcionando). Usuario local: `demo@ladino.dev` / `LadinoDemo2026!`.
 
 ## UI/UX Fase A — sistema de diseño y vertical pulida (2026-09-01)
 
