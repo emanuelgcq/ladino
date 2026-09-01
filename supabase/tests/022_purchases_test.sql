@@ -573,15 +573,20 @@ select is(platform.supplier_invoice_balance(
   10440::numeric, 'la nota de crédito recibida REDUCE el saldo: 11 600 − 1 160 = 10 440');
 
 -- ── 11. El pago: bruto cancela deuda, neto sale del banco ───────────────────
+-- Desde la migración 29 todo pago LLEVA cuenta.
+insert into public.company_accounts (id, tenant_id, company_id, name, currency, kind) values
+  ('aaaa0022-0000-4000-8000-000000000ca1', 'aaaa0022-0000-4000-8000-00000000000a',
+   'aaaa0022-0000-4000-8000-0000000000a2', 'Banco 22', 'VES', 'bank');
 insert into public.supplier_payments
   (tenant_id, company_id, supplier_id, supplier_invoice_id, paid_at, instrument,
    gross_amount, retained_amount, net_amount, amount_transaction_currency,
    transaction_currency, fx_rate, functional_amount, functional_currency, rate_source,
-   rate_timestamp)
+   rate_timestamp, account_id)
 values
   ('aaaa0022-0000-4000-8000-00000000000a', 'aaaa0022-0000-4000-8000-0000000000a2',
    'aaaa0022-0000-4000-8000-00000000ba01'::uuid, 'aaaa0022-0000-4000-8000-00000000cb01'::uuid,
-   now(), 'transferencia', 10440, 1200, 9240, 10440, 'VES', 1, 10440, 'VES', 'identidad', now());
+   now(), 'transferencia', 10440, 1200, 9240, 10440, 'VES', 1, 10440, 'VES', 'identidad', now(),
+   'aaaa0022-0000-4000-8000-000000000ca1');
 select is(platform.supplier_invoice_balance(
             'aaaa0022-0000-4000-8000-0000000000a2', 'aaaa0022-0000-4000-8000-00000000cb01'::uuid),
   0::numeric,
@@ -592,11 +597,12 @@ select throws_ok($$
     (tenant_id, company_id, supplier_id, supplier_invoice_id, paid_at, instrument,
      gross_amount, retained_amount, net_amount, amount_transaction_currency,
      transaction_currency, fx_rate, functional_amount, functional_currency, rate_source,
-     rate_timestamp)
+     rate_timestamp, account_id)
   values ('aaaa0022-0000-4000-8000-00000000000a', 'aaaa0022-0000-4000-8000-0000000000a2',
           'aaaa0022-0000-4000-8000-00000000ba01'::uuid,
           'aaaa0022-0000-4000-8000-00000000cb01'::uuid, now(), 'transferencia',
-          1000, 200, 900, 1000, 'VES', 1, 1000, 'VES', 'identidad', now())
+          1000, 200, 900, 1000, 'VES', 1, 1000, 'VES', 'identidad', now(),
+          'aaaa0022-0000-4000-8000-000000000ca1')
 $$, '23514', null,
   'un pago donde bruto ≠ retenido + neto se rechaza: el descuadre sería dinero que no está en ningún lado');
 

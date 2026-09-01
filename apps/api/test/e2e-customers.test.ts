@@ -95,10 +95,11 @@ describe("clientes de extremo a extremo", () => {
     taxpayer_type_code: "ordinario",
   };
 
-  it("los catálogos de contraparte responden (5 y 4)", async () => {
+  it("los catálogos de contraparte responden (6 y 4)", async () => {
+    // 6 desde la migración 32: consumidor_final se sumó a los cinco de ADR-0033.
     expect(
       ((await (await pedir("GET", "/v1/taxpayer-types", GESTOR)).json()) as unknown[]).length,
-    ).toBe(5);
+    ).toBe(6);
     expect(
       ((await (await pedir("GET", "/v1/person-types", GESTOR)).json()) as unknown[]).length,
     ).toBe(4);

@@ -27,6 +27,7 @@ import type {
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { receiveStock, revalueStock } from "./inventory.js";
+import { resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 
 /**
@@ -1550,6 +1551,17 @@ export async function registerSupplierPayment(
   const funcional = aFuncional(bruto.value, tasa.value.rate, ctx.value.functionalCurrency);
   if (!funcional.ok) return funcional;
 
+  // La cuenta de la que SALE el efectivo (migración 29): forma de pago
+  // configurada → «Sin asignar». Una nota de crédito no mueve efectivo y va
+  // sin cuenta, que es lo que el CHECK de la tabla exige.
+  const cuentaId = await resolverCuentaEfectivo(
+    sql,
+    ctx.value.tenantId,
+    input.company_id,
+    input.instrument,
+    input.currency,
+  );
+
   let pago: Record<string, unknown>;
   try {
     pago = await sql.savepoint(async (sp) => {
@@ -1558,14 +1570,14 @@ export async function registerSupplierPayment(
           (tenant_id, company_id, supplier_id, supplier_invoice_id, bank_account_id, paid_at,
            instrument, reference, gross_amount, retained_amount, net_amount,
            amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
-           functional_currency, rate_source, rate_timestamp, rounding_policy_id)
+           functional_currency, rate_source, rate_timestamp, rounding_policy_id, account_id)
         values (${ctx.value.tenantId}, ${input.company_id}, ${factura.supplier_id},
                 ${input.supplier_invoice_id}, ${input.bank_account_id ?? null}, ${fecha},
                 ${input.instrument}, ${input.reference ?? null}, ${bruto.value.toAmountString()},
                 ${aRetener.toFixed(8)}, ${neto.toFixed(8)}, ${bruto.value.toAmountString()},
                 ${input.currency}, ${tasa.value.rate.toFixed()},
                 ${funcional.value.toAmountString()}, ${ctx.value.functionalCurrency},
-                ${tasa.value.source}, now(), ${POLICY.id})
+                ${tasa.value.source}, now(), ${POLICY.id}, ${cuentaId})
         returning id, supplier_invoice_id,
                   to_char(paid_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as paid_at,
                   instrument, gross_amount::text as gross_amount,

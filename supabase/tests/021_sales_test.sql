@@ -364,12 +364,19 @@ select is(platform.document_balance('aaaa0021-0000-4000-8000-0000000000a2',
   4000.00000000::numeric, 'saldo inicial = total: 4 000,00 Bs (100 USD a 40)');
 
 -- Se cobra el 1-SEP, cuando la tasa es 50: 100 USD valen ahora 5 000,00 Bs.
+-- Desde la migración 29 todo pago LLEVA cuenta: las de este test, una por moneda.
+insert into public.company_accounts (id, tenant_id, company_id, name, currency, kind) values
+  ('aaaa0021-0000-4000-8000-000000000ca1', 'aaaa0021-0000-4000-8000-00000000000a',
+   'aaaa0021-0000-4000-8000-0000000000a2', 'Caja Bs 21', 'VES', 'cash'),
+  ('aaaa0021-0000-4000-8000-000000000ca2', 'aaaa0021-0000-4000-8000-00000000000a',
+   'aaaa0021-0000-4000-8000-0000000000a2', 'Zelle 21', 'USD', 'wallet');
 insert into public.payments
   (id, tenant_id, company_id, document_id, paid_at, currency, amount, fx_rate, rate_source,
-   rate_timestamp, functional_amount, instrument)
+   rate_timestamp, functional_amount, instrument, account_id)
 values ('aaaa0021-0000-4000-8000-00000000f105', 'aaaa0021-0000-4000-8000-00000000000a',
         'aaaa0021-0000-4000-8000-0000000000a2', 'aaaa0021-0000-4000-8000-00000000f005',
-        '2026-09-01T12:00:00Z', 'USD', 100, 50, 'BCV', '2026-09-01T10:00:00Z', 5000, 'transferencia');
+        '2026-09-01T12:00:00Z', 'USD', 100, 50, 'BCV', '2026-09-01T10:00:00Z', 5000, 'transferencia',
+        'aaaa0021-0000-4000-8000-000000000ca2');
 select is(platform.document_balance('aaaa0021-0000-4000-8000-0000000000a2',
                                     'aaaa0021-0000-4000-8000-00000000f005'),
   -1000.00000000::numeric,
@@ -543,9 +550,10 @@ select is(
 -- Una factura PAGADA no envejece.
 insert into public.payments
   (tenant_id, company_id, document_id, paid_at, currency, amount, fx_rate, rate_source,
-   rate_timestamp, functional_amount, instrument)
+   rate_timestamp, functional_amount, instrument, account_id)
 select 'aaaa0021-0000-4000-8000-00000000000a', 'aaaa0021-0000-4000-8000-0000000000a2', d.id,
-       now(), 'VES', 100, 1, 'identidad', now(), 100, 'efectivo_bs'
+       now(), 'VES', 100, 1, 'identidad', now(), 100, 'efectivo_bs',
+       'aaaa0021-0000-4000-8000-000000000ca1'
   from public.documents d
  where d.company_id = 'aaaa0021-0000-4000-8000-0000000000a2' and d.document_number = 101
    and d.series = 'B';

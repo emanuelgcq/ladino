@@ -247,11 +247,14 @@ select throws_ok($$
   delete from public.journal_lines
    where entry_id = 'aaaa0025-0000-4000-8000-0000000000e1' and line_number = 1
 $$, 'LAD06', null, 'ni se borran');
--- Se truncan las TRES que se referencian entre sí. Truncar solo la cabecera
--- fallaría por la FK con 0A000, y el test pasaría por la razón equivocada sin
--- llegar nunca al trigger — que es justo lo que se quiere comprobar.
+-- Se truncan TODAS las que se referencian entre sí (desde la fase C, también
+-- expenses y cash_closings apuntan al diario con su backlink). Truncar solo la
+-- cabecera fallaría por la FK con 0A000, y el test pasaría por la razón
+-- equivocada sin llegar nunca al trigger — que es justo lo que se quiere
+-- comprobar.
 select throws_ok($$
-  truncate public.journal_lines, public.journal_generation_queue, public.journal_entries
+  truncate public.journal_lines, public.journal_generation_queue,
+           public.expenses, public.cash_closings, public.journal_entries
 $$, 'LAD06', null,
   'TRUNCATE sobre el diario: rechazado por trigger (capa 2 de ADR-0006), no por la FK');
 

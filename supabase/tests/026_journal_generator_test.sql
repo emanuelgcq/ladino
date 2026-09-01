@@ -116,7 +116,11 @@ select is(
     where preset_code = 've_basico'
       and source_event not in ('fiscal.invoice.issued', 'ar.payment_applied',
                                'ap.invoice_posted', 'ap.payment_made',
-                               'purchase.landed_cost_applied', 'stock.adjusted')),
+                               'purchase.landed_cost_applied', 'stock.adjusted',
+                               -- Fase C (migraciones 30 y 31), registrados en
+                               -- EVENT_CATALOG.md como todos los demás:
+                               'treasury.expense.registered',
+                               'treasury.cash_register.closed')),
   0::bigint,
   'los eventos del preset son los del OUTBOX, con su nombre real: no se inventa un vocabulario paralelo');
 

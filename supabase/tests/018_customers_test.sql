@@ -55,8 +55,9 @@ select is(
     where n.nspname = 'public' and c.relname in ('taxpayer_types','person_types','customers')
       and c.relrowsecurity and c.relforcerowsecurity),
   3::bigint, 'las tres tablas nuevas tienen RLS habilitada y FORZADA');
-select is((select count(*) from public.taxpayer_types where status = 'active'), 5::bigint,
-  'seed de taxpayer_types: los cinco del vocabulario aprobado, VALIDAR-TRIBUTARIO');
+-- Seis desde la migración 32: consumidor_final se sumó a los cinco de ADR-0033.
+select is((select count(*) from public.taxpayer_types where status = 'active'), 6::bigint,
+  'seed de taxpayer_types: el vocabulario aprobado (5 de ADR-0033 + consumidor_final), VALIDAR-TRIBUTARIO');
 select is((select count(*) from public.person_types where status = 'active'), 4::bigint,
   'seed de person_types: cuatro');
 select is(

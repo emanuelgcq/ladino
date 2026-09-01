@@ -199,6 +199,17 @@ export async function createCompany(
      where c.id = ${fila.id}
     on conflict (company_id, name) do nothing`;
 
+  // Y el cliente de sistema de la venta de mostrador (migración 32): toda
+  // empresa nace con su «Consumidor final», congelado por trigger. Sin él, la
+  // primera venta rápida no tendría contraparte. El índice parcial garantiza
+  // a lo sumo uno; el guard de existencia evita chocar con él.
+  await sql`
+    insert into public.customers
+      (tenant_id, company_id, legal_name, person_type_code, taxpayer_type_code, is_system)
+    select ${fila.tenant_id}, ${fila.id}, 'Consumidor final', 'natural', 'consumidor_final', true
+     where not exists (select 1 from public.customers
+                        where company_id = ${fila.id} and is_system)`;
+
   // ── 8. AUDITAR ────────────────────────────────────────────────────────────
   // El caso de uso escribe el HECHO DE NEGOCIO: company.created. El trigger M4
   // escribe además company.tax_id_established — NO es un duplicado: son dos

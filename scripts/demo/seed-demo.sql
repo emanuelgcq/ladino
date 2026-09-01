@@ -71,6 +71,16 @@ insert into public.customers (id, tenant_id, company_id, tax_id, legal_name, per
    'juridica', 'ordinario')
 on conflict (id) do nothing;
 
+-- El cliente de sistema de la venta de mostrador (migración 32). La empresa
+-- demo se crea por SQL directo, así que el seed hace lo que haría createCompany.
+insert into public.customers
+  (id, tenant_id, company_id, legal_name, person_type_code, taxpayer_type_code, is_system)
+select 'deade001-0000-4000-8000-0000000000b0', 'deade001-0000-4000-8000-000000000001',
+       'deade001-0000-4000-8000-0000000000c0', 'Consumidor final', 'natural',
+       'consumidor_final', true
+ where not exists (select 1 from public.customers
+                    where company_id = 'deade001-0000-4000-8000-0000000000c0' and is_system);
+
 -- Productos.
 insert into public.products (id, tenant_id, company_id, sku, name, kind, status, unit_code,
                              tax_category_code) values
@@ -138,6 +148,18 @@ select 'VE', 'iva', 'ordinario', c, r::numeric, current_date - 30,
  where not exists (select 1 from public.tax_rules
                     where jurisdiction = 'VE' and tax_code = 'iva' and taxpayer_type = 'ordinario'
                       and product_tax_category = t.c and transaction_type = t.tt);
+
+-- Y la regla GENERAL de ventas (taxpayer_type NULL, prioridad menor): es la que
+-- aplica al Consumidor final y a cualquier contraparte sin regla específica.
+-- resolve_tax elige la específica cuando existe (prioridad 10 > 5).
+insert into public.tax_rules (jurisdiction, tax_code, taxpayer_type, product_tax_category,
+                              rate, effective_from, legal_source, priority, transaction_type)
+select 'VE', 'iva', null, c, r::numeric, current_date - 30,
+       'Carga DEMO — VALIDAR-SENIAT antes de producción.', 5, 'sale'
+  from (values ('gravado_general', '0.16'), ('exento', '0')) as t(c, r)
+ where not exists (select 1 from public.tax_rules
+                    where jurisdiction = 'VE' and tax_code = 'iva' and taxpayer_type is null
+                      and product_tax_category = t.c and transaction_type = 'sale');
 
 -- Existencias: 500 de cada producto, con su costo.
 insert into public.inventory_moves

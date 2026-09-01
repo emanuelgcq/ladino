@@ -23,6 +23,7 @@ import type {
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { issueStock, receiveStock } from "./inventory.js";
+import { resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 import { reverseJournalEntry } from "./accounting.js";
 
@@ -1015,17 +1016,29 @@ export async function registerPayment(
        where id = ${input.customer_credit_id}`;
   }
 
+  // La cuenta a la que ENTRA el efectivo (migración 29): forma de pago
+  // configurada → «Sin asignar». Un saldo a favor no mueve efectivo y va sin
+  // cuenta, que es lo que el CHECK de la tabla exige.
+  const cuentaId = await resolverCuentaEfectivo(
+    sql,
+    ctx.value.tenantId,
+    input.company_id,
+    input.instrument,
+    input.currency,
+  );
+
   let pago;
   try {
     pago = await sql.savepoint(async (sp) => {
       const [p] = await sp<Record<string, unknown>[]>`
         insert into public.payments
           (tenant_id, company_id, document_id, paid_at, currency, amount, fx_rate, rate_source,
-           rate_timestamp, functional_amount, instrument, reference, customer_credit_id)
+           rate_timestamp, functional_amount, instrument, reference, customer_credit_id,
+           account_id)
         values (${ctx.value.tenantId}, ${input.company_id}, ${input.document_id}, ${fecha},
                 ${input.currency}, ${input.amount}, ${tasaCobro}, ${fuenteCobro}, now(),
                 ${funcionalRedondeado.value.toAmountString()}, ${input.instrument},
-                ${input.reference ?? null}, ${input.customer_credit_id ?? null})
+                ${input.reference ?? null}, ${input.customer_credit_id ?? null}, ${cuentaId})
         returning id, document_id,
                   to_char(paid_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as paid_at,
                   currency, amount::text as amount, fx_rate::text as fx_rate, rate_source,

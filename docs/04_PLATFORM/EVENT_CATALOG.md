@@ -79,6 +79,21 @@ suyo y se ligará por `source_document_id`.
 
 Cada evento incluye schema version.
 
+## Tesorería (Fase C, migraciones 29–31)
+
+- `treasury.expense.registered` — lo emite `registerExpense()` (gastos del negocio:
+  alquiler, luz, nómina). El payload lleva los siete campos de ADR-0020 más
+  `{category, account_id}`. Es también el `source_event` de su plantilla contable
+  en el preset `ve_basico` (migración 30): contabilidad y notificaciones llaman
+  igual al mismo hecho, que es lo que permite cruzarlas (ADR-0042 §Idempotencia).
+- `treasury.cash_register.closed` — lo emite `closeCashRegister()`. El payload lleva
+  `{account_id, closing_date, expected_amount, counted_amount, difference, reason}`
+  (importes como string). Con diferencia cero el evento SÍ se emite —el cierre es un
+  hecho aunque cuadre—, pero no genera asiento: no hay hecho contable.
+
+Ambos nombres los referencia ya el preset `ve_basico` (migraciones 30 y 31) y los
+asevera el pgTAP 26; los casos de uso emisores son parte de la misma fase.
+
 ## Estructura organizacional
 
 Sección nueva (S0.5). Las cuatro anteriores —Fiscal, Accounting, Inventory, Money— cubren el

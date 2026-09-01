@@ -98,7 +98,13 @@ beforeAll(async () => {
   // primer caso de este fichero demuestra que SIN tasa no se vende, así que la
   // corrida tiene que empezar sin las tasas que dejó la anterior. Se borran
   // solo las de esta prueba, por su fuente, nunca las de nadie más.
-  await sql`delete from public.exchange_rates where source = ${FUENTE_TASA}`;
+  // También las tasas que dejaron las OTRAS suites (compras y contabilidad
+  // usan fuentes por-corrida que su propia limpieza no barre entre corridas).
+  // Con `fileParallelism: false` nadie está insertando mientras esto borra.
+  await sql`delete from public.exchange_rates
+             where source = ${FUENTE_TASA}
+                or source like 'Carga E2E compras%'
+                or source like 'Carga E2E contabilidad%'`;
   // `tax_rules` NO se limpia, y no se puede: una regla citada por una línea de
   // documento tiene FK y la base se niega a borrarla —correctamente, porque
   // borrar la regla dejaría una factura sin decir con qué alícuota se emitió.
