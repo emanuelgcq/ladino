@@ -107,6 +107,10 @@ const TABLAS_BACKLINK = new Set([
   "supplier_invoices",
   "goods_receipts",
   "landed_costs",
+  // Fase C (migraciones 30 y 31): las dos llevan guard de «solo backlink» —
+  // el UPDATE que este generador hace es exactamente el único que admiten.
+  "expenses",
+  "cash_closings",
 ]);
 
 /**

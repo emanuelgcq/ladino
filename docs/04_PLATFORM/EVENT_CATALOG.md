@@ -94,6 +94,11 @@ Cada evento incluye schema version.
 Ambos nombres los referencia ya el preset `ve_basico` (migraciones 30 y 31) y los
 asevera el pgTAP 26; los casos de uso emisores son parte de la misma fase.
 
+Configuración de tesorería (casos de uso de `treasury.ts`, `schema_version` 1):
+
+- treasury.account.created · treasury.account.updated
+- treasury.payment_method.created · treasury.payment_method.updated
+
 ## Estructura organizacional
 
 Sección nueva (S0.5). Las cuatro anteriores —Fiscal, Accounting, Inventory, Money— cubren el

@@ -109,6 +109,22 @@ import {
   ExportFiscalBookRequest,
   ExportFiscalBookResponse,
   ListFiscalBookRunsResponse,
+  CreateCompanyAccountRequest,
+  UpdateCompanyAccountRequest,
+  CompanyAccountResponse,
+  ListCompanyAccountsResponse,
+  CreatePaymentMethodRequest,
+  UpdatePaymentMethodRequest,
+  PaymentMethodResponse,
+  ListPaymentMethodsResponse,
+  RegisterExpenseRequest,
+  ExpenseResponse,
+  ListExpensesResponse,
+  CloseCashRegisterRequest,
+  CashClosingResponse,
+  ListCashClosingsResponse,
+  KeepDailyRateRequest,
+  DailyRateResponse,
 } from "@ladino/schemas";
 
 /**
@@ -1912,6 +1928,175 @@ export function buildOpenApiDocument(): object {
       query: periodoQuery,
     },
     responses: { 200: okJson(libro, "El libro del período."), ...erroresComunes },
+  });
+
+  // ── Tesorería (Fase C, migraciones 29–31) ──────────────────────────────────
+  const cuentaTesoreria = registry.register("CompanyAccountResponse", CompanyAccountResponse);
+  const cuentasTesoreria = registry.register(
+    "ListCompanyAccountsResponse",
+    ListCompanyAccountsResponse,
+  );
+  const crearCuentaTes = registry.register(
+    "CreateCompanyAccountRequest",
+    CreateCompanyAccountRequest,
+  );
+  const editarCuentaTes = registry.register(
+    "UpdateCompanyAccountRequest",
+    UpdateCompanyAccountRequest,
+  );
+  const formaPago = registry.register("PaymentMethodResponse", PaymentMethodResponse);
+  const formasPago = registry.register("ListPaymentMethodsResponse", ListPaymentMethodsResponse);
+  const crearFormaPago = registry.register(
+    "CreatePaymentMethodRequest",
+    CreatePaymentMethodRequest,
+  );
+  const editarFormaPago = registry.register(
+    "UpdatePaymentMethodRequest",
+    UpdatePaymentMethodRequest,
+  );
+  const registrarGasto = registry.register("RegisterExpenseRequest", RegisterExpenseRequest);
+  const gasto = registry.register("ExpenseResponse", ExpenseResponse);
+  const gastos = registry.register("ListExpensesResponse", ListExpensesResponse);
+  const cerrarCaja = registry.register("CloseCashRegisterRequest", CloseCashRegisterRequest);
+  const cierreCaja = registry.register("CashClosingResponse", CashClosingResponse);
+  const cierresCaja = registry.register("ListCashClosingsResponse", ListCashClosingsResponse);
+  const confirmarTasa = registry.register("KeepDailyRateRequest", KeepDailyRateRequest);
+  const tasaDiaria = registry.register("DailyRateResponse", DailyRateResponse);
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/treasury/accounts",
+    summary: "Las cuentas del negocio con su saldo (permiso treasury.read)",
+    description:
+      "«¿Dónde está mi dinero?» — cada cuenta con su saldo materializado EN SU MONEDA, " +
+      "mantenido por triggers y verificado por `treasury_reconciliation()`. Las «Sin asignar» " +
+      "de sistema son la lista de lo que el contador aún no redistribuyó.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(cuentasTesoreria, "Las cuentas."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/treasury/accounts",
+    summary: "Crear una cuenta (permiso treasury.account.manage)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearCuentaTes } } },
+    },
+    responses: { 201: okJson(cuentaTesoreria, "La cuenta creada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "patch",
+    path: "/v1/treasury/accounts/{id}",
+    summary: "Renombrar, activar/desactivar o mapear a cuenta contable",
+    description:
+      "La MONEDA no se cambia: el dinero que ya está dentro no cambia de moneda por editar una " +
+      "etiqueta. Las cuentas de sistema están congeladas (LAD06).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: z.object({ id: z.string().uuid() }),
+      body: { content: { "application/json": { schema: editarCuentaTes } } },
+    },
+    responses: { 200: okJson(cuentaTesoreria, "La cuenta editada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/payment-methods",
+    summary: "Las formas de pago configuradas (permiso treasury.read)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(formasPago, "Las formas de pago."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/payment-methods",
+    summary: "Crear una forma de pago apuntando a su cuenta (permiso treasury.account.manage)",
+    description:
+      "«Pago móvil → Banesco»: al cobrar con ese instrumento, el dinero entra a esa cuenta solo.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: crearFormaPago } } },
+    },
+    responses: { 201: okJson(formaPago, "La forma de pago."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "patch",
+    path: "/v1/payment-methods/{id}",
+    summary: "Editar una forma de pago",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: z.object({ id: z.string().uuid() }),
+      body: { content: { "application/json": { schema: editarFormaPago } } },
+    },
+    responses: { 200: okJson(formaPago, "La forma de pago editada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/expenses",
+    summary: "Registrar un gasto en un paso (permiso expense.register)",
+    description:
+      "Alquiler, luz, nómina, flete: sale de su cuenta, baja el saldo y va a contabilidad — " +
+      "directo si el mapeo del contador resuelve, a la cola de ADR-0042 si no. El importe va en " +
+      "la MONEDA de la cuenta; la conversión a funcional usa la tasa vigente con su fuente.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: registrarGasto } } },
+    },
+    responses: { 201: okJson(gasto, "El gasto registrado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/expenses",
+    summary: "Los gastos del período (permiso expense.read)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ from: z.string().optional(), to: z.string().optional() }),
+    },
+    responses: { 200: okJson(gastos, "Los gastos."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/cash-closings",
+    summary: "Cerrar la caja del día (permiso cash.close)",
+    description:
+      "El servidor dice cuánto ESPERABA (el saldo materializado), la persona dice cuánto contó, " +
+      "y la diferencia queda registrada con su motivo, ajusta el saldo a lo contado y va a " +
+      "contabilidad como faltante o sobrante. Un cierre no se edita: se cierra de nuevo.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: cerrarCaja } } },
+    },
+    responses: { 201: okJson(cierreCaja, "El cierre registrado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/cash-closings",
+    summary: "Los cierres hechos (permiso treasury.read)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(cierresCaja, "Los cierres."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/exchange-rates/keep",
+    summary: "«La tasa sigue igual»: confirmarla para hoy (permiso fx.rate.manage)",
+    description:
+      "SIEMPRE crea una fila nueva con la fecha de hoy y una fuente que dice que fue una " +
+      "confirmación humana. Reutilizar la fila vieja dejaría indistinguible «nadie miró la " +
+      "tasa» de «se miró y no cambió».",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: confirmarTasa } } },
+    },
+    responses: { 201: okJson(tasaDiaria, "La tasa confirmada."), ...erroresComunes },
   });
 
   const generator = new OpenApiGeneratorV3(registry.definitions);

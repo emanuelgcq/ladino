@@ -31,6 +31,8 @@ export const PaymentInstrument = z.enum([
   "usdt",
   "transferencia",
   "punto_venta",
+  "pago_movil",
+  "tarjeta",
   "saldo_a_favor",
   "otro",
 ]);
@@ -107,6 +109,13 @@ export const RegisterPaymentRequest = z
     paid_at: z.string().datetime({ offset: true }).optional(),
     /** Obligatorio cuando el instrumento es `saldo_a_favor`. */
     customer_credit_id: uuid.optional(),
+    /**
+     * A qué cuenta ENTRA el dinero (migración 29). Opcional: sin ella el
+     * servidor resuelve por la forma de pago configurada para el instrumento,
+     * y en último término por «Sin asignar (<moneda>)». Con `saldo_a_favor`
+     * no se admite: aplicar un crédito no mete efectivo en ninguna cuenta.
+     */
+    account_id: uuid.optional(),
   })
   .strict();
 export type RegisterPaymentRequest = z.infer<typeof RegisterPaymentRequest>;

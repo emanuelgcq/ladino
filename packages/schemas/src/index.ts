@@ -137,6 +137,27 @@ export {
   BalanceSheetResponse,
 } from "./accounting.js";
 export {
+  TreasuryAccountKind,
+  PaymentMethodKind,
+  CompanyAccountResponse,
+  CreateCompanyAccountRequest,
+  UpdateCompanyAccountRequest,
+  ListCompanyAccountsResponse,
+  PaymentMethodResponse,
+  CreatePaymentMethodRequest,
+  UpdatePaymentMethodRequest,
+  ListPaymentMethodsResponse,
+  AccountingOutcome,
+  RegisterExpenseRequest,
+  ExpenseResponse,
+  ListExpensesResponse,
+  CloseCashRegisterRequest,
+  CashClosingResponse,
+  ListCashClosingsResponse,
+  KeepDailyRateRequest,
+  DailyRateResponse,
+} from "./treasury.js";
+export {
   BookKind,
   TaxTreatment,
   SalesBookRow,

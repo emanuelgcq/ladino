@@ -74,6 +74,7 @@ function traducir(e: unknown): PurchaseError | null {
   if (code === "LAD54" || code === "LAD49") return { code: "FISCAL_NUMBERING_INVALID", message };
   if (code === "LAD50") return { code: "TAX_RULE_MISSING", message };
   if (code === "LAD06") return { code: "APPEND_ONLY_VIOLATION", message };
+  if (code === "LAD67") return { code: "VALIDATION_FAILED", message };
   if (code === "LAD39") return { code: "NEGATIVE_STOCK", message };
   if (code === "23505") {
     return {

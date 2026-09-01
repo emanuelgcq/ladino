@@ -2789,6 +2789,8 @@
                     "usdt",
                     "transferencia",
                     "punto_venta",
+                    "pago_movil",
+                    "tarjeta",
                     "saldo_a_favor",
                     "otro"
                   ]
@@ -3336,6 +3338,8 @@
               "usdt",
               "transferencia",
               "punto_venta",
+              "pago_movil",
+              "tarjeta",
               "saldo_a_favor",
               "otro"
             ]
@@ -3350,6 +3354,10 @@
             "format": "date-time"
           },
           "customer_credit_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_id": {
             "type": "string",
             "format": "uuid"
           }
@@ -3405,6 +3413,8 @@
                   "usdt",
                   "transferencia",
                   "punto_venta",
+                  "pago_movil",
+                  "tarjeta",
                   "saldo_a_favor",
                   "otro"
                 ]
@@ -8097,6 +8107,817 @@
         },
         "required": [
           "runs"
+        ],
+        "additionalProperties": false
+      },
+      "CompanyAccountResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "cash",
+              "bank",
+              "wallet"
+            ]
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "is_system": {
+            "type": "boolean"
+          },
+          "ledger_account_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "balance": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              {
+                "type": "string",
+                "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "currency",
+          "kind",
+          "is_active",
+          "is_system",
+          "ledger_account_id",
+          "balance"
+        ],
+        "additionalProperties": false
+      },
+      "ListCompanyAccountsResponse": {
+        "type": "object",
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "cash",
+                    "bank",
+                    "wallet"
+                  ]
+                },
+                "is_active": {
+                  "type": "boolean"
+                },
+                "is_system": {
+                  "type": "boolean"
+                },
+                "ledger_account_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "balance": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "currency",
+                "kind",
+                "is_active",
+                "is_system",
+                "ledger_account_id",
+                "balance"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "accounts"
+        ],
+        "additionalProperties": false
+      },
+      "CreateCompanyAccountRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "cash",
+              "bank",
+              "wallet"
+            ]
+          },
+          "ledger_account_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "company_id",
+          "name",
+          "currency",
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "UpdateCompanyAccountRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "ledger_account_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "company_id"
+        ],
+        "additionalProperties": false
+      },
+      "PaymentMethodResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "efectivo_bs",
+              "efectivo_usd",
+              "zelle",
+              "usdt",
+              "transferencia",
+              "punto_venta",
+              "pago_movil",
+              "tarjeta",
+              "otro"
+            ]
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_active": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "account_id",
+          "is_active"
+        ],
+        "additionalProperties": false
+      },
+      "ListPaymentMethodsResponse": {
+        "type": "object",
+        "properties": {
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "efectivo_bs",
+                    "efectivo_usd",
+                    "zelle",
+                    "usdt",
+                    "transferencia",
+                    "punto_venta",
+                    "pago_movil",
+                    "tarjeta",
+                    "otro"
+                  ]
+                },
+                "account_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "is_active": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "kind",
+                "account_id",
+                "is_active"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "methods"
+        ],
+        "additionalProperties": false
+      },
+      "CreatePaymentMethodRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "efectivo_bs",
+              "efectivo_usd",
+              "zelle",
+              "usdt",
+              "transferencia",
+              "punto_venta",
+              "pago_movil",
+              "tarjeta",
+              "otro"
+            ]
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "company_id",
+          "name",
+          "kind",
+          "account_id"
+        ],
+        "additionalProperties": false
+      },
+      "UpdatePaymentMethodRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "company_id"
+        ],
+        "additionalProperties": false
+      },
+      "RegisterExpenseRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "category": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 60
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "paid_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "supplier_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "is_recurring": {
+            "type": "boolean"
+          },
+          "branch_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "attachment_path": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "company_id",
+          "category",
+          "account_id",
+          "amount"
+        ],
+        "additionalProperties": false
+      },
+      "ExpenseResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "category": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "paid_at": {
+            "type": "string"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "functional_amount": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "functional_currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "fx_rate": {
+            "type": "string"
+          },
+          "is_recurring": {
+            "type": "boolean"
+          },
+          "supplier_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "branch_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "attachment_path": {
+            "type": "string",
+            "nullable": true
+          },
+          "journal_entry_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "accounting": {
+            "type": "string",
+            "enum": [
+              "posted",
+              "queued"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "description",
+          "paid_at",
+          "account_id",
+          "amount",
+          "currency",
+          "functional_amount",
+          "functional_currency",
+          "fx_rate",
+          "is_recurring",
+          "supplier_id",
+          "branch_id",
+          "attachment_path",
+          "journal_entry_id",
+          "accounting"
+        ],
+        "additionalProperties": false
+      },
+      "ListExpensesResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "category": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "paid_at": {
+                  "type": "string"
+                },
+                "account_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "amount": {
+                  "type": "string",
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                "functional_amount": {
+                  "type": "string",
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "functional_currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                "fx_rate": {
+                  "type": "string"
+                },
+                "is_recurring": {
+                  "type": "boolean"
+                },
+                "supplier_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "branch_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "attachment_path": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "journal_entry_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "id",
+                "category",
+                "description",
+                "paid_at",
+                "account_id",
+                "amount",
+                "currency",
+                "functional_amount",
+                "functional_currency",
+                "fx_rate",
+                "is_recurring",
+                "supplier_id",
+                "branch_id",
+                "attachment_path",
+                "journal_entry_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "CloseCashRegisterRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "counted_amount": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 300
+          },
+          "branch_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "company_id",
+          "account_id",
+          "counted_amount"
+        ],
+        "additionalProperties": false
+      },
+      "CashClosingResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "closing_date": {
+            "type": "string"
+          },
+          "closed_at": {
+            "type": "string"
+          },
+          "expected_amount": {
+            "type": "string",
+            "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "counted_amount": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "difference": {
+            "type": "string",
+            "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "journal_entry_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "accounting": {
+            "type": "string",
+            "enum": [
+              "posted",
+              "queued",
+              "none"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "account_id",
+          "closing_date",
+          "closed_at",
+          "expected_amount",
+          "counted_amount",
+          "difference",
+          "reason",
+          "currency",
+          "journal_entry_id",
+          "accounting"
+        ],
+        "additionalProperties": false
+      },
+      "ListCashClosingsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "account_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "closing_date": {
+                  "type": "string"
+                },
+                "closed_at": {
+                  "type": "string"
+                },
+                "expected_amount": {
+                  "type": "string",
+                  "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "counted_amount": {
+                  "type": "string",
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "difference": {
+                  "type": "string",
+                  "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "reason": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                "journal_entry_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "id",
+                "account_id",
+                "closing_date",
+                "closed_at",
+                "expected_amount",
+                "counted_amount",
+                "difference",
+                "reason",
+                "currency",
+                "journal_entry_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "KeepDailyRateRequest": {
+        "type": "object",
+        "properties": {
+          "from_currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "to_currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          }
+        },
+        "required": [
+          "from_currency",
+          "to_currency"
+        ],
+        "additionalProperties": false
+      },
+      "DailyRateResponse": {
+        "type": "object",
+        "properties": {
+          "from_currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "to_currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "rate": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "rate_date": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_currency",
+          "to_currency",
+          "rate",
+          "rate_date",
+          "source"
         ],
         "additionalProperties": false
       }
@@ -18055,6 +18876,967 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FiscalBookResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/treasury/accounts": {
+      "get": {
+        "summary": "Las cuentas del negocio con su saldo (permiso treasury.read)",
+        "description": "«¿Dónde está mi dinero?» — cada cuenta con su saldo materializado EN SU MONEDA, mantenido por triggers y verificado por `treasury_reconciliation()`. Las «Sin asignar» de sistema son la lista de lo que el contador aún no redistribuyó.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Las cuentas.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListCompanyAccountsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Crear una cuenta (permiso treasury.account.manage)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCompanyAccountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "La cuenta creada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyAccountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/treasury/accounts/{id}": {
+      "patch": {
+        "summary": "Renombrar, activar/desactivar o mapear a cuenta contable",
+        "description": "La MONEDA no se cambia: el dinero que ya está dentro no cambia de moneda por editar una etiqueta. Las cuentas de sistema están congeladas (LAD06).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCompanyAccountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "La cuenta editada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyAccountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payment-methods": {
+      "get": {
+        "summary": "Las formas de pago configuradas (permiso treasury.read)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Las formas de pago.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListPaymentMethodsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Crear una forma de pago apuntando a su cuenta (permiso treasury.account.manage)",
+        "description": "«Pago móvil → Banesco»: al cobrar con ese instrumento, el dinero entra a esa cuenta solo.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePaymentMethodRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "La forma de pago.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentMethodResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payment-methods/{id}": {
+      "patch": {
+        "summary": "Editar una forma de pago",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePaymentMethodRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "La forma de pago editada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentMethodResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/expenses": {
+      "post": {
+        "summary": "Registrar un gasto en un paso (permiso expense.register)",
+        "description": "Alquiler, luz, nómina, flete: sale de su cuenta, baja el saldo y va a contabilidad — directo si el mapeo del contador resuelve, a la cola de ADR-0042 si no. El importe va en la MONEDA de la cuenta; la conversión a funcional usa la tasa vigente con su fuente.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterExpenseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El gasto registrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExpenseResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Los gastos del período (permiso expense.read)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Los gastos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListExpensesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/cash-closings": {
+      "post": {
+        "summary": "Cerrar la caja del día (permiso cash.close)",
+        "description": "El servidor dice cuánto ESPERABA (el saldo materializado), la persona dice cuánto contó, y la diferencia queda registrada con su motivo, ajusta el saldo a lo contado y va a contabilidad como faltante o sobrante. Un cierre no se edita: se cierra de nuevo.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseCashRegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El cierre registrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CashClosingResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Los cierres hechos (permiso treasury.read)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Los cierres.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListCashClosingsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/exchange-rates/keep": {
+      "post": {
+        "summary": "«La tasa sigue igual»: confirmarla para hoy (permiso fx.rate.manage)",
+        "description": "SIEMPRE crea una fila nueva con la fecha de hoy y una fuente que dice que fue una confirmación humana. Reutilizar la fila vieja dejaría indistinguible «nadie miró la tasa» de «se miró y no cambió».",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeepDailyRateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "La tasa confirmada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DailyRateResponse"
                 }
               }
             }

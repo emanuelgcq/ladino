@@ -77,6 +77,19 @@ export {
   type JournalGenerationError,
 } from "./journal-generator.js";
 export {
+  listCompanyAccounts,
+  createCompanyAccount,
+  updateCompanyAccount,
+  listPaymentMethods,
+  createPaymentMethod,
+  updatePaymentMethod,
+  registerExpense,
+  closeCashRegister,
+  keepDailyRate,
+  resolverCuentaEfectivo,
+  type TreasuryError,
+} from "./treasury.js";
+export {
   readFiscalBook,
   exportFiscalBook,
   BOOK_GENERATOR_VERSION,

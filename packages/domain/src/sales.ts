@@ -87,6 +87,7 @@ function traducir(e: unknown): SalesError | null {
     return { code: "TAX_RULE_MISSING", message };
   }
   if (code === "LAD06") return { code: "APPEND_ONLY_VIOLATION", message };
+  if (code === "LAD67") return { code: "VALIDATION_FAILED", message };
   if (code === "LAD39") return { code: "NEGATIVE_STOCK", message };
   if (code === "23505") {
     return { code: "DUPLICATE", message: "Ya existe un documento con ese número en esa serie." };
@@ -1016,16 +1017,44 @@ export async function registerPayment(
        where id = ${input.customer_credit_id}`;
   }
 
-  // La cuenta a la que ENTRA el efectivo (migración 29): forma de pago
-  // configurada → «Sin asignar». Un saldo a favor no mueve efectivo y va sin
-  // cuenta, que es lo que el CHECK de la tabla exige.
-  const cuentaId = await resolverCuentaEfectivo(
-    sql,
-    ctx.value.tenantId,
-    input.company_id,
-    input.instrument,
-    input.currency,
-  );
+  // La cuenta a la que ENTRA el efectivo (migración 29): la explícita si el
+  // llamante la eligió, si no la forma de pago configurada → «Sin asignar».
+  // Un saldo a favor no mueve efectivo y va sin cuenta, que es lo que el
+  // CHECK de la tabla exige.
+  let cuentaId: string | null;
+  if (input.account_id !== undefined) {
+    if (input.instrument === "saldo_a_favor") {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "Aplicar un saldo a favor no mete dinero en ninguna cuenta: quita la cuenta.",
+      });
+    }
+    const [cuenta] = await sql<{ currency: string; name: string; is_active: boolean }[]>`
+      select currency, name, is_active from public.company_accounts
+       where id = ${input.account_id} and company_id = ${input.company_id}`;
+    if (!cuenta) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    if (!cuenta.is_active) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `La cuenta «${cuenta.name}» está desactivada.`,
+      });
+    }
+    if (cuenta.currency !== input.currency) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `El cobro es en ${input.currency} y la cuenta «${cuenta.name}» vive en ${cuenta.currency}.`,
+      });
+    }
+    cuentaId = input.account_id;
+  } else {
+    cuentaId = await resolverCuentaEfectivo(
+      sql,
+      ctx.value.tenantId,
+      input.company_id,
+      input.instrument,
+      input.currency,
+    );
+  }
 
   let pago;
   try {
