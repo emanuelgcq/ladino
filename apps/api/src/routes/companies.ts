@@ -3,6 +3,7 @@ import { withTransaction, type Sql } from "@ladino/db";
 import { CreateCompanyRequest } from "@ladino/schemas";
 import { createCompany } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
+import { CTX } from "../middleware/context.js";
 
 /**
  * PLANTILLA DE HANDLER. Esto es TODO lo que un handler hace (API_SPEC.md §La
@@ -64,5 +65,31 @@ export function companiesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
 
     if (!resultado.ok) throw new DominioError(resultado.error);
     return c.json(resultado.value, 201);
+  });
+
+  /**
+   * Las sucursales de la empresa (Fase C): visibles para cualquier miembro —
+   * el middleware de scope ya validó membresía y visibilidad de la company, y
+   * una sucursal es estructura, no dato sensible.
+   */
+  app.get("/v1/branches", async (c) => {
+    const ctx = c.get(CTX);
+    if (ctx.companyId === null) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Esta operación exige el header X-Company-Id.",
+      });
+    }
+    const companyId = ctx.companyId;
+    const { actor } = c.get("ladino.auth");
+    const filas = await withTransaction(
+      sql,
+      actor,
+      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+        select id, code, name, status from public.branches
+         where company_id = ${companyId}
+         order by name`,
+    );
+    return c.json({ items: filas }, 200);
   });
 }

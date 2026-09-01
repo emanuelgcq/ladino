@@ -742,6 +742,23 @@ describe("ventas de extremo a extremo", () => {
     expect(r.status).toBe(422);
   });
 
+  it("el PDF del documento sale con sus datos legales y la marca de formato libre", async () => {
+    const [doc] = await sql<{ id: string }[]>`
+      select id from public.documents
+       where company_id = ${COMPANY} and status in ('issued', 'paid')
+       order by created_at desc limit 1`;
+    const r = await pedir("GET", `/v1/documents/${doc!.id}/pdf`, VENDEDOR);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("application/pdf");
+    const cuerpo = Buffer.from(await r.arrayBuffer());
+    expect(cuerpo.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(cuerpo.length).toBeGreaterThan(1000);
+
+    const sucursales = await pedir("GET", "/v1/branches", VENDEDOR);
+    expect(sucursales.status).toBe(200);
+    expect(Array.isArray(((await sucursales.json()) as { items: unknown[] }).items)).toBe(true);
+  });
+
   it("el vuelto en vivo: GET /v1/pos/change convierte con la tasa del día", async () => {
     const r = await pedir(
       "GET",

@@ -245,6 +245,50 @@ function mensajePara(code: string): string {
 }
 
 /**
+ * La VOZ DE PERSONA (Fase C, PARTE 16): la misma verdad que `message`, dicha
+ * para quien atiende un mostrador — dos frases como máximo, qué pasó y qué
+ * hacer. Viaja SIEMPRE como `person_message`, junto al `message` técnico: las
+ * pantallas de negocio enseñan esta; las de /admin pueden enseñar las dos.
+ * La tabla espejo vive en ERROR_CATALOG.md §Mensajes de persona.
+ */
+function mensajePersona(code: string): string {
+  switch (code) {
+    case "VALIDATION_FAILED":
+      return "Algo en el formulario no está bien. Revisa los campos marcados y vuelve a intentar.";
+    case "PERMISSION_REQUIRED":
+      return "Tu usuario no puede hacer esto. Pídele acceso a quien administra el negocio.";
+    case "NOT_FOUND":
+      return "Eso no existe o no está disponible para ti.";
+    case "DUPLICATE":
+      return "Ya hay uno igual registrado. Busca el que existe en vez de crear otro.";
+    case "EXCHANGE_RATE_MISSING":
+      return "Falta la tasa del día. Cárgala en Mi dinero y vuelve a intentar.";
+    case "TAX_RULE_MISSING":
+      return "Falta configurar el impuesto de venta. Se completa en Empezar antes de poder vender.";
+    case "FISCAL_NUMBERING_INVALID":
+      return "No hay números de factura disponibles. Carga un rango nuevo en Facturación fiscal.";
+    case "NEGATIVE_STOCK":
+      return "No hay suficiente mercancía para esa cantidad. Revisa la existencia o registra la entrada primero.";
+    case "APPEND_ONLY_VIOLATION":
+      return "Esto ya quedó registrado y no se puede cambiar. Lo que corresponde es registrar la corrección.";
+    case "PERIOD_CLOSED":
+      return "Ese mes ya está cerrado en contabilidad. Habla con quien lleva los números.";
+    case "COMPANY_SUSPENDED":
+      return "El negocio está suspendido en el sistema. Contacta a soporte.";
+    case "COSTING_MISMATCH":
+      return "La existencia cambió mientras guardabas. Vuelve a intentar: casi siempre pasa a la primera.";
+    case "PAYLOAD_TOO_LARGE":
+      return "El archivo es demasiado grande. Prueba con uno más liviano.";
+    case "RATE_LIMITED":
+      return "Demasiadas operaciones muy seguidas. Espera un momento y sigue.";
+    case "GATEWAY_TIMEOUT":
+      return "Esto está tardando más de la cuenta. Revisa en un momento si quedó registrado antes de repetirlo.";
+    default:
+      return "Algo salió mal de nuestro lado. Vuelve a intentar; si sigue, avísanos.";
+  }
+}
+
+/**
  * El mapeo de errores va en `app.onError`, NO en un middleware con try/catch.
  *
  * No es preferencia: **en Hono, `next()` no propaga excepciones**. El framework
@@ -264,7 +308,13 @@ export function onErrorResponder(e: Error, c: Context): Response {
 
   if (e instanceof ValidacionError) {
     return c.json(
-      { code: "VALIDATION_FAILED", message: e.message, details: e.issues, request_id: requestId },
+      {
+        code: "VALIDATION_FAILED",
+        message: e.message,
+        person_message: mensajePersona("VALIDATION_FAILED"),
+        details: e.issues,
+        request_id: requestId,
+      },
       422,
     );
   }
@@ -274,6 +324,7 @@ export function onErrorResponder(e: Error, c: Context): Response {
       {
         code: e.domainError.code,
         message: e.domainError.message,
+        person_message: mensajePersona(e.domainError.code),
         ...(e.domainError.details !== undefined ? { details: e.domainError.details } : {}),
         request_id: requestId,
       },
@@ -282,5 +333,8 @@ export function onErrorResponder(e: Error, c: Context): Response {
   }
 
   const { code, status, message } = mapearError(e);
-  return c.json({ code, message, request_id: requestId }, status as 400);
+  return c.json(
+    { code, message, person_message: mensajePersona(code), request_id: requestId },
+    status as 400,
+  );
 }

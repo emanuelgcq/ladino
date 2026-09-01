@@ -57,6 +57,34 @@ Comprobado sobre las funciones realmente instaladas. **Cada uno es único en tie
 | `LAD55` | *caso de uso* (`applyLandedCost`) | prorrateo `by_weight` con alguna línea sin peso. **No lo lanza la base**: el esquema admite `unit_weight` nulo porque no todo producto lo tiene; lo que no admite es repartir un flete solo entre lo que sí pesa, y eso lo decide el caso de uso. Mismo patrón que LAD45 | `MISSING_WEIGHT` | `422` |
 | `LAD67` | `platform.assert_payment_account_currency()` | el pago, gasto o cierre declara una moneda distinta a la de su cuenta de tesorería: un Zelle no entra a Caja Bs (migración 29) | `VALIDATION_FAILED` | `422` |
 
+## Mensajes de persona (Fase C, PARTE 16)
+
+Desde la Fase C toda respuesta de error lleva **dos** mensajes: `message` (el técnico, con el
+detalle del dominio cuando lo hay) y `person_message` — la misma verdad en voz de persona, dos
+frases como máximo: qué pasó y qué hacer. Las pantallas de negocio enseñan `person_message`;
+las de `/admin` pueden enseñar los dos. La fuente única del texto es `mensajePersona()` en
+`apps/api/src/middleware/errors.ts`; esta tabla es su espejo documentado — si divergen, manda
+el código y se corrige el espejo.
+
+| `code` | `person_message` |
+|---|---|
+| `VALIDATION_FAILED` | Algo en el formulario no está bien. Revisa los campos marcados y vuelve a intentar. |
+| `PERMISSION_REQUIRED` | Tu usuario no puede hacer esto. Pídele acceso a quien administra el negocio. |
+| `NOT_FOUND` | Eso no existe o no está disponible para ti. |
+| `DUPLICATE` | Ya hay uno igual registrado. Busca el que existe en vez de crear otro. |
+| `EXCHANGE_RATE_MISSING` | Falta la tasa del día. Cárgala en Mi dinero y vuelve a intentar. |
+| `TAX_RULE_MISSING` | Falta configurar el impuesto de venta. Se completa en Empezar antes de poder vender. |
+| `FISCAL_NUMBERING_INVALID` | No hay números de factura disponibles. Carga un rango nuevo en Facturación fiscal. |
+| `NEGATIVE_STOCK` | No hay suficiente mercancía para esa cantidad. Revisa la existencia o registra la entrada primero. |
+| `APPEND_ONLY_VIOLATION` | Esto ya quedó registrado y no se puede cambiar. Lo que corresponde es registrar la corrección. |
+| `PERIOD_CLOSED` | Ese mes ya está cerrado en contabilidad. Habla con quien lleva los números. |
+| `COMPANY_SUSPENDED` | El negocio está suspendido en el sistema. Contacta a soporte. |
+| `COSTING_MISMATCH` | La existencia cambió mientras guardabas. Vuelve a intentar: casi siempre pasa a la primera. |
+| `PAYLOAD_TOO_LARGE` | El archivo es demasiado grande. Prueba con uno más liviano. |
+| `RATE_LIMITED` | Demasiadas operaciones muy seguidas. Espera un momento y sigue. |
+| `GATEWAY_TIMEOUT` | Esto está tardando más de la cuenta. Revisa en un momento si quedó registrado antes de repetirlo. |
+| *(cualquier otro)* | Algo salió mal de nuestro lado. Vuelve a intentar; si sigue, avísanos. |
+
 ## Códigos de una sola ejecución — NO llegan a la API
 
 `LAD26` y `LAD27` aparecen **también** en `20260810040143_create_audit_events.sql`, con otro

@@ -1030,6 +1030,50 @@ export function buildOpenApiDocument(): object {
     },
   });
 
+  registry.registerPath({
+    method: "get",
+    path: "/v1/branches",
+    summary: "Las sucursales de la empresa (cualquier miembro)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(
+        z.object({
+          items: z.array(
+            z
+              .object({
+                id: z.string().uuid(),
+                code: z.string(),
+                name: z.string(),
+                status: z.string(),
+              })
+              .strict(),
+          ),
+        }),
+        "Las sucursales.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/documents/{id}/pdf",
+    summary: "El PDF del documento — formato libre, y lo dice en el pie",
+    description:
+      "VALIDAR-SENIAT: layout NO homologado, con la marca visible en el pie. Imprime lo " +
+      "PERSISTIDO — importes exactos vestidos, la tasa del día de emisión citada, ANULADA en " +
+      "rojo si aplica. El cliente impreso es el de HOY: el snapshot de R-05 es deuda declarada.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      headers: companyHeader,
+    },
+    responses: {
+      200: { description: "El PDF (application/pdf)." },
+      ...erroresComunes,
+    },
+  });
+
   // ── El punto de venta (Fase C) ─────────────────────────────────────────────
   const posQuote = registry.register("PosQuoteRequest", PosQuoteRequest);
   const posQuoteResp = registry.register("PosQuoteResponse", PosQuoteResponse);

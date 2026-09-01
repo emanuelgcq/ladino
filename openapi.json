@@ -96,6 +96,9 @@
           "message": {
             "type": "string"
           },
+          "person_message": {
+            "type": "string"
+          },
           "details": {
             "nullable": true
           },
@@ -15223,6 +15226,188 @@
           },
           "409": {
             "description": "Sin tasa vigente para la fecha del cobro, o saldo a favor insuficiente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/branches": {
+      "get": {
+        "summary": "Las sucursales de la empresa (cualquier miembro)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Las sucursales.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "code",
+                          "name",
+                          "status"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/{id}/pdf": {
+      "get": {
+        "summary": "El PDF del documento — formato libre, y lo dice en el pie",
+        "description": "VALIDAR-SENIAT: layout NO homologado, con la marca visible en el pie. Imprime lo PERSISTIDO — importes exactos vestidos, la tasa del día de emisión citada, ANULADA en rojo si aplica. El cliente impreso es el de HOY: el snapshot de R-05 es deuda declarada.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El PDF (application/pdf)."
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
             "content": {
               "application/json": {
                 "schema": {

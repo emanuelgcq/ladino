@@ -49,6 +49,12 @@ export type ListCompaniesResponse = z.infer<typeof ListCompaniesResponse>;
 export const ErrorResponse = z.object({
   code: z.string(),
   message: z.string(),
+  /**
+   * La misma verdad en VOZ DE PERSONA (Fase C): dos frases como máximo, qué
+   * pasó y qué hacer. Las pantallas de negocio enseñan esta; /admin puede
+   * enseñar las dos.
+   */
+  person_message: z.string().optional(),
   details: z.unknown().optional(),
   request_id: z.string().nullable().optional(),
 });
