@@ -1,17 +1,97 @@
-# Handoff — 2026-08-31
+# Handoff — 2026-09-01
 
 ## Estado
 
-**Sprint 0 cerrado y OCHO módulos de negocio construidos de extremo a extremo: productos,
-precios, clientes, inventario (con su segunda vuelta), ventas, compras, contabilidad y LIBROS
-FISCALES.** Flujo trunk-based: todo en `main`, `verify` en verde antes de cada commit.
+**Sprint 0 cerrado, OCHO módulos de negocio de extremo a extremo, y la FASE A de UI/UX
+entregada: sistema de diseño, shell, componentes fundamentales y la vertical pulida
+(dashboard, ventas, cuentas por cobrar, puesta a punto fiscal).** Flujo trunk-based: todo en
+`main`, `verify` en verde antes de cada commit.
 
 S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅ ·
-Inventario ✅ · Ventas ✅ · Compras ✅ · Contabilidad ✅ · Libros fiscales ✅** · S0.6b ⏸️
+Inventario ✅ · Ventas ✅ · Compras ✅ · Contabilidad ✅ · Libros fiscales ✅ · UI Fase A ✅** ·
+UI Fase B ⏭️ · S0.6b ⏸️
 
 > ✅ **La migración 27 está aplicada en el remoto** (2026-08-31, con aprobación explícita, vía
 > Management API y registrada en `supabase_migrations.schema_migrations` con la forma de la CLI).
 > **27/27. Local y remoto no divergen.**
+
+## UI/UX Fase A — sistema de diseño y vertical pulida (2026-09-01)
+
+Capturas reales en `docs/08_UX/capturas-fase-a/` (dashboard claro y oscuro, listado, detalle,
+alta, cuentas con aging, checklist fiscal, paleta Ctrl+K, demo de componentes).
+
+**Stack instalado** (apps/web): Tailwind v4 (`@tailwindcss/vite`), Base UI 1.0.0-rc.0 (el
+default actual de shadcn; NO Radix), TanStack Table **v8** (v9 recién salida reescribió su API:
+`useTable`/`createTableHelper` — pineado a la estable a propósito), @tanstack/react-virtual,
+Recharts 3, Motion, Lucide, Inter y JetBrains Mono autoalojadas (@fontsource-variable),
+react-router 8 (data mode), TanStack Query. Tema ÚNICO en `src/styles/theme.css`: todos los
+tokens como CSS variables mapeadas con `@theme inline`; dark por CLASE (light default,
+`prefers-color-scheme` de arranque, elección persistida — `theme.ts`).
+
+**Componentes de firma**: `DualMoney` (formatea con @ladino/money/format y JAMÁS convierte: el
+secundario solo existe si el servidor lo mandó; tasa+fuente en tooltip), `FiscalStatusBadge`
+(estados del backend, color+icono fijos), `ExchangeDiffIndicator` (ganancia esmeralda, pérdida
+ÁMBAR, narrativa tasa-emisión→tasa-cobro). **Fundamentales**: DataTable (v8, paginación de
+SERVIDOR, virtualización opcional, CSV, estados integrados), FormField/MoneyInput (valida el
+patrón del contrato, no redondea), Date(Range)Picker, EntityPicker asíncrono genérico, KpiCard,
+EmptyState, ConfirmDialog, PageHeader, Toast. Todos en `/dev/components` (solo DEV).
+
+**Shell**: sidebar 256px colapsable, top bar (CompanySwitcher con búsqueda >5, toggle de tema,
+usuario), migas, Ctrl+K que navega y busca clientes/productos contra el SERVIDOR con el slot
+del asistente IA reservado y rotulado como no implementado. **Divulgación progresiva con
+datos**: Compras/Contabilidad/Libros aparecen si la empresa tiene filas (3 sondas per_page=1,
+cacheadas), con «mostrar todos» en Configuración. Las 10 pantallas heredadas viven DENTRO del
+shell bajo `.legacy` (theme.css) hasta que Fase B las alcance — `app/legacy.tsx` es la lista de
+lo que falta.
+
+**Vertical**: dashboard (5 respuestas del dueño, cada cifra del servidor), listado con los
+filtros del endpoint, detalle con diferencial POR PAGO y trazabilidad al asiento o a la cola de
+ADR-0042, alta donde el precio por línea es `price_at` con fecha explícita y los totales vienen
+de una COTIZACIÓN guardada (botones con peso distinto; emitir pasa por consecuencias), registro
+de cobro con el diferencial como narrativa de tasas (el importe exacto solo tras el servidor),
+cuentas por cobrar con `ar_aging` en barras. **Checklist fiscal** (`/configuracion/fiscal`,
+R-16 como diseño): tasa y rango con estado VIVO y carga inline; alícuota y régimen honestamente
+«por operación» (sin endpoint de lectura hoy) con sello VALIDAR-SENIAT; verificación real vía
+cotización de prueba; y los 409 de emisión enlazan a esta pantalla desde `MensajeError`.
+
+**Decisiones/hallazgos que Fase B hereda:**
+
+- **El contrato del documento no expone `amount_transaction_currency`** (solo totales
+  funcionales + `transaction_currency` + `fx_rate`). La UI enseña el Bs con la tasa en tooltip;
+  exponer el otro lado del pie es cambio de contrato → decide el usuario.
+- **`balance` llega NULL en una anulada** — no es deuda cero. La UI lo enseña como «—»; el tipo
+  dice `string | null`.
+- **Una factura pagada en divisa queda con saldo funcional NEGATIVO** (= el diferencial): se
+  pinta esmeralda (nada por cobrar), no ámbar, y no ofrece «Registrar cobro».
+- **`/v1/branches` no existe**: BranchSwitcher montado y deshabilitado con el motivo en hover.
+  «Rendimiento por sede» del dashboard, diferido por lo mismo.
+- **`journal-entries` no filtra por `source_id`**: la trazabilidad al asiento barre
+  `source_kind` (100 filas) y cruza en cliente — a escala Fase A vale; para Fase B conviene el
+  filtro en servidor (cambio de contrato menor).
+- **Sin GET de `tax_rules` ni endpoints de régimen fiscal**: por eso dos pasos del checklist son
+  «por operación». Si se quiere estado vivo, son endpoints nuevos (aprobación aparte).
+- El fallback de `mostrarImporte` VISTE el importe exacto (miles, coma, prefijo) quitando SOLO
+  ceros finales — nunca redondea. `mostrarCantidad` recorta ceros de cantidades y tasas.
+- KPI deltas: dirección por comparación de strings decimales (`decimal-compare.ts`), la
+  etiqueta enseña el valor del período anterior tal cual — sin porcentajes calculados en
+  cliente. Gráficas: `Number()` SOLO como geometría; toda cifra visible es el string del
+  servidor.
+
+**Para levantar el entorno de demo local**: stack supabase + API
+(`DATABASE_URL=postgres://ladino_api:ladino_api@127.0.0.1:54322/postgres LADINO_AUTH_MODE=jwks
+SUPABASE_AUTH_ISSUER=http://127.0.0.1:54321/auth/v1
+SUPABASE_JWKS_URL=http://127.0.0.1:54321/auth/v1/.well-known/jwks.json
+CORS_ORIGIN=http://localhost:5174 node apps/api/dist/server.js`) + web
+(`VITE_SUPABASE_URL=http://127.0.0.1:54321 VITE_SUPABASE_PUBLISHABLE_KEY=<anon del stack local>
+VITE_API_URL=http://127.0.0.1:3000 pnpm --filter @ladino/web dev`). OJO: vite dev escucha en
+`localhost` (no en 127.0.0.1), así que el navegador va a `http://localhost:5174` y la API
+necesita ese CORS_ORIGIN. Usuario demo local: `demo@ladino.dev` / `LadinoDemo2026!` (empresa
+«Distribuidora El Ávila, C.A.» sembrada con datos de mentira evidente; el token local es ES256,
+por eso la API va en modo jwks).
+
+**Fase B** = replicar el patrón a los 10 módulos restantes vaciando `app/legacy.tsx`:
+productos, precios, clientes, inventario, compras, contabilidad, libros, reportes. El patrón
+está entero en `pages/ventas/` y los componentes en `components/`.
 
 ## Libros fiscales — el módulo entero (2026-08-31)
 

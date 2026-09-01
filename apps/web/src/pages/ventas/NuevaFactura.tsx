@@ -45,7 +45,6 @@ interface DocumentoCreado {
   subtotal_amount: string;
   tax_amount: string;
   total_amount: string;
-  amount_transaction_currency: string;
 }
 
 const nuevaLinea = (): LineaForm => ({
@@ -332,17 +331,16 @@ export function NuevaFactura(): React.JSX.Element {
                   <div className="flex items-baseline justify-between">
                     <span className="font-medium">Total</span>
                     <DualMoney
-                      amount={cotizacion.amount_transaction_currency}
-                      currency={cotizacion.transaction_currency}
-                      secondary={
+                      amount={cotizacion.total_amount}
+                      currency={cotizacion.functional_currency}
+                      rate={
                         cotizacion.transaction_currency === cotizacion.functional_currency
                           ? null
                           : {
-                              amount: cotizacion.total_amount,
-                              currency: cotizacion.functional_currency,
+                              rate: cotizacion.fx_rate,
+                              source: `${cotizacion.rate_source} · doc. en ${cotizacion.transaction_currency}`,
                             }
                       }
-                      rate={{ rate: cotizacion.fx_rate, source: cotizacion.rate_source }}
                     />
                   </div>
                   <p className="pt-1 text-[0.78rem] text-faint-foreground">

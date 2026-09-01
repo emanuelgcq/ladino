@@ -34,7 +34,7 @@ interface DocumentoFila {
   transaction_currency: string;
   functional_currency: string;
   total_amount: string;
-  amount_transaction_currency: string;
+
   fx_rate: string;
   rate_source: string;
 }
@@ -171,20 +171,26 @@ export function Dashboard(): React.JSX.Element {
       {
         id: "total",
         header: () => <span className="block text-right">Total</span>,
-        accessorKey: "amount_transaction_currency",
+        accessorKey: "total_amount",
         cell: (c) => {
+          // El contrato del documento expone los totales FUNCIONALES (Bs) más
+          // moneda y tasa de la transacción — no el importe en divisa. Se
+          // enseña lo que el contrato dice, con la tasa en el tooltip; añadir
+          // el otro lado es un cambio de contrato que decide el usuario.
           const d = c.row.original;
           return (
             <DualMoney
               variant="cell"
-              amount={d.amount_transaction_currency}
-              currency={d.transaction_currency}
-              secondary={
+              amount={d.total_amount}
+              currency={d.functional_currency}
+              rate={
                 d.transaction_currency === d.functional_currency
                   ? null
-                  : { amount: d.total_amount, currency: d.functional_currency }
+                  : {
+                      rate: d.fx_rate,
+                      source: `${d.rate_source} · doc. en ${d.transaction_currency}`,
+                    }
               }
-              rate={{ rate: d.fx_rate, source: d.rate_source }}
             />
           );
         },

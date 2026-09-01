@@ -16,7 +16,7 @@ import { Table, TBody, TD, TDNum, TH, THead, TR } from "../../ui/table.js";
 import { Textarea } from "../../ui/input.js";
 import { Badge } from "../../ui/badge.js";
 import { useToast } from "../../ui/toast.js";
-import { mostrarImporte } from "../../money.js";
+import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
 import { KIND_LABEL, MensajeError, numeroDe } from "./comunes.js";
 import { RegistrarPago } from "./RegistrarPago.js";
@@ -44,7 +44,7 @@ interface Documento {
   subtotal_amount: string;
   tax_amount: string;
   total_amount: string;
-  amount_transaction_currency: string;
+
   rules_version: string | null;
 }
 interface Linea {
@@ -82,7 +82,8 @@ interface Detalle {
   lines: Linea[];
   payments: Pago[];
   exchange_differences: Diferencia[];
-  balance: string;
+  /** NULL en una anulada: no hay deuda, que no es lo mismo que deuda cero. */
+  balance: string | null;
 }
 
 export function DetalleFactura(): React.JSX.Element {
@@ -184,7 +185,7 @@ export function DetalleFactura(): React.JSX.Element {
                 <Ban /> Anular
               </Button>
             )}
-            {pagable && !esCero(balance) && (
+            {pagable && balance !== null && !esCero(balance) && !balance.startsWith("-") && (
               <Button variant="primary" onClick={() => setPagando(true)}>
                 <HandCoins /> Registrar cobro
               </Button>
@@ -223,7 +224,7 @@ export function DetalleFactura(): React.JSX.Element {
                     <TR key={l.id}>
                       <TD className="text-faint-foreground">{l.line_number}</TD>
                       <TD className="max-w-64 truncate whitespace-normal">{l.description}</TD>
-                      <TDNum>{l.quantity}</TDNum>
+                      <TDNum>{mostrarCantidad(l.quantity)}</TDNum>
                       <TDNum>
                         {mostrarImporte({
                           amount: l.unit_price_transaction,
@@ -339,24 +340,34 @@ export function DetalleFactura(): React.JSX.Element {
               </Fila>
               <div className="my-2 h-px bg-border" />
               <Fila etiqueta="Total" destacada>
+                {/* El contrato del documento trae los totales FUNCIONALES; el
+                    total en divisa vive en las LÍNEAS y no se suma aquí
+                    (apps/web/CLAUDE.md). La tasa y la moneda del documento van
+                    en el tooltip. */}
                 <DualMoney
-                  amount={doc.amount_transaction_currency}
-                  currency={doc.transaction_currency}
-                  secondary={
-                    dual ? { amount: doc.total_amount, currency: doc.functional_currency } : null
+                  amount={doc.total_amount}
+                  currency={doc.functional_currency}
+                  rate={
+                    dual
+                      ? {
+                          rate: doc.fx_rate,
+                          source: `${doc.rate_source} · doc. en ${doc.transaction_currency}`,
+                        }
+                      : null
                   }
-                  rate={{ rate: doc.fx_rate, source: doc.rate_source }}
                 />
               </Fila>
               <Fila etiqueta="Saldo" destacada>
                 <span
                   className={
-                    esCero(balance)
+                    balance === null || esCero(balance) || balance.startsWith("-")
                       ? "font-mono text-accent-soft-foreground"
                       : "font-mono text-warning-soft-foreground"
                   }
                 >
-                  {mostrarImporte({ amount: balance, currency: doc.functional_currency })}
+                  {balance === null
+                    ? "—"
+                    : mostrarImporte({ amount: balance, currency: doc.functional_currency })}
                 </span>
               </Fila>
             </CardContent>
@@ -429,7 +440,7 @@ export function DetalleFactura(): React.JSX.Element {
       {pagando && (
         <RegistrarPago
           documento={doc}
-          balance={balance}
+          balance={balance ?? "0"}
           onClose={(hecho) => {
             setPagando(false);
             if (hecho) {

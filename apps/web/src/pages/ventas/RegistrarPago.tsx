@@ -15,7 +15,7 @@ import { SimpleSelect } from "../../ui/select.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
 import { ExchangeDiffIndicator } from "../../components/ExchangeDiffIndicator.js";
-import { mostrarImporte } from "../../money.js";
+import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { MensajeError } from "./comunes.js";
 
 /**
@@ -176,9 +176,9 @@ export function RegistrarPago({
                     Este cobro tendrá diferencial cambiario
                   </p>
                   <p className="mt-1 flex items-center gap-1.5 font-mono text-[0.8rem] text-muted-foreground tabular-nums">
-                    tasa de emisión {documento.fx_rate} ({documento.rate_source})
+                    tasa de emisión {mostrarCantidad(documento.fx_rate)} ({documento.rate_source})
                     <ArrowRight className="size-3" />
-                    tasa de hoy {tasaHoy.rate} ({tasaHoy.source})
+                    tasa de hoy {mostrarCantidad(tasaHoy.rate)} ({tasaHoy.source})
                   </p>
                   <p className="mt-1 text-muted-foreground">
                     El importe exacto lo calcula el servidor al registrar — aquí no se adelantan

@@ -1,6 +1,6 @@
 import { cn } from "../ui/cn.js";
 import { Tooltip } from "../ui/tooltip.js";
-import { mostrarImporte } from "../money.js";
+import { mostrarCantidad, mostrarImporte } from "../money.js";
 
 /**
  * DualMoney — LA firma visual de Ladino: el manejo dual Bs/USD como identidad.
@@ -43,7 +43,7 @@ function TooltipTasa({
     <Tooltip
       content={
         <span className="block">
-          <span className="block font-mono text-[0.82rem]">Tasa {rate.rate}</span>
+          <span className="block font-mono text-[0.82rem]">Tasa {mostrarCantidad(rate.rate)}</span>
           <span className="block text-muted-foreground">
             Fuente: {rate.source}
             {rate.timestamp != null && ` · ${rate.timestamp.slice(0, 10)}`}

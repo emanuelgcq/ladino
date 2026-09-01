@@ -335,6 +335,9 @@ function ThemeToggle(): React.JSX.Element {
 function Migas(): React.JSX.Element {
   const { pathname } = useLocation();
   const partes = pathname.split("/").filter(Boolean);
+  // Un id en la ruta no es una miga legible: se enseña «Detalle», no el uuid.
+  const etiqueta = (r: string, seg: string | undefined): string =>
+    CRUMBS[r] ?? (seg !== undefined && /^[0-9a-f-]{20,}$/i.test(seg) ? "Detalle" : (seg ?? ""));
   const rutas = partes.map((_, i) => "/" + partes.slice(0, i + 1).join("/"));
   return (
     <div className="flex h-8 items-center gap-1 border-b border-border bg-background px-4 text-[0.82rem] text-muted-foreground md:px-6">
@@ -345,10 +348,10 @@ function Migas(): React.JSX.Element {
         <span key={r} className="flex items-center gap-1">
           <ChevronRight className="size-3.5 text-faint-foreground" />
           {i === rutas.length - 1 ? (
-            <span className="font-medium text-foreground">{CRUMBS[r] ?? partes[i]}</span>
+            <span className="font-medium text-foreground">{etiqueta(r, partes[i])}</span>
           ) : (
             <Link to={r} className="hover:text-foreground">
-              {CRUMBS[r] ?? partes[i]}
+              {etiqueta(r, partes[i])}
             </Link>
           )}
         </span>

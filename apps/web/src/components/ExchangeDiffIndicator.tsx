@@ -1,6 +1,6 @@
 import { ArrowRight, Minus, TrendingDown, TrendingUp } from "lucide-react";
 import { cn } from "../ui/cn.js";
-import { mostrarImporte } from "../money.js";
+import { mostrarCantidad, mostrarImporte } from "../money.js";
 
 /**
  * ExchangeDiffIndicator — el diferencial cambiario con su narrativa.
@@ -80,9 +80,9 @@ export function ExchangeDiffIndicator({
       </p>
       {rateIssue != null && ratePayment != null && (
         <p className="mt-1 flex items-center gap-1.5 font-mono text-[0.78rem] text-muted-foreground tabular-nums">
-          emisión {rateIssue}
+          emisión {mostrarCantidad(rateIssue)}
           <ArrowRight className="size-3" />
-          cobro {ratePayment}
+          cobro {mostrarCantidad(ratePayment)}
         </p>
       )}
     </div>

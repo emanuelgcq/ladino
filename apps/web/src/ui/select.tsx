@@ -55,9 +55,13 @@ export function SimpleSelect({
         <BaseSelect.Value>
           {(v: string | null) =>
             v === null || v === "" ? (
-              <span className="text-faint-foreground">{placeholder}</span>
+              <span className="truncate text-faint-foreground">{placeholder}</span>
             ) : (
-              (options.find((o) => o.value === v)?.label ?? v)
+              // truncate y no wrap: una etiqueta larga («PRINCIPAL — Almacén
+              // principal») no debe desbordar el trigger de 32 px.
+              <span className="min-w-0 truncate whitespace-nowrap">
+                {options.find((o) => o.value === v)?.label ?? v}
+              </span>
             )
           }
         </BaseSelect.Value>

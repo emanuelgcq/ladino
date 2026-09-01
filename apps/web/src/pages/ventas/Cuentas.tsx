@@ -31,7 +31,7 @@ interface DocumentoStatement {
   status: string;
   total_amount: string;
   paid_amount: string;
-  balance: string;
+  balance: string | null;
   days_outstanding: number;
 }
 interface Statement {
@@ -252,12 +252,18 @@ function EstadoDeCuenta({
                   <TDNum>
                     {mostrarImporte({ amount: d.paid_amount, currency: data.currency })}
                   </TDNum>
+                  {/* Una ANULADA llega con saldo NULL del servidor: no hay
+                      deuda que mostrar, y pintarla como 0 diría «pagada». */}
                   <TDNum
                     className={
-                      esCero(d.balance) ? "text-faint-foreground" : "text-warning-soft-foreground"
+                      d.balance === null || esCero(d.balance)
+                        ? "text-faint-foreground"
+                        : "text-warning-soft-foreground"
                     }
                   >
-                    {mostrarImporte({ amount: d.balance, currency: data.currency })}
+                    {d.balance === null
+                      ? "—"
+                      : mostrarImporte({ amount: d.balance, currency: data.currency })}
                   </TDNum>
                   <TDNum className={d.days_outstanding > 60 ? "text-warning-soft-foreground" : ""}>
                     {d.days_outstanding}
