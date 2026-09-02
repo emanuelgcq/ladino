@@ -171,7 +171,12 @@ export {
   KeepDailyRateRequest,
   DailyRateResponse,
 } from "./treasury.js";
-export { NegocioResumenResponse } from "./negocio.js";
+export {
+  NegocioResumenResponse,
+  ConvertResponse,
+  CompanySettingsResponse,
+  UpdateCompanySettingsRequest,
+} from "./negocio.js";
 export {
   BookKind,
   TaxTreatment,

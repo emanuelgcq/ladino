@@ -1,6 +1,8 @@
 import type { Hono } from "hono";
 import { withTransaction, type Sql, type TransactionSql } from "@ladino/db";
-import { DominioError } from "../middleware/errors.js";
+import { UpdateCompanySettingsRequest } from "@ladino/schemas";
+import { getCompanySettings, setCompanySettings } from "@ladino/domain";
+import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
 
 /**
@@ -143,5 +145,83 @@ export function negocioRoutes(app: Hono, sql: Sql): void {
       };
     });
     return c.json(cuerpo, 200);
+  });
+
+  /**
+   * Conversión del SERVIDOR con la tasa vigente: la pantalla que enseña «≈ Bs.»
+   * junto a un precio en dólares pregunta aquí — multiplicar en el navegador
+   * sería aritmética de dinero en el cliente.
+   */
+  app.get("/v1/negocio/convertir", async (c) => {
+    requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const amount = c.req.query("amount") ?? "";
+    const from = c.req.query("from") ?? "USD";
+    const to = c.req.query("to") ?? "VES";
+    if (
+      !/^\d{1,16}(\.\d{1,8})?$/.test(amount) ||
+      !/^[A-Z]{3}$/.test(from) ||
+      !/^[A-Z]{3}$/.test(to)
+    ) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "La conversión exige amount decimal y monedas de tres letras.",
+      });
+    }
+    const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      if (from === to) {
+        return {
+          amount,
+          from_currency: from,
+          to_currency: to,
+          rate: "1",
+          rate_source: "identidad",
+          converted: amount,
+        };
+      }
+      const [t] = await tx<{ rate: string | null; source: string | null }[]>`
+        select r.rate::text as rate, r.source from public.exchange_rates r
+         where r.from_currency = ${from} and r.to_currency = ${to}
+           and r.rate_date <= (now() at time zone 'America/Caracas')::date + 1
+         order by r.rate_date desc, r.created_at desc limit 1`;
+      if (!t?.rate) {
+        throw new DominioError({
+          code: "EXCHANGE_RATE_MISSING",
+          message: `No hay tasa de ${from} a ${to}. Carga la tasa del día primero.`,
+        });
+      }
+      const [calc] = await tx<{ converted: string }[]>`
+        select round(${amount}::numeric * ${t.rate}::numeric, 8)::text as converted`;
+      return {
+        amount,
+        from_currency: from,
+        to_currency: to,
+        rate: t.rate,
+        rate_source: t.source ?? "manual",
+        converted: calc!.converted,
+      };
+    });
+    return c.json(cuerpo, 200);
+  });
+
+  // ── Los ajustes del negocio (migración 28) ────────────────────────────────
+  app.get("/v1/company-settings", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => getCompanySettings(uow, companyId));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
+
+  app.put("/v1/company-settings", async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = UpdateCompanySettingsRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      setCompanySettings(uow, companyId, parsed.data),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
   });
 }

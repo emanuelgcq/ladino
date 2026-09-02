@@ -120,6 +120,9 @@ import {
   ProductSimpleResponse,
   ImportProductsResponse,
   NegocioResumenResponse,
+  ConvertResponse,
+  CompanySettingsResponse,
+  UpdateCompanySettingsRequest,
   CreateCompanyAccountRequest,
   UpdateCompanyAccountRequest,
   CompanyAccountResponse,
@@ -1072,6 +1075,60 @@ export function buildOpenApiDocument(): object {
     security: [{ bearerAuth: [] }],
     request: { headers: companyHeader },
     responses: { 200: okJson(resumenNegocio, "El resumen."), ...erroresComunes },
+  });
+  const convertir = registry.register("ConvertResponse", ConvertResponse);
+  registry.registerPath({
+    method: "get",
+    path: "/v1/negocio/convertir",
+    summary: "Convertir un importe con la tasa vigente, en el SERVIDOR",
+    description:
+      "`converted = amount × tasa`, calculado en SQL numeric. La pantalla que enseña «≈ Bs.» " +
+      "junto a un precio en dólares pregunta aquí: multiplicar en el navegador sería aritmética " +
+      "de dinero en el cliente.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        amount: z.string(),
+        from: z.string().optional(),
+        to: z.string().optional(),
+      }),
+    },
+    responses: {
+      200: okJson(convertir, "El importe convertido, con la tasa y su fuente."),
+      ...erroresComunes,
+      409: errorRef("Sin tasa vigente para ese par."),
+    },
+  });
+  const ajustesNegocio = registry.register("CompanySettingsResponse", CompanySettingsResponse);
+  const editarAjustes = registry.register(
+    "UpdateCompanySettingsRequest",
+    UpdateCompanySettingsRequest,
+  );
+  registry.registerPath({
+    method: "get",
+    path: "/v1/company-settings",
+    summary: "Los ajustes del negocio (cualquier miembro)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(ajustesNegocio, "Los ajustes (defaults si nunca se guardaron)."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/company-settings",
+    summary: "Cambiar los ajustes del negocio (permiso company.settings.manage)",
+    description:
+      "Upsert parcial: solo lo enviado cambia. Son interruptores de EXPERIENCIA, no de verdad " +
+      "fiscal — la defensa real contra vender sin existencia sigue siendo la del kardex.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: editarAjustes } } },
+    },
+    responses: { 200: okJson(ajustesNegocio, "Los ajustes resultantes."), ...erroresComunes },
   });
   registry.registerPath({
     method: "get",

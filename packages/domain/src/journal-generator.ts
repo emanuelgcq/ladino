@@ -210,14 +210,16 @@ export async function generateJournalFromDocument(
     select id, description from public.journal_templates
      where company_id = ${input.companyId} and source_kind = ${input.sourceKind}
        and source_event = ${input.sourceEvent} and is_active
-       -- La vigencia se compara POR DÍA, no por instante. Una plantilla creada
-       -- hoy a las cinco de la tarde tiene que aplicar a un documento fechado
-       -- hoy, y \`fecha::timestamptz\` es la MEDIANOCHE de ese día: comparar
-       -- instantes dejaba fuera todo lo del propio día de configuración, así
-       -- que el sistema encolaba con «no hay plantilla» teniéndola delante. Es
-       -- la misma trampa que \`occurred_at\` contra \`now()\` en inventario.
-       and effective_from::date <= ${input.postingDate}::date
-       and (effective_to is null or effective_to::date > ${input.postingDate}::date)
+       -- La vigencia se compara POR DÍA, no por instante — y el día se decide
+       -- EN CARACAS, no en el huso de la sesión. La versión anterior casteaba
+       -- \`effective_from::date\` (UTC): entre las 8 pm y la medianoche de
+       -- Venezuela, una plantilla importada «hoy» quedaba fechada MAÑANA
+       -- respecto del posting_date del día venezolano, y el gasto se encolaba
+       -- con «no hay plantilla» teniéndola delante. Quinta aparición de la
+       -- familia de CLAUDE.md §3, cazada por el verify nocturno.
+       and (effective_from at time zone 'America/Caracas')::date <= ${input.postingDate}::date
+       and (effective_to is null
+            or (effective_to at time zone 'America/Caracas')::date > ${input.postingDate}::date)
      order by effective_from desc limit 1`;
   if (!plantilla) {
     return encolar(
@@ -265,8 +267,10 @@ export async function generateJournalFromDocument(
     const [cuenta] = await sql<{ id: string }[]>`
       select account_id as id from public.company_account_settings
        where company_id = ${input.companyId} and purpose = ${l.account_purpose}
-         and effective_from::date <= ${input.postingDate}::date
-         and (effective_to is null or effective_to::date > ${input.postingDate}::date)
+         -- El mismo día DE CARACAS que la vigencia de la plantilla (arriba).
+         and (effective_from at time zone 'America/Caracas')::date <= ${input.postingDate}::date
+         and (effective_to is null
+              or (effective_to at time zone 'America/Caracas')::date > ${input.postingDate}::date)
        order by effective_from desc limit 1`;
     if (!cuenta) {
       papelesSinCuenta.add(l.account_purpose);

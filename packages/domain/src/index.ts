@@ -82,6 +82,12 @@ export {
   type JournalGenerationError,
 } from "./journal-generator.js";
 export {
+  getCompanySettings,
+  setCompanySettings,
+  type CompanySettings,
+  type SettingsError,
+} from "./company-settings.js";
+export {
   listCompanyAccounts,
   createCompanyAccount,
   updateCompanyAccount,

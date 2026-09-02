@@ -53,3 +53,40 @@ export const NegocioResumenResponse = z
   })
   .strict();
 export type NegocioResumenResponse = z.infer<typeof NegocioResumenResponse>;
+
+/** Conversión del SERVIDOR: `converted = amount × tasa vigente`, en SQL. */
+export const ConvertResponse = z
+  .object({
+    amount: cifra,
+    from_currency: z.string(),
+    to_currency: z.string(),
+    rate: cifra,
+    rate_source: z.string(),
+    converted: cifra,
+  })
+  .strict();
+export type ConvertResponse = z.infer<typeof ConvertResponse>;
+
+/** Los tres interruptores del negocio y su depósito por defecto (migración 28). */
+export const CompanySettingsResponse = z
+  .object({
+    sells_wholesale: z.boolean(),
+    block_sale_without_stock: z.boolean(),
+    default_tax_category_code: z.string(),
+    default_warehouse_id: uuid.nullable(),
+  })
+  .strict();
+export type CompanySettingsResponse = z.infer<typeof CompanySettingsResponse>;
+
+export const UpdateCompanySettingsRequest = z
+  .object({
+    sells_wholesale: z.boolean().optional(),
+    block_sale_without_stock: z.boolean().optional(),
+    default_tax_category_code: z
+      .string()
+      .regex(/^[a-z][a-z0-9_]{0,39}$/)
+      .optional(),
+    default_warehouse_id: uuid.nullable().optional(),
+  })
+  .strict();
+export type UpdateCompanySettingsRequest = z.infer<typeof UpdateCompanySettingsRequest>;
