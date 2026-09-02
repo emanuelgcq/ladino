@@ -21,6 +21,12 @@ const COLUMNS = `id, tenant_id, company_id, tax_id, legal_name, trade_name, pers
   taxpayer_type_code, fiscal_address, email, phone, status, default_price_list_id,
   to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
 
+/** El mismo select con alias `cu.` (el join de deuda del listado de Fase C). */
+const COLUMNS_CU = `cu.id, cu.tenant_id, cu.company_id, cu.tax_id, cu.legal_name, cu.trade_name,
+  cu.person_type_code, cu.taxpayer_type_code, cu.fiscal_address, cu.email, cu.phone, cu.status,
+  cu.default_price_list_id, cu.is_system,
+  to_char(cu.created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
+
 function comoPatron(termino: string): string {
   return `%${termino.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
 }
@@ -46,19 +52,36 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
     const search = c.req.query("search")?.trim() ?? "";
+    // Fase C: `with_debt=1` añade lo que CADA cliente debe (suma de saldos
+    // positivos de sus facturas emitidas), calculado por el ESQUEMA. La
+    // pantalla de Clientes vive de esta cifra; pedirla es opt-in porque el
+    // cálculo recorre las facturas abiertas del cliente.
+    const conDeuda = c.req.query("with_debt") === "1";
     const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 20) || 20, 1), 100);
     const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     const filas = await withTransaction(sql, actor, ({ sql: tx }) => {
       const filtro =
         search === ""
           ? tx``
-          : tx`and (coalesce(tax_id, '') ilike ${comoPatron(search)} escape '\\'
-                 or legal_name ilike ${comoPatron(search)} escape '\\')`;
+          : tx`and (coalesce(cu.tax_id, '') ilike ${comoPatron(search)} escape '\\'
+                 or cu.legal_name ilike ${comoPatron(search)} escape '\\')`;
+      const deudaJoin = conDeuda
+        ? tx`left join lateral (
+              select coalesce(sum(greatest(platform.document_balance(cu.company_id, d.id), 0)), 0)
+                     ::text as debt
+                from public.documents d
+               where d.company_id = cu.company_id and d.customer_id = cu.id
+                 and d.kind = 'invoice' and d.status = 'issued'
+            ) deuda on true`
+        : tx``;
+      const deudaCol = conDeuda ? ", deuda.debt" : "";
       return tx<Record<string, unknown>[]>`
-        select ${tx.unsafe(COLUMNS)}, count(*) over ()::int as total
-          from public.customers
-         where company_id = ${companyId} ${filtro}
-         order by legal_name, id
+        select ${tx.unsafe(COLUMNS_CU)} ${tx.unsafe(deudaCol)},
+               count(*) over ()::int as total
+          from public.customers cu
+          ${deudaJoin}
+         where cu.company_id = ${companyId} ${filtro}
+         order by cu.legal_name, cu.id
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
     });
     const total = filas.length > 0 ? (filas[0]!["total"] as number) : 0;

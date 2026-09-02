@@ -1136,6 +1136,12 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "is_system": {
+            "type": "boolean"
+          },
+          "debt": {
+            "type": "string"
           }
         },
         "required": [
@@ -1222,6 +1228,12 @@
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "is_system": {
+                  "type": "boolean"
+                },
+                "debt": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -12340,6 +12352,7 @@
     "/v1/customers": {
       "get": {
         "summary": "Listar clientes (búsqueda por RIF o razón social, paginación en servidor)",
+        "description": "`with_debt=1` añade a cada cliente lo que debe (suma de saldos positivos de sus facturas emitidas, calculada por el esquema) — la cifra de la pantalla de Clientes.",
         "security": [
           {
             "bearerAuth": []
@@ -12371,6 +12384,17 @@
             },
             "required": false,
             "name": "per_page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "required": false,
+            "name": "with_debt",
             "in": "query"
           },
           {

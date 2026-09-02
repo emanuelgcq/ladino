@@ -513,6 +513,9 @@ export function buildOpenApiDocument(): object {
     method: "get",
     path: "/v1/customers",
     summary: "Listar clientes (búsqueda por RIF o razón social, paginación en servidor)",
+    description:
+      "`with_debt=1` añade a cada cliente lo que debe (suma de saldos positivos de sus " +
+      "facturas emitidas, calculada por el esquema) — la cifra de la pantalla de Clientes.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
@@ -520,6 +523,7 @@ export function buildOpenApiDocument(): object {
         search: z.string().optional(),
         page: z.coerce.number().int().min(1).optional(),
         per_page: z.coerce.number().int().min(1).max(100).optional(),
+        with_debt: z.enum(["1"]).optional(),
       }),
     },
     responses: {

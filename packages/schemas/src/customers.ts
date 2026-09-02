@@ -73,6 +73,13 @@ export const CustomerResponse = z
     status: CustomerStatus,
     default_price_list_id: uuid.nullable(),
     created_at: z.string().datetime({ offset: true }),
+    /**
+     * Extras del listado de Fase C: `is_system` marca al Consumidor final
+     * (congelado, la contraparte del mostrador) y `debt` — presente solo con
+     * `with_debt=1` — es lo que ese cliente debe, sumado por el esquema.
+     */
+    is_system: z.boolean().optional(),
+    debt: z.string().optional(),
   })
   .strict();
 export type CustomerResponse = z.infer<typeof CustomerResponse>;
