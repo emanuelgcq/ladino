@@ -339,6 +339,20 @@ function PasoTasa({
     },
     onError: (e) => toast.error("No se pudo guardar la tasa", errorDePersona(e)),
   });
+  // El camino de UN clic: la oficial del BCV, vía DolarAPI, con fuente y día
+  // publicados. El manual queda como fallback para cuando no haya internet.
+  const traerBcv = useMutation({
+    mutationFn: () =>
+      llamar<{ rate: string }>("/v1/exchange-rates/bcv", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+      }),
+    onSuccess: (r) => {
+      toast.success("Tasa del BCV traída", `Bs. ${mostrarCantidad(r.rate)} por dólar`);
+      onCambio();
+    },
+    onError: (e) => toast.error("No se pudo traer la tasa", errorDePersona(e)),
+  });
 
   return (
     <Card>
@@ -357,6 +371,13 @@ function PasoTasa({
           </p>
         ) : (
           <div className="space-y-3">
+            <Button
+              variant="primary"
+              disabled={traerBcv.isPending}
+              onClick={() => traerBcv.mutate()}
+            >
+              {traerBcv.isPending ? "Consultando…" : "Traer la oficial del BCV"}
+            </Button>
             {tasa !== null && (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[0.9rem]">
@@ -373,7 +394,7 @@ function PasoTasa({
               </div>
             )}
             <div className="flex flex-wrap items-end gap-2">
-              <FormField label="¿A cuánto está el dólar hoy? (Bs.)">
+              <FormField label="O escríbela tú (Bs. por dólar)">
                 {(p) => (
                   <Input
                     {...p}

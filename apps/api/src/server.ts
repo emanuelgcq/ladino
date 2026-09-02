@@ -42,6 +42,7 @@ const app = buildApp({
   sql,
   auth: cfg.auth,
   storage: cfg.storage,
+  bcv: { url: cfg.bcvUrl },
   rateLimitPorMinuto: cfg.rateLimitPorMinuto,
   requestTimeoutMs: cfg.requestTimeoutMs,
   corsOrigin: cfg.corsOrigin,

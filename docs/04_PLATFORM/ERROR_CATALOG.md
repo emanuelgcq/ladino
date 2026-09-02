@@ -79,6 +79,7 @@ el código y se corrige el espejo.
 | `NEGATIVE_STOCK` | No hay suficiente mercancía para esa cantidad. Revisa la existencia o registra la entrada primero. |
 | `APPEND_ONLY_VIOLATION` | Esto ya quedó registrado y no se puede cambiar. Lo que corresponde es registrar la corrección. |
 | `DOCUMENT_SNAPSHOT_FROZEN` | Los datos del cliente quedaron impresos en esa factura y no se cambian. Si están mal, se corrige con una nota de crédito. |
+| `UPSTREAM_UNAVAILABLE` | No se pudo consultar la fuente en este momento. Intenta de nuevo, o carga el dato a mano. |
 | `PERIOD_CLOSED` | Ese mes ya está cerrado en contabilidad. Habla con quien lleva los números. |
 | `COMPANY_SUSPENDED` | El negocio está suspendido en el sistema. Contacta a soporte. |
 | `COSTING_MISMATCH` | La existencia cambió mientras guardabas. Vuelve a intentar: casi siempre pasa a la primera. |

@@ -154,6 +154,10 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   BOOK_FORMAT_UNAVAILABLE: 409, // LAD65
   // POS identificado (migración 33): el snapshot del cliente no se edita.
   DOCUMENT_SNAPSHOT_FROZEN: 409, // LAD68
+  // El adaptador BCV (DolarAPI) no respondió o respondió irreconocible. 502:
+  // el cuerpo del cliente está bien; lo que falló está aguas arriba, y el
+  // fallback es la carga manual de siempre.
+  UPSTREAM_UNAVAILABLE: 502,
 };
 
 export class DominioError extends Error {
@@ -291,6 +295,8 @@ function mensajePersona(code: string): string {
       return "Demasiadas operaciones muy seguidas. Espera un momento y sigue.";
     case "GATEWAY_TIMEOUT":
       return "Esto está tardando más de la cuenta. Revisa en un momento si quedó registrado antes de repetirlo.";
+    case "UPSTREAM_UNAVAILABLE":
+      return "No se pudo consultar la fuente en este momento. Intenta de nuevo, o carga el dato a mano.";
     default:
       return "Algo salió mal de nuestro lado. Vuelve a intentar; si sigue, avísanos.";
   }

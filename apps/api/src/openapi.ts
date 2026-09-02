@@ -1442,14 +1442,33 @@ export function buildOpenApiDocument(): object {
     path: "/v1/exchange-rates",
     summary: "Cargar tasa manualmente (permiso fx.rate.manage)",
     description:
-      "Camino manual del adaptador BCV (ADR-0028): hoy el adaptador es NullBCVAdapter y no " +
-      "trae nada. Sin fuente citada no se persiste, y la fuente viaja en cada documento.",
+      "El FALLBACK del adaptador BCV (ADR-0028): sin internet, la tasa se teclea. Sin fuente " +
+      "citada no se persiste, y la fuente viaja en cada documento.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: idemHeader,
       body: { content: { "application/json": { schema: crearTasa } } },
     },
     responses: { 201: okJson(crearTasa, "Tasa cargada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/exchange-rates/bcv",
+    summary: "Traer la tasa OFICIAL del BCV desde DolarAPI (permiso fx.rate.manage)",
+    description:
+      "El adaptador BCV de ADR-0028, ya no null: consulta `GET /v1/dolares/oficial` de " +
+      "DolarAPI, extrae `promedio` del cuerpo CRUDO (la tasa nunca pasa por un float) y la " +
+      "persiste como USD→VES con el día PUBLICADO por la fuente y la fuente citada " +
+      "(«BCV oficial vía DolarAPI (<fechaActualizacion>)»). Si la fuente no responde: 502 " +
+      "UPSTREAM_UNAVAILABLE, y el fallback es la carga manual de siempre.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: idemHeader },
+    responses: {
+      200: okJson(crearTasa, "La MISMA publicación ya estaba cargada: la fila existente."),
+      201: okJson(crearTasa, "La tasa traída y persistida."),
+      ...erroresComunes,
+      502: errorRef("DolarAPI no respondió o la respuesta no trae promedio/fecha reconocibles."),
+    },
   });
   registry.registerPath({
     method: "get",

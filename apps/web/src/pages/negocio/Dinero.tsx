@@ -293,6 +293,21 @@ function TarjetaTasa({
     onError: (e) => toast.error("No se pudo confirmar la tasa", errorDePersona(e)),
   });
 
+  // La tasa OFICIAL, traída del BCV (vía DolarAPI) y guardada con su fuente.
+  // Si no hay internet, el camino manual de abajo sigue ahí.
+  const traerBcv = useMutation({
+    mutationFn: () =>
+      llamar<{ rate: string }>("/v1/exchange-rates/bcv", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+      }),
+    onSuccess: (r) => {
+      toast.success("Tasa del BCV traída", `Bs. ${mostrarCantidad(r.rate)} por dólar`);
+      onCambio();
+    },
+    onError: (e) => toast.error("No se pudo traer la tasa", errorDePersona(e)),
+  });
+
   const cambiar = useMutation({
     mutationFn: () =>
       llamar("/v1/exchange-rates", {
@@ -343,10 +358,17 @@ function TarjetaTasa({
           )}
         </div>
         {!editando ? (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant={tasa === null || !tasa.es_de_hoy ? "primary" : "secondary"}
+              disabled={traerBcv.isPending}
+              onClick={() => traerBcv.mutate()}
+            >
+              {traerBcv.isPending ? "Consultando…" : "Traer del BCV"}
+            </Button>
             {tasa !== null && !tasa.es_de_hoy && (
               <Button
-                variant="primary"
+                variant="secondary"
                 disabled={confirmar.isPending}
                 onClick={() => confirmar.mutate()}
               >
@@ -354,7 +376,7 @@ function TarjetaTasa({
               </Button>
             )}
             <Button variant="secondary" onClick={() => setEditando(true)}>
-              {tasa === null ? "Cargar tasa" : "Cambió"}
+              {tasa === null ? "Cargarla a mano" : "Cambió"}
             </Button>
           </div>
         ) : (

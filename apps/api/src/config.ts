@@ -92,6 +92,8 @@ export interface ServerConfig {
   readonly port: number;
   readonly auth: AuthConfig;
   readonly storage?: StorageConfig | undefined;
+  /** Base de DolarAPI para la tasa oficial del BCV. Siempre hay default. */
+  readonly bcvUrl: string;
   /** Peticiones por minuto y usuario autenticado en /v1/*. */
   readonly rateLimitPorMinuto: number;
   /** Plazo máximo de una petición a /v1/*, en ms. */
@@ -114,6 +116,9 @@ export function configServidor(env: Entorno): ServerConfig {
     port: entero(env, "PORT", 3000),
     auth: configAuth(env),
     storage: configStorage(env),
+    // DolarAPI publica la tasa oficial del BCV; la env existe para apuntar a
+    // un mock en pruebas o cambiar de proveedor sin tocar código.
+    bcvUrl: env["BCV_API_URL"] ?? "https://ve.dolarapi.com",
     rateLimitPorMinuto: entero(env, "RATE_LIMIT_PER_MINUTE", 300),
     // 30 s: MUY por debajo de los 15 min del reaper de idempotencia (F-10):
     // ninguna petición puede seguir viva cuando el reaper libera su clave.

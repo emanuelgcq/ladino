@@ -17668,7 +17668,7 @@
       },
       "post": {
         "summary": "Cargar tasa manualmente (permiso fx.rate.manage)",
-        "description": "Camino manual del adaptador BCV (ADR-0028): hoy el adaptador es NullBCVAdapter y no trae nada. Sin fuente citada no se persiste, y la fuente viaja en cada documento.",
+        "description": "El FALLBACK del adaptador BCV (ADR-0028): sin internet, la tasa se teclea. Sin fuente citada no se persiste, y la fuente viaja en cada documento.",
         "security": [
           {
             "bearerAuth": []
@@ -17746,6 +17746,109 @@
           },
           "422": {
             "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/exchange-rates/bcv": {
+      "post": {
+        "summary": "Traer la tasa OFICIAL del BCV desde DolarAPI (permiso fx.rate.manage)",
+        "description": "El adaptador BCV de ADR-0028, ya no null: consulta `GET /v1/dolares/oficial` de DolarAPI, extrae `promedio` del cuerpo CRUDO (la tasa nunca pasa por un float) y la persiste como USD→VES con el día PUBLICADO por la fuente y la fuente citada («BCV oficial vía DolarAPI (<fechaActualizacion>)»). Si la fuente no responde: 502 UPSTREAM_UNAVAILABLE, y el fallback es la carga manual de siempre.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "La MISMA publicación ya estaba cargada: la fila existente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateExchangeRateRequest"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "La tasa traída y persistida.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateExchangeRateRequest"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "DolarAPI no respondió o la respuesta no trae promedio/fecha reconocibles.",
             "content": {
               "application/json": {
                 "schema": {

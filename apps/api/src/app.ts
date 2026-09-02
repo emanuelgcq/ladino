@@ -22,12 +22,15 @@ import { documentsPdfRoutes } from "./routes/documents-pdf.js";
 import { negocioRoutes } from "./routes/negocio.js";
 import { fiscalSetupRoutes } from "./routes/fiscal-setup.js";
 import type { StorageConfig } from "./config.js";
+import type { BcvConfig } from "./bcv.js";
 
 export interface AppConfig {
   readonly sql: Sql;
   readonly auth: AuthConfig;
   /** Almacenamiento de objetos (fotos, recibos). Sin él, esos endpoints lo dicen. */
   readonly storage?: StorageConfig | undefined;
+  /** El adaptador BCV (DolarAPI). Sin él, /v1/exchange-rates/bcv lo dice. */
+  readonly bcv?: BcvConfig | undefined;
   /** Por defecto 300; los tests bajan la cifra para ejercer el 429. */
   readonly rateLimitPorMinuto?: number;
   /** Por defecto 30 s. Ver middleware/timeout.ts para el invariante con el reaper. */
@@ -163,7 +166,7 @@ export function buildApp(cfg: AppConfig): Hono {
   catalogRoutes(app, cfg.sql);
   customersRoutes(app, cfg.sql, idempotencia);
   inventoryRoutes(app, cfg.sql, idempotencia);
-  salesRoutes(app, cfg.sql, idempotencia);
+  salesRoutes(app, cfg.sql, idempotencia, cfg.bcv);
   accountingRoutes(app, cfg.sql, idempotencia);
   purchasesRoutes(app, cfg.sql, idempotencia);
   fiscalBooksRoutes(app, cfg.sql, idempotencia);

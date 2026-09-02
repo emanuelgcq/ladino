@@ -1,5 +1,27 @@
 # Handoff — 2026-09-02 (2ª sesión)
 
+## El adaptador BCV dejó de ser null (2026-09-02)
+
+`POST /v1/exchange-rates/bcv` trae la tasa OFICIAL del BCV desde DolarAPI
+(`GET https://ve.dolarapi.com/v1/dolares/oficial`; `BCV_API_URL` la apunta a un mock en
+pruebas). Lo que importa de cómo:
+
+- **La tasa jamás pasa por un float**: `promedio` viaja como número JSON y se extrae del
+  cuerpo CRUDO por regex (`apps/api/src/bcv.ts`), string de punta a punta hasta el
+  `numeric(24,8)`. Hasta 8 decimales; con 9 se planta en vez de truncar.
+- **El día es el PUBLICADO por la fuente** (los 10 primeros caracteres de
+  `fechaActualizacion`, que DolarAPI emite a medianoche de Caracas): sin conversión de zona,
+  que es por donde entra la familia fecha-contra-reloj.
+- **La misma publicación dos veces es UN hecho**: el único `(par, fuente, día)` del esquema
+  convierte el reintento en 200 con la fila existente — el botón se puede pulsar dos veces
+  sin 409 ni duplicado. Si el BCV actualiza intradía, la fuente citada cambia con
+  `fechaActualizacion` y esa sí es fila nueva.
+- Permiso `fx.rate.manage` comprobado ANTES de tocar la red; fuente caída → 502
+  `UPSTREAM_UNAVAILABLE` con el fallback dicho («carga el dato a mano») — la carga manual
+  de siempre sigue ahí. Botones: «Traer del BCV» en Mi dinero y en el paso de tasa de
+  /empezar. E2E contra un mock HTTP local (tasa exacta, replay, 403 sin red, 502) + smoke
+  real (captura 27).
+
 ## La venta empieza por la cédula (2026-09-02, cambio al flujo de /vender)
 
 Decisión del usuario, reemplaza el «Consumidor final por defecto» de la fase. Migración 33

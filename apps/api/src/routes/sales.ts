@@ -1,5 +1,6 @@
 import type { Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql, type TransactionSql } from "@ladino/db";
+import { tasaOficialBcv, BcvNoDisponible, type BcvConfig } from "../bcv.js";
 import {
   CreateQuoteRequest,
   CreateOrderRequest,
@@ -87,7 +88,12 @@ async function exigeArRead(
  * `platform.ar_aging`— nunca sumando en JavaScript. Un saldo calculado en dos
  * sitios se convierte en dos saldos.
  */
-export function salesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler): void {
+export function salesRoutes(
+  app: Hono,
+  sql: Sql,
+  idempotencia: MiddlewareHandler,
+  bcv?: BcvConfig,
+): void {
   // ── Documentos ────────────────────────────────────────────────────────────
 
   app.get("/v1/documents", async (c) => {
@@ -529,9 +535,80 @@ export function salesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler
   });
 
   /**
-   * Carga MANUAL de tasa (ADR-0028). Es el camino que existe hoy porque el
-   * adaptador BCV todavía no trae nada: `NullBCVAdapter`. Sin fuente no se
-   * persiste, y la fuente queda visible en cada documento que la use.
+   * La tasa OFICIAL del BCV, traída del adaptador (DolarAPI) y persistida con
+   * su fuente y su día PUBLICADO — el `NullBCVAdapter` de ADR-0028 por fin
+   * dejó de ser null. La carga manual de abajo sigue siendo el fallback: sin
+   * internet, la tasa se teclea.
+   */
+  app.post("/v1/exchange-rates/bcv", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    if (actor.kind !== "user") {
+      throw new DominioError({
+        code: "PERMISSION_REQUIRED",
+        message: "Traer la tasa exige un usuario real.",
+      });
+    }
+    if (bcv === undefined) {
+      throw new DominioError({
+        code: "UPSTREAM_UNAVAILABLE",
+        message: "El adaptador BCV no está configurado en este servidor.",
+      });
+    }
+    // El permiso se comprueba ANTES de tocar la red: sin él, ni una petición
+    // sale de aquí.
+    const autorizado = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      const [p] = await tx<{ ok: boolean }[]>`
+        select platform.ladino_user_has_permission(${actor.userId}, 'fx.rate.manage',
+                                                   ${companyId}) as ok`;
+      return p?.ok === true;
+    });
+    if (!autorizado) {
+      throw new DominioError({
+        code: "PERMISSION_REQUIRED",
+        message: "Traer la tasa exige el permiso fx.rate.manage.",
+      });
+    }
+
+    let tasa;
+    try {
+      tasa = await tasaOficialBcv(bcv);
+    } catch (e) {
+      if (e instanceof BcvNoDisponible) {
+        throw new DominioError({ code: "UPSTREAM_UNAVAILABLE", message: e.message });
+      }
+      throw e;
+    }
+
+    // La MISMA publicación dos veces es UN hecho, no dos (el único por par,
+    // fuente y día lo dice): el reintento devuelve la fila que ya está. Si el
+    // BCV actualiza intradía, `fechaActualizacion` cambia, la fuente citada
+    // cambia con ella, y esa sí es una fila nueva.
+    const fuente = `BCV oficial vía DolarAPI (${tasa.actualizada})`;
+    const { fila, nueva } = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      const [insertada] = await tx<Record<string, unknown>[]>`
+        insert into public.exchange_rates
+          (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+        values ('USD', 'VES', ${tasa.rate}, ${fuente}, ${tasa.rateDate}::date, now())
+        on conflict on constraint exchange_rates_day_key do nothing
+        returning id, from_currency, to_currency, rate::text as rate, source,
+                  rate_date::text as rate_date`;
+      if (insertada) return { fila: insertada, nueva: true };
+      const [existente] = await tx<Record<string, unknown>[]>`
+        select id, from_currency, to_currency, rate::text as rate, source,
+               rate_date::text as rate_date
+          from public.exchange_rates
+         where from_currency = 'USD' and to_currency = 'VES'
+           and source = ${fuente} and rate_date = ${tasa.rateDate}::date`;
+      return { fila: existente!, nueva: false };
+    });
+    return c.json(fila, nueva ? 201 : 200);
+  });
+
+  /**
+   * Carga MANUAL de tasa (ADR-0028): el fallback del adaptador BCV de arriba
+   * — sin internet, la tasa se teclea. Sin fuente no se persiste, y la fuente
+   * queda visible en cada documento que la use.
    */
   app.post("/v1/exchange-rates", idempotencia, async (c) => {
     const parsed = CreateExchangeRateRequest.safeParse(await c.req.json().catch(() => null));
