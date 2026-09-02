@@ -18,6 +18,7 @@ import { ChecklistFiscal } from "../pages/setup/ChecklistFiscal.js";
 import { DemoComponentes } from "../pages/dev/DemoComponentes.js";
 import { Dinero } from "../pages/negocio/Dinero.js";
 import { ProductosNegocio } from "../pages/negocio/Productos.js";
+import { Vender } from "../pages/negocio/Vender.js";
 import { PantallaEnCamino } from "../pages/negocio/comunes.js";
 
 /**
@@ -39,7 +40,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/inicio" replace /> },
       // ── El mundo de la persona ─────────────────────────────────────────
       { path: "inicio", element: <PantallaEnCamino titulo="Inicio" /> },
-      { path: "vender", element: <PantallaEnCamino titulo="Vender" /> },
+      { path: "vender", element: <Vender /> },
       { path: "productos", element: <ProductosNegocio /> },
       { path: "inventario", element: <PantallaEnCamino titulo="Inventario" /> },
       { path: "clientes", element: <PantallaEnCamino titulo="Clientes" /> },
