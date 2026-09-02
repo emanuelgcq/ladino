@@ -51,3 +51,27 @@ function compararMagnitud(a: Partes, b: Partes): -1 | 0 | 1 {
 export function esCero(v: string): boolean {
   return /^-?0*(?:\.0*)?$/.test(v.trim());
 }
+
+/**
+ * Resta de CANTIDADES (contado − registrado), exacta, con BigInt escalado.
+ *
+ * Es para el ajuste de inventario: la persona dice «conté 47» y la API pide
+ * el DELTA. Son cantidades físicas, NO dinero — la prohibición de aritmética
+ * monetaria del cliente sigue intacta: esto jamás toca un importe, y el
+ * esquema vuelve a validar el resultado contra el kardex de todas formas.
+ * Devuelve null si algo no es un decimal legible.
+ */
+export function restarCantidades(a: string, b: string): string | null {
+  const pa = /^(-)?(\d+)(?:\.(\d+))?$/.exec(a.trim());
+  const pb = /^(-)?(\d+)(?:\.(\d+))?$/.exec(b.trim());
+  if (pa === null || pb === null) return null;
+  const escala = Math.max(pa[3]?.length ?? 0, pb[3]?.length ?? 0);
+  const aEntero = BigInt((pa[1] ?? "") + (pa[2] ?? "0") + (pa[3] ?? "").padEnd(escala, "0"));
+  const bEntero = BigInt((pb[1] ?? "") + (pb[2] ?? "0") + (pb[3] ?? "").padEnd(escala, "0"));
+  const r = aEntero - bEntero;
+  const neg = r < 0n;
+  const abs = (neg ? -r : r).toString().padStart(escala + 1, "0");
+  const ent = abs.slice(0, abs.length - escala).replace(/^0+(?=\d)/, "");
+  const dec = escala === 0 ? "" : abs.slice(abs.length - escala).replace(/0+$/, "");
+  return `${neg ? "-" : ""}${ent}${dec === "" ? "" : `.${dec}`}`;
+}

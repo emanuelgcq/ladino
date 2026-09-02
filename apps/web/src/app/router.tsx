@@ -19,6 +19,7 @@ import { DemoComponentes } from "../pages/dev/DemoComponentes.js";
 import { Dinero } from "../pages/negocio/Dinero.js";
 import { ProductosNegocio } from "../pages/negocio/Productos.js";
 import { Vender } from "../pages/negocio/Vender.js";
+import { InventarioNegocio } from "../pages/negocio/Inventario.js";
 import { PantallaEnCamino } from "../pages/negocio/comunes.js";
 
 /**
@@ -42,7 +43,7 @@ export const router = createBrowserRouter([
       { path: "inicio", element: <PantallaEnCamino titulo="Inicio" /> },
       { path: "vender", element: <Vender /> },
       { path: "productos", element: <ProductosNegocio /> },
-      { path: "inventario", element: <PantallaEnCamino titulo="Inventario" /> },
+      { path: "inventario", element: <InventarioNegocio /> },
       { path: "clientes", element: <PantallaEnCamino titulo="Clientes" /> },
       { path: "compras", element: <PantallaEnCamino titulo="Compras y gastos" /> },
       { path: "dinero", element: <Dinero /> },
