@@ -18,7 +18,7 @@ import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
-import { fechaRelativa } from "./comunes.js";
+import { fechaRelativa, formatearDocumento } from "./comunes.js";
 
 /**
  * CLIENTES (Fase C, PARTE 9): a quién le vendo y quién me debe. La lista trae
@@ -140,8 +140,8 @@ export function ClientesNegocio(): React.JSX.Element {
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{c.legal_name}</span>
-                <span className="block text-[0.8rem] text-muted-foreground">
-                  {c.tax_id ?? "Sin RIF"}
+                <span className="block text-[0.8rem] text-muted-foreground tabular-nums">
+                  {c.tax_id !== null ? formatearDocumento(c.tax_id) : "Sin RIF"}
                   {c.phone !== null ? ` · ${c.phone}` : ""}
                 </span>
               </span>
@@ -170,11 +170,12 @@ function Deuda({ debt }: { debt: string | undefined }): React.JSX.Element {
   );
 }
 
-/** J/G → empresa; V/E o sin RIF → persona. El contador afina en /admin. */
+/** J/G → empresa; P → extranjera; V/E o sin RIF → persona. El contador afina en /admin. */
 function inferirTipo(taxId: string): { persona: string; contribuyente: string } {
   const t = taxId.trim().toUpperCase();
   if (t.startsWith("J")) return { persona: "juridica", contribuyente: "ordinario" };
   if (t.startsWith("G")) return { persona: "gobierno", contribuyente: "ordinario" };
+  if (t.startsWith("P")) return { persona: "extranjera", contribuyente: "no_domiciliado" };
   return { persona: "natural", contribuyente: "consumidor_final" };
 }
 
@@ -190,18 +191,27 @@ function AltaCliente({
   const [nombre, setNombre] = useState("");
   const [rif, setRif] = useState("");
   const [telefono, setTelefono] = useState("");
+  const [direccion, setDireccion] = useState("");
+
+  // El documento viaja NORMALIZADO (prefijo + alfanumérico, sin separadores):
+  // los guiones y puntos son presentación y los pone `formatearDocumento`.
+  const documento = rif
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
 
   const crear = useMutation({
     mutationFn: () => {
-      const tipo = inferirTipo(rif);
+      const tipo = inferirTipo(documento);
       return llamar("/v1/customers", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
           company_id: empresa.id,
           legal_name: nombre.trim(),
-          ...(rif.trim() === "" ? {} : { tax_id: rif.trim().toUpperCase() }),
+          ...(documento === "" ? {} : { tax_id: documento }),
           ...(telefono.trim() === "" ? {} : { phone: telefono.trim() }),
+          ...(direccion.trim() === "" ? {} : { fiscal_address: direccion.trim() }),
           person_type_code: tipo.persona,
           taxpayer_type_code: tipo.contribuyente,
         }),
@@ -215,8 +225,9 @@ function AltaCliente({
     onError: (e) => toast.error("No se pudo agregar", errorDePersona(e)),
   });
 
-  const esEmpresa = /^[JG]/i.test(rif.trim());
-  const listo = nombre.trim().length > 0 && (!esEmpresa || rif.trim().length >= 3);
+  const esEmpresa = /^[JG]/.test(documento);
+  const listo =
+    nombre.trim().length > 0 && (!esEmpresa || (documento.length >= 3 && direccion.trim() !== ""));
 
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
@@ -252,6 +263,16 @@ function AltaCliente({
                 onChange={(e) => setTelefono(e.target.value)}
                 placeholder="0414-1234567"
               />
+            )}
+          </FormField>
+          <FormField
+            label="Dirección"
+            {...(esEmpresa
+              ? { required: true, hint: "Una factura a una empresa lleva su domicilio fiscal." }
+              : {})}
+          >
+            {(p) => (
+              <Input {...p} value={direccion} onChange={(e) => setDireccion(e.target.value)} />
             )}
           </FormField>
         </div>

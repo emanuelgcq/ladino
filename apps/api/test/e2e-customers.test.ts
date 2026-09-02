@@ -14,10 +14,14 @@ const JWT_SECRET = new TextEncoder().encode(
 const ISSUER = "http://127.0.0.1:54321/auth/v1";
 const TENANT = "e2ec0000-0000-4000-8000-000000000001";
 const COMPANY = "e2ec0000-0000-4000-8000-000000000002";
+/** Otra empresa del MISMO tenant: el lookup desde ella tiene que dar el MISMO 404. */
+const COMPANY_B = "e2ec0000-0000-4000-8000-000000000003";
 const GESTOR = "e2ec0000-0000-4000-8000-00000000000a";
 const RIF = "e2ec0000-0000-4000-8000-00000000000b";
 const COBRANZAS = "e2ec0000-0000-4000-8000-00000000000c";
 const RUN = Date.now().toString(36);
+/** Solo dígitos: los documentos V/J del lookup llevan número, no base36. */
+const NUM = String(Date.now());
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -33,10 +37,16 @@ const tokenDe = (sub: string) =>
     .setExpirationTime("1h")
     .sign(JWT_SECRET);
 
-async function pedir(metodo: string, path: string, sub: string, body?: unknown): Promise<Response> {
+async function pedir(
+  metodo: string,
+  path: string,
+  sub: string,
+  body?: unknown,
+  company: string = COMPANY,
+): Promise<Response> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${await tokenDe(sub)}`,
-    "X-Company-Id": COMPANY,
+    "X-Company-Id": company,
   };
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -58,7 +68,9 @@ beforeAll(async () => {
     await tx`select set_config('ladino.actor_id', ${GESTOR}, true)`;
     await tx`insert into public.tenants (id, name) values (${TENANT}, 'Tenant e2e cli') on conflict (id) do nothing`;
     await tx`insert into public.companies (id, tenant_id, tax_id, legal_name)
-             values (${COMPANY}, ${TENANT}, 'J-E2ECLI', 'Empresa e2e clientes') on conflict (id) do nothing`;
+             values (${COMPANY}, ${TENANT}, 'J-E2ECLI', 'Empresa e2e clientes'),
+                    (${COMPANY_B}, ${TENANT}, 'J-E2ECLI-B', 'Otra empresa e2e clientes')
+             on conflict (id) do nothing`;
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values
              ('e2ec0000-0000-4000-8000-0000000000e1', null, 'e2ec_gestor', 'Gestor', false),
              ('e2ec0000-0000-4000-8000-0000000000e2', null, 'e2ec_rif', 'RIF', false),
@@ -93,6 +105,9 @@ describe("clientes de extremo a extremo", () => {
     company_id: COMPANY,
     person_type_code: "juridica",
     taxpayer_type_code: "ordinario",
+    // Una jurídica sin dirección ya no entra (migración 33): el caso negativo
+    // tiene su test propio más abajo.
+    fiscal_address: "Av. E2E, edificio Clientes, Caracas",
   };
 
   it("los catálogos de contraparte responden (6 y 4)", async () => {
@@ -139,6 +154,62 @@ describe("clientes de extremo a extremo", () => {
       legal_name: `Final ${RUN} 2`,
     });
     expect([n1.status, n2.status]).toEqual([201, 201]);
+  });
+
+  it("una jurídica sin dirección → 422: una factura a una empresa lleva domicilio", async () => {
+    const r = await pedir("POST", "/v1/customers", GESTOR, {
+      company_id: COMPANY,
+      person_type_code: "juridica",
+      taxpayer_type_code: "ordinario",
+      tax_id: `J-SINDIR-${RUN}`,
+      legal_name: "Sin dirección, C.A.",
+    });
+    expect(r.status).toBe(422);
+    expect(((await r.json()) as { message: string }).message).toContain("domicilio fiscal");
+  });
+
+  it("dos formas del mismo documento son EL MISMO cliente (clave natural normalizada)", async () => {
+    const r = await pedir("POST", "/v1/customers", GESTOR, {
+      ...base,
+      tax_id: `J-${NUM}-7`,
+      legal_name: "Cliente del lookup, C.A.",
+    });
+    expect(r.status).toBe(201);
+    const sinGuiones = await pedir("POST", "/v1/customers", GESTOR, {
+      ...base,
+      tax_id: `J${NUM}7`,
+      legal_name: "El mismo, sin guiones",
+    });
+    expect(sinGuiones.status).toBe(409);
+  });
+
+  it("lookup: exacto normalizado; «no existe» y «otra empresa» son EL MISMO 404", async () => {
+    // Con guiones, sin guiones y en minúscula: las tres formas encuentran.
+    for (const forma of [`J-${NUM}-7`, `J${NUM}7`, `j.${NUM}.7`]) {
+      const r = await pedir("GET", `/v1/customers/lookup?document=${forma}`, GESTOR);
+      expect(r.status).toBe(200);
+      const c = (await r.json()) as { legal_name: string; tax_id: string };
+      expect(c.legal_name).toBe("Cliente del lookup, C.A.");
+    }
+
+    const noExiste = await pedir("GET", `/v1/customers/lookup?document=V${NUM}`, GESTOR);
+    expect(noExiste.status).toBe(404);
+    const otraEmpresa = await pedir(
+      "GET",
+      `/v1/customers/lookup?document=J-${NUM}-7`,
+      GESTOR,
+      undefined,
+      COMPANY_B,
+    );
+    expect(otraEmpresa.status).toBe(404);
+    // Sin canal lateral: los dos 404 son INDISTINGUIBLES (mismo code y message).
+    const cuerpoNoExiste = (await noExiste.json()) as { code: string; message: string };
+    const cuerpoOtra = (await otraEmpresa.json()) as { code: string; message: string };
+    expect(cuerpoOtra.code).toBe(cuerpoNoExiste.code);
+    expect(cuerpoOtra.message).toBe(cuerpoNoExiste.message);
+
+    // Un prefijo fuera del conjunto es un 422 del borde, no un 404.
+    expect((await pedir("GET", "/v1/customers/lookup?document=X123", GESTOR)).status).toBe(422);
   });
 
   it("GET con búsqueda por RIF y paginación", async () => {

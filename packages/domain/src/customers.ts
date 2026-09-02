@@ -80,6 +80,19 @@ export async function createCustomer(
       message: "Solo una persona natural puede registrarse sin RIF.",
     });
   }
+  // Una factura a una empresa o a un ente público lleva su domicilio fiscal
+  // (ADR-0033; el snapshot de la migración 33 lo congela en el documento).
+  // Para persona natural o extranjera es opcional.
+  if (
+    (input.person_type_code === "juridica" || input.person_type_code === "gobierno") &&
+    (input.fiscal_address ?? "").trim() === ""
+  ) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Una factura a una empresa lleva su domicilio fiscal: escribe la dirección del cliente.",
+    });
+  }
   const [cats] = await sql<{ persona: boolean; fiscal: boolean }[]>`
     select exists (select 1 from public.person_types
                     where code = ${input.person_type_code} and status = 'active') as persona,

@@ -361,19 +361,21 @@ async function resolverLista(
     });
   }
 
-  // El CONSUMIDOR FINAL (migración 32) no tiene lista preferida — está
-  // congelado y no puede tenerla. Su lista es la «detal» de la empresa,
-  // resuelta por el SERVIDOR: el cajero no elige, así que no hay atribución
-  // que vigilar. Pedir otra distinta sí sigue exigiendo el override.
-  const defaultEfectiva = cliente.is_system
-    ? ((
-        await sql<{ id: string }[]>`
-          select id from public.price_lists
-           where company_id = ${companyId} and status = 'active'
-           order by (name = 'detal') desc, (name like 'detal%') desc, created_at
-           limit 1`
-      )[0]?.id ?? null)
-    : cliente.default_price_list_id;
+  // Sin lista preferida, la del mostrador es la «detal» de la empresa,
+  // resuelta por el SERVIDOR — para el Consumidor final (que está congelado y
+  // no puede tenerla) y también para el cliente recién creado con su cédula
+  // en el POS: el cajero no elige lista, así que no hay atribución que
+  // vigilar. Pedir otra distinta sí sigue exigiendo el override.
+  const defaultEfectiva =
+    cliente.default_price_list_id !== null && !cliente.is_system
+      ? cliente.default_price_list_id
+      : ((
+          await sql<{ id: string }[]>`
+            select id from public.price_lists
+             where company_id = ${companyId} and status = 'active'
+             order by (name = 'detal') desc, (name like 'detal%') desc, created_at
+             limit 1`
+        )[0]?.id ?? null);
 
   if (pedida === undefined) {
     if (defaultEfectiva === null) {
@@ -455,19 +457,35 @@ async function insertarDocumento(
   }
   const taxFunc = totFunc.minus(subFunc);
 
+  // R-05, lado cliente (ADR-0033, migración 33): el documento COPIA razón
+  // social, RIF/cédula y domicilio del cliente al nacer; nunca los referencia.
+  // El RIF va NORMALIZADO — la misma forma que la clave natural de customers;
+  // los guiones son presentación y se ponen al enseñarlo.
+  const [contraparte] = await sql<
+    { name: string; tax_id: string | null; address: string | null }[]
+  >`
+    select legal_name as name,
+           upper(regexp_replace(tax_id, '[^a-zA-Z0-9]', '', 'g')) as tax_id,
+           fiscal_address as address
+      from public.customers
+     where id = ${d.customerId} and company_id = ${d.companyId}`;
+  if (!contraparte) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+
   const [doc] = await sql<DocumentResponse[]>`
     insert into public.documents
       (tenant_id, company_id, branch_id, kind, series, customer_id, vendor_id, price_list_id,
        source_document_id, transaction_currency, functional_currency, fx_rate, rate_source,
        rate_timestamp, rounding_policy_id, amount_transaction_currency, functional_amount,
-       subtotal_amount, tax_amount, total_amount, notes)
+       subtotal_amount, tax_amount, total_amount, notes,
+       customer_name_snapshot, customer_tax_id_snapshot, customer_address_snapshot)
     values (${ctx.tenantId}, ${d.companyId}, ${d.branchId}, ${d.kind}, ${d.series},
             ${d.customerId}, ${d.vendorId}, ${d.priceListId === "" ? null : d.priceListId},
             ${d.sourceDocumentId},
             ${d.transactionCurrency}, ${ctx.functionalCurrency}, ${d.fxRate.toFixed()},
             ${d.rateSource}, now(),
             ${DOC_POLICY.id}, ${totales.value.total.toAmountString()}, ${totFunc.toFixed(8)},
-            ${subFunc.toFixed(8)}, ${taxFunc.toFixed(8)}, ${totFunc.toFixed(8)}, ${d.notes})
+            ${subFunc.toFixed(8)}, ${taxFunc.toFixed(8)}, ${totFunc.toFixed(8)}, ${d.notes},
+            ${contraparte.name}, ${contraparte.tax_id}, ${contraparte.address})
     returning ${sql.unsafe(DOC_COLUMNS)}`;
 
   let n = 0;
@@ -1678,6 +1696,25 @@ export async function quickSale(
 
   const cliente = await clienteEfectivo(sql, input.company_id, input.customer_id);
   if (!cliente.ok) return cliente;
+
+  // El interruptor del dueño (migración 33): con las ventas sin identificar
+  // apagadas, el «Consumidor final» de sistema no puede recibir una venta de
+  // mostrador. La UI esconde el enlace; ESTA comprobación es la que vale —
+  // la app móvil no es una vía para saltarse los controles del backend.
+  const [mostrador] = await sql<{ is_system: boolean; permitido: boolean }[]>`
+    select cu.is_system,
+           coalesce((select cs.allow_unidentified_sales from public.company_settings cs
+                      where cs.company_id = ${input.company_id}), true) as permitido
+      from public.customers cu
+     where cu.id = ${cliente.value} and cu.company_id = ${input.company_id}`;
+  if (mostrador?.is_system && !mostrador.permitido) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Este negocio exige identificar al cliente: pide la cédula o el RIF antes de cobrar " +
+        "(ajuste «Permitir ventas sin identificar», apagado por el dueño).",
+    });
+  }
 
   const emitida = await createInvoice(uow, {
     company_id: input.company_id,

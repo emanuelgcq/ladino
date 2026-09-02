@@ -295,7 +295,12 @@ function NuevoCliente({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Rea
               />
             )}
           </FormField>
-          <FormField label="Dirección fiscal">
+          <FormField
+            label="Dirección fiscal"
+            {...(form.person_type_code === "juridica" || form.person_type_code === "gobierno"
+              ? { required: true, hint: "Obligatoria para jurídica y ente público (migración 33)." }
+              : {})}
+          >
             {(a) => (
               <Input
                 id={a.id}
@@ -335,7 +340,12 @@ function NuevoCliente({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Rea
           </Button>
           <Button
             variant="primary"
-            disabled={guardando || form.legal_name.trim() === ""}
+            disabled={
+              guardando ||
+              form.legal_name.trim() === "" ||
+              ((form.person_type_code === "juridica" || form.person_type_code === "gobierno") &&
+                form.fiscal_address.trim() === "")
+            }
             onClick={() => void guardar()}
           >
             {guardando ? "Creando…" : "Crear cliente"}

@@ -88,6 +88,40 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     return c.json({ items: filas.map(({ total: _t, ...r }) => r), total }, 200);
   });
 
+  /**
+   * El lookup del mostrador: búsqueda EXACTA por documento normalizado
+   * (prefijo + alfanumérico, sin separadores, en mayúsculas) — la misma
+   * expresión de la clave natural, así que va por el índice único. 404 idéntico
+   * para «no existe» y «no es visible»: la consulta ya viene scoped a la
+   * company, no hay canal lateral que distinga los dos casos.
+   */
+  app.get("/v1/customers/lookup", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const crudo = c.req.query("document")?.trim() ?? "";
+    const normalizado = crudo.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    // Validación MÍNIMA (VALIDAR-SENIAT, OPEN_QUESTIONS 9: sin regex de
+    // formato ni dígito verificador): prefijo del conjunto y el resto dígitos
+    // — alfanumérico para P, que es un pasaporte.
+    const valido = /^[VEJG]\d{1,17}$/.test(normalizado) || /^P[A-Z0-9]{1,17}$/.test(normalizado);
+    if (!valido) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "El documento se busca como prefijo (V, E, J, G o P) más el número.",
+      });
+    }
+    const [fila] = await withTransaction(
+      sql,
+      actor,
+      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+        select ${tx.unsafe(COLUMNS_CU)} from public.customers cu
+         where cu.company_id = ${companyId} and cu.tax_id is not null
+           and upper(regexp_replace(cu.tax_id, '[^a-zA-Z0-9]', '', 'g')) = ${normalizado}`,
+    );
+    if (!fila) throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    return c.json(fila, 200);
+  });
+
   app.get("/v1/customers/:id", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");

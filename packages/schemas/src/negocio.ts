@@ -72,6 +72,8 @@ export const CompanySettingsResponse = z
   .object({
     sells_wholesale: z.boolean(),
     block_sale_without_stock: z.boolean(),
+    /** Si es false, el mostrador exige cédula o RIF: quickSale rechaza al «Consumidor final». */
+    allow_unidentified_sales: z.boolean(),
     default_tax_category_code: z.string(),
     default_warehouse_id: uuid.nullable(),
   })
@@ -82,6 +84,7 @@ export const UpdateCompanySettingsRequest = z
   .object({
     sells_wholesale: z.boolean().optional(),
     block_sale_without_stock: z.boolean().optional(),
+    allow_unidentified_sales: z.boolean().optional(),
     default_tax_category_code: z
       .string()
       .regex(/^[a-z][a-z0-9_]{0,39}$/)

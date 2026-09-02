@@ -13,10 +13,12 @@ import { requireCompany } from "./products.js";
  * de página lleva la marca; quitarla es una decisión de homologación, no de
  * código.
  *
- * Dos deudas declaradas (HANDOFF):
- *   · el documento NO congela razón social/RIF del cliente (R-05 a medias):
- *     aquí se imprime el cliente DE HOY. Cerrarlo exige migración de snapshot;
- *   · companies no modela su domicilio fiscal; el membrete va sin dirección.
+ * Desde la migración 33, el documento CONGELA razón social, RIF y domicilio
+ * del cliente (R-05, lado cliente) y aquí se imprime ESE snapshot; el
+ * `coalesce` contra el cliente vivo existe solo para documentos anteriores a
+ * la migración, que honestamente no lo tienen. Deuda que sigue declarada
+ * (HANDOFF): companies no modela su domicilio fiscal; el membrete va sin
+ * dirección.
  *
  * Generación en la API (pdfkit) y no en el worker — desviación declarada de
  * la spec de fase: es render puro de datos ya persistidos, tarda milisegundos
@@ -57,6 +59,27 @@ function fechaLegible(iso: string | null): string {
   return `${d}/${m}/${y}`;
 }
 
+/**
+ * Viste un documento de identidad NORMALIZADO para imprimirlo: «V12345678» →
+ * «V-12.345.678», «J401234567» → «J-40123456-7». Solo presentación — los
+ * separadores no se guardan ni significan nada. Lo que no tenga la forma
+ * prefijo+alfanumérico (datos anteriores a la migración 33) se imprime tal
+ * cual: vestir no es corregir.
+ */
+export function vestirDocumento(crudo: string): string {
+  const m = /^([VEJGP])([0-9A-Z]+)$/.exec(crudo.toUpperCase());
+  if (!m) return crudo;
+  const prefijo = m[1]!;
+  const resto = m[2]!;
+  if (prefijo === "V" || prefijo === "E") {
+    return `${prefijo}-${resto.replace(/\B(?=(\d{3})+(?!\d))/g, ".")}`;
+  }
+  if ((prefijo === "J" || prefijo === "G") && resto.length > 1) {
+    return `${prefijo}-${resto.slice(0, -1)}-${resto.slice(-1)}`;
+  }
+  return `${prefijo}-${resto}`;
+}
+
 export function documentsPdfRoutes(app: Hono, sql: Sql): void {
   app.get("/v1/documents/:id/pdf", async (c) => {
     const { companyId } = requireCompany(c);
@@ -77,8 +100,10 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
                d.functional_amount::text as functional_amount,
                d.annul_reason,
                e.legal_name as company_name, e.tax_id as company_tax_id,
-               cu.legal_name as customer_name, cu.tax_id as customer_tax_id,
-               cu.fiscal_address as customer_address, cu.is_system as customer_is_system
+               coalesce(d.customer_name_snapshot, cu.legal_name) as customer_name,
+               coalesce(d.customer_tax_id_snapshot, cu.tax_id) as customer_tax_id,
+               coalesce(d.customer_address_snapshot, cu.fiscal_address) as customer_address,
+               cu.is_system as customer_is_system
           from public.documents d
           join public.companies e on e.id = d.company_id
           join public.customers cu on cu.id = d.customer_id
@@ -153,7 +178,7 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
         .fontSize(10)
         .text(`Cliente: ${String(doc["customer_name"])}`);
       if (doc["customer_tax_id"]) {
-        pdf.text(`RIF/C.I.: ${String(doc["customer_tax_id"])}`);
+        pdf.text(`RIF/C.I.: ${vestirDocumento(String(doc["customer_tax_id"]))}`);
       }
       if (doc["customer_address"]) {
         pdf.text(`Domicilio: ${String(doc["customer_address"])}`);

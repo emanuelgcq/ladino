@@ -138,6 +138,8 @@ beforeAll(async () => {
              (${ROL_VENTAS}, 'fiscal.range.manage'),
              (${ROL_VENTAS}, 'fx.rate.manage'),
              (${ROL_VENTAS}, 'ar.read'),
+             (${ROL_VENTAS}, 'customer.manage'),
+             (${ROL_VENTAS}, 'company.settings.manage'),
              (${ROL_VENTAS}, 'sales.payment.register'),
              (${ROL_CAJA}, 'sales.payment.register'),
              (${ROL_CAJA}, 'ar.read')
@@ -757,6 +759,118 @@ describe("ventas de extremo a extremo", () => {
     const sucursales = await pedir("GET", "/v1/branches", VENDEDOR);
     expect(sucursales.status).toBe(200);
     expect(Array.isArray(((await sucursales.json()) as { items: unknown[] }).items)).toBe(true);
+  });
+
+  // ── LA VENTA EMPIEZA POR LA CÉDULA (migración 33) ─────────────────────────
+
+  it("la venta a cliente IDENTIFICADO congela sus datos y el PDF los imprime con prefijo", async () => {
+    // El flujo real del mostrador: lookup falla → alta inline → vender.
+    const noEsta = await pedir("GET", "/v1/customers/lookup?document=V-12.345.678", VENDEDOR);
+    expect(noEsta.status).toBe(404);
+
+    const alta = await pedir("POST", "/v1/customers", VENDEDOR, {
+      company_id: COMPANY,
+      tax_id: "V12345678",
+      legal_name: "Juan Pérez",
+      person_type_code: "natural",
+      taxpayer_type_code: "consumidor_final",
+      phone: "0414-1234567",
+      fiscal_address: "Calle 5, casa 12, Maracay",
+      // SIN lista preferida a propósito: el POS crea así, y la venta tiene que
+      // resolver a la «detal» de la empresa como con el Consumidor final.
+    });
+    expect(alta.status).toBe(201);
+    const juan = (await alta.json()) as { id: string };
+
+    // Ahora el lookup SÍ encuentra, con separadores y todo.
+    const esta = await pedir("GET", "/v1/customers/lookup?document=v-12345678", VENDEDOR);
+    expect(esta.status).toBe(200);
+    expect(((await esta.json()) as { id: string }).id).toBe(juan.id);
+
+    const r = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
+      company_id: COMPANY,
+      customer_id: juan.id,
+      warehouse_id: W1,
+      series: "C",
+      lines: [{ product_id: PROD, quantity: "1" }],
+      payments: [{ instrument: "efectivo_usd", amount: "116.00000000", currency: "USD" }],
+    });
+    expect(r.status).toBe(201);
+    const v = (await r.json()) as { document: { id: string } };
+
+    // El documento CONGELÓ al cliente (R-05, lado cliente): nombre, documento
+    // NORMALIZADO y domicilio, aunque mañana le cambien el nombre al maestro.
+    const [congelado] = await sql<
+      {
+        customer_name_snapshot: string;
+        customer_tax_id_snapshot: string;
+        customer_address_snapshot: string;
+      }[]
+    >`
+      select customer_name_snapshot, customer_tax_id_snapshot, customer_address_snapshot
+        from public.documents where id = ${v.document.id}`;
+    expect(congelado).toMatchObject({
+      customer_name_snapshot: "Juan Pérez",
+      customer_tax_id_snapshot: "V12345678",
+      customer_address_snapshot: "Calle 5, casa 12, Maracay",
+    });
+
+    // Y el PDF imprime el documento VESTIDO con su prefijo. El contenido va
+    // comprimido y pdfkit escribe el texto como arrays TJ en HEX con cortes de
+    // kerning: se inflan los streams, se decodifican los <hex> y se concatena —
+    // el kerning solo separa glifos, no quita letras.
+    const pdf = await pedir("GET", `/v1/documents/${v.document.id}/pdf`, VENDEDOR);
+    expect(pdf.status).toBe(200);
+    const bruto = Buffer.from(await pdf.arrayBuffer());
+    const { inflateSync } = await import("node:zlib");
+    let texto = "";
+    let i = 0;
+    for (;;) {
+      const s = bruto.indexOf("stream", i);
+      if (s === -1) break;
+      let inicio = s + 6;
+      if (bruto[inicio] === 0x0d) inicio++;
+      if (bruto[inicio] === 0x0a) inicio++;
+      const fin = bruto.indexOf("endstream", inicio);
+      if (fin === -1) break;
+      const trozo = bruto.subarray(inicio, fin);
+      try {
+        texto += inflateSync(trozo).toString("latin1");
+      } catch {
+        texto += trozo.toString("latin1");
+      }
+      i = fin + 9;
+    }
+    const legible = [...texto.matchAll(/<([0-9a-fA-F]+)>/g)]
+      .map((m) => Buffer.from(m[1]!, "hex").toString("latin1"))
+      .join("");
+    expect(legible).toContain("V-12.345.678");
+    expect(legible).toContain("Juan P");
+    expect(legible).toContain("Calle 5, casa 12, Maracay");
+  });
+
+  it("con las ventas sin identificar APAGADAS, el mostrador exige la cédula", async () => {
+    const apagar = await pedir("PUT", "/v1/company-settings", VENDEDOR, {
+      allow_unidentified_sales: false,
+    });
+    expect(apagar.status).toBe(200);
+
+    // Sin cliente = Consumidor final de sistema → el dominio lo rechaza.
+    const r = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      series: "C",
+      lines: [{ product_id: PROD, quantity: "1" }],
+      payments: [{ instrument: "efectivo_usd", amount: "116.00000000", currency: "USD" }],
+    });
+    expect(r.status).toBe(422);
+    expect(((await r.json()) as { message: string }).message).toContain("identificar al cliente");
+
+    // Se vuelve a encender: los demás tests de este fichero venden de mostrador.
+    const encender = await pedir("PUT", "/v1/company-settings", VENDEDOR, {
+      allow_unidentified_sales: true,
+    });
+    expect(encender.status).toBe(200);
   });
 
   it("el vuelto en vivo: GET /v1/pos/change convierte con la tasa del día", async () => {

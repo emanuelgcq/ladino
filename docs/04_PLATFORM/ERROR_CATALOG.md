@@ -56,6 +56,7 @@ Comprobado sobre las funciones realmente instaladas. **Cada uno es único en tie
 | `LAD62` | `platform.assert_entry_balanced()` | la cuenta agrupa (no es hoja), está desactivada, o exige dimensiones analíticas y la línea no las trae | `ACCOUNT_NOT_POSTABLE` | `409` |
 | `LAD55` | *caso de uso* (`applyLandedCost`) | prorrateo `by_weight` con alguna línea sin peso. **No lo lanza la base**: el esquema admite `unit_weight` nulo porque no todo producto lo tiene; lo que no admite es repartir un flete solo entre lo que sí pesa, y eso lo decide el caso de uso. Mismo patrón que LAD45 | `MISSING_WEIGHT` | `422` |
 | `LAD67` | `platform.assert_payment_account_currency()` | el pago, gasto o cierre declara una moneda distinta a la de su cuenta de tesorería: un Zelle no entra a Caja Bs (migración 29) | `VALIDATION_FAILED` | `422` |
+| `LAD68` | `platform.documents_customer_snapshot_freeze()` | tocar el snapshot del cliente de un documento — nombre, documento de identidad o domicilio congelados al crearlo (R-05 lado cliente, migración 33). También rellenarlo en un documento anterior a la 33: un backfill fila a fila sigue siendo una inferencia sobre el pasado | `DOCUMENT_SNAPSHOT_FROZEN` | `409` |
 
 ## Mensajes de persona (Fase C, PARTE 16)
 
@@ -77,6 +78,7 @@ el código y se corrige el espejo.
 | `FISCAL_NUMBERING_INVALID` | No hay números de factura disponibles. Carga un rango nuevo en Facturación fiscal. |
 | `NEGATIVE_STOCK` | No hay suficiente mercancía para esa cantidad. Revisa la existencia o registra la entrada primero. |
 | `APPEND_ONLY_VIOLATION` | Esto ya quedó registrado y no se puede cambiar. Lo que corresponde es registrar la corrección. |
+| `DOCUMENT_SNAPSHOT_FROZEN` | Los datos del cliente quedaron impresos en esa factura y no se cambian. Si están mal, se corrige con una nota de crédito. |
 | `PERIOD_CLOSED` | Ese mes ya está cerrado en contabilidad. Habla con quien lleva los números. |
 | `COMPANY_SUSPENDED` | El negocio está suspendido en el sistema. Contacta a soporte. |
 | `COSTING_MISMATCH` | La existencia cambió mientras guardabas. Vuelve a intentar: casi siempre pasa a la primera. |

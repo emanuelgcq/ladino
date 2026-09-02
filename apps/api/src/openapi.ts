@@ -541,7 +541,9 @@ export function buildOpenApiDocument(): object {
     summary: "Crear cliente (permiso customer.manage)",
     description:
       "RIF sin validación de formato (VALIDAR-SENIAT); nullable solo para persona natural; " +
-      "único por empresa (case-insensitive). El alta con RIF deja customer.tax_id_established.",
+      "único por empresa sobre la forma NORMALIZADA (sin separadores, case-insensitive — " +
+      "migración 33). Persona jurídica o ente público exigen domicilio fiscal: una factura " +
+      "a una empresa lo lleva. El alta con RIF deja customer.tax_id_established.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: idemHeader,
@@ -551,6 +553,26 @@ export function buildOpenApiDocument(): object {
       201: okJson(cliente, "Cliente creado."),
       ...erroresComunes,
       409: errorRef("RIF duplicado en la empresa."),
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/customers/lookup",
+    summary: "Buscar UN cliente por su documento exacto (el primer paso del mostrador)",
+    description:
+      "El documento viaja como prefijo (V, E, J, G o P) más el número, con o sin separadores: " +
+      "se normaliza (mayúsculas, sin guiones ni puntos) y se compara EXACTO contra la clave " +
+      "natural — la búsqueda va por el índice único. Sin regex de formato ni dígito " +
+      "verificador (VALIDAR-SENIAT). 404 idéntico para «no existe» y «no es visible».",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ document: z.string() }),
+    },
+    responses: {
+      200: okJson(cliente, "El cliente, exacto."),
+      ...erroresComunes,
+      404: errorRef("Ningún cliente con ese documento en esta empresa."),
     },
   });
   registry.registerPath({

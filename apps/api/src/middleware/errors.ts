@@ -75,6 +75,10 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // traduzca: la red que hace valer «sin regla no se retiene» en cualquier ruta.
   LAD53: { code: "RETENTION_RULE_MISSING", status: 409 },
   LAD54: { code: "FISCAL_NUMBERING_INVALID", status: 409 },
+  // Migración 33: el snapshot del cliente en un documento está CONGELADO
+  // (R-05, lado cliente). Lo levanta el trigger del esquema: llega aquí
+  // aunque ningún caso de uso lo traduzca.
+  LAD68: { code: "DOCUMENT_SNAPSHOT_FROZEN", status: 409 },
 
   // --- estándar
   "23505": { code: "DUPLICATE", status: 409 },
@@ -148,6 +152,8 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   // siempre: el cuerpo está bien, lo que falta es en el sistema. Y no es 501,
   // porque el recurso sí existe — lo que no existe es ese formato concreto.
   BOOK_FORMAT_UNAVAILABLE: 409, // LAD65
+  // POS identificado (migración 33): el snapshot del cliente no se edita.
+  DOCUMENT_SNAPSHOT_FROZEN: 409, // LAD68
 };
 
 export class DominioError extends Error {
@@ -271,6 +277,8 @@ function mensajePersona(code: string): string {
       return "No hay suficiente mercancía para esa cantidad. Revisa la existencia o registra la entrada primero.";
     case "APPEND_ONLY_VIOLATION":
       return "Esto ya quedó registrado y no se puede cambiar. Lo que corresponde es registrar la corrección.";
+    case "DOCUMENT_SNAPSHOT_FROZEN":
+      return "Los datos del cliente quedaron impresos en esa factura y no se cambian. Si están mal, se corrige con una nota de crédito.";
     case "PERIOD_CLOSED":
       return "Ese mes ya está cerrado en contabilidad. Habla con quien lleva los números.";
     case "COMPANY_SUSPENDED":

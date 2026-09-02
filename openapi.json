@@ -4696,6 +4696,9 @@
           "block_sale_without_stock": {
             "type": "boolean"
           },
+          "allow_unidentified_sales": {
+            "type": "boolean"
+          },
           "default_tax_category_code": {
             "type": "string"
           },
@@ -4708,6 +4711,7 @@
         "required": [
           "sells_wholesale",
           "block_sale_without_stock",
+          "allow_unidentified_sales",
           "default_tax_category_code",
           "default_warehouse_id"
         ],
@@ -4720,6 +4724,9 @@
             "type": "boolean"
           },
           "block_sale_without_stock": {
+            "type": "boolean"
+          },
+          "allow_unidentified_sales": {
             "type": "boolean"
           },
           "default_tax_category_code": {
@@ -12574,7 +12581,7 @@
       },
       "post": {
         "summary": "Crear cliente (permiso customer.manage)",
-        "description": "RIF sin validación de formato (VALIDAR-SENIAT); nullable solo para persona natural; único por empresa (case-insensitive). El alta con RIF deja customer.tax_id_established.",
+        "description": "RIF sin validación de formato (VALIDAR-SENIAT); nullable solo para persona natural; único por empresa sobre la forma NORMALIZADA (sin separadores, case-insensitive — migración 33). Persona jurídica o ente público exigen domicilio fiscal: una factura a una empresa lo lleva. El alta con RIF deja customer.tax_id_established.",
         "security": [
           {
             "bearerAuth": []
@@ -12652,6 +12659,88 @@
           },
           "409": {
             "description": "RIF duplicado en la empresa.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/customers/lookup": {
+      "get": {
+        "summary": "Buscar UN cliente por su documento exacto (el primer paso del mostrador)",
+        "description": "El documento viaja como prefijo (V, E, J, G o P) más el número, con o sin separadores: se normaliza (mayúsculas, sin guiones ni puntos) y se compara EXACTO contra la clave natural — la búsqueda va por el índice único. Sin regex de formato ni dígito verificador (VALIDAR-SENIAT). 404 idéntico para «no existe» y «no es visible».",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "document",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El cliente, exacto.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Ningún cliente con ese documento en esta empresa.",
             "content": {
               "application/json": {
                 "schema": {

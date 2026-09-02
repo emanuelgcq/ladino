@@ -22,19 +22,25 @@ import { compararImportes } from "../../components/decimal-compare.js";
 import { Button } from "../../ui/button.js";
 import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog.js";
 import { Input } from "../../ui/input.js";
+import { SimpleSelect } from "../../ui/select.js";
 import { useToast } from "../../ui/toast.js";
-import { MoneyInput, importeValido } from "../../components/forms.js";
+import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
+import { formatearDocumento } from "./comunes.js";
 
 /**
- * VENDER (Fase C, PARTE 6): el punto de venta. Cuadrícula con fotos a la
- * izquierda, carrito a la derecha, Consumidor final por defecto. TODO importe
- * lo dice el servidor: el carrito se cotiza con debounce en /v1/pos/quote, el
- * vuelto lo calcula /v1/pos/change, y la venta entera es UNA transacción en
- * /v1/pos/sales con el id de venta como llave — repetir el clic no repite la
- * factura.
+ * VENDER: el punto de venta. La venta EMPIEZA POR LA CÉDULA — es el flujo
+ * real de una caja venezolana: se pide el documento, se busca exacto, y si no
+ * está se crea al cliente ahí mismo sin salir de la pantalla. «Consumidor
+ * final» dejó de ser el default: es un escape explícito que el dueño puede
+ * apagar en Configuración (y el dominio lo respalda: quickSale lo rechaza).
  *
- * Teclado: la búsqueda tiene el foco al entrar; Enter agrega la primera
- * coincidencia (o la del código de barras del lector); F9 abre Cobrar.
+ * TODO importe lo dice el servidor: el carrito se cotiza con debounce en
+ * /v1/pos/quote, el vuelto lo calcula /v1/pos/change, y la venta entera es
+ * UNA transacción en /v1/pos/sales con el id de venta como llave — repetir el
+ * clic no repite la factura.
+ *
+ * Teclado, sin ratón: cédula → Enter → (si es nuevo: nombre → Tab → teléfono
+ * → Enter) → buscar producto → Enter agrega → F2 abre Cobrar → Enter cobra.
  */
 
 interface ProductoFila {
@@ -52,6 +58,7 @@ interface ClienteFila {
   id: string;
   legal_name: string;
   tax_id: string | null;
+  phone: string | null;
 }
 interface FormaDePago {
   id: string;
@@ -85,11 +92,11 @@ export function Vender(): React.JSX.Element {
     new Map(),
   );
   const [cliente, setCliente] = useState<ClienteFila | null>(null);
+  // «Venta sin identificar»: una DECISIÓN explícita del cajero, no un default.
+  const [sinIdentificar, setSinIdentificar] = useState(false);
   const [cobrando, setCobrando] = useState(false);
   const [venta, setVenta] = useState<Venta | null>(null);
   const q = useDebounced(busqueda.trim(), 200);
-
-  useEffect(() => buscarRef.current?.focus(), []);
 
   const productos = useQuery({
     queryKey: ["pos-productos", empresa.id, q],
@@ -102,9 +109,11 @@ export function Vender(): React.JSX.Element {
     queryKey: ["ajustes", empresa.id],
     staleTime: 5 * 60_000,
     queryFn: () =>
-      llamar<{ block_sale_without_stock: boolean; default_warehouse_id: string | null }>(
-        "/v1/company-settings",
-      ),
+      llamar<{
+        block_sale_without_stock: boolean;
+        allow_unidentified_sales: boolean;
+        default_warehouse_id: string | null;
+      }>("/v1/company-settings"),
   });
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],
@@ -178,16 +187,18 @@ export function Vender(): React.JSX.Element {
     }
   }
 
+  const clienteResuelto = cliente !== null || sinIdentificar;
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "F9" && carrito.size > 0) {
+      if (e.key === "F2" && carrito.size > 0 && clienteResuelto) {
         e.preventDefault();
         setCobrando(true);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [carrito.size]);
+  }, [carrito.size, clienteResuelto]);
 
   const items = productos.data?.items ?? [];
 
@@ -229,7 +240,25 @@ export function Vender(): React.JSX.Element {
 
       {/* ── El carrito ─────────────────────────────────────────────────── */}
       <aside className="flex w-96 shrink-0 flex-col rounded-lg border border-border bg-surface">
-        <SelectorCliente cliente={cliente} onElegir={setCliente} />
+        <IdentificarCliente
+          cliente={cliente}
+          sinIdentificar={sinIdentificar}
+          permiteSinIdentificar={ajustes.data?.allow_unidentified_sales ?? true}
+          onCliente={(c) => {
+            setCliente(c);
+            setSinIdentificar(false);
+            buscarRef.current?.focus();
+          }}
+          onSinIdentificar={() => {
+            setSinIdentificar(true);
+            setCliente(null);
+            buscarRef.current?.focus();
+          }}
+          onCambiar={() => {
+            setCliente(null);
+            setSinIdentificar(false);
+          }}
+        />
         <div className="min-h-0 flex-1 overflow-y-auto px-3">
           {carrito.size === 0 ? (
             <div className="flex h-full flex-col items-center justify-center py-16 text-center text-muted-foreground">
@@ -328,11 +357,18 @@ export function Vender(): React.JSX.Element {
             variant="primary"
             size="lg"
             className="h-12 w-full text-[1.05rem]"
-            disabled={carrito.size === 0 || !cotizacion.data || deposito === null}
+            disabled={
+              carrito.size === 0 || !cotizacion.data || deposito === null || !clienteResuelto
+            }
             onClick={() => setCobrando(true)}
           >
-            Cobrar {carrito.size > 0 ? "· F9" : ""}
+            Cobrar {carrito.size > 0 && clienteResuelto ? "· F2" : ""}
           </Button>
+          {carrito.size > 0 && !clienteResuelto && (
+            <p className="text-center text-[0.8rem] text-warning-soft-foreground">
+              Primero di quién compra: la cédula arriba, o «Venta sin identificar».
+            </p>
+          )}
           {deposito === null && (
             <p className="text-center text-[0.8rem] text-warning-soft-foreground">
               Falta un depósito para descontar la mercancía. Configúralo en Empezar.
@@ -353,6 +389,7 @@ export function Vender(): React.JSX.Element {
             setVenta(v);
             setCarrito(new Map());
             setCliente(null);
+            setSinIdentificar(false);
           }}
         />
       )}
@@ -361,7 +398,12 @@ export function Vender(): React.JSX.Element {
           venta={venta}
           onNueva={() => {
             setVenta(null);
-            buscarRef.current?.focus();
+            // La venta nueva empieza como todas: por la cédula. El foco se
+            // difiere: al cerrarse, el diálogo restaura el foco al elemento
+            // anterior y pisaría este si se pusiera en el mismo tick.
+            requestAnimationFrame(() =>
+              setTimeout(() => document.getElementById("pos-cedula")?.focus(), 0),
+            );
           }}
         />
       )}
@@ -415,86 +457,260 @@ function TarjetaPos({
   );
 }
 
-function SelectorCliente({
+const PREFIJOS = ["V", "E", "J", "G", "P"].map((p) => ({ value: p, label: p }));
+
+/** Qué tipo de cliente crea cada prefijo. La persona nunca ve estas palabras. */
+function tipoDePrefijo(prefijo: string): { persona: string; contribuyente: string } {
+  if (prefijo === "J") return { persona: "juridica", contribuyente: "ordinario" };
+  if (prefijo === "G") return { persona: "gobierno", contribuyente: "ordinario" };
+  if (prefijo === "P") return { persona: "extranjera", contribuyente: "no_domiciliado" };
+  return { persona: "natural", contribuyente: "consumidor_final" };
+}
+
+/**
+ * El PRIMER paso de la venta: la cédula o el RIF. Busca exacto contra el
+ * servidor; si el cliente no está, se crea aquí mismo con el mini-formulario
+ * — el tipo de persona se infiere del prefijo, y a una empresa (J/G) se le
+ * pide dirección: una factura a una empresa lleva domicilio fiscal.
+ */
+function IdentificarCliente({
   cliente,
-  onElegir,
+  sinIdentificar,
+  permiteSinIdentificar,
+  onCliente,
+  onSinIdentificar,
+  onCambiar,
 }: {
   cliente: ClienteFila | null;
-  onElegir: (c: ClienteFila | null) => void;
+  sinIdentificar: boolean;
+  permiteSinIdentificar: boolean;
+  onCliente: (c: ClienteFila) => void;
+  onSinIdentificar: () => void;
+  onCambiar: () => void;
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
-  const [abierto, setAbierto] = useState(false);
-  const [texto, setTexto] = useState("");
-  const q = useDebounced(texto.trim(), 250);
-  const clientes = useQuery({
-    queryKey: ["pos-clientes", empresa.id, q],
-    enabled: abierto && q.length >= 2,
-    queryFn: () =>
-      llamar<{ items: ClienteFila[] }>(`/v1/customers?search=${encodeURIComponent(q)}&per_page=8`),
+  const toast = useToast();
+  const [prefijo, setPrefijo] = useState<string | null>("V");
+  const [digitos, setDigitos] = useState("");
+  const [nuevo, setNuevo] = useState(false);
+  const [nombre, setNombre] = useState("");
+  const [telefono, setTelefono] = useState("");
+  const [direccion, setDireccion] = useState("");
+
+  const esEmpresa = prefijo === "J" || prefijo === "G";
+  const documento = `${prefijo ?? "V"}${digitos.trim().toUpperCase()}`;
+
+  // El cajero teclea la letra al inicio y el prefijo se pone solo:
+  // «J401234567» en el campo pone J en el selector y deja los dígitos.
+  function alEscribir(v: string): void {
+    const limpio = v.trim().toUpperCase();
+    const letra = limpio.charAt(0);
+    if (/^[VEJGP]$/.test(letra)) {
+      setPrefijo(letra);
+      setDigitos(limpio.slice(1).replace(/[^0-9A-Z]/g, ""));
+    } else {
+      setDigitos(limpio.replace(/[^0-9A-Z]/g, ""));
+    }
+  }
+
+  const buscar = useMutation({
+    mutationFn: () =>
+      llamar<ClienteFila>(`/v1/customers/lookup?document=${encodeURIComponent(documento)}`),
+    onSuccess: (c) => {
+      setNuevo(false);
+      setDigitos(""); // la próxima venta arranca con el campo limpio
+      onCliente(c);
+    },
+    onError: (e) => {
+      // 404 limpio = no está: se abre el alta inline. Cualquier otro error se dice.
+      if ((e as { status?: number }).status === 404) {
+        setNuevo(true);
+      } else {
+        toast.error("No se pudo buscar", errorDePersona(e));
+      }
+    },
   });
-  return (
-    <div className="border-b border-border p-3">
-      {!abierto ? (
-        <button
-          onClick={() => setAbierto(true)}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-surface-muted"
-        >
-          <User className="size-4 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-[0.92rem] font-medium">
-            {cliente === null ? "Consumidor final" : cliente.legal_name}
-          </span>
-          <span className="text-[0.8rem] text-accent-soft-foreground">Cambiar</span>
-        </button>
-      ) : (
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5">
-            <Input
-              autoFocus
-              value={texto}
-              onChange={(e) => setTexto(e.target.value)}
-              placeholder="Nombre o RIF del cliente…"
-              aria-label="Buscar cliente"
-              className="h-9"
-            />
-            <Button
-              variant="ghost"
-              size="iconSm"
-              aria-label="Cerrar búsqueda de cliente"
-              onClick={() => {
-                setAbierto(false);
-                setTexto("");
-              }}
-            >
-              <X />
-            </Button>
+
+  const crear = useMutation({
+    mutationFn: () => {
+      const tipo = tipoDePrefijo(prefijo ?? "V");
+      return llamar<ClienteFila>("/v1/customers", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          tax_id: documento,
+          legal_name: nombre.trim(),
+          person_type_code: tipo.persona,
+          taxpayer_type_code: tipo.contribuyente,
+          ...(telefono.trim() === "" ? {} : { phone: telefono.trim() }),
+          ...(direccion.trim() === "" ? {} : { fiscal_address: direccion.trim() }),
+        }),
+      });
+    },
+    onSuccess: (c) => {
+      toast.success("Cliente guardado");
+      setNuevo(false);
+      setNombre("");
+      setTelefono("");
+      setDireccion("");
+      setDigitos("");
+      onCliente(c);
+    },
+    onError: (e) => toast.error("No se pudo guardar", errorDePersona(e)),
+  });
+
+  const listoParaCrear =
+    nombre.trim().length > 0 &&
+    digitos.trim().length > 0 &&
+    (!esEmpresa || direccion.trim() !== "");
+
+  // Identificado (o decidido): el chip con «Cambiar».
+  if (cliente !== null || sinIdentificar) {
+    return (
+      <div className="border-b border-border p-3">
+        <div className="flex items-center gap-2 rounded-md bg-accent-soft px-2.5 py-2">
+          <User className="size-4 shrink-0 text-accent-soft-foreground" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[0.92rem] font-medium">
+              {cliente !== null ? cliente.legal_name : "Venta sin identificar"}
+            </p>
+            <p className="truncate text-[0.8rem] text-muted-foreground tabular-nums">
+              {cliente !== null
+                ? [
+                    cliente.tax_id === null ? null : formatearDocumento(cliente.tax_id),
+                    cliente.phone,
+                  ]
+                    .filter((x) => x !== null && x !== "")
+                    .join(" · ")
+                : "Consumidor final"}
+            </p>
           </div>
           <button
-            className="w-full rounded-sm px-2 py-1 text-left text-[0.88rem] hover:bg-surface-muted"
-            onClick={() => {
-              onElegir(null);
-              setAbierto(false);
-              setTexto("");
-            }}
+            className="shrink-0 text-[0.8rem] text-accent-soft-foreground hover:underline"
+            onClick={onCambiar}
           >
-            Consumidor final (sin datos)
+            Cambiar
           </button>
-          {(clientes.data?.items ?? []).map((c) => (
-            <button
-              key={c.id}
-              className="flex w-full items-center justify-between rounded-sm px-2 py-1 text-left text-[0.88rem] hover:bg-surface-muted"
-              onClick={() => {
-                onElegir(c);
-                setAbierto(false);
-                setTexto("");
-              }}
-            >
-              <span className="truncate">{c.legal_name}</span>
-              {c.tax_id !== null && (
-                <span className="text-[0.78rem] text-faint-foreground">{c.tax_id}</span>
-              )}
-            </button>
-          ))}
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2 border-b border-border p-3">
+      <div className="flex items-end gap-1.5">
+        <SimpleSelect
+          id="pos-prefijo"
+          value={prefijo}
+          onValueChange={setPrefijo}
+          options={PREFIJOS}
+          ariaLabel="Tipo de documento"
+          className="w-16"
+        />
+        <Input
+          id="pos-cedula"
+          autoFocus
+          value={digitos}
+          onChange={(e) => alEscribir(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && digitos.trim() !== "") {
+              e.preventDefault();
+              buscar.mutate();
+            }
+          }}
+          placeholder="12345678"
+          inputMode="numeric"
+          aria-label="Cédula o RIF del cliente"
+          className="h-11 flex-1 text-[1rem] tabular-nums"
+        />
+        <Button
+          variant="secondary"
+          className="h-11"
+          disabled={digitos.trim() === "" || buscar.isPending}
+          onClick={() => buscar.mutate()}
+          aria-label="Buscar cliente por documento"
+        >
+          <Search />
+        </Button>
+      </div>
+      <p className="text-[0.8rem] text-muted-foreground">Cédula o RIF del cliente</p>
+
+      {nuevo && (
+        <div className="space-y-2 rounded-md border border-border bg-surface-muted/40 p-2.5">
+          <p className="text-[0.85rem]">
+            <span className="font-medium tabular-nums">{formatearDocumento(documento)}</span> no
+            está registrado. Se guarda ahora mismo:
+          </p>
+          <FormField label="Nombre completo" required>
+            {(p) => (
+              <Input
+                {...p}
+                autoFocus
+                value={nombre}
+                onChange={(e) => setNombre(e.target.value)}
+                className="h-9"
+              />
+            )}
+          </FormField>
+          <FormField label="Teléfono">
+            {(p) => (
+              <Input
+                {...p}
+                value={telefono}
+                onChange={(e) => setTelefono(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && listoParaCrear && !crear.isPending) {
+                    e.preventDefault();
+                    crear.mutate();
+                  }
+                }}
+                placeholder="0414-1234567"
+                className="h-9"
+              />
+            )}
+          </FormField>
+          <FormField
+            label="Dirección"
+            {...(esEmpresa
+              ? { required: true, hint: "Una factura a una empresa lleva su domicilio fiscal." }
+              : {})}
+          >
+            {(p) => (
+              <Input
+                {...p}
+                value={direccion}
+                onChange={(e) => setDireccion(e.target.value)}
+                className="h-9"
+              />
+            )}
+          </FormField>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!listoParaCrear || crear.isPending}
+              onClick={() => crear.mutate()}
+            >
+              Guardar y seguir
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setNuevo(false)}>
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {permiteSinIdentificar && !nuevo && (
+        <button
+          className="text-[0.8rem] text-muted-foreground hover:text-foreground hover:underline"
+          onClick={() => {
+            setDigitos("");
+            onSinIdentificar();
+          }}
+        >
+          Venta sin identificar
+        </button>
       )}
     </div>
   );
@@ -599,7 +815,8 @@ function Cobrar({
       toast.warning("Máximo dos formas de pago", "Quita una para agregar otra.");
       return;
     }
-    const exacto = pagos.length === 0 ? (exactoEn(b.currency) ?? "") : "";
+    const indice = pagos.length;
+    const exacto = indice === 0 ? (exactoEn(b.currency) ?? "") : "";
     setPagos((prev) => [
       ...prev,
       {
@@ -609,6 +826,9 @@ function Cobrar({
         ...(b.account_id === undefined ? {} : { account_id: b.account_id }),
       },
     ]);
+    // El foco cae en el monto recién puesto: con el exacto prellenado, el
+    // siguiente Enter ya cobra — el flujo de teclado completo sin ratón.
+    requestAnimationFrame(() => document.getElementById(`pos-pago-${indice}`)?.focus());
   }
 
   const vender = useMutation({
@@ -640,7 +860,22 @@ function Cobrar({
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
       <DialogContent className="max-w-md">
         <DialogTitle>Cobrar</DialogTitle>
-        <div className="space-y-4 pt-1">
+        <div
+          className="space-y-4 pt-1"
+          onKeyDown={(e) => {
+            // Enter fuera de un botón = confirmar, si ya se puede. Los botones
+            // conservan su Enter propio (elegir forma, quitar, etc.).
+            if (
+              e.key === "Enter" &&
+              !(e.target instanceof HTMLButtonElement) &&
+              listo &&
+              !vender.isPending
+            ) {
+              e.preventDefault();
+              vender.mutate();
+            }
+          }}
+        >
           <div className="rounded-lg bg-surface-muted p-3 text-center">
             <p className="text-[0.85rem] text-muted-foreground">Total a cobrar</p>
             <p className="text-3xl font-semibold tabular-nums">
@@ -681,6 +916,7 @@ function Cobrar({
           {pagos.map((p, i) => (
             <PagoFila
               key={i}
+              indice={i}
               pago={p}
               cotizacion={cotizacion}
               onCambiar={(amount) =>
@@ -706,11 +942,13 @@ function Cobrar({
 }
 
 function PagoFila({
+  indice,
   pago,
   cotizacion,
   onCambiar,
   onQuitar,
 }: {
+  indice: number;
   pago: PagoElegido;
   cotizacion: CotizacionPos;
   onCambiar: (v: string) => void;
@@ -751,6 +989,7 @@ function PagoFila({
         </Button>
       </div>
       <MoneyInput
+        id={`pos-pago-${indice}`}
         value={pago.amount}
         onChange={onCambiar}
         currency={pago.currency === "VES" ? "Bs." : pago.currency}

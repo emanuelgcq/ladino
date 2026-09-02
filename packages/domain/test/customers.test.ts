@@ -71,6 +71,9 @@ const base = {
   legal_name: "Distribuidora Ñandú C.A.",
   person_type_code: "juridica",
   taxpayer_type_code: "ordinario",
+  // Desde la migración 33 una jurídica exige domicilio; el caso sin dirección
+  // tiene su aserción propia más abajo.
+  fiscal_address: "Av. Ñandú, galpón 4, Barquisimeto",
 };
 
 describe("createCustomer", () => {
@@ -126,6 +129,19 @@ describe("createCustomer", () => {
     );
     expect(!juridica.ok && juridica.error.code).toBe("VALIDATION_FAILED");
     expect(!juridica.ok && juridica.error.message).toContain("persona natural");
+
+    // Y con RIF pero SIN dirección tampoco (migración 33): una factura a una
+    // empresa lleva su domicilio fiscal.
+    const { fiscal_address: _fuera, ...baseSinDireccion } = base;
+    const sinDireccion = await como(GESTOR, (uow) =>
+      createCustomer(uow, {
+        ...baseSinDireccion,
+        tax_id: `J-${RUN}-SD`,
+        legal_name: `Sin dirección ${RUN}, C.A.`,
+      }),
+    );
+    expect(!sinDireccion.ok && sinDireccion.error.code).toBe("VALIDATION_FAILED");
+    expect(!sinDireccion.ok && sinDireccion.error.message).toContain("domicilio fiscal");
   });
 
   it("sin customer.manage → PERMISSION_REQUIRED; clasificación fuera del catálogo → VALIDATION_FAILED", async () => {

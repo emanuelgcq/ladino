@@ -27,6 +27,27 @@ export function porcentajeAFraccion(p: string): string | null {
   return fraccion === "0" || fraccion === "" ? "0" : fraccion;
 }
 
+/**
+ * Viste una cédula o RIF NORMALIZADO para enseñarlo: «V12345678» →
+ * «V-12.345.678», «J401234567» → «J-40123456-7». Solo presentación: el guion
+ * y los puntos no se guardan ni significan nada. Lo que no tenga la forma
+ * prefijo+alfanumérico (datos viejos con otro formato) se enseña tal cual —
+ * vestir no es corregir. Espejo de `vestirDocumento` del PDF de la API.
+ */
+export function formatearDocumento(crudo: string): string {
+  const m = /^([VEJGP])([0-9A-Z]+)$/.exec(crudo.toUpperCase());
+  if (!m) return crudo;
+  const prefijo = m[1]!;
+  const resto = m[2]!;
+  if (prefijo === "V" || prefijo === "E") {
+    return `${prefijo}-${resto.replace(/\B(?=(\d{3})+(?!\d))/g, ".")}`;
+  }
+  if ((prefijo === "J" || prefijo === "G") && resto.length > 1) {
+    return `${prefijo}-${resto.slice(0, -1)}-${resto.slice(-1)}`;
+  }
+  return `${prefijo}-${resto}`;
+}
+
 /** La vuelta: «0.16000000» → «16», «0.125» → «12,5». Igual: solo la coma. */
 export function fraccionAPorcentaje(f: string): string {
   const [ent = "0", dec = ""] = f.split(".");

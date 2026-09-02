@@ -1,21 +1,49 @@
 import { useState } from "react";
 import { Link } from "react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardCheck } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card.js";
 import { SimpleSelect } from "../ui/select.js";
 import { Switch } from "../ui/switch.js";
 import { Label } from "../ui/input.js";
+import { useToast } from "../ui/toast.js";
+import { useSesion } from "../app/session.js";
+import { errorDePersona } from "../lib.js";
 import { setTema, temaActual, type ThemeChoice } from "../theme.js";
 import { mostrarTodosLosModulos, setMostrarTodos } from "../app/shell.js";
 
 /**
  * Configuración. Fase A trae lo que gobierna la EXPERIENCIA: tema, divulgación
- * de módulos y la puesta a punto fiscal. La configuración de negocio sigue en
- * cada módulo, que es donde tiene su permiso y su auditoría.
+ * de módulos y la puesta a punto fiscal; el cambio del flujo de Vender añade
+ * la sección de Ventas (ajustes de empresa, con permiso y auditoría en el
+ * servidor). El resto de la configuración de negocio sigue en cada módulo.
  */
 export function Configuracion(): React.JSX.Element {
   const [tema, setTemaLocal] = useState<ThemeChoice>(temaActual);
   const [todos, setTodos] = useState(mostrarTodosLosModulos);
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const qc = useQueryClient();
+
+  const ajustes = useQuery({
+    queryKey: ["ajustes", empresa.id],
+    queryFn: () => llamar<{ allow_unidentified_sales: boolean }>("/v1/company-settings"),
+  });
+  const cambiar = useMutation({
+    mutationFn: (v: boolean) =>
+      llamar("/v1/company-settings", {
+        method: "PUT",
+        body: JSON.stringify({ allow_unidentified_sales: v }),
+      }),
+    onSuccess: () => {
+      toast.success("Guardado");
+      void qc.invalidateQueries({ queryKey: ["ajustes", empresa.id] });
+    },
+    onError: (e) => {
+      toast.error("No se pudo guardar", errorDePersona(e));
+      void qc.invalidateQueries({ queryKey: ["ajustes", empresa.id] });
+    },
+  });
 
   return (
     <div className="max-w-2xl space-y-4">
@@ -67,6 +95,33 @@ export function Configuracion(): React.JSX.Element {
                 ]}
               />
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Ventas</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <Label htmlFor="cfg-sin-identificar">
+                Permitir ventas sin identificar al cliente
+              </Label>
+              <CardDescription>
+                Encendido, el punto de venta ofrece «Venta sin identificar» (va al Consumidor final
+                de sistema). Apagado, la cédula o el RIF son obligatorios SIEMPRE — y el servidor
+                también lo exige, no solo la pantalla.
+              </CardDescription>
+            </div>
+            <Switch
+              id="cfg-sin-identificar"
+              checked={ajustes.data?.allow_unidentified_sales ?? true}
+              disabled={ajustes.isLoading || cambiar.isPending}
+              onCheckedChange={(v: boolean) => cambiar.mutate(v)}
+              aria-label="Permitir ventas sin identificar al cliente"
+            />
           </div>
         </CardContent>
       </Card>
