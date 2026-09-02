@@ -1,21 +1,67 @@
-# Handoff — 2026-09-01 (2ª sesión)
+# Handoff — 2026-09-02
 
 ## Estado
 
-**Sprint 0 cerrado, OCHO módulos de negocio de extremo a extremo, UI Fase A Y Fase B
-completas (las DOCE superficies sobre el sistema de diseño, cero pantallas heredadas), y la
-PREPARACIÓN DE PRODUCCIÓN entregada: las tres imágenes construyen y humean, el worker tiene su
-bucle probado (R-10 cerrado), el CI corre el gate entero con Postgres real, y el runbook de
-deploy está escrito.** Flujo trunk-based: todo en `main`, `verify` en verde antes de cada
-commit.
+**Sprint 0 cerrado, OCHO módulos de negocio de extremo a extremo, UI Fase A y B completas, la
+preparación de producción entregada, y la FASE C construida ENTERA: Ladino para personas — las
+ocho pantallas del mundo del negocio, el asistente de /empezar, el POS de 4 clics, tesorería,
+gastos y cierres con contabilidad automática, y el gate del glosario dentro de `verify`.**
+Flujo trunk-based: todo en `main`, `verify` en verde antes de cada commit.
 
 S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 ✅ · **Productos ✅ · Clientes ✅ ·
 Inventario ✅ · Ventas ✅ · Compras ✅ · Contabilidad ✅ · Libros fiscales ✅ · UI Fase A ✅ ·
-UI Fase B ✅ · Prod-ready ✅** · Deploy al VPS ⏸️ (espera el «go» explícito) · S0.6b ⏸️
+UI Fase B ✅ · Prod-ready ✅ · Fase C ✅** · Deploy al VPS ⏸️ (espera el «go» explícito) · S0.6b ⏸️
 
-> ✅ **La migración 27 está aplicada en el remoto** (2026-08-31, con aprobación explícita, vía
-> Management API y registrada en `supabase_migrations.schema_migrations` con la forma de la CLI).
-> **27/27. Local y remoto no divergen.**
+> ✅ **Local y remoto no divergen: 32/32 migraciones** (28–32 aplicadas al remoto el 2026-09-01
+> vía Management API, huellas idénticas). **La fase espera la REVISIÓN DEL USUARIO: no se
+> despliega a producción hasta que la vea** (regla de la propia fase).
+
+## Fase C — Ladino para personas (2026-09-01 → 2026-09-02)
+
+Capturas y el recorrido de aceptación con los clics contados:
+`docs/08_UX/capturas-fase-c/` (24 capturas + `RECORRIDO_PRIMER_DIA.md`). La venta simple en
+efectivo: **4 clics** (la vara era ≤ 5).
+
+**Qué hay.** Dos mundos en una app: `/inicio`, `/vender`, `/productos`, `/inventario`,
+`/clientes`, `/compras`, `/dinero`, `/empezar` para la persona, y TODA la Fase B intacta bajo
+`/admin/*` (grupo «ADMINISTRACIÓN» colapsado, visible solo con permisos técnicos — la sonda
+solo decide qué se VE; el servidor sigue decidiendo qué se puede). Detrás: migraciones 28–32
+(imágenes+ajustes, tesorería, gastos, cierres de caja, consumidor final), tesorería con saldos
+materializados y su `treasury_reconciliation()`, gastos y cierres que generan asiento por
+ADR-0042, POS cotizado por el servidor (cero aritmética de dinero en el cliente, vuelto
+incluido), fotos con thumbnails, import de Excel con errores por fila en voz de persona,
+compra simple de un paso, PDF de factura, y `person_message` en TODOS los errores de la API.
+
+**El gate nuevo:** `apps/web/test/glosario.test.ts` recorre el FUENTE de `pages/negocio/**` y
+prohíbe la jerga (SKU, kardex, asiento, CxC/CxP, aging, instrumento, régimen, Bs.S, LAD\d+…).
+Se probó a sí mismo con texto envenenado y cazó cuatro violaciones reales durante la fase;
+se arreglaron renombrando o con adaptadores (`src/pos.ts`), nunca con indultos.
+
+**La decisión delicada de `/empezar` (VALIDAR-TRIBUTARIO):** Ladino NO fija la alícuota del
+IVA. `docs/02_COMPLIANCE/IVA_SPEC.md` lo exige y no cita gaceta para el 16%; inventarla está
+prohibido por CLAUDE.md §2. El asistente enseña los regímenes CON su norma (la Providencia
+00071 viene sembrada y citada desde la migración 21) y el porcentaje lo escribe y lo ACEPTA la
+persona: `POST /v1/fiscal/iva-general` crea las reglas generales (gravado a lo aceptado,
+exento a cero; venta y compra, `taxpayer NULL`, prioridad 5) con el ACTA de aceptación como
+`legal_source` y deja `fiscal.iva.accepted` en `audit_events` (quién, qué tasa, qué día —
+Caracas). Si las reglas ya existen, la aceptación solo deja su acta. Antes de producción, un
+humano confirma la cifra contra la ley vigente.
+
+**Deudas declaradas (ninguna escondida):**
+
+- **R-05 sigue abierto**: los documentos no congelan snapshot del cliente.
+- `companies` no tiene domicilio fiscal; el PDF lo omite y lo dice el pie («Formato libre …
+  VALIDAR-SENIAT» — el layout oficial no está en el repositorio).
+- Thumbnails se generan INLINE en el upload y el PDF se arma en la API (la spec decía worker):
+  desviación declarada en `EVENT_CATALOG.md`; mover ambos al worker es tarea mecánica.
+- La demo se borra con CADA `verify` (paso 10): `pnpm demo:seed` la repone (la API en :3000
+  debe estar arriba).
+- `mostrarImporte` enseña EXACTO lo que no puede vestir a 2 decimales (p. ej. un total
+  funcional de factura USD: «Bs. 4.817,9208») — es la regla de «formatear no redondea», no un
+  bug.
+- Quinta y sexta aparición del bug fecha-contra-reloj cazadas en la fase: la vigencia del
+  generador de asientos comparaba en UTC (arreglado a Caracas en `journal-generator.ts`) y la
+  carga manual de tasa en la web mandaba el día UTC (`toISOString` → `toLocaleDateString`).
 
 ## Preparación de producción (2026-09-01, 2ª sesión)
 
