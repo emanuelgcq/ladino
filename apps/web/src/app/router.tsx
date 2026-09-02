@@ -21,6 +21,7 @@ import { ProductosNegocio } from "../pages/negocio/Productos.js";
 import { Vender } from "../pages/negocio/Vender.js";
 import { InventarioNegocio } from "../pages/negocio/Inventario.js";
 import { ClientesNegocio } from "../pages/negocio/Clientes.js";
+import { ComprasNegocio } from "../pages/negocio/Compras.js";
 import { PantallaEnCamino } from "../pages/negocio/comunes.js";
 
 /**
@@ -46,7 +47,7 @@ export const router = createBrowserRouter([
       { path: "productos", element: <ProductosNegocio /> },
       { path: "inventario", element: <InventarioNegocio /> },
       { path: "clientes", element: <ClientesNegocio /> },
-      { path: "compras", element: <PantallaEnCamino titulo="Compras y gastos" /> },
+      { path: "compras", element: <ComprasNegocio /> },
       { path: "dinero", element: <Dinero /> },
       { path: "empezar", element: <PantallaEnCamino titulo="Empezar" /> },
       // ── Administración: la Fase B, intacta, bajo /admin/* ──────────────

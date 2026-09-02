@@ -2360,6 +2360,29 @@ export function buildOpenApiDocument(): object {
     responses: { 201: okJson(gasto, "El gasto registrado."), ...erroresComunes },
   });
   registry.registerPath({
+    method: "post",
+    path: "/v1/expenses/attachment",
+    summary: "Subir el comprobante de un gasto (permiso expense.register)",
+    description:
+      "Multipart con `file` (foto o PDF, hasta 6 MB) al bucket privado `receipts`. Devuelve la " +
+      "RUTA que luego viaja en `attachment_path` de POST /v1/expenses — nunca una URL firmada.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: {
+        content: {
+          "multipart/form-data": {
+            schema: z.object({ file: z.string().openapi({ format: "binary" }) }),
+          },
+        },
+      },
+    },
+    responses: {
+      201: okJson(z.object({ attachment_path: z.string() }), "La ruta del comprobante."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
     method: "get",
     path: "/v1/expenses",
     summary: "Los gastos del período (permiso expense.read)",

@@ -79,7 +79,8 @@ export function buildApp(cfg: AppConfig): Hono {
     const esSubidaArchivo =
       c.req.method === "POST" &&
       ((c.req.path.startsWith("/v1/products/") && c.req.path.endsWith("/image")) ||
-        c.req.path === "/v1/products/import");
+        c.req.path === "/v1/products/import" ||
+        c.req.path === "/v1/expenses/attachment");
     // El Context de un `app.use("*")` colapsa su tercer genérico a `any`; los
     // dos handlers son bodyLimit reales y el dispatch es solo por tamaño.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
@@ -166,7 +167,7 @@ export function buildApp(cfg: AppConfig): Hono {
   purchasesRoutes(app, cfg.sql, idempotencia);
   fiscalBooksRoutes(app, cfg.sql, idempotencia);
   inventoryExtensionsRoutes(app, cfg.sql, idempotencia);
-  treasuryRoutes(app, cfg.sql, idempotencia);
+  treasuryRoutes(app, cfg.sql, idempotencia, cfg.storage);
   documentsPdfRoutes(app, cfg.sql);
   negocioRoutes(app, cfg.sql);
 

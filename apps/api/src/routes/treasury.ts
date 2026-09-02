@@ -22,6 +22,8 @@ import {
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
+import { subirObjeto } from "../storage.js";
+import type { StorageConfig } from "../config.js";
 
 /**
  * Rutas de TESORERÍA (Fase C, migraciones 29–31): cuentas, formas de pago,
@@ -61,7 +63,55 @@ async function exigePermiso(
   }
 }
 
-export function treasuryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler): void {
+export function treasuryRoutes(
+  app: Hono,
+  sql: Sql,
+  idempotencia: MiddlewareHandler,
+  storage?: StorageConfig,
+): void {
+  /**
+   * El COMPROBANTE de un gasto: multipart al bucket privado `receipts`
+   * (migración 30) con la credencial de servicio; devuelve la RUTA que luego
+   * viaja en `attachment_path` de POST /v1/expenses. Foto o PDF, hasta 6 MB.
+   */
+  app.post("/v1/expenses/attachment", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    if (storage === undefined) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Este servidor no tiene almacenamiento de comprobantes configurado.",
+      });
+    }
+    await withTransaction(sql, actor, ({ sql: tx }) =>
+      exigePermiso(tx, actor, companyId, "expense.register", "Adjuntar un comprobante"),
+    );
+    const cuerpo = await c.req.parseBody();
+    const archivo = cuerpo["file"];
+    if (!(archivo instanceof File)) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Manda el comprobante en el campo `file` (multipart/form-data).",
+      });
+    }
+    if (!/^(image\/(jpeg|png|webp)|application\/pdf)$/.test(archivo.type)) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "El comprobante tiene que ser una foto (JPG, PNG, WebP) o un PDF.",
+      });
+    }
+    const extension = archivo.type === "application/pdf" ? "pdf" : "img";
+    const ruta = `${companyId}/receipts/${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}.${extension}`;
+    await subirObjeto(
+      storage,
+      "receipts",
+      ruta,
+      new Uint8Array(await archivo.arrayBuffer()),
+      archivo.type,
+    );
+    return c.json({ attachment_path: ruta }, 201);
+  });
+
   // ── Cuentas ───────────────────────────────────────────────────────────────
   app.get("/v1/treasury/accounts", async (c) => {
     const { companyId } = requireCompany(c);
