@@ -123,6 +123,10 @@ import {
   ConvertResponse,
   CompanySettingsResponse,
   UpdateCompanySettingsRequest,
+  FiscalSetupResponse,
+  AssignFiscalRegimeRequest,
+  AcceptIvaGeneralRequest,
+  AcceptIvaGeneralResponse,
   CreateCompanyAccountRequest,
   UpdateCompanyAccountRequest,
   CompanyAccountResponse,
@@ -1133,6 +1137,60 @@ export function buildOpenApiDocument(): object {
       body: { content: { "application/json": { schema: editarAjustes } } },
     },
     responses: { 200: okJson(ajustesNegocio, "Los ajustes resultantes."), ...erroresComunes },
+  });
+
+  const setupFiscal = registry.register("FiscalSetupResponse", FiscalSetupResponse);
+  const asignarRegimen = registry.register("AssignFiscalRegimeRequest", AssignFiscalRegimeRequest);
+  const aceptarIva = registry.register("AcceptIvaGeneralRequest", AcceptIvaGeneralRequest);
+  const aceptacionIva = registry.register("AcceptIvaGeneralResponse", AcceptIvaGeneralResponse);
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal/setup",
+    summary: "La puesta a punto fiscal: regímenes con su norma, el vigente y el IVA general",
+    description:
+      "Lo que el asistente de /empezar necesita leer: el catálogo de regímenes (cada uno con la " +
+      "norma citada en la migración), el régimen vigente de la empresa y la regla general del " +
+      "IVA si esta instancia ya la aceptó.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(setupFiscal, "El estado de la puesta a punto."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal/regime",
+    summary: "Asignar el régimen fiscal (permiso fiscal.regime.manage)",
+    description:
+      "Solo si la empresa no tiene régimen vigente: el asistente asigna una vez; cambiar " +
+      "después es un acto del mundo técnico (append-only, ADR-0029).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader.extend({ "Idempotency-Key": z.string().max(255) }),
+      body: { content: { "application/json": { schema: asignarRegimen } } },
+    },
+    responses: {
+      201: okJson(z.object({ regime_code: z.string() }), "El régimen asignado."),
+      ...erroresComunes,
+      409: errorRef("La empresa ya tiene un régimen vigente."),
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal/iva-general",
+    summary: "ACEPTAR la alícuota general del IVA (permiso tax.rules.manage)",
+    description:
+      "Ladino no afirma la alícuota: la declara y la acepta LA PERSONA. Crea —si no existen— " +
+      "las reglas generales (gravado a la alícuota aceptada, exento a cero; venta y compra) " +
+      "con el acta de aceptación como `legal_source`, y siempre deja el acta en la auditoría. " +
+      "VALIDAR-TRIBUTARIO: confirmar contra la Ley de IVA vigente antes de producción.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader.extend({ "Idempotency-Key": z.string().max(255) }),
+      body: { content: { "application/json": { schema: aceptarIva } } },
+    },
+    responses: {
+      201: okJson(aceptacionIva, "La aceptación registrada."),
+      ...erroresComunes,
+    },
   });
   registry.registerPath({
     method: "get",

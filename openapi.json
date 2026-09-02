@@ -4734,6 +4734,118 @@
         },
         "additionalProperties": false
       },
+      "FiscalSetupResponse": {
+        "type": "object",
+        "properties": {
+          "regimes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "numbering_mode": {
+                  "type": "string"
+                },
+                "legal_source": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "name",
+                "description",
+                "numbering_mode",
+                "legal_source"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "current_regime": {
+            "type": "string",
+            "nullable": true
+          },
+          "iva_general": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "rate": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "legal_source": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "rate",
+              "legal_source"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "regimes",
+          "current_regime",
+          "iva_general"
+        ],
+        "additionalProperties": false
+      },
+      "AssignFiscalRegimeRequest": {
+        "type": "object",
+        "properties": {
+          "regime_code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,39}$"
+          }
+        },
+        "required": [
+          "regime_code"
+        ],
+        "additionalProperties": false
+      },
+      "AcceptIvaGeneralRequest": {
+        "type": "object",
+        "properties": {
+          "rate": {
+            "type": "string",
+            "pattern": "^0(\\.\\d{1,4})?$"
+          }
+        },
+        "required": [
+          "rate"
+        ],
+        "additionalProperties": false
+      },
+      "AcceptIvaGeneralResponse": {
+        "type": "object",
+        "properties": {
+          "rate": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "rules_created": {
+            "type": "integer"
+          },
+          "accepted_on": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "required": [
+          "rate",
+          "rules_created",
+          "accepted_on"
+        ],
+        "additionalProperties": false
+      },
       "PosQuoteRequest": {
         "type": "object",
         "properties": {
@@ -15912,6 +16024,282 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CompanySettingsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal/setup": {
+      "get": {
+        "summary": "La puesta a punto fiscal: regímenes con su norma, el vigente y el IVA general",
+        "description": "Lo que el asistente de /empezar necesita leer: el catálogo de regímenes (cada uno con la norma citada en la migración), el régimen vigente de la empresa y la regla general del IVA si esta instancia ya la aceptó.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El estado de la puesta a punto.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiscalSetupResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal/regime": {
+      "post": {
+        "summary": "Asignar el régimen fiscal (permiso fiscal.regime.manage)",
+        "description": "Solo si la empresa no tiene régimen vigente: el asistente asigna una vez; cambiar después es un acto del mundo técnico (append-only, ADR-0029).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignFiscalRegimeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El régimen asignado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "regime_code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "regime_code"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "La empresa ya tiene un régimen vigente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal/iva-general": {
+      "post": {
+        "summary": "ACEPTAR la alícuota general del IVA (permiso tax.rules.manage)",
+        "description": "Ladino no afirma la alícuota: la declara y la acepta LA PERSONA. Crea —si no existen— las reglas generales (gravado a la alícuota aceptada, exento a cero; venta y compra) con el acta de aceptación como `legal_source`, y siempre deja el acta en la auditoría. VALIDAR-TRIBUTARIO: confirmar contra la Ley de IVA vigente antes de producción.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptIvaGeneralRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "La aceptación registrada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptIvaGeneralResponse"
                 }
               }
             }

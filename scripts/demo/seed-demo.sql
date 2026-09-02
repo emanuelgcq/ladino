@@ -40,7 +40,9 @@ select 'deade001-0000-4000-8000-00000000ee01', k from (values
   ('product.manage'), ('price_list.manage'), ('customer.manage'),
   ('treasury.read'), ('treasury.account.manage'), ('treasury.reassign'),
   ('expense.register'), ('expense.read'), ('cash.close'),
-  ('company.settings.manage')
+  ('company.settings.manage'),
+  -- El asistente de /empezar: asignar régimen y aceptar la alícuota general.
+  ('fiscal.regime.manage'), ('tax.rules.manage')
 ) as t(k)
 on conflict do nothing;
 

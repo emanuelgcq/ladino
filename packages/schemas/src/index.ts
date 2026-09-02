@@ -91,6 +91,10 @@ export {
   CreateFiscalRangeRequest,
   FiscalRangeResponse,
   CreateExchangeRateRequest,
+  FiscalSetupResponse,
+  AssignFiscalRegimeRequest,
+  AcceptIvaGeneralRequest,
+  AcceptIvaGeneralResponse,
 } from "./sales.js";
 export {
   SupplierKind,

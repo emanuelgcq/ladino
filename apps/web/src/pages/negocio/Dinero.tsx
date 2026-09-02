@@ -303,7 +303,9 @@ function TarjetaTasa({
           to_currency: "VES",
           rate: nueva.trim().replace(",", "."),
           source: "Carga manual del negocio",
-          rate_date: new Date().toISOString().slice(0, 10),
+          // El día LOCAL de la persona, no el de UTC: a las 9 pm de Caracas,
+          // toISOString ya va por mañana (la familia de bugs de CLAUDE.md §3).
+          rate_date: new Date().toLocaleDateString("en-CA"),
         }),
       }),
     onSuccess: () => {
@@ -533,7 +535,7 @@ function CerrarCaja({
   );
 }
 
-function CrearCuenta({ onCreada }: { onCreada: () => void }): React.JSX.Element {
+export function CrearCuenta({ onCreada }: { onCreada: () => void }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [abierto, setAbierto] = useState(false);

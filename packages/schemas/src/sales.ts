@@ -488,3 +488,55 @@ export const CreateExchangeRateRequest = z
   })
   .strict();
 export type CreateExchangeRateRequest = z.infer<typeof CreateExchangeRateRequest>;
+
+/**
+ * Puesta a punto fiscal del asistente (Fase C, PARTE 4): el catálogo de
+ * regímenes con su norma citada, el vigente de la empresa y si la alícuota
+ * general del IVA ya fue aceptada en esta instancia.
+ */
+export const FiscalSetupResponse = z
+  .object({
+    regimes: z.array(
+      z
+        .object({
+          code: z.string(),
+          name: z.string(),
+          description: z.string(),
+          numbering_mode: z.string(),
+          /** La norma que sustenta el régimen, sembrada en la migración. */
+          legal_source: z.string(),
+        })
+        .strict(),
+    ),
+    current_regime: z.string().nullable(),
+    iva_general: z.object({ rate: amount, legal_source: z.string() }).strict().nullable(),
+  })
+  .strict();
+export type FiscalSetupResponse = z.infer<typeof FiscalSetupResponse>;
+
+export const AssignFiscalRegimeRequest = z
+  .object({ regime_code: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/) })
+  .strict();
+export type AssignFiscalRegimeRequest = z.infer<typeof AssignFiscalRegimeRequest>;
+
+/**
+ * La ACEPTACIÓN consciente de la alícuota general del IVA. Ladino no la
+ * afirma: la declara la persona y queda su acta (VALIDAR-TRIBUTARIO).
+ */
+export const AcceptIvaGeneralRequest = z
+  .object({
+    /** Como fracción: "0.16" es 16%. */
+    rate: z.string().regex(/^0(\.\d{1,4})?$/),
+  })
+  .strict();
+export type AcceptIvaGeneralRequest = z.infer<typeof AcceptIvaGeneralRequest>;
+
+export const AcceptIvaGeneralResponse = z
+  .object({
+    rate: amount,
+    /** Cuántas reglas creó esta aceptación (0 si otra empresa ya las creó). */
+    rules_created: z.number().int(),
+    accepted_on: z.string().date(),
+  })
+  .strict();
+export type AcceptIvaGeneralResponse = z.infer<typeof AcceptIvaGeneralResponse>;

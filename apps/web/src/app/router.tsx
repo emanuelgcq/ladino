@@ -22,7 +22,8 @@ import { Vender } from "../pages/negocio/Vender.js";
 import { InventarioNegocio } from "../pages/negocio/Inventario.js";
 import { ClientesNegocio } from "../pages/negocio/Clientes.js";
 import { ComprasNegocio } from "../pages/negocio/Compras.js";
-import { PantallaEnCamino } from "../pages/negocio/comunes.js";
+import { Inicio } from "../pages/negocio/Inicio.js";
+import { Empezar } from "../pages/negocio/Empezar.js";
 
 /**
  * DOS MUNDOS, UNA APP (Fase C).
@@ -32,8 +33,8 @@ import { PantallaEnCamino } from "../pages/negocio/comunes.js";
  * Fase B bajo /admin/* — el mundo del contador y de quien configura, con
  * «Facturación fiscal» como casa del checklist técnico.
  *
- * Las PantallaEnCamino son provisionales y desaparecen pantalla a pantalla
- * dentro de esta misma fase.
+ * Con /empezar, las ocho pantallas de la persona están construidas: ya no
+ * queda ninguna provisional.
  */
 export const router = createBrowserRouter([
   {
@@ -42,14 +43,14 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/inicio" replace /> },
       // ── El mundo de la persona ─────────────────────────────────────────
-      { path: "inicio", element: <PantallaEnCamino titulo="Inicio" /> },
+      { path: "inicio", element: <Inicio /> },
       { path: "vender", element: <Vender /> },
       { path: "productos", element: <ProductosNegocio /> },
       { path: "inventario", element: <InventarioNegocio /> },
       { path: "clientes", element: <ClientesNegocio /> },
       { path: "compras", element: <ComprasNegocio /> },
       { path: "dinero", element: <Dinero /> },
-      { path: "empezar", element: <PantallaEnCamino titulo="Empezar" /> },
+      { path: "empezar", element: <Empezar /> },
       // ── Administración: la Fase B, intacta, bajo /admin/* ──────────────
       { path: "admin", element: <Dashboard /> },
       { path: "admin/ventas", element: <Ventas /> },

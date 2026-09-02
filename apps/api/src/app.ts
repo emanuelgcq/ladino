@@ -20,6 +20,7 @@ import { fiscalBooksRoutes } from "./routes/fiscal-books.js";
 import { treasuryRoutes } from "./routes/treasury.js";
 import { documentsPdfRoutes } from "./routes/documents-pdf.js";
 import { negocioRoutes } from "./routes/negocio.js";
+import { fiscalSetupRoutes } from "./routes/fiscal-setup.js";
 import type { StorageConfig } from "./config.js";
 
 export interface AppConfig {
@@ -170,6 +171,7 @@ export function buildApp(cfg: AppConfig): Hono {
   treasuryRoutes(app, cfg.sql, idempotencia, cfg.storage);
   documentsPdfRoutes(app, cfg.sql);
   negocioRoutes(app, cfg.sql);
+  fiscalSetupRoutes(app, cfg.sql, idempotencia);
 
   return app;
 }

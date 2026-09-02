@@ -1,5 +1,3 @@
-import { Hammer } from "lucide-react";
-
 /**
  * Fechas RELATIVAS para el mundo del negocio (PARTE 16): «hoy», «ayer»,
  * «hace 3 días» — y a partir de la semana, la fecha corta de verdad. Compara
@@ -17,18 +15,24 @@ export function fechaRelativa(iso: string): string {
 }
 
 /**
- * Pantalla provisional del mundo de la persona: honesta, en su voz, y sin
- * fingir que hay algo detrás. Cada una desaparece cuando su pantalla real
- * llega — la fase no se cierra con ninguna de estas en pie.
+ * Los dos conversores del asistente de /empezar: entre el «16%» que escribe
+ * la persona y la fracción «0.16» que viaja a la API, moviendo la coma sobre
+ * STRINGS. Ni un float toca el porcentaje que la persona acepta.
  */
-export function PantallaEnCamino({ titulo }: { titulo: string }): React.JSX.Element {
-  return (
-    <div className="mx-auto max-w-md py-16 text-center">
-      <Hammer className="mx-auto size-8 text-faint-foreground" />
-      <h1 className="mt-3 text-lg font-semibold">{titulo}</h1>
-      <p className="mt-1 text-[0.95rem] text-muted-foreground">
-        Estamos armando esta pantalla. Llega en esta misma fase.
-      </p>
-    </div>
-  );
+export function porcentajeAFraccion(p: string): string | null {
+  const limpio = p.trim().replace(",", ".");
+  if (!/^\d{1,2}(\.\d{1,2})?$/.test(limpio)) return null;
+  const [ent = "0", dec = ""] = limpio.split(".");
+  const fraccion = `0.${ent.padStart(2, "0")}${dec}`.replace(/0+$/, "").replace(/\.$/, "");
+  return fraccion === "0" || fraccion === "" ? "0" : fraccion;
+}
+
+/** La vuelta: «0.16000000» → «16», «0.125» → «12,5». Igual: solo la coma. */
+export function fraccionAPorcentaje(f: string): string {
+  const [ent = "0", dec = ""] = f.split(".");
+  const rellena = dec.length < 2 ? `${dec}00`.slice(0, 2) : dec;
+  const entera = (ent === "0" ? "" : ent) + rellena.slice(0, 2);
+  const resto = rellena.slice(2).replace(/0+$/, "");
+  const cabeza = entera.replace(/^0+(?=\d)/, "");
+  return resto === "" ? cabeza : `${cabeza},${resto}`;
 }

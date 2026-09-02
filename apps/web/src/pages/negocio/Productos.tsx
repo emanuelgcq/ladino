@@ -295,7 +295,7 @@ function EquivalenteBs({
   );
 }
 
-function AltaSimple({
+export function AltaSimple({
   onCerrar,
   onCreado,
 }: {
@@ -563,7 +563,7 @@ function AltaSimple({
   );
 }
 
-function ImportarExcel({
+export function ImportarExcel({
   onCerrar,
   onListo,
 }: {
