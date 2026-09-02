@@ -1,4 +1,36 @@
-# Handoff — 2026-09-02
+# Handoff — 2026-09-02 (2ª sesión)
+
+## La venta empieza por la cédula (2026-09-02, cambio al flujo de /vender)
+
+Decisión del usuario, reemplaza el «Consumidor final por defecto» de la fase. Migración 33
+(`pos_customer_identification`) + pgTAP 033, aplicada en local y remoto.
+
+- **El POS pide el documento PRIMERO**: prefijo V/E/J/G/P + número, con autofoco; tecleando la
+  letra al inicio el prefijo se pone solo. `GET /v1/customers/lookup?document=` busca EXACTO
+  sobre la forma normalizada (mayúsculas, sin separadores) — la misma expresión del único
+  parcial, que la migración 33 pasó de `upper(tax_id)` a la forma normalizada: «J-40123456-7»
+  y «J401234567» ya son EL MISMO cliente. 404 idéntico para «no existe» y «otra empresa» (sin
+  canal lateral, probado en E2E). Sin regex de formato ni dígito verificador (VALIDAR-SENIAT).
+- **Si no está, se crea inline** sin salir de la pantalla: nombre, teléfono, dirección
+  (obligatoria para J/G — el DOMINIO la exige, no solo la pantalla). El tipo se infiere del
+  prefijo (V/E natural, J jurídica, G gobierno, P extranjera/no_domiciliado); la persona nunca
+  ve esas palabras. Teclado completo: cédula → Enter → nombre → Tab → teléfono → Enter →
+  producto → Enter → F2 → Enter (probado así en el smoke).
+- **R-05, lado CLIENTE, CERRADO**: `documents` congela razón social, documento normalizado y
+  domicilio al crearse (`customer_*_snapshot`, nullable y sin default — los documentos viejos
+  quedan NULL honesto, y rellenarlos también es LAD68). El PDF imprime el snapshot con el
+  documento vestido («V-12.345.678» — presentación, no dato) y hace `coalesce` al cliente vivo
+  solo para documentos pre-33. El lado EMISOR de R-05 sigue abierto (companies sin domicilio).
+- **«Venta sin identificar» es un escape explícito**, ya no el default: enlace discreto que usa
+  el Consumidor final de sistema. `company_settings.allow_unidentified_sales` (default true) lo
+  gobierna desde Configuración → Ventas; apagado, quickSale RECHAZA al cliente de sistema — el
+  control vive en el dominio, no en el botón.
+- Un cliente SIN lista preferida resuelve ahora a la «detal» de la empresa (como el Consumidor
+  final): el cliente recién creado en el POS puede comprar sin que nadie elija lista. Pedir
+  una distinta sigue exigiendo `sales.price_list.override`.
+- La vara de aceptación cambió con el flujo: venta a cliente EXISTENTE ≤ 6 interacciones desde
+  /vender (cédula + Enter = 2); quedó en 6. `RECORRIDO_PRIMER_DIA.md` reescrito; capturas
+  03–05 y 25–26 renovadas.
 
 ## Estado
 
@@ -12,7 +44,8 @@ S0.1 ✅ · S0.2 ✅ · S0.3 ✅ · S0.4 ✅ · S0.5 ✅ · S0.6a ✅ · F-15 �
 Inventario ✅ · Ventas ✅ · Compras ✅ · Contabilidad ✅ · Libros fiscales ✅ · UI Fase A ✅ ·
 UI Fase B ✅ · Prod-ready ✅ · Fase C ✅** · Deploy al VPS ⏸️ (espera el «go» explícito) · S0.6b ⏸️
 
-> ✅ **Local y remoto no divergen: 32/32 migraciones** (28–32 aplicadas al remoto el 2026-09-01
+> ✅ **Local y remoto no divergen: 33/33 migraciones** (la 33 aplicada al remoto el 2026-09-02;
+> 28–32 el 2026-09-01
 > vía Management API, huellas idénticas). **La fase espera la REVISIÓN DEL USUARIO: no se
 > despliega a producción hasta que la vea** (regla de la propia fase).
 
@@ -49,7 +82,8 @@ humano confirma la cifra contra la ley vigente.
 
 **Deudas declaradas (ninguna escondida):**
 
-- **R-05 sigue abierto**: los documentos no congelan snapshot del cliente.
+- **R-05, lado emisor, sigue abierto** (el lado cliente se cerró el 2026-09-02 con la
+  migración 33 — ver arriba): `companies` no congela su propio RIF en el documento.
 - `companies` no tiene domicilio fiscal; el PDF lo omite y lo dice el pie («Formato libre …
   VALIDAR-SENIAT» — el layout oficial no está en el repositorio).
 - Thumbnails se generan INLINE en el upload y el PDF se arma en la API (la spec decía worker):

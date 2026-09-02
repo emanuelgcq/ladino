@@ -5,8 +5,9 @@ de una persona con su negocio. Cada flujo cuenta los clics de verdad, medidos so
 pantallas reales (las capturas de esta carpeta salen de un navegador de verdad contra la API
 local, con la empresa de demostración).
 
-**La vara de la fase: una venta de un producto pagada en efectivo, en 5 clics o menos.**
-Resultado: **4 clics.** Detalle abajo.
+**La vara vigente: una venta en efectivo a cliente EXISTENTE en 6 interacciones o menos desde
+`/vender` (la cédula + Enter cuentan como 2).** Resultado: **6.** A cliente nuevo se suman las
+tres del mini-formulario, y está bien. Detalle abajo.
 
 ---
 
@@ -37,18 +38,34 @@ cuando el servidor confirma cada uno:
 
 Con los cuatro en verde: «¡Listo! Tu negocio ya puede vender» → **Ir a vender**.
 
-## 2. La primera venta (`/vender`, capturas 3–5) — **4 clics**
+## 2. La primera venta (`/vender`, capturas 3–5 y 25–26) — la venta EMPIEZA POR LA CÉDULA
 
-| # | Clic | Qué pasa |
-| --- | ------------------------------ | ----------------------------------------------------------------- |
-| 1 | La foto del producto | Entra al carrito. El total lo cotiza el **servidor** en cada cambio |
-| 2 | **COBRAR** | Se abre el cobro con el total en Bs y su equivalente |
-| 3 | **Efectivo (Bs)** | La forma de pago; el monto ya viene puesto con el total |
-| 4 | **Confirmar** | Factura emitida + cobro registrado. Pantalla de éxito con PDF y WhatsApp |
+Es el flujo real de una caja venezolana: lo primero que pide el cajero es el documento. El
+carrito arranca con un campo grande con el foco puesto (prefijo V/E/J/G/P + número; si el
+cajero teclea «J401234567», el prefijo se pone solo).
 
-Con vuelto: se teclea cuánto entregó el cliente y **el vuelto lo calcula el servidor** —
-la pantalla no suma ni un céntimo. Cliente por omisión: Consumidor final; buscar con la
-lupa o el lector de código de barras (Enter agrega directo).
+**A cliente EXISTENTE — 6 interacciones:**
+
+| # | Interacción | Qué pasa |
+| --- | ---------------------- | ------------------------------------------------------------------ |
+| 1–2 | Cédula + **Enter** | Búsqueda exacta en el servidor. Chip con nombre y teléfono («María González · V-85.239.866 · 0424-5556677»); el foco salta a productos |
+| 3 | El producto (o Enter) | Entra al carrito. El total lo cotiza el **servidor** en cada cambio |
+| 4 | **COBRAR** (o F2) | Se abre el cobro con el total y su equivalente |
+| 5 | **Efectivo Bs.** | El monto ya viene puesto con el exacto |
+| 6 | **Confirmar** (o Enter) | Factura emitida + cobro registrado, con los datos del cliente CONGELADOS en el documento |
+
+**A cliente NUEVO** se suman las tres del mini-formulario inline — nombre, teléfono, Enter —
+sin salir de la pantalla: el tipo de cliente se infiere del prefijo y a una empresa (J/G) se
+le pide su domicilio fiscal, porque la factura lo lleva. Todo el recorrido va **sin ratón**:
+cédula → Enter → nombre → Tab → teléfono → Enter → producto → Enter → F2 → Enter.
+
+**«Venta sin identificar»** quedó como escape explícito (el enlace discreto bajo el campo):
+usa el Consumidor final de sistema. El dueño puede apagarlo en Configuración → Ventas, y
+entonces la cédula es obligatoria SIEMPRE — también para quien le hable a la API directo,
+porque el dominio lo rechaza.
+
+Con vuelto: se teclea cuánto entregó el cliente y **el vuelto lo calcula el servidor** — la
+pantalla no suma ni un céntimo. El lector de código de barras sigue igual: Enter agrega.
 
 ## 3. Entró mercancía (`/inventario`, capturas 9–11) — 4 clics + cantidad
 
@@ -85,7 +102,7 @@ pantalla viste, no suma.
 
 ## Las tres promesas de la fase, verificadas
 
-- **≤ 5 clics la venta simple**: 4. ✔
+- **≤ 6 interacciones la venta a cliente existente** (la vara del flujo con cédula): 6. ✔
 - **Cero jerga**: el glosario es un **gate dentro de `pnpm verify`** que recorre el fuente
   de `pages/negocio/**` y se pone rojo con SKU, kardex, asiento, CxC, régimen, Bs.S…
   Durante la fase cazó cuatro violaciones reales; ninguna se indultó. ✔
