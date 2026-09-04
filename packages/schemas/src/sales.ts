@@ -15,7 +15,14 @@ const quantity = z
   .regex(/^\d{1,16}(\.\d{1,8})?$/, "cantidad decimal como string")
   .refine(noEsCero, "la cantidad debe ser mayor que cero");
 
-export const DocumentKind = z.enum(["quote", "order", "invoice", "credit_note", "debit_note"]);
+export const DocumentKind = z.enum([
+  "quote",
+  "order",
+  "invoice",
+  "credit_note",
+  "debit_note",
+  "receipt",
+]);
 export const DocumentStatus = z.enum([
   "draft",
   "confirmed",

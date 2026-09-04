@@ -416,7 +416,7 @@ export function salesRoutes(
         select coalesce((select sum(platform.document_balance(${companyId}, d.id))
                            from public.documents d
                           where d.company_id = ${companyId} and d.customer_id = ${id}
-                            and d.kind = 'invoice' and d.status in ('issued', 'paid')), 0)::text
+                            and d.kind in ('invoice', 'receipt') and d.status in ('issued', 'paid')), 0)::text
                  as pendiente,
                coalesce((select sum(cc.amount - cc.applied_amount)
                            from public.customer_credits cc

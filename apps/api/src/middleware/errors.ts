@@ -157,6 +157,9 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   BOOK_FORMAT_UNAVAILABLE: 409, // LAD65
   // POS identificado (migración 33): el snapshot del cliente no se edita.
   DOCUMENT_SNAPSHOT_FROZEN: 409, // LAD68
+  // Modo recibos (migración 37): cada régimen emite SOLO sus kinds. 409: el
+  // cuerpo está bien; lo que no cuadra es el régimen, y se arregla en Empezar.
+  REGIME_KIND_NOT_ALLOWED: 409,
   // El adaptador BCV (DolarAPI) no respondió o respondió irreconocible. 502:
   // el cuerpo del cliente está bien; lo que falló está aguas arriba, y el
   // fallback es la carga manual de siempre.
@@ -284,6 +287,8 @@ function mensajePersona(code: string): string {
       return "No hay suficiente mercancía para esa cantidad. Revisa la existencia o registra la entrada primero.";
     case "APPEND_ONLY_VIOLATION":
       return "Esto ya quedó registrado y no se puede cambiar. Lo que corresponde es registrar la corrección.";
+    case "REGIME_KIND_NOT_ALLOWED":
+      return "Ese tipo de documento no va con cómo factura tu negocio. Revisa el paso de facturación en Empezar.";
     case "DOCUMENT_SNAPSHOT_FROZEN":
       return "Los datos del cliente quedaron impresos en esa factura y no se cambian. Si están mal, se corrige con una nota de crédito.";
     case "PERIOD_CLOSED":

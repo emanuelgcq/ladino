@@ -71,7 +71,7 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
                      ::text as debt
                 from public.documents d
                where d.company_id = cu.company_id and d.customer_id = cu.id
-                 and d.kind = 'invoice' and d.status = 'issued'
+                 and d.kind in ('invoice', 'receipt') and d.status = 'issued'
             ) deuda on true`
         : tx``;
       const deudaCol = conDeuda ? ", deuda.debt" : "";

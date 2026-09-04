@@ -56,7 +56,8 @@ export type SalesError =
   | { code: "TAX_RULE_MISSING"; message: string }
   | { code: "EXCHANGE_RATE_MISSING"; message: string }
   | { code: "NEGATIVE_STOCK"; message: string }
-  | { code: "APPEND_ONLY_VIOLATION"; message: string };
+  | { code: "APPEND_ONLY_VIOLATION"; message: string }
+  | { code: "REGIME_KIND_NOT_ALLOWED"; message: string };
 
 /** Política de redondeo del documento. Se persiste con cada línea (ADR-0024). */
 const DOC_POLICY: RoundingPolicy = { id: "sales:document:8:HALF_UP", scale: 8, mode: "HALF_UP" };
@@ -78,6 +79,8 @@ interface Contexto {
   readonly functionalCurrency: string;
   readonly regimeVersionId: string;
   readonly numberingMode: string;
+  /** Los kinds que el régimen vigente permite emitir (migración 37). */
+  readonly allowedKinds: readonly string[];
 }
 
 function traducir(e: unknown): SalesError | null {
@@ -116,13 +119,17 @@ async function autorizar(
   const [cfg] = await sql<{ moneda: string }[]>`
     select functional_currency_code as moneda from public.companies where id = ${companyId}`;
   if (!cfg) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-  const [regimen] = await sql<{ regime_version_id: string; numbering_mode: string }[]>`
-    select regime_version_id, numbering_mode from platform.regime_at(${companyId}, ${fecha})`;
+  const [regimen] = await sql<
+    { regime_version_id: string; numbering_mode: string; allowed_kinds: string[] }[]
+  >`
+    select regime_version_id, numbering_mode, allowed_kinds
+      from platform.regime_at(${companyId}, ${fecha})`;
   return ok({
     tenantId: scope.value.tenantId,
     functionalCurrency: cfg.moneda,
     regimeVersionId: regimen?.regime_version_id ?? "",
     numberingMode: regimen?.numbering_mode ?? "",
+    allowedKinds: regimen?.allowed_kinds ?? [],
   });
 }
 
@@ -541,10 +548,13 @@ async function insertarDocumento(
               ${d.fxRate.toFixed()}, ${f.tot.value.toAmountString()},
               ${ctx.functionalCurrency}, ${d.rateSource}, now(), ${DOC_POLICY.id},
               ${l.costSnapshot},
-              -- El tratamiento se deriva con la función de la base y NO aquí:
-              -- una segunda definición en TypeScript es exactamente cómo dos
-              -- libros acaban clasificando distinto la misma línea.
-              ${l.taxCategory}, platform.tax_treatment_of(${l.taxCategory}),
+              -- El tratamiento se deriva con la función de la base y NO aquí
+              -- (una segunda definición en TypeScript es cómo dos libros
+              -- clasifican distinto la misma línea) — salvo el RECIBO
+              -- (migración 37): su línea no lleva regla y el snapshot lo DICE
+              -- con 'no_fiscal', en vez de fingir una clasificación de libro.
+              ${l.taxCategory},
+              ${d.kind === "receipt" ? sql`'no_fiscal'` : sql`platform.tax_treatment_of(${l.taxCategory})`},
               ${l.operationType})`;
   }
   return ok(doc!);
@@ -748,6 +758,27 @@ export async function createInvoice(
   uow: UnitOfWork,
   input: CreateInvoiceRequest,
 ): Promise<Result<DocumentResponse, SalesError>> {
+  return emitirVenta(uow, input, "invoice");
+}
+
+/**
+ * El RECIBO (migración 37): la venta del negocio SIN RIF. Misma emisión que la
+ * factura — correlativo gapless, kardex, cobros, asiento por ADR-0042 — pero
+ * SIN número de control, SIN resolve_tax (un no-inscrito no repercute IVA) y
+ * con tratamiento `no_fiscal` en el snapshot. Jamás pisa un libro fiscal.
+ */
+export async function createReceipt(
+  uow: UnitOfWork,
+  input: CreateInvoiceRequest,
+): Promise<Result<DocumentResponse, SalesError>> {
+  return emitirVenta(uow, input, "receipt");
+}
+
+async function emitirVenta(
+  uow: UnitOfWork,
+  input: CreateInvoiceRequest,
+  kind: "invoice" | "receipt",
+): Promise<Result<DocumentResponse, SalesError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Emitir exige un usuario real." });
@@ -760,6 +791,19 @@ export async function createInvoice(
       code: "FISCAL_NUMBERING_INVALID",
       message:
         "La empresa no tiene régimen fiscal vigente a esa fecha: asígnalo antes de emitir (ADR-0029).",
+    });
+  }
+  // EL GATE DE KIND (migración 37), dicho con palabras antes de que lo diga el
+  // trigger: sin RIF no existe factura (PA 00071 art. 13.5), y con datos
+  // fiscales no se vende por recibo — la puerta al uso evasor queda cerrada
+  // en el esquema Y aquí, con el mensaje que cada caso merece.
+  if (!ctx.value.allowedKinds.includes(kind)) {
+    return err({
+      code: "REGIME_KIND_NOT_ALLOWED",
+      message:
+        kind === "invoice"
+          ? "Para emitir facturas necesitas completar tus datos fiscales (el régimen actual solo emite recibos). Actívalo en Empezar."
+          : "El régimen fiscal de esta empresa no emite recibos: un negocio con datos fiscales factura.",
     });
   }
 
@@ -781,16 +825,17 @@ export async function createInvoice(
     lines: input.lines,
     fecha,
     functionalCurrency: ctx.value.functionalCurrency,
-    conImpuesto: true,
+    // El recibo NO resuelve impuesto: un no-inscrito no puede repercutir IVA.
+    conImpuesto: kind === "invoice",
   });
   if (!calculadas.ok) return calculadas;
 
-  const serie = input.series ?? "A";
+  const serie = input.series ?? (kind === "receipt" ? "R" : "A");
   try {
     const doc = await sql.savepoint(async (sp) => {
       const creado = await insertarDocumento(sp, ctx.value, {
         companyId: input.company_id,
-        kind: "invoice",
+        kind,
         series: serie,
         customerId: input.customer_id,
         vendorId: input.vendor_id ?? null,
@@ -809,9 +854,9 @@ export async function createInvoice(
       // control solo cuando el régimen lo usa: pedirlo cuando no toca sería
       // consumir un número autorizado para nada.
       const [num] = await sp<{ n: string }[]>`
-        select platform.claim_document_number(${input.company_id}, 'invoice', ${serie})::text as n`;
+        select platform.claim_document_number(${input.company_id}, ${kind}, ${serie})::text as n`;
       let control: string | null = null;
-      if (ctx.value.numberingMode === "range") {
+      if (kind === "invoice" && ctx.value.numberingMode === "range") {
         const [c] = await sp<{ n: string }[]>`
           select platform.claim_control_number(${input.company_id}, 'invoice', ${serie})::text as n`;
         control = c!.n;
@@ -853,24 +898,31 @@ export async function createInvoice(
       }
     }
 
-    await auditar(sql, ctx.value.tenantId, doc.value, "fiscal.invoice.issued", {
-      warehouse_id: input.warehouse_id,
-      line_count: calculadas.value.lineas.length,
-    });
+    await auditar(
+      sql,
+      ctx.value.tenantId,
+      doc.value,
+      kind === "receipt" ? "sales.receipt.issued" : "fiscal.invoice.issued",
+      {
+        warehouse_id: input.warehouse_id,
+        line_count: calculadas.value.lineas.length,
+      },
+    );
 
     // EL ASIENTO, en la misma transacción (ADR-0042). Los importes que van son
     // los FUNCIONALES del pie: es la moneda en la que se lleva la contabilidad
     // y en la que se comprueba la partida doble. Sin plantilla configurada, el
-    // generador encola y la factura se emite igual.
+    // generador encola y la venta se emite igual. El recibo asienta por SU
+    // plantilla (sales_receipt, sin línea de IVA — migración 37).
     const contable = await generateJournalFromDocument(sql, {
       tenantId: ctx.value.tenantId,
       companyId: input.company_id,
-      sourceKind: "sales_invoice",
-      sourceEvent: "fiscal.invoice.issued",
+      sourceKind: kind === "receipt" ? "sales_receipt" : "sales_invoice",
+      sourceEvent: kind === "receipt" ? "sales.receipt.issued" : "fiscal.invoice.issued",
       sourceId: doc.value.id,
       postingDate: fecha.slice(0, 10),
       postedBy: actor.userId,
-      description: `Factura ${doc.value.series}-${doc.value.document_number ?? ""}`,
+      description: `${kind === "receipt" ? "Recibo" : "Factura"} ${doc.value.series}-${doc.value.document_number ?? ""}`,
       functionalCurrency: ctx.value.functionalCurrency,
       amounts: {
         subtotal: doc.value.subtotal_amount,
@@ -1631,6 +1683,11 @@ async function clienteEfectivo(
  * corazón compartido de cotización, pedido y factura. La pantalla de Vender
  * pregunta con debounce; el cliente jamás suma dinero.
  */
+/** Modo recibos (migración 37): el régimen vigente solo emite `receipt`. */
+function esModoRecibos(ctx: Contexto): boolean {
+  return ctx.allowedKinds.includes("receipt") && !ctx.allowedKinds.includes("invoice");
+}
+
 export async function quotePos(
   uow: UnitOfWork,
   input: PosQuoteRequest,
@@ -1662,7 +1719,9 @@ export async function quotePos(
     lines: input.lines,
     fecha,
     functionalCurrency: ctx.value.functionalCurrency,
-    conImpuesto: true,
+    // En modo recibos (migración 37) la cotización tampoco lleva IVA: el
+    // total que enseña el carrito es el total que cobrará el recibo.
+    conImpuesto: !esModoRecibos(ctx.value),
   });
   if (!calculadas.ok) return calculadas;
   const totales = calculateTotals(calculadas.value.lineas.map((l) => l.calc));
@@ -1740,7 +1799,17 @@ export async function quickSale(
     });
   }
 
-  const emitida = await createInvoice(uow, {
+  // EL KIND LO DECIDE EL RÉGIMEN, no la pantalla (migración 37): en modo
+  // recibos la misma venta del POS emite un recibo; con datos fiscales, una
+  // factura. El gate de kind del trigger y de emitirVenta respalda esto.
+  const [regimen] = await sql<{ allowed_kinds: string[] }[]>`
+    select allowed_kinds from platform.regime_at(${input.company_id}, now())`;
+  const modoRecibos =
+    regimen !== undefined &&
+    regimen.allowed_kinds.includes("receipt") &&
+    !regimen.allowed_kinds.includes("invoice");
+
+  const emitida = await (modoRecibos ? createReceipt : createInvoice)(uow, {
     company_id: input.company_id,
     customer_id: cliente.value,
     warehouse_id: input.warehouse_id,

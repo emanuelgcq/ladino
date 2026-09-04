@@ -87,9 +87,17 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
     const { actor } = c.get("ladino.auth");
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigePermiso(tx, actor, companyId, "fiscal.regime.manage", "Asignar el régimen");
-      const [ya] = await tx<{ regime_code: string }[]>`
-        select regime_code from platform.regime_at(${companyId}, now())`;
-      if (ya) {
+      const [ya] = await tx<{ regime_code: string; regime_version_id: string }[]>`
+        select regime_code, regime_version_id from platform.regime_at(${companyId}, now())`;
+      // LA ÚNICA transición permitida desde aquí: salir del modo recibos
+      // (sin_facturacion) hacia un régimen fiscal — el negocio obtuvo su RIF
+      // (migración 37). La vigencia vieja se CIERRA (no se borra: append-only
+      // por fecha, ADR-0029) y los recibos históricos quedan intactos bajo
+      // ella. Cualquier otro cambio sigue siendo un acto del mundo técnico.
+      if (
+        ya &&
+        !(ya.regime_code === "sin_facturacion" && parsed.data.regime_code !== "sin_facturacion")
+      ) {
         throw new DominioError({
           code: "DUPLICATE",
           message: `La empresa ya factura bajo «${ya.regime_code}». Cambiar de régimen es un acto del mundo técnico: /admin/facturacion-fiscal.`,
@@ -97,6 +105,18 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
       }
       const [empresa] = await tx<{ tenant_id: string }[]>`
         select tenant_id from public.companies where id = ${companyId}`;
+      if (ya) {
+        await tx`
+          update public.company_fiscal_regimes set effective_to = now()
+           where id = ${ya.regime_version_id} and effective_to is null`;
+        await tx`
+          insert into public.audit_events
+            (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+             actor_type, occurred_at, rules_version, payload)
+          values (${empresa!.tenant_id}, ${companyId}, 'company', ${companyId},
+                  'fiscal.regime.upgraded', 'user', now(), ${RULES_VERSION},
+                  ${tx.json({ from: ya.regime_code, to: parsed.data.regime_code })})`;
+      }
       // `effective_from` es timestamptz: rige desde ESTE instante. La empresa
       // recién asistida no tiene documentos anteriores que quedarse sin régimen.
       const [fila] = await tx<{ regime_code: string }[]>`

@@ -48,6 +48,7 @@ export {
   createOrder,
   confirmOrder,
   createInvoice,
+  createReceipt,
   annulInvoice,
   registerPayment,
   createReturn,

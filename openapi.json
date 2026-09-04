@@ -2944,7 +2944,8 @@
               "order",
               "invoice",
               "credit_note",
-              "debit_note"
+              "debit_note",
+              "receipt"
             ]
           },
           "series": {
@@ -3081,7 +3082,8 @@
                   "order",
                   "invoice",
                   "credit_note",
-                  "debit_note"
+                  "debit_note",
+                  "receipt"
                 ]
               },
               "series": {
@@ -3460,7 +3462,8 @@
                     "order",
                     "invoice",
                     "credit_note",
-                    "debit_note"
+                    "debit_note",
+                    "receipt"
                   ]
                 },
                 "series": {
@@ -4281,7 +4284,8 @@
                     "order",
                     "invoice",
                     "credit_note",
-                    "debit_note"
+                    "debit_note",
+                    "receipt"
                   ]
                 },
                 "series": {
@@ -5384,7 +5388,8 @@
                   "order",
                   "invoice",
                   "credit_note",
-                  "debit_note"
+                  "debit_note",
+                  "receipt"
                 ]
               },
               "series": {

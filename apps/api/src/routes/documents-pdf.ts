@@ -35,6 +35,7 @@ const KIND_TITULO: Record<string, string> = {
   debit_note: "NOTA DE DÉBITO",
   quote: "COTIZACIÓN",
   order: "PEDIDO",
+  receipt: "RECIBO",
 };
 
 /**
@@ -148,16 +149,19 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
     // ── Membrete (PA 00071 art. 13.5: nombre, RIF y domicilio del EMISOR;
     //    desde la migración 34 salen del SNAPSHOT congelado — el coalesce al
     //    vivo existe solo para documentos anteriores) ─────────────────────────
+    const esRecibo = doc["kind"] === "receipt";
     pdf.font("Helvetica-Bold").fontSize(14).text(String(doc["company_name"]));
-    pdf
-      .font("Helvetica")
-      .fontSize(10)
-      .text(`RIF: ${vestirDocumento(String(doc["company_tax_id"]))}`);
-    if (doc["company_address"]) {
-      pdf.text(`Domicilio fiscal: ${String(doc["company_address"])}`);
-    }
-    if (doc["branch_address"]) {
-      pdf.text(`Sucursal: ${String(doc["branch_address"])}`);
+    pdf.font("Helvetica").fontSize(10);
+    // El RECIBO (migración 37) no lleva RIF del emisor: el negocio aún no lo
+    // tiene, y un documento no fiscal no finge campos de factura.
+    if (!esRecibo) {
+      pdf.text(`RIF: ${vestirDocumento(String(doc["company_tax_id"]))}`);
+      if (doc["company_address"]) {
+        pdf.text(`Domicilio fiscal: ${String(doc["company_address"])}`);
+      }
+      if (doc["branch_address"]) {
+        pdf.text(`Sucursal: ${String(doc["branch_address"])}`);
+      }
     }
     pdf.moveDown(0.8);
 
@@ -259,8 +263,11 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
       pdf.text(`${moneda} ${vestirImporte(importe)}`, 470, y, { width: 94, align: "right" });
       pdf.moveDown(0.15);
     };
-    totalFila("Subtotal:", String(doc["subtotal_amount"]));
-    totalFila("IVA:", String(doc["tax_amount"]));
+    // El recibo no separa IVA: no hay impuesto que separar (migración 37).
+    if (!esRecibo) {
+      totalFila("Subtotal:", String(doc["subtotal_amount"]));
+      totalFila("IVA:", String(doc["tax_amount"]));
+    }
     totalFila("TOTAL:", String(doc["total_amount"]), true);
     // PA 00071 art. 13.14: operación expresada en moneda extranjera → el
     // documento lleva AMBAS monedas y el tipo de cambio aplicable. Los tres
@@ -291,7 +298,9 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
       .fontSize(8)
       .fillColor("#666666")
       .text(
-        "Documento en formato libre, pendiente de homologación SENIAT (VALIDAR-SENIAT). Generado por Ladino.",
+        esRecibo
+          ? "Documento no fiscal — no es una factura. Generado por Ladino."
+          : "Documento en formato libre, pendiente de homologación SENIAT (VALIDAR-SENIAT). Generado por Ladino.",
         48,
         720,
         { width: 516, align: "center" },
