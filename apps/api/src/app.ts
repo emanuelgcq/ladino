@@ -21,6 +21,7 @@ import { treasuryRoutes } from "./routes/treasury.js";
 import { documentsPdfRoutes } from "./routes/documents-pdf.js";
 import { negocioRoutes } from "./routes/negocio.js";
 import { fiscalSetupRoutes } from "./routes/fiscal-setup.js";
+import { contingencyRoutes } from "./routes/contingency.js";
 import type { StorageConfig } from "./config.js";
 import type { BcvConfig } from "./bcv.js";
 
@@ -175,6 +176,7 @@ export function buildApp(cfg: AppConfig): Hono {
   documentsPdfRoutes(app, cfg.sql);
   negocioRoutes(app, cfg.sql);
   fiscalSetupRoutes(app, cfg.sql, idempotencia);
+  contingencyRoutes(app, cfg.sql, idempotencia);
 
   return app;
 }

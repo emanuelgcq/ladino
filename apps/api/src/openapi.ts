@@ -9,6 +9,7 @@ import { z } from "zod";
 extendZodWithOpenApi(z);
 import {
   CreateCompanyRequest,
+  SetCompanyFiscalAddressRequest,
   CompanyResponse,
   ErrorResponse,
   CreateProductRequest,
@@ -127,6 +128,10 @@ import {
   AssignFiscalRegimeRequest,
   AcceptIvaGeneralRequest,
   AcceptIvaGeneralResponse,
+  RegisterContingencyRangeRequest,
+  ContingencyRangeResponse,
+  RegisterContingencyInvoiceRequest,
+  CloseContingencyRequest,
   CreateCompanyAccountRequest,
   UpdateCompanyAccountRequest,
   CompanyAccountResponse,
@@ -216,6 +221,10 @@ export function buildOpenApiDocument(): object {
     },
   });
 
+  const setDomicilio = registry.register(
+    "SetCompanyFiscalAddressRequest",
+    SetCompanyFiscalAddressRequest,
+  );
   // ── Módulo de productos (migraciones 16-17, ADR-0032) ─────────────────────
   // Todo lo company-scoped exige X-Company-Id, validado por el middleware de
   // scope contra ladino_user_company_ids(). Los importes son STRING decimal
@@ -1161,6 +1170,25 @@ export function buildOpenApiDocument(): object {
     responses: { 200: okJson(ajustesNegocio, "Los ajustes resultantes."), ...erroresComunes },
   });
 
+  registry.registerPath({
+    method: "put",
+    path: "/v1/companies/fiscal-address",
+    summary: "Cargar el domicilio fiscal del emisor (permiso company.settings.manage)",
+    description:
+      "PA 00071 art. 13.5: la factura lleva el domicilio fiscal del emisor. Se guarda en el " +
+      "maestro y queda auditado con el valor anterior; los documentos YA emitidos no cambian — " +
+      "cada uno congeló el domicilio vigente el día que nació (R-05, migración 34).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader.extend({ "Idempotency-Key": z.string().max(255) }),
+      body: { content: { "application/json": { schema: setDomicilio } } },
+    },
+    responses: {
+      200: okJson(z.object({ fiscal_address: z.string() }), "El domicilio guardado."),
+      ...erroresComunes,
+    },
+  });
+
   const setupFiscal = registry.register("FiscalSetupResponse", FiscalSetupResponse);
   const asignarRegimen = registry.register("AssignFiscalRegimeRequest", AssignFiscalRegimeRequest);
   const aceptarIva = registry.register("AcceptIvaGeneralRequest", AcceptIvaGeneralRequest);
@@ -1214,6 +1242,88 @@ export function buildOpenApiDocument(): object {
       ...erroresComunes,
     },
   });
+
+  // ── Contingencia (PA 102, migración 35) ───────────────────────────────────
+  const rangoContingencia = registry.register(
+    "RegisterContingencyRangeRequest",
+    RegisterContingencyRangeRequest,
+  );
+  const rangoContingenciaResp = registry.register(
+    "ContingencyRangeResponse",
+    ContingencyRangeResponse,
+  );
+  const facturaContingencia = registry.register(
+    "RegisterContingencyInvoiceRequest",
+    RegisterContingencyInvoiceRequest,
+  );
+  const cerrarContingencia = registry.register("CloseContingencyRequest", CloseContingencyRequest);
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal/contingency-ranges",
+    summary: "Los talonarios de contingencia registrados (permiso de lectura de la company)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(
+        z.object({ items: z.array(rangoContingenciaResp) }),
+        "Talonarios con su rango, motivo y período.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal/contingency-ranges",
+    summary: "Registrar un talonario físico de contingencia (fiscal.contingency.manage)",
+    description:
+      "PA 102: la serie lleva la palabra «contingencia» (el esquema lo exige, LAD69). El " +
+      "talonario ES un rango de numeración normal; esta tabla añade el motivo y el período " +
+      "de la falla. De un registro solo se puede cerrar el período, una vez (LAD06).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader.extend({ "Idempotency-Key": z.string().max(255) }),
+      body: { content: { "application/json": { schema: rangoContingencia } } },
+    },
+    responses: {
+      201: okJson(rangoContingenciaResp, "El talonario registrado."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal/contingency-invoices",
+    summary: "Registrar a posteriori una factura emitida en papel durante la falla",
+    description:
+      "Pasa por la emisión COMPLETA (kardex, impuestos, numeración, contabilidad, libros) " +
+      "con la serie del talonario y la fecha del papel. Los números asignados TIENEN que " +
+      "reproducir los impresos — se registra en el orden del talonario, o el 422 dice cuál " +
+      "se esperaba y no queda nada escrito.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader.extend({ "Idempotency-Key": z.string().max(255) }),
+      body: { content: { "application/json": { schema: facturaContingencia } } },
+    },
+    responses: {
+      201: okJson(
+        z.object({ document: documento }),
+        "La factura de contingencia, en libros y contabilidad como cualquier otra.",
+      ),
+      ...erroresComunes,
+      409: errorRef("Sin tasa o sin regla vigentes a la fecha del papel, o rango agotado."),
+    },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/fiscal/contingency-ranges/{id}/close",
+    summary: "Cerrar el período de la falla (una vez)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      headers: companyHeader.extend({ "Idempotency-Key": z.string().max(255) }),
+      body: { content: { "application/json": { schema: cerrarContingencia } } },
+    },
+    responses: { 200: okJson(rangoContingenciaResp, "El período cerrado."), ...erroresComunes },
+  });
   registry.registerPath({
     method: "get",
     path: "/v1/branches",
@@ -1245,12 +1355,16 @@ export function buildOpenApiDocument(): object {
     summary: "El PDF del documento — formato libre, y lo dice en el pie",
     description:
       "VALIDAR-SENIAT: layout NO homologado, con la marca visible en el pie. Imprime lo " +
-      "PERSISTIDO — importes exactos vestidos, la tasa del día de emisión citada, ANULADA en " +
-      "rojo si aplica. El cliente impreso es el de HOY: el snapshot de R-05 es deuda declarada.",
+      "PERSISTIDO — los snapshots congelados de emisor y cliente (R-05, migraciones 33-34), " +
+      "importes exactos vestidos, la tasa del día de emisión citada, ANULADA en rojo si " +
+      "aplica. Del art. 13 de PA 00071: fecha en ocho dígitos (13.6), «(E)» en líneas " +
+      "exentas/exoneradas/no sujetas (13.9), leyenda de copia (13.13, `copia=1`) y ambas " +
+      "monedas con tipo de cambio (13.14).",
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({ id: z.string().uuid() }),
       headers: companyHeader,
+      query: z.object({ copia: z.enum(["1"]).optional() }),
     },
     responses: {
       200: { description: "El PDF (application/pdf)." },

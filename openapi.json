@@ -63,6 +63,10 @@
           "tax_id": {
             "type": "string"
           },
+          "fiscal_address": {
+            "type": "string",
+            "nullable": true
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -82,6 +86,7 @@
           "legal_name",
           "trade_name",
           "tax_id",
+          "fiscal_address",
           "status",
           "created_at"
         ],
@@ -111,6 +116,20 @@
           "code",
           "message"
         ]
+      },
+      "SetCompanyFiscalAddressRequest": {
+        "type": "object",
+        "properties": {
+          "fiscal_address": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "fiscal_address"
+        ],
+        "additionalProperties": false
       },
       "ProductResponse": {
         "type": "object",
@@ -3570,7 +3589,7 @@
           "series": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 10
+            "maxLength": 30
           },
           "lines": {
             "type": "array",
@@ -3641,7 +3660,7 @@
           "series": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 10
+            "maxLength": 30
           },
           "lines": {
             "type": "array",
@@ -3734,7 +3753,7 @@
           "series": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 10
+            "maxLength": 30
           },
           "lines": {
             "type": "array",
@@ -4416,7 +4435,7 @@
           "series": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 10
+            "maxLength": 30
           },
           "range_from": {
             "type": "string",
@@ -4853,6 +4872,203 @@
         ],
         "additionalProperties": false
       },
+      "RegisterContingencyRangeRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "series": {
+            "type": "string",
+            "maxLength": 30,
+            "pattern": "^contingencia"
+          },
+          "range_from": {
+            "type": "string",
+            "pattern": "^\\d{1,18}$"
+          },
+          "range_to": {
+            "type": "string",
+            "pattern": "^\\d{1,18}$"
+          },
+          "printer_source": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          },
+          "failure_started_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "company_id",
+          "series",
+          "range_from",
+          "range_to",
+          "printer_source",
+          "reason",
+          "failure_started_at"
+        ],
+        "additionalProperties": false
+      },
+      "ContingencyRangeResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fiscal_number_range_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "series": {
+            "type": "string"
+          },
+          "range_from": {
+            "type": "integer"
+          },
+          "range_to": {
+            "type": "integer"
+          },
+          "next_available": {
+            "type": "integer"
+          },
+          "remaining": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "failure_started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "failure_ended_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "fiscal_number_range_id",
+          "series",
+          "range_from",
+          "range_to",
+          "next_available",
+          "remaining",
+          "status",
+          "reason",
+          "failure_started_at",
+          "failure_ended_at"
+        ],
+        "additionalProperties": false
+      },
+      "RegisterContingencyInvoiceRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "contingency_range_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "price_list_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "product_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "quantity": {
+                  "type": "string",
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                }
+              },
+              "required": [
+                "product_id",
+                "quantity"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "maxItems": 500
+          },
+          "paper_document_number": {
+            "type": "string",
+            "pattern": "^\\d{1,18}$"
+          },
+          "paper_control_number": {
+            "type": "string",
+            "pattern": "^\\d{1,18}$"
+          }
+        },
+        "required": [
+          "company_id",
+          "contingency_range_id",
+          "customer_id",
+          "warehouse_id",
+          "issued_at",
+          "lines",
+          "paper_document_number",
+          "paper_control_number"
+        ],
+        "additionalProperties": false
+      },
+      "CloseContingencyRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "failure_ended_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "company_id",
+          "failure_ended_at"
+        ],
+        "additionalProperties": false
+      },
       "PosQuoteRequest": {
         "type": "object",
         "properties": {
@@ -5021,7 +5237,7 @@
           "series": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 10
+            "maxLength": 30
           },
           "price_list_id": {
             "type": "string",
@@ -16160,6 +16376,106 @@
         }
       }
     },
+    "/v1/companies/fiscal-address": {
+      "put": {
+        "summary": "Cargar el domicilio fiscal del emisor (permiso company.settings.manage)",
+        "description": "PA 00071 art. 13.5: la factura lleva el domicilio fiscal del emisor. Se guarda en el maestro y queda auditado con el valor anterior; los documentos YA emitidos no cambian — cada uno congeló el domicilio vigente el día que nació (R-05, migración 34).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCompanyFiscalAddressRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "El domicilio guardado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "fiscal_address": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fiscal_address"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/fiscal/setup": {
       "get": {
         "summary": "La puesta a punto fiscal: regímenes con su norma, el vigente y el IVA general",
@@ -16436,6 +16752,390 @@
         }
       }
     },
+    "/v1/fiscal/contingency-ranges": {
+      "get": {
+        "summary": "Los talonarios de contingencia registrados (permiso de lectura de la company)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Talonarios con su rango, motivo y período.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ContingencyRangeResponse"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Registrar un talonario físico de contingencia (fiscal.contingency.manage)",
+        "description": "PA 102: la serie lleva la palabra «contingencia» (el esquema lo exige, LAD69). El talonario ES un rango de numeración normal; esta tabla añade el motivo y el período de la falla. De un registro solo se puede cerrar el período, una vez (LAD06).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterContingencyRangeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El talonario registrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContingencyRangeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal/contingency-invoices": {
+      "post": {
+        "summary": "Registrar a posteriori una factura emitida en papel durante la falla",
+        "description": "Pasa por la emisión COMPLETA (kardex, impuestos, numeración, contabilidad, libros) con la serie del talonario y la fecha del papel. Los números asignados TIENEN que reproducir los impresos — se registra en el orden del talonario, o el 422 dice cuál se esperaba y no queda nada escrito.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterContingencyInvoiceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "La factura de contingencia, en libros y contabilidad como cualquier otra.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "document": {
+                      "$ref": "#/components/schemas/DocumentResponse"
+                    }
+                  },
+                  "required": [
+                    "document"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sin tasa o sin regla vigentes a la fecha del papel, o rango agotado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal/contingency-ranges/{id}/close": {
+      "put": {
+        "summary": "Cerrar el período de la falla (una vez)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseContingencyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "El período cerrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContingencyRangeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/branches": {
       "get": {
         "summary": "Las sucursales de la empresa (cualquier miembro)",
@@ -16545,7 +17245,7 @@
     "/v1/documents/{id}/pdf": {
       "get": {
         "summary": "El PDF del documento — formato libre, y lo dice en el pie",
-        "description": "VALIDAR-SENIAT: layout NO homologado, con la marca visible en el pie. Imprime lo PERSISTIDO — importes exactos vestidos, la tasa del día de emisión citada, ANULADA en rojo si aplica. El cliente impreso es el de HOY: el snapshot de R-05 es deuda declarada.",
+        "description": "VALIDAR-SENIAT: layout NO homologado, con la marca visible en el pie. Imprime lo PERSISTIDO — los snapshots congelados de emisor y cliente (R-05, migraciones 33-34), importes exactos vestidos, la tasa del día de emisión citada, ANULADA en rojo si aplica. Del art. 13 de PA 00071: fecha en ocho dígitos (13.6), «(E)» en líneas exentas/exoneradas/no sujetas (13.9), leyenda de copia (13.13, `copia=1`) y ambas monedas con tipo de cambio (13.14).",
         "security": [
           {
             "bearerAuth": []
@@ -16560,6 +17260,17 @@
             "required": true,
             "name": "id",
             "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "required": false,
+            "name": "copia",
+            "in": "query"
           },
           {
             "schema": {

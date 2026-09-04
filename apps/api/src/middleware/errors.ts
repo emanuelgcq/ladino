@@ -75,10 +75,13 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // traduzca: la red que hace valer «sin regla no se retiene» en cualquier ruta.
   LAD53: { code: "RETENTION_RULE_MISSING", status: 409 },
   LAD54: { code: "FISCAL_NUMBERING_INVALID", status: 409 },
-  // Migración 33: el snapshot del cliente en un documento está CONGELADO
-  // (R-05, lado cliente). Lo levanta el trigger del esquema: llega aquí
-  // aunque ningún caso de uso lo traduzca.
+  // Migraciones 33-34: los snapshots de cliente y EMISOR en un documento
+  // están CONGELADOS (R-05, ambos lados). Lo levanta el trigger del esquema:
+  // llega aquí aunque ningún caso de uso lo traduzca.
   LAD68: { code: "DOCUMENT_SNAPSHOT_FROZEN", status: 409 },
+  // Migración 35: un talonario de contingencia lleva la palabra en su serie
+  // (PA 102) — un rango cualquiera no puede disfrazarse de contingencia.
+  LAD69: { code: "VALIDATION_FAILED", status: 422 },
 
   // --- estándar
   "23505": { code: "DUPLICATE", status: 409 },

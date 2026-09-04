@@ -59,7 +59,7 @@ const documentoBase = {
    * atribución, no una preferencia de pantalla.
    */
   price_list_id: uuid.optional(),
-  series: z.string().trim().min(1).max(10).optional(),
+  series: z.string().trim().min(1).max(30).optional(),
   lines: z.array(DocumentLineRequest).min(1).max(500),
   notes: z.string().trim().min(1).max(1000).optional(),
 };
@@ -329,7 +329,7 @@ export const QuickSaleRequest = z
     customer_id: uuid.optional(),
     warehouse_id: uuid,
     branch_id: uuid.nullable().optional(),
-    series: z.string().trim().min(1).max(10).optional(),
+    series: z.string().trim().min(1).max(30).optional(),
     price_list_id: uuid.optional(),
     lines: z.array(DocumentLineRequest).min(1).max(200),
     /** Hasta DOS formas de pago (decisión de la fase: más es otra pantalla). */
@@ -452,7 +452,7 @@ export const CreateFiscalRangeRequest = z
   .object({
     company_id: uuid,
     kind: z.enum(["invoice", "credit_note", "debit_note", "delivery_note"]),
-    series: z.string().trim().min(1).max(10),
+    series: z.string().trim().min(1).max(30),
     range_from: z.string().regex(/^\d{1,18}$/),
     range_to: z.string().regex(/^\d{1,18}$/),
     printer_source: z.string().trim().min(1).max(200),
@@ -475,6 +475,73 @@ export const FiscalRangeResponse = z
   })
   .strict();
 export type FiscalRangeResponse = z.infer<typeof FiscalRangeResponse>;
+
+/**
+ * Contingencia (PA 102, migración 35): el talonario físico con la palabra
+ * «contingencia» en la serie, y el registro A POSTERIORI de cada factura
+ * emitida en papel durante la falla — con los números tal como quedaron
+ * impresos, que el registro tiene que reproducir o negarse.
+ */
+export const RegisterContingencyRangeRequest = z
+  .object({
+    company_id: uuid,
+    /** La serie impresa en el talonario; debe empezar por «contingencia». */
+    series: z
+      .string()
+      .trim()
+      .regex(
+        /^contingencia/i,
+        "la serie de un talonario de contingencia empieza por «contingencia»",
+      )
+      .max(30),
+    range_from: z.string().regex(/^\d{1,18}$/),
+    range_to: z.string().regex(/^\d{1,18}$/),
+    printer_source: z.string().trim().min(1).max(200),
+    /** Por qué se emitió en papel: la falla, contada para el fiscalizador. */
+    reason: z.string().trim().min(5).max(500),
+    failure_started_at: z.string().datetime({ offset: true }),
+  })
+  .strict();
+export type RegisterContingencyRangeRequest = z.infer<typeof RegisterContingencyRangeRequest>;
+
+export const ContingencyRangeResponse = z
+  .object({
+    id: uuid,
+    fiscal_number_range_id: uuid,
+    series: z.string(),
+    range_from: z.number().int(),
+    range_to: z.number().int(),
+    next_available: z.number().int(),
+    remaining: z.number().int(),
+    status: z.string(),
+    reason: z.string(),
+    failure_started_at: z.string().datetime({ offset: true }),
+    failure_ended_at: z.string().datetime({ offset: true }).nullable(),
+  })
+  .strict();
+export type ContingencyRangeResponse = z.infer<typeof ContingencyRangeResponse>;
+
+export const RegisterContingencyInvoiceRequest = z
+  .object({
+    company_id: uuid,
+    contingency_range_id: uuid,
+    customer_id: uuid,
+    warehouse_id: uuid,
+    price_list_id: uuid.optional(),
+    /** Cuándo se emitió EN PAPEL: dentro del período de la falla. */
+    issued_at: z.string().datetime({ offset: true }),
+    lines: z.array(DocumentLineRequest).min(1).max(500),
+    /** Los números tal como quedaron impresos en el talonario. */
+    paper_document_number: z.string().regex(/^\d{1,18}$/),
+    paper_control_number: z.string().regex(/^\d{1,18}$/),
+  })
+  .strict();
+export type RegisterContingencyInvoiceRequest = z.infer<typeof RegisterContingencyInvoiceRequest>;
+
+export const CloseContingencyRequest = z
+  .object({ company_id: uuid, failure_ended_at: z.string().datetime({ offset: true }) })
+  .strict();
+export type CloseContingencyRequest = z.infer<typeof CloseContingencyRequest>;
 
 /** Carga manual de tasa: el fallback del adaptador BCV (ADR-0028). */
 export const CreateExchangeRateRequest = z

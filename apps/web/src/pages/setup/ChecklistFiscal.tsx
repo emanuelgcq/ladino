@@ -13,6 +13,7 @@ import {
 } from "../../components/forms.js";
 import { Button } from "../../ui/button.js";
 import { Input } from "../../ui/input.js";
+import { SimpleSelect } from "../../ui/select.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../ui/card.js";
 import { Badge } from "../../ui/badge.js";
 import { useToast } from "../../ui/toast.js";
@@ -54,6 +55,10 @@ export function ChecklistFiscal(): React.JSX.Element {
 
   const tasaOk = (tasas.data?.length ?? 0) > 0;
   const rangoOk = (rangos.data ?? []).some((r) => r.kind === "invoice" && r.status === "active");
+  const contingencias = useQuery({
+    queryKey: ["contingencias", empresa.id],
+    queryFn: () => llamar<{ items: RangoContingencia[] }>("/v1/fiscal/contingency-ranges"),
+  });
 
   return (
     <div className="max-w-3xl">
@@ -92,6 +97,31 @@ export function ChecklistFiscal(): React.JSX.Element {
           }
         >
           <CargarRango />
+        </Paso>
+
+        <Paso
+          numero={5}
+          titulo="Contingencia (PA 102)"
+          estado={
+            contingencias.isPending
+              ? "cargando"
+              : (contingencias.data?.items.length ?? 0) > 0
+                ? "completo"
+                : "pendiente"
+          }
+          codigo409="FISCAL_NUMBERING_INVALID"
+          resumen={
+            (contingencias.data?.items.length ?? 0) > 0
+              ? `Talonarios de contingencia: ${(contingencias.data?.items ?? [])
+                  .map(
+                    (r) =>
+                      `${r.series} (quedan ${r.remaining}${r.failure_ended_at === null ? ", falla abierta" : ""})`,
+                  )
+                  .join(" · ")}`
+              : "Sin talonario físico registrado. Cuando el sistema o la imprenta fallen, se factura en papel y se registra aquí a posteriori."
+          }
+        >
+          <Contingencia rangos={contingencias.data?.items ?? []} />
         </Paso>
 
         <Paso
@@ -430,5 +460,349 @@ function VerificacionReal(): React.JSX.Element {
         </Button>
       </CardContent>
     </Card>
+  );
+}
+
+interface RangoContingencia {
+  id: string;
+  series: string;
+  range_from: number;
+  range_to: number;
+  next_available: number;
+  remaining: number;
+  status: string;
+  reason: string;
+  failure_started_at: string;
+  failure_ended_at: string | null;
+}
+
+/**
+ * CONTINGENCIA (PA 102, migración 35). Pantalla deliberadamente simple: el
+ * talonario físico se registra con su serie «contingencia…», su motivo y el
+ * inicio de la falla; cada factura emitida EN PAPEL durante la falla se
+ * registra a posteriori con sus números impresos — y entra por la emisión
+ * completa (kardex, impuestos, asiento, libros), en el ORDEN del talonario.
+ */
+function Contingencia({ rangos }: { rangos: RangoContingencia[] }): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [error, setError] = useState<unknown>(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [talonario, setTalonario] = useState({
+    series: "contingencia-1",
+    range_from: "1",
+    range_to: "",
+    printer_source: "",
+    reason: "",
+    failure_started_at: "",
+  });
+  const abiertos = rangos.filter((r) => r.failure_ended_at === null && r.status === "active");
+  const [rangoElegido, setRangoElegido] = useState<string | null>(null);
+  const [cliente, setCliente] = useState<EntityOption | null>(null);
+  const [producto, setProducto] = useState<EntityOption | null>(null);
+  const [factura, setFactura] = useState({
+    cantidad: "1",
+    emitida: "",
+    papel_numero: "",
+    papel_control: "",
+  });
+
+  const recargar = () => qc.invalidateQueries({ queryKey: ["contingencias", empresa.id] });
+
+  async function registrarTalonario(): Promise<void> {
+    setError(null);
+    setOcupado(true);
+    try {
+      await llamar("/v1/fiscal/contingency-ranges", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          series: talonario.series.trim(),
+          range_from: talonario.range_from.trim(),
+          range_to: talonario.range_to.trim(),
+          printer_source: talonario.printer_source.trim(),
+          reason: talonario.reason.trim(),
+          failure_started_at: new Date(talonario.failure_started_at).toISOString(),
+        }),
+      });
+      toast.success("Talonario de contingencia registrado");
+      await recargar();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function registrarFactura(): Promise<void> {
+    setError(null);
+    setOcupado(true);
+    try {
+      const almacenes = await llamar<{ id: string }[]>("/v1/warehouses");
+      const deposito = almacenes[0]?.id;
+      if (deposito === undefined) throw new Error("La empresa no tiene almacén configurado.");
+      await llamar("/v1/fiscal/contingency-invoices", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          contingency_range_id: rangoElegido,
+          customer_id: cliente?.id,
+          warehouse_id: deposito,
+          issued_at: new Date(factura.emitida).toISOString(),
+          lines: [{ product_id: producto?.id, quantity: factura.cantidad.trim() }],
+          paper_document_number: factura.papel_numero.trim(),
+          paper_control_number: factura.papel_control.trim(),
+        }),
+      });
+      toast.success("Factura de papel registrada: entró a inventario, contabilidad y libros");
+      setFactura({ cantidad: "1", emitida: "", papel_numero: "", papel_control: "" });
+      await recargar();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function cerrar(id: string): Promise<void> {
+    setError(null);
+    try {
+      await llamar(`/v1/fiscal/contingency-ranges/${id}/close`, {
+        method: "PUT",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          failure_ended_at: new Date().toISOString(),
+        }),
+      });
+      toast.success("Período de contingencia cerrado");
+      await recargar();
+    } catch (e) {
+      setError(e);
+    }
+  }
+
+  return (
+    <div className="space-y-4 rounded-md border border-border bg-surface-muted/40 p-3">
+      {rangos.length > 0 && (
+        <ul className="space-y-1 text-sm">
+          {rangos.map((r) => (
+            <li key={r.id} className="flex items-center gap-2">
+              <span className="font-mono">{r.series}</span>
+              <span className="text-muted-foreground">
+                {r.range_from}–{r.range_to} · quedan {r.remaining} · {r.reason}
+              </span>
+              {r.failure_ended_at === null ? (
+                <Button variant="ghost" size="sm" onClick={() => void cerrar(r.id)}>
+                  Cerrar la falla
+                </Button>
+              ) : (
+                <Badge tone="outline">cerrada</Badge>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div>
+        <p className="pb-2 text-sm font-medium">Registrar talonario físico</p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <FormField label="Serie impresa" required hint="Debe empezar por «contingencia».">
+            {(a) => (
+              <Input
+                id={a.id}
+                value={talonario.series}
+                onChange={(e) => setTalonario({ ...talonario, series: e.target.value })}
+              />
+            )}
+          </FormField>
+          <FormField label="Desde" required>
+            {(a) => (
+              <Input
+                id={a.id}
+                inputMode="numeric"
+                className="font-mono"
+                value={talonario.range_from}
+                onChange={(e) => setTalonario({ ...talonario, range_from: e.target.value })}
+              />
+            )}
+          </FormField>
+          <FormField label="Hasta" required>
+            {(a) => (
+              <Input
+                id={a.id}
+                inputMode="numeric"
+                className="font-mono"
+                value={talonario.range_to}
+                onChange={(e) => setTalonario({ ...talonario, range_to: e.target.value })}
+              />
+            )}
+          </FormField>
+          <FormField label="Imprenta" required>
+            {(a) => (
+              <Input
+                id={a.id}
+                value={talonario.printer_source}
+                onChange={(e) => setTalonario({ ...talonario, printer_source: e.target.value })}
+              />
+            )}
+          </FormField>
+          <FormField label="Motivo de la falla" required>
+            {(a) => (
+              <Input
+                id={a.id}
+                value={talonario.reason}
+                onChange={(e) => setTalonario({ ...talonario, reason: e.target.value })}
+              />
+            )}
+          </FormField>
+          <FormField label="Inicio de la falla" required>
+            {(a) => (
+              <Input
+                id={a.id}
+                type="datetime-local"
+                value={talonario.failure_started_at}
+                onChange={(e) => setTalonario({ ...talonario, failure_started_at: e.target.value })}
+              />
+            )}
+          </FormField>
+        </div>
+        <Button
+          className="mt-2"
+          variant="secondary"
+          disabled={
+            ocupado ||
+            talonario.series.trim() === "" ||
+            talonario.range_to.trim() === "" ||
+            talonario.printer_source.trim() === "" ||
+            talonario.reason.trim() === "" ||
+            talonario.failure_started_at === ""
+          }
+          onClick={() => void registrarTalonario()}
+        >
+          Registrar talonario
+        </Button>
+      </div>
+
+      {abiertos.length > 0 && (
+        <div>
+          <p className="pb-2 text-sm font-medium">Registrar factura emitida en papel</p>
+          <p className="pb-2 text-xs text-muted-foreground">
+            En el ORDEN del talonario, una línea por registro (la pantalla simple registra un
+            producto; lo compuesto va por la API). Los números son los IMPRESOS en el papel: si no
+            cuadran con el siguiente del talonario, no se registra nada.
+          </p>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <FormField label="Talonario" required>
+              {(a) => (
+                <SimpleSelect
+                  id={a.id}
+                  value={rangoElegido}
+                  onValueChange={setRangoElegido}
+                  options={abiertos.map((r) => ({
+                    value: r.id,
+                    label: `${r.series} (sigue el ${r.next_available})`,
+                  }))}
+                />
+              )}
+            </FormField>
+            <FormField label="Cliente" required>
+              {(a) => (
+                <EntityPicker
+                  id={a.id}
+                  value={cliente}
+                  onChange={setCliente}
+                  buscar={async (q) => {
+                    const r = await llamar<{ items: { id: string; legal_name: string }[] }>(
+                      `/v1/customers?search=${encodeURIComponent(q)}&per_page=8`,
+                    );
+                    return r.items.map((c) => ({ id: c.id, label: c.legal_name }));
+                  }}
+                />
+              )}
+            </FormField>
+            <FormField label="Producto" required>
+              {(a) => (
+                <EntityPicker
+                  id={a.id}
+                  value={producto}
+                  onChange={setProducto}
+                  buscar={async (q) => {
+                    const r = await llamar<{ items: { id: string; name: string }[] }>(
+                      `/v1/products?search=${encodeURIComponent(q)}&per_page=8&only_active=1`,
+                    );
+                    return r.items.map((p) => ({ id: p.id, label: p.name }));
+                  }}
+                />
+              )}
+            </FormField>
+            <FormField label="Cantidad" required>
+              {(a) => (
+                <Input
+                  id={a.id}
+                  inputMode="decimal"
+                  className="font-mono"
+                  value={factura.cantidad}
+                  onChange={(e) => setFactura({ ...factura, cantidad: e.target.value })}
+                />
+              )}
+            </FormField>
+            <FormField label="Emitida el (papel)" required>
+              {(a) => (
+                <Input
+                  id={a.id}
+                  type="datetime-local"
+                  value={factura.emitida}
+                  onChange={(e) => setFactura({ ...factura, emitida: e.target.value })}
+                />
+              )}
+            </FormField>
+            <FormField label="N° factura del papel" required>
+              {(a) => (
+                <Input
+                  id={a.id}
+                  inputMode="numeric"
+                  className="font-mono"
+                  value={factura.papel_numero}
+                  onChange={(e) => setFactura({ ...factura, papel_numero: e.target.value })}
+                />
+              )}
+            </FormField>
+            <FormField label="N° de control del papel" required>
+              {(a) => (
+                <Input
+                  id={a.id}
+                  inputMode="numeric"
+                  className="font-mono"
+                  value={factura.papel_control}
+                  onChange={(e) => setFactura({ ...factura, papel_control: e.target.value })}
+                />
+              )}
+            </FormField>
+          </div>
+          <Button
+            className="mt-2"
+            variant="primary"
+            disabled={
+              ocupado ||
+              rangoElegido === null ||
+              cliente === null ||
+              producto === null ||
+              factura.emitida === "" ||
+              factura.papel_numero.trim() === "" ||
+              factura.papel_control.trim() === ""
+            }
+            onClick={() => void registrarFactura()}
+          >
+            Registrar factura de papel
+          </Button>
+        </div>
+      )}
+
+      {error !== null && <MensajeError error={error} />}
+    </div>
   );
 }
