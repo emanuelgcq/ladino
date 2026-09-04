@@ -26,7 +26,6 @@ import {
   DialogTitle,
 } from "../../ui/dialog.js";
 import { Input } from "../../ui/input.js";
-import { SimpleSelect } from "../../ui/select.js";
 import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
@@ -49,6 +48,8 @@ interface ProductoFila {
   image_url?: string | null;
   price_amount?: string | null;
   price_currency?: string | null;
+  price_equivalent_amount?: string | null;
+  price_equivalent_currency?: string | null;
   stock_quantity?: string | null;
 }
 
@@ -201,6 +202,14 @@ function Precio({ producto }: { producto: ProductoFila }): React.JSX.Element {
   return (
     <span>
       {mostrarImporte({ amount: producto.price_amount, currency: producto.price_currency })}
+      {producto.price_equivalent_amount && producto.price_equivalent_currency ? (
+        <span className="block text-[0.8rem] text-muted-foreground">
+          {mostrarImporte({
+            amount: producto.price_equivalent_amount,
+            currency: producto.price_equivalent_currency,
+          })}
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -306,7 +315,9 @@ export function AltaSimple({
   const toast = useToast();
   const [nombre, setNombre] = useState("");
   const [precio, setPrecio] = useState("");
-  const [moneda, setMoneda] = useState<string | null>("USD");
+  // ADR-0046: el precio se pone en dólares, siempre — el sistema lo convierte
+  // a Bs con la tasa del día (y lo enseña debajo). No hay moneda que elegir.
+  const moneda = "USD";
   const [esServicio, setEsServicio] = useState(false);
   const [existencia, setExistencia] = useState("");
   const [costo, setCosto] = useState("");
@@ -426,29 +437,10 @@ export function AltaSimple({
                   />
                 )}
               </FormField>
-              <div className="flex items-end gap-2">
-                <FormField label="Precio de venta" required className="flex-1">
-                  {(p) => (
-                    <MoneyInput
-                      {...p}
-                      value={precio}
-                      onChange={setPrecio}
-                      currency={moneda ?? "USD"}
-                    />
-                  )}
-                </FormField>
-                <SimpleSelect
-                  value={moneda}
-                  onValueChange={setMoneda}
-                  options={[
-                    { value: "USD", label: "USD" },
-                    { value: "VES", label: "Bs." },
-                  ]}
-                  className="w-24"
-                  ariaLabel="Moneda del precio"
-                />
-              </div>
-              <EquivalenteBs amount={precio} currency={moneda ?? "USD"} />
+              <FormField label="Precio de venta (USD)" required>
+                {(p) => <MoneyInput {...p} value={precio} onChange={setPrecio} currency="USD" />}
+              </FormField>
+              <EquivalenteBs amount={precio} currency={moneda} />
             </div>
           </div>
 
@@ -533,14 +525,7 @@ export function AltaSimple({
               </FormField>
               {ajustes.data?.sells_wholesale && (
                 <FormField label="Precio al mayor" className="col-span-2">
-                  {(p) => (
-                    <MoneyInput
-                      {...p}
-                      value={mayor}
-                      onChange={setMayor}
-                      currency={moneda ?? "USD"}
-                    />
-                  )}
+                  {(p) => <MoneyInput {...p} value={mayor} onChange={setMayor} currency={moneda} />}
                 </FormField>
               )}
             </div>

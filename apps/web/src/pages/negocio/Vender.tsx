@@ -52,6 +52,8 @@ interface ProductoFila {
   image_url?: string | null;
   price_amount?: string | null;
   price_currency?: string | null;
+  price_equivalent_amount?: string | null;
+  price_equivalent_currency?: string | null;
   stock_quantity?: string | null;
 }
 interface ClienteFila {
@@ -304,7 +306,12 @@ export function Vender(): React.JSX.Element {
                         <p className="truncate text-[0.92rem] font-medium">{l.producto.name}</p>
                         <p className="text-[0.8rem] text-muted-foreground tabular-nums">
                           {cot
-                            ? `${mostrarImporte({ amount: cot.unit_price, currency: cotizacion.data!.currency })} c/u`
+                            ? `${
+                                cot.precio_referencia !== null &&
+                                cotizacion.data!.moneda_referencia !== null
+                                  ? `${mostrarImporte({ amount: cot.precio_referencia, currency: cotizacion.data!.moneda_referencia })} · `
+                                  : ""
+                              }${mostrarImporte({ amount: cot.unit_price, currency: cotizacion.data!.currency })} c/u`
                             : "…"}
                         </p>
                       </div>
@@ -373,16 +380,18 @@ export function Vender(): React.JSX.Element {
                     })}
                   </span>
                 </div>
-                {cotizacion.data.currency !== cotizacion.data.functional_currency && (
-                  <p className="text-right text-[0.82rem] text-muted-foreground tabular-nums">
-                    ={" "}
-                    {mostrarImporte({
-                      amount: cotizacion.data.functional_total,
-                      currency: cotizacion.data.functional_currency,
-                    })}{" "}
-                    a la tasa de hoy ({mostrarCantidad(cotizacion.data.tasa)})
-                  </p>
-                )}
+                {cotizacion.data.total_referencia !== null &&
+                  cotizacion.data.moneda_referencia !== null &&
+                  cotizacion.data.tasa_precios !== null && (
+                    <p className="text-right text-[0.82rem] text-muted-foreground tabular-nums">
+                      ={" "}
+                      {mostrarImporte({
+                        amount: cotizacion.data.total_referencia,
+                        currency: cotizacion.data.moneda_referencia,
+                      })}{" "}
+                      a la tasa de hoy ({mostrarCantidad(cotizacion.data.tasa_precios)})
+                    </p>
+                  )}
               </>
             )}
             <Button
@@ -485,6 +494,16 @@ function TarjetaPos({
             ? mostrarImporte({ amount: producto.price_amount, currency: producto.price_currency })
             : "Sin precio"}
         </p>
+        {/* Las dos monedas también en la cuadrícula: el equivalente en Bs lo
+            calcula el servidor con la tasa de hoy; sin tasa no se enseña nada. */}
+        {producto.price_equivalent_amount && producto.price_equivalent_currency ? (
+          <p className="text-[0.78rem] text-muted-foreground tabular-nums">
+            {mostrarImporte({
+              amount: producto.price_equivalent_amount,
+              currency: producto.price_equivalent_currency,
+            })}
+          </p>
+        ) : null}
       </div>
     </button>
   );
@@ -859,6 +878,11 @@ function Cobrar({
   const exactoEn = (currency: string): string | null => {
     if (currency === cotizacion.currency) return cotizacion.total;
     if (currency === cotizacion.functional_currency) return cotizacion.functional_total;
+    // El equivalente del servidor en la moneda ancla (el total ÷ tasa de hoy):
+    // prellenar con él deja el vuelto en cero para quien paga justo en divisa.
+    if (currency === cotizacion.moneda_referencia && cotizacion.total_referencia !== null) {
+      return cotizacion.total_referencia;
+    }
     return null;
   };
 
@@ -933,12 +957,12 @@ function Cobrar({
             <p className="text-3xl font-semibold tabular-nums">
               {mostrarImporte({ amount: cotizacion.total, currency: cotizacion.currency })}
             </p>
-            {cotizacion.currency !== cotizacion.functional_currency && (
+            {cotizacion.total_referencia !== null && cotizacion.moneda_referencia !== null && (
               <p className="text-[0.85rem] text-muted-foreground tabular-nums">
                 ={" "}
                 {mostrarImporte({
-                  amount: cotizacion.functional_total,
-                  currency: cotizacion.functional_currency,
+                  amount: cotizacion.total_referencia,
+                  currency: cotizacion.moneda_referencia,
                 })}
               </p>
             )}

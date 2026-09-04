@@ -15,7 +15,6 @@ import {
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
 import { Button } from "../../ui/button.js";
 import { Input } from "../../ui/input.js";
-import { SimpleSelect } from "../../ui/select.js";
 import { Badge } from "../../ui/badge.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card.js";
 import {
@@ -26,8 +25,7 @@ import {
   DialogTitle,
 } from "../../ui/dialog.js";
 import { useToast } from "../../ui/toast.js";
-import { mostrarCantidad } from "../../money.js";
-import { DualMoney } from "../../components/DualMoney.js";
+import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { MensajeError } from "../ventas/comunes.js";
 import type { PriceList, PriceItem, Product } from "../../lib.js";
 
@@ -57,7 +55,7 @@ export function Precios(): React.JSX.Element {
     <div>
       <PageHeader
         title="Listas de precios"
-        description="Cada lista vive en una moneda: los documentos que la usan nacen en esa moneda, y la factura siempre muestra el equivalente en la otra con la tasa del día (art. 13.14). Si la venta se cobra en otra moneda o en otra fecha, la diferencia cambiaria se calcula sola."
+        description="Los precios se ponen en dólares y se mantienen solos: la caja convierte a bolívares con la tasa BCV del día, y el recibo o la factura sale siempre en bolívares. La columna en Bs es la conversión de hoy, como referencia."
         actions={
           <Button variant="primary" onClick={() => setCreando(true)}>
             <Plus /> Nueva lista
@@ -145,7 +143,9 @@ function NuevaLista({ onCerrar }: { onCerrar: (hecha: boolean) => void }): React
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [nombre, setNombre] = useState("");
-  const [moneda, setMoneda] = useState("VES");
+  // ADR-0046: los precios se anclan en dólares. La lista nace en USD, siempre;
+  // el documento sale en Bs a la tasa del día — no hay decisión que ofrecer.
+  const moneda = "USD";
   const [error, setError] = useState<unknown>(null);
   const [guardando, setGuardando] = useState(false);
 
@@ -172,33 +172,15 @@ function NuevaLista({ onCerrar }: { onCerrar: (hecha: boolean) => void }): React
       <DialogContent>
         <DialogTitle>Nueva lista de precios</DialogTitle>
         <DialogDescription>
-          La moneda es de la LISTA y no se cambia después: los documentos que la usen nacerán en
-          ella.
+          Los precios se ponen en dólares y se mantienen solos cuando la tasa cambia: la caja
+          convierte a bolívares al día, y el documento sale siempre en bolívares.
         </DialogDescription>
         <div className="mt-3 grid grid-cols-2 gap-3">
           <FormField label="Nombre" required>
             {(a) => <Input id={a.id} value={nombre} onChange={(e) => setNombre(e.target.value)} />}
           </FormField>
-          <FormField
-            label="Moneda"
-            required
-            hint={
-              moneda === "USD"
-                ? "USD: los precios se mantienen solos cuando la tasa cambia (la caja convierte al día)."
-                : "VES: los precios son fijos en bolívares y tendrás que actualizarlos tú cuando la tasa se mueva."
-            }
-          >
-            {(a) => (
-              <SimpleSelect
-                id={a.id}
-                value={moneda}
-                onValueChange={setMoneda}
-                options={[
-                  { value: "VES", label: "VES — Bolívares" },
-                  { value: "USD", label: "USD — Dólares" },
-                ]}
-              />
-            )}
+          <FormField label="Moneda" hint="Siempre en dólares: es el ancla de los precios.">
+            {(a) => <Input id={a.id} value="USD — Dólares" disabled readOnly />}
           </FormField>
         </div>
         {error !== null && (
@@ -281,48 +263,51 @@ function PreciosDeLista({
     () => [
       { id: "producto", header: "Producto", accessorKey: "producto" },
       {
+        // ADR-0046: las DOS columnas — el precio ancla (USD) y su conversión.
         id: "importe",
-        // La EQUIVALENCIA la calcula el servidor con la tasa BCV de HOY —
+        header: () => <span className="block text-right">Precio ({lista.currency_code})</span>,
+        accessorKey: "amount",
+        enableSorting: false,
+        cell: (c) => (
+          <span className="block text-right tabular-nums">
+            {mostrarImporte({ amount: c.row.original.amount, currency: c.row.original.currency })}
+          </span>
+        ),
+      },
+      {
+        // La CONVERSIÓN la calcula el servidor con la tasa BCV de HOY —
         // también para filas históricas (la tasa se ancla al documento, no al
         // precio), y el encabezado lo dice. Sin tasa: «sin tasa del día».
+        id: "equivalente",
         header: () => (
           <span className="block text-right">
-            Importe
+            {lista.currency_code === "VES" ? "En dólares" : "En bolívares"}
             {tasa !== null ? (
               <span
                 className="block text-[0.72rem] font-normal text-muted-foreground"
                 title={`Tasa ${tasa.rate} · ${tasa.source} · ${tasa.rate_date}. Referencia de HOY, también para vigencias históricas.`}
               >
-                ≈ al BCV de hoy ({mostrarCantidad(tasa.rate)})
+                al BCV de hoy ({mostrarCantidad(tasa.rate)})
               </span>
             ) : (
               <span className="block text-[0.72rem] font-normal text-warning-soft-foreground">
-                ≈ — sin tasa del día
+                — sin tasa del día
               </span>
             )}
           </span>
         ),
-        accessorKey: "amount",
         enableSorting: false,
-        cell: (c) => (
-          <span className="block text-right">
-            <DualMoney
-              variant="cell"
-              amount={c.row.original.amount}
-              currency={c.row.original.currency}
-              secondary={
-                c.row.original.equivalent_amount != null &&
-                c.row.original.equivalent_currency != null
-                  ? {
-                      amount: c.row.original.equivalent_amount,
-                      currency: c.row.original.equivalent_currency,
-                    }
-                  : null
-              }
-              rate={tasa === null ? null : { rate: tasa.rate, source: tasa.source }}
-            />
-          </span>
-        ),
+        cell: (c) =>
+          c.row.original.equivalent_amount != null && c.row.original.equivalent_currency != null ? (
+            <span className="block text-right text-muted-foreground tabular-nums">
+              {mostrarImporte({
+                amount: c.row.original.equivalent_amount,
+                currency: c.row.original.equivalent_currency,
+              })}
+            </span>
+          ) : (
+            <span className="block text-right text-muted-foreground">—</span>
+          ),
       },
       {
         id: "desde",
@@ -343,7 +328,7 @@ function PreciosDeLista({
           ),
       },
     ],
-    [tasa],
+    [tasa, lista.currency_code],
   );
 
   async function cargarPrecio(): Promise<void> {

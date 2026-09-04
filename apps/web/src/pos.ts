@@ -12,6 +12,8 @@ export interface LineaCotizada {
   readonly description: string;
   readonly quantity: string;
   readonly unit_price: string;
+  /** El precio de lista exacto en la moneda ancla (contrato: reference_unit_price). */
+  readonly precio_referencia: string | null;
   readonly total: string;
 }
 
@@ -21,6 +23,11 @@ export interface CotizacionPos {
   readonly currency: string;
   /** La tasa del día que usó el servidor (el contrato la llama fx_rate). */
   readonly tasa: string;
+  /** La moneda ancla de la lista y su tasa aplicada (contrato: pricing_*). */
+  readonly moneda_referencia: string | null;
+  readonly tasa_precios: string | null;
+  /** El total dividido por esa tasa, del servidor (contrato: reference_total). */
+  readonly total_referencia: string | null;
   readonly lines: readonly LineaCotizada[];
   readonly subtotal: string;
   readonly tax_amount: string;
@@ -39,10 +46,42 @@ export async function cotizarPos(
     lines: { product_id: string; quantity: string }[];
   },
 ): Promise<CotizacionPos> {
-  const r = await llamar<CotizacionPos & { fx_rate: string }>("/v1/pos/quote", {
+  const r = await llamar<
+    Omit<
+      CotizacionPos,
+      "tasa" | "moneda_referencia" | "tasa_precios" | "total_referencia" | "lines"
+    > & {
+      fx_rate: string;
+      pricing_currency: string | null;
+      pricing_fx_rate: string | null;
+      pricing_rate_source: string | null;
+      reference_total: string | null;
+      lines: readonly (Omit<LineaCotizada, "precio_referencia"> & {
+        reference_unit_price: string | null;
+      })[];
+    }
+  >("/v1/pos/quote", {
     method: "POST",
     body: JSON.stringify(req),
   });
-  const { fx_rate, ...resto } = r;
-  return { ...resto, tasa: fx_rate };
+  const {
+    fx_rate,
+    pricing_currency,
+    pricing_fx_rate,
+    pricing_rate_source: _fuente,
+    reference_total,
+    lines,
+    ...resto
+  } = r;
+  return {
+    ...resto,
+    tasa: fx_rate,
+    moneda_referencia: pricing_currency,
+    tasa_precios: pricing_fx_rate,
+    total_referencia: reference_total,
+    lines: lines.map(({ reference_unit_price, ...l }) => ({
+      ...l,
+      precio_referencia: reference_unit_price,
+    })),
+  };
 }
