@@ -26,7 +26,8 @@ import {
   DialogTitle,
 } from "../../ui/dialog.js";
 import { useToast } from "../../ui/toast.js";
-import { mostrarImporte } from "../../money.js";
+import { mostrarCantidad } from "../../money.js";
+import { DualMoney } from "../../components/DualMoney.js";
 import { MensajeError } from "../ventas/comunes.js";
 import type { PriceList, PriceItem, Product } from "../../lib.js";
 
@@ -46,12 +47,17 @@ export function Precios(): React.JSX.Element {
     queryKey: ["listas", empresa.id],
     queryFn: () => llamar<PriceList[]>("/v1/price-lists"),
   });
+  const ajustes = useQuery({
+    queryKey: ["ajustes", empresa.id],
+    queryFn: () => llamar<{ sells_wholesale: boolean }>("/v1/company-settings"),
+  });
+  const alMayor = ajustes.data?.sells_wholesale === true;
 
   return (
     <div>
       <PageHeader
         title="Listas de precios"
-        description="Cada lista vive en UNA moneda; el documento que la usa nace en esa moneda y de ahí sale el diferencial cambiario."
+        description="Cada lista vive en una moneda: los documentos que la usan nacen en esa moneda, y la factura siempre muestra el equivalente en la otra con la tasa del día (art. 13.14). Si la venta se cobra en otra moneda o en otra fecha, la diferencia cambiaria se calcula sola."
         actions={
           <Button variant="primary" onClick={() => setCreando(true)}>
             <Plus /> Nueva lista
@@ -69,14 +75,28 @@ export function Precios(): React.JSX.Element {
               <button
                 key={l.id}
                 onClick={() => setSeleccionada(l)}
-                className={`flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-[0.9rem] transition-colors ${
+                className={`w-full rounded-sm px-2 py-1.5 text-left text-[0.9rem] transition-colors ${
                   seleccionada?.id === l.id
                     ? "bg-accent-soft font-medium text-accent-soft-foreground"
                     : "hover:bg-surface-muted"
                 }`}
               >
-                <span className="truncate">{l.name}</span>
-                <Badge tone={l.status === "active" ? "accent" : "neutral"}>{l.currency_code}</Badge>
+                <span className="flex items-center justify-between gap-2">
+                  <span className="truncate">{l.name}</span>
+                  <Badge tone={l.status === "active" ? "accent" : "neutral"}>
+                    {l.currency_code}
+                  </Badge>
+                </span>
+                {l.is_caja_default === true && (
+                  <Badge tone="accent" className="mt-1">
+                    Predeterminada · la usa la caja
+                  </Badge>
+                )}
+                {alMayor && l.is_caja_default !== true && /mayor/i.test(l.name) && (
+                  <Badge tone="info" className="mt-1">
+                    Al mayor · clientes marcados
+                  </Badge>
+                )}
               </button>
             ))}
             {listas.data !== undefined && listas.data.length === 0 && (
@@ -96,7 +116,15 @@ export function Precios(): React.JSX.Element {
               </CardContent>
             </Card>
           ) : (
-            <PreciosDeLista lista={seleccionada} />
+            <PreciosDeLista
+              lista={seleccionada}
+              esPredeterminada={
+                listas.data?.find((l) => l.id === seleccionada.id)?.is_caja_default === true
+              }
+              onPredeterminadaCambiada={() =>
+                void qc.invalidateQueries({ queryKey: ["listas", empresa.id] })
+              }
+            />
           )}
         </div>
       </div>
@@ -151,7 +179,15 @@ function NuevaLista({ onCerrar }: { onCerrar: (hecha: boolean) => void }): React
           <FormField label="Nombre" required>
             {(a) => <Input id={a.id} value={nombre} onChange={(e) => setNombre(e.target.value)} />}
           </FormField>
-          <FormField label="Moneda" required>
+          <FormField
+            label="Moneda"
+            required
+            hint={
+              moneda === "USD"
+                ? "USD: los precios se mantienen solos cuando la tasa cambia (la caja convierte al día)."
+                : "VES: los precios son fijos en bolívares y tendrás que actualizarlos tú cuando la tasa se mueva."
+            }
+          >
             {(a) => (
               <SimpleSelect
                 id={a.id}
@@ -187,7 +223,15 @@ function NuevaLista({ onCerrar }: { onCerrar: (hecha: boolean) => void }): React
   );
 }
 
-function PreciosDeLista({ lista }: { lista: PriceList }): React.JSX.Element {
+function PreciosDeLista({
+  lista,
+  esPredeterminada,
+  onPredeterminadaCambiada,
+}: {
+  lista: PriceList;
+  esPredeterminada: boolean;
+  onPredeterminadaCambiada: () => void;
+}): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
@@ -195,19 +239,42 @@ function PreciosDeLista({ lista }: { lista: PriceList }): React.JSX.Element {
   const [importe, setImporte] = useState("");
   const [desde, setDesde] = useState("");
   const [confirmando, setConfirmando] = useState(false);
+  const [confirmandoDefault, setConfirmandoDefault] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
   const precios = useQuery({
     queryKey: ["precios-lista", empresa.id, lista.id],
     queryFn: async () => {
       const [r, prods] = await Promise.all([
-        llamar<{ items: PriceItem[] }>(`/v1/price-lists/${lista.id}/prices`),
+        llamar<{
+          items: PriceItem[];
+          rate: { rate: string; rate_date: string; source: string } | null;
+        }>(`/v1/price-lists/${lista.id}/prices`),
         llamar<{ items: Product[] }>(`/v1/products?per_page=100`),
       ]);
       const skuDe = new Map(prods.items.map((p) => [p.id, `${p.sku} · ${p.name}`]));
-      return r.items.map((i) => ({ ...i, producto: skuDe.get(i.product_id) ?? i.product_id }));
+      return {
+        rate: r.rate,
+        filas: r.items.map((i) => ({ ...i, producto: skuDe.get(i.product_id) ?? i.product_id })),
+      };
     },
   });
+  const tasa = precios.data?.rate ?? null;
+
+  async function hacerPredeterminada(): Promise<void> {
+    try {
+      await llamar("/v1/company-settings", {
+        method: "PUT",
+        body: JSON.stringify({ default_price_list_id: lista.id }),
+      });
+      toast.success("Lista predeterminada", "Las próximas ventas de caja usarán esta lista.");
+      onPredeterminadaCambiada();
+      void qc.invalidateQueries({ queryKey: ["ajustes", empresa.id] });
+    } catch (e) {
+      toast.error("No se pudo cambiar la predeterminada");
+      setError(e);
+    }
+  }
 
   type Fila = PriceItem & { producto: string };
   const columnas = useMemo<ColumnDef<Fila, unknown>[]>(
@@ -215,12 +282,45 @@ function PreciosDeLista({ lista }: { lista: PriceList }): React.JSX.Element {
       { id: "producto", header: "Producto", accessorKey: "producto" },
       {
         id: "importe",
-        header: () => <span className="block text-right">Importe</span>,
+        // La EQUIVALENCIA la calcula el servidor con la tasa BCV de HOY —
+        // también para filas históricas (la tasa se ancla al documento, no al
+        // precio), y el encabezado lo dice. Sin tasa: «sin tasa del día».
+        header: () => (
+          <span className="block text-right">
+            Importe
+            {tasa !== null ? (
+              <span
+                className="block text-[0.72rem] font-normal text-muted-foreground"
+                title={`Tasa ${tasa.rate} · ${tasa.source} · ${tasa.rate_date}. Referencia de HOY, también para vigencias históricas.`}
+              >
+                ≈ al BCV de hoy ({mostrarCantidad(tasa.rate)})
+              </span>
+            ) : (
+              <span className="block text-[0.72rem] font-normal text-warning-soft-foreground">
+                ≈ — sin tasa del día
+              </span>
+            )}
+          </span>
+        ),
         accessorKey: "amount",
         enableSorting: false,
         cell: (c) => (
-          <span className="block text-right font-mono text-[0.84rem]">
-            {mostrarImporte({ amount: c.row.original.amount, currency: c.row.original.currency })}
+          <span className="block text-right">
+            <DualMoney
+              variant="cell"
+              amount={c.row.original.amount}
+              currency={c.row.original.currency}
+              secondary={
+                c.row.original.equivalent_amount != null &&
+                c.row.original.equivalent_currency != null
+                  ? {
+                      amount: c.row.original.equivalent_amount,
+                      currency: c.row.original.equivalent_currency,
+                    }
+                  : null
+              }
+              rate={tasa === null ? null : { rate: tasa.rate, source: tasa.source }}
+            />
           </span>
         ),
       },
@@ -243,7 +343,7 @@ function PreciosDeLista({ lista }: { lista: PriceList }): React.JSX.Element {
           ),
       },
     ],
-    [],
+    [tasa],
   );
 
   async function cargarPrecio(): Promise<void> {
@@ -274,9 +374,25 @@ function PreciosDeLista({ lista }: { lista: PriceList }): React.JSX.Element {
     <div className="space-y-3">
       <Card>
         <CardHeader>
-          <CardTitle>
-            Cargar precio en {lista.name} ({lista.currency_code})
-          </CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <CardTitle>
+              Cargar precio en {lista.name} ({lista.currency_code})
+            </CardTitle>
+            {esPredeterminada && <Badge tone="accent">Predeterminada · la usa la caja</Badge>}
+          </div>
+          {!esPredeterminada && lista.status === "active" && (
+            <Button variant="secondary" size="sm" onClick={() => setConfirmandoDefault(true)}>
+              Hacer predeterminada
+            </Button>
+          )}
+          {tasa === null && (
+            <p className="text-[0.82rem] text-warning-soft-foreground">
+              Sin tasa del día: la columna de equivalencia no puede calcularse.{" "}
+              <a href="/admin/facturacion-fiscal" className="underline">
+                Cargar la tasa
+              </a>
+            </p>
+          )}
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -336,7 +452,7 @@ function PreciosDeLista({ lista }: { lista: PriceList }): React.JSX.Element {
 
       <DataTable
         columns={columnas}
-        data={precios.data}
+        data={precios.data?.filas}
         error={precios.error instanceof Error ? precios.error.message : null}
         onRetry={() => void precios.refetch()}
         density="compact"
@@ -347,6 +463,19 @@ function PreciosDeLista({ lista }: { lista: PriceList }): React.JSX.Element {
             "El primer precio de cada producto abre su historial de vigencias — que nunca se edita, solo crece.",
         }}
       />
+
+      <ConfirmDialog
+        open={confirmandoDefault}
+        onOpenChange={setConfirmandoDefault}
+        title="Hacer predeterminada esta lista"
+        confirmLabel="Hacer predeterminada"
+        onConfirm={hacerPredeterminada}
+      >
+        <strong>Las próximas ventas de caja usarán esta lista</strong> ({lista.name},{" "}
+        {lista.currency_code}): es la que /vender aplica al Consumidor final y a cualquier cliente
+        sin lista preferida. Los clientes con preferida propia no cambian, y los documentos ya
+        emitidos tampoco.
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={confirmando}

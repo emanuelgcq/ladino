@@ -81,12 +81,17 @@ export interface PriceList {
   name: string;
   currency_code: string;
   status: string;
+  /** true si es la lista que /vender aplica a un cliente sin preferida. */
+  is_caja_default?: boolean;
 }
 export interface PriceItem {
   id: string;
   product_id: string;
   amount: string;
   currency: string;
+  /** Equivalente en la otra moneda, del SERVIDOR con la tasa BCV de hoy. */
+  equivalent_amount?: string | null;
+  equivalent_currency?: string | null;
   effective_from: string;
   effective_to: string | null;
 }
