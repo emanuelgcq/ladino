@@ -1,4 +1,26 @@
-# Handoff — 2026-09-04
+# Handoff — 2026-09-04 (2ª entrega)
+
+## Listas de precios: la predeterminada de la caja es dato, y todo precio se ve en dos monedas
+
+Migración 36 (`company_settings.default_price_list_id`, FK compuesta anti-cross-company,
+pgTAP 036). UNA resolución con tres consumidores —`resolverLista`, la columna de precio de la
+cuadrícula de /vender y el flag `is_caja_default` del panel— para que la cuadrícula nunca
+enseñe un precio distinto del que el carrito cobra; el alta simple escribe el detal a la
+predeterminada cuando la moneda coincide. `GET /v1/price-lists/:id/prices` devuelve por fila
+el equivalente en la otra moneda calculado por el SERVIDOR con la tasa BCV de HOY (con la
+tasa citada: fuente y fecha; sin tasa → null, jamás un cero) — referencia, no dato del
+precio: la tasa se ancla al documento. /admin/precios: badges «Predeterminada · la usa la
+caja» y «Al mayor», acción «Hacer predeterminada» con la consecuencia dicha, columna dual
+con DualMoney, y los copys de consecuencia (art. 13.14, USD-se-mantiene / VES-se-remarca).
+La DEMO quedó reconciliada con la decisión grabada: «Detal USD» (0,75/1,40/0,55…) es la
+predeterminada; «PVP Bolívares» queda solo como ilustración del caso nativo en Bs.
+
+**Pendiente de la cola anterior, con hallazgo:** «la corrección legal del consumidor final»
+— el repo solo registra la línea pendiente, sin especificar cuál es la corrección; no se
+implementó nada para no inventar norma (CLAUDE.md §2) y **necesita que el usuario la
+especifique**. «El lector de códigos» — el flujo de lector físico ya existe en /vender
+(Enter agrega por código exacto); si lo pendiente es el escáner por cámara u otra cosa,
+también necesita una línea del usuario.
 
 ## Investigación normativa de facturación aplicada (2026-09-03/04)
 
