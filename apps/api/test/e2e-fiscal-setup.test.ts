@@ -134,6 +134,29 @@ describe("puesta a punto fiscal", () => {
     );
   });
 
+  it("la tercera modalidad: una empresa con máquina fiscal queda en sin_emision y opera todo lo demás", async () => {
+    // Otra empresa del MISMO tenant: /empezar la asigna cuando el negocio
+    // declara tener máquina fiscal (EMISION_FACTURAS.md §1).
+    const OTRA = crypto.randomUUID();
+    await sql.begin(async (tx) => {
+      await tx`select set_config('ladino.actor_id', ${GERENTE}, true)`;
+      await tx`insert into public.companies (id, tenant_id, tax_id, legal_name)
+               values (${OTRA}, ${TENANT}, ${`J-E2EFS-ME-${RUN}`}, 'Con máquina fiscal, C.A.')`;
+    });
+    const r = await app.request("/v1/fiscal/regime", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${await tokenDe(GERENTE)}`,
+        "X-Company-Id": OTRA,
+        "Idempotency-Key": crypto.randomUUID(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ regime_code: "sin_emision" }),
+    });
+    expect(r.status).toBe(201);
+    expect(((await r.json()) as { regime_code: string }).regime_code).toBe("sin_emision");
+  });
+
   it("aceptar la alícuota exige el permiso", async () => {
     const r = await pedir("POST", "/v1/fiscal/iva-general", MIRON, { rate: "0.16" });
     expect(r.status).toBe(403);

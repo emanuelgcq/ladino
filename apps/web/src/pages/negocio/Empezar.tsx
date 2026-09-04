@@ -435,14 +435,39 @@ function PasoFacturas({
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const toast = useToast();
-  const [elegido, setElegido] = useState<string | null>(setup.current_regime);
+  // Las dos preguntas que deciden la vía (PA 00071): a quién le vendes, y si
+  // tienes máquina fiscal. La persona nunca ve la palabra técnica.
+  const [vendeA, setVendeA] = useState<"negocios" | "personas" | "mitad" | null>(null);
+  const [maquina, setMaquina] = useState<boolean | null>(null);
   const [porcentaje, setPorcentaje] = useState("16");
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
   const [serie, setSerie] = useState("A");
   const [imprenta, setImprenta] = useState("");
+  // El domicilio fiscal (art. 13.5): la factura lo lleva, así que se pide
+  // ANTES de elegir cómo facturar. La sesión se refresca al recargar; mientras
+  // tanto este flag local evita pedirlo dos veces.
+  const [direccion, setDireccion] = useState("");
+  const [direccionGuardada, setDireccionGuardada] = useState(false);
+  const hayDomicilio = empresa.fiscal_address !== null || direccionGuardada;
 
   const vigente = setup.regimes.find((r) => r.code === setup.current_regime) ?? null;
+  const formaLibre = setup.regimes.find((r) => r.code === "formatos_libres") ?? null;
+
+  const guardarDomicilio = useMutation({
+    mutationFn: () =>
+      llamar("/v1/companies/fiscal-address", {
+        method: "PUT",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ fiscal_address: direccion.trim() }),
+      }),
+    onSuccess: () => {
+      toast.success("Dirección guardada");
+      setDireccionGuardada(true);
+      onCambio();
+    },
+    onError: (e) => toast.error("No se pudo guardar la dirección", errorDePersona(e)),
+  });
 
   const asignar = useMutation({
     mutationFn: (code: string) =>
@@ -507,43 +532,139 @@ function PasoFacturas({
           </p>
         </div>
 
-        {setup.current_regime === null ? (
-          <div className="space-y-2">
-            {setup.regimes.map((r) => (
-              <button
-                key={r.code}
-                onClick={() => setElegido(r.code)}
-                className={`block w-full rounded-md border px-3 py-2.5 text-left ${
-                  elegido === r.code
-                    ? "border-accent bg-accent-soft"
-                    : "border-border bg-surface hover:border-accent"
-                }`}
+        {/* El domicilio fiscal va primero: la factura lo lleva (art. 13.5). */}
+        {!hayDomicilio && (
+          <div className="space-y-2 rounded-md border border-border bg-surface-muted/40 p-3">
+            <p className="text-[0.9rem]">
+              Antes de nada: la <span className="font-medium">dirección fiscal</span> de tu negocio.
+              Va impresa en cada factura.
+            </p>
+            <div className="flex flex-wrap items-end gap-2">
+              <FormField label="Dirección fiscal" required>
+                {(p) => (
+                  <Input
+                    {...p}
+                    value={direccion}
+                    onChange={(e) => setDireccion(e.target.value)}
+                    placeholder="Av. Bolívar, local 3, Valencia"
+                    className="w-72"
+                  />
+                )}
+              </FormField>
+              <Button
+                variant="primary"
+                disabled={direccion.trim().length < 5 || guardarDomicilio.isPending}
+                onClick={() => guardarDomicilio.mutate()}
               >
-                <span className="font-medium">{r.name}</span>
-                <span className="mt-0.5 block text-[0.85rem] text-muted-foreground">
-                  {r.description}
-                </span>
-                <span className="mt-0.5 block text-[0.75rem] text-faint-foreground">
-                  {r.legal_source}
-                </span>
-              </button>
-            ))}
+                Guardar dirección
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {setup.current_regime === null ? (
+          <div className={`space-y-4 ${hayDomicilio ? "" : "pointer-events-none opacity-50"}`}>
+            <div className="space-y-1.5">
+              <p className="font-medium">¿A quién le vendes principalmente?</p>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    ["negocios", "A negocios y empresas"],
+                    ["personas", "A personas"],
+                    ["mitad", "Mitad y mitad"],
+                  ] as const
+                ).map(([clave, etiqueta]) => (
+                  <button
+                    key={clave}
+                    onClick={() => setVendeA(clave)}
+                    className={`rounded-full border px-3 py-1.5 text-[0.88rem] ${
+                      vendeA === clave
+                        ? "border-accent bg-accent-soft text-accent-soft-foreground"
+                        : "border-border bg-surface hover:border-accent"
+                    }`}
+                  >
+                    {etiqueta}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <p className="font-medium">¿Tienes máquina fiscal?</p>
+              <div className="flex gap-1.5">
+                {(
+                  [
+                    [false, "No"],
+                    [true, "Sí"],
+                  ] as const
+                ).map(([valor, etiqueta]) => (
+                  <button
+                    key={etiqueta}
+                    onClick={() => setMaquina(valor)}
+                    className={`rounded-full border px-4 py-1.5 text-[0.88rem] ${
+                      maquina === valor
+                        ? "border-accent bg-accent-soft text-accent-soft-foreground"
+                        : "border-border bg-surface hover:border-accent"
+                    }`}
+                  >
+                    {etiqueta}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {maquina === true && (
+              <div className="rounded-md border border-border bg-surface-muted/40 p-3 text-[0.9rem]">
+                <p className="font-medium">Ladino todavía no imprime por máquina fiscal.</p>
+                <p className="mt-1 text-muted-foreground">
+                  Puedes usar todo lo demás — inventario, clientes, cuentas, compras, tu dinero — y
+                  facturar por tu máquina mientras tanto. Cuando esa función llegue, te avisamos.
+                </p>
+              </div>
+            )}
+            {maquina === false && (vendeA === "personas" || vendeA === "mitad") && (
+              <div className="rounded-md border border-warning-soft-foreground/40 bg-warning-soft p-3 text-[0.9rem] text-warning-soft-foreground">
+                <p className="font-medium">Un aviso importante</p>
+                <p className="mt-1">
+                  Por tu tipo de negocio, es posible que la ley te exija máquina fiscal (art. 8, PA
+                  00071: ventas del año pasado sobre 1.500 UT, ventas mayormente a consumidor final
+                  y actividad listada — las tres a la vez; algunas actividades la exigen sin
+                  importar el ingreso). Confírmalo con tu contador — y si te aplica, avísanos:
+                  estamos preparando esa función.
+                </p>
+              </div>
+            )}
+            {maquina === false && formaLibre !== null && vendeA !== null && (
+              <p className="text-[0.78rem] text-faint-foreground">
+                Facturarás con formatos libres de imprenta autorizada · {formaLibre.legal_source}
+              </p>
+            )}
+
             <Button
               variant="primary"
-              disabled={elegido === null || asignar.isPending}
-              onClick={() => elegido !== null && asignar.mutate(elegido)}
+              disabled={vendeA === null || maquina === null || asignar.isPending}
+              onClick={() => asignar.mutate(maquina === true ? "sin_emision" : "formatos_libres")}
             >
-              Así facturo
+              {maquina === true ? "Entendido, sigo sin facturar desde Ladino" : "Así facturo"}
             </Button>
           </div>
         ) : (
-          <p className="flex items-center gap-2 text-[0.95rem]">
-            <Check className="size-4 text-success-soft-foreground" />
-            {vigente?.name ?? setup.current_regime}
-            {vigente !== null && (
-              <span className="text-[0.78rem] text-faint-foreground">· {vigente.legal_source}</span>
+          <div className="space-y-1">
+            <p className="flex items-center gap-2 text-[0.95rem]">
+              <Check className="size-4 text-success-soft-foreground" />
+              {vigente?.name ?? setup.current_regime}
+              {vigente !== null && (
+                <span className="text-[0.78rem] text-faint-foreground">
+                  · {vigente.legal_source}
+                </span>
+              )}
+            </p>
+            {setup.current_regime === "sin_emision" && (
+              <p className="text-[0.85rem] text-muted-foreground">
+                Facturas por tu máquina fiscal; Ladino te lleva todo lo demás. Si eso cambia, se
+                ajusta desde el mundo de administración.
+              </p>
             )}
-          </p>
+          </div>
         )}
 
         {setup.current_regime !== null && setup.current_regime !== "sin_emision" && (
