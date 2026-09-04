@@ -100,6 +100,7 @@ export function Empezar(): React.JSX.Element {
     facturacion !== null &&
     facturacion.current_regime !== null &&
     (facturacion.current_regime === "sin_emision" ||
+      facturacion.current_regime === "sin_facturacion" ||
       (facturacion.iva_general !== null && (!necesitaTalonario || hayTalonario)));
 
   const pasos: { titulo: string; listo: boolean; saltable: boolean }[] = [
@@ -435,6 +436,11 @@ function PasoFacturas({
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const toast = useToast();
+  // La PRIMERA pregunta (migración 37): ¿ya tienes RIF? Sin RIF no existe
+  // factura (art. 13.5) — pero el negocio arranca HOY vendiendo con recibos.
+  const [tieneRif, setTieneRif] = useState<boolean | null>(null);
+  // Y si viene del modo recibos con su RIF nuevo, este flag reabre el flujo.
+  const [activandoFacturacion, setActivandoFacturacion] = useState(false);
   // Las dos preguntas que deciden la vía (PA 00071): a quién le vendes, y si
   // tienes máquina fiscal. La persona nunca ve la palabra técnica.
   const [vendeA, setVendeA] = useState<"negocios" | "personas" | "mitad" | null>(null);
@@ -532,8 +538,9 @@ function PasoFacturas({
           </p>
         </div>
 
-        {/* El domicilio fiscal va primero: la factura lo lleva (art. 13.5). */}
-        {!hayDomicilio && (
+        {/* El domicilio fiscal va primero: la factura lo lleva (art. 13.5).
+            Solo aplica al camino CON RIF — el recibo no es factura. */}
+        {tieneRif === true && !hayDomicilio && (
           <div className="space-y-2 rounded-md border border-border bg-surface-muted/40 p-3">
             <p className="text-[0.9rem]">
               Antes de nada: la <span className="font-medium">dirección fiscal</span> de tu negocio.
@@ -562,46 +569,23 @@ function PasoFacturas({
           </div>
         )}
 
-        {setup.current_regime === null ? (
-          <div className={`space-y-4 ${hayDomicilio ? "" : "pointer-events-none opacity-50"}`}>
+        {setup.current_regime === null ||
+        (setup.current_regime === "sin_facturacion" && activandoFacturacion) ? (
+          <div className="space-y-4">
             <div className="space-y-1.5">
-              <p className="font-medium">¿A quién le vendes principalmente?</p>
-              <div className="flex flex-wrap gap-1.5">
-                {(
-                  [
-                    ["negocios", "A negocios y empresas"],
-                    ["personas", "A personas"],
-                    ["mitad", "Mitad y mitad"],
-                  ] as const
-                ).map(([clave, etiqueta]) => (
-                  <button
-                    key={clave}
-                    onClick={() => setVendeA(clave)}
-                    className={`rounded-full border px-3 py-1.5 text-[0.88rem] ${
-                      vendeA === clave
-                        ? "border-accent bg-accent-soft text-accent-soft-foreground"
-                        : "border-border bg-surface hover:border-accent"
-                    }`}
-                  >
-                    {etiqueta}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <p className="font-medium">¿Tienes máquina fiscal?</p>
+              <p className="font-medium">¿Tu negocio ya tiene RIF?</p>
               <div className="flex gap-1.5">
                 {(
                   [
-                    [false, "No"],
                     [true, "Sí"],
+                    [false, "Todavía no"],
                   ] as const
                 ).map(([valor, etiqueta]) => (
                   <button
                     key={etiqueta}
-                    onClick={() => setMaquina(valor)}
+                    onClick={() => setTieneRif(valor)}
                     className={`rounded-full border px-4 py-1.5 text-[0.88rem] ${
-                      maquina === valor
+                      tieneRif === valor
                         ? "border-accent bg-accent-soft text-accent-soft-foreground"
                         : "border-border bg-surface hover:border-accent"
                     }`}
@@ -612,40 +596,126 @@ function PasoFacturas({
               </div>
             </div>
 
-            {maquina === true && (
-              <div className="rounded-md border border-border bg-surface-muted/40 p-3 text-[0.9rem]">
-                <p className="font-medium">Ladino todavía no imprime por máquina fiscal.</p>
-                <p className="mt-1 text-muted-foreground">
-                  Puedes usar todo lo demás — inventario, clientes, cuentas, compras, tu dinero — y
-                  facturar por tu máquina mientras tanto. Cuando esa función llegue, te avisamos.
+            {tieneRif === false && (
+              <div className="space-y-3 rounded-md border border-border bg-surface-muted/40 p-3">
+                <p className="text-[0.92rem]">
+                  Puedes usar todo Ladino desde hoy: vender con recibos, inventario, clientes,
+                  deudas, cuentas y gastos. Cuando tengas tu RIF, activas la facturación en minutos.
                 </p>
-              </div>
-            )}
-            {maquina === false && (vendeA === "personas" || vendeA === "mitad") && (
-              <div className="rounded-md border border-warning-soft-foreground/40 bg-warning-soft p-3 text-[0.9rem] text-warning-soft-foreground">
-                <p className="font-medium">Un aviso importante</p>
-                <p className="mt-1">
-                  Por tu tipo de negocio, es posible que la ley te exija máquina fiscal (art. 8, PA
-                  00071: ventas del año pasado sobre 1.500 UT, ventas mayormente a consumidor final
-                  y actividad listada — las tres a la vez; algunas actividades la exigen sin
-                  importar el ingreso). Confírmalo con tu contador — y si te aplica, avísanos:
-                  estamos preparando esa función.
+                <p className="text-[0.82rem] text-muted-foreground">
+                  Tus ventas saldrán como <span className="font-medium">recibos</span>, rotulados
+                  como documento no fiscal — sin RIF, la ley no permite emitir facturas. Sacar el
+                  RIF es un trámite digital en el portal del SENIAT (
+                  <a
+                    href="https://www.seniat.gob.ve"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  >
+                    seniat.gob.ve
+                  </a>
+                  ) y ya no caduca.
                 </p>
+                <Button
+                  variant="primary"
+                  disabled={asignar.isPending}
+                  onClick={() => asignar.mutate("sin_facturacion")}
+                >
+                  Vender con recibos desde hoy
+                </Button>
               </div>
-            )}
-            {maquina === false && formaLibre !== null && vendeA !== null && (
-              <p className="text-[0.78rem] text-faint-foreground">
-                Facturarás con formatos libres de imprenta autorizada · {formaLibre.legal_source}
-              </p>
             )}
 
-            <Button
-              variant="primary"
-              disabled={vendeA === null || maquina === null || asignar.isPending}
-              onClick={() => asignar.mutate(maquina === true ? "sin_emision" : "formatos_libres")}
-            >
-              {maquina === true ? "Entendido, sigo sin facturar desde Ladino" : "Así facturo"}
-            </Button>
+            {tieneRif === true && (
+              <div className={`space-y-4 ${hayDomicilio ? "" : "pointer-events-none opacity-50"}`}>
+                <div className="space-y-1.5">
+                  <p className="font-medium">¿A quién le vendes principalmente?</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(
+                      [
+                        ["negocios", "A negocios y empresas"],
+                        ["personas", "A personas"],
+                        ["mitad", "Mitad y mitad"],
+                      ] as const
+                    ).map(([clave, etiqueta]) => (
+                      <button
+                        key={clave}
+                        onClick={() => setVendeA(clave)}
+                        className={`rounded-full border px-3 py-1.5 text-[0.88rem] ${
+                          vendeA === clave
+                            ? "border-accent bg-accent-soft text-accent-soft-foreground"
+                            : "border-border bg-surface hover:border-accent"
+                        }`}
+                      >
+                        {etiqueta}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <p className="font-medium">¿Tienes máquina fiscal?</p>
+                  <div className="flex gap-1.5">
+                    {(
+                      [
+                        [false, "No"],
+                        [true, "Sí"],
+                      ] as const
+                    ).map(([valor, etiqueta]) => (
+                      <button
+                        key={etiqueta}
+                        onClick={() => setMaquina(valor)}
+                        className={`rounded-full border px-4 py-1.5 text-[0.88rem] ${
+                          maquina === valor
+                            ? "border-accent bg-accent-soft text-accent-soft-foreground"
+                            : "border-border bg-surface hover:border-accent"
+                        }`}
+                      >
+                        {etiqueta}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {maquina === true && (
+                  <div className="rounded-md border border-border bg-surface-muted/40 p-3 text-[0.9rem]">
+                    <p className="font-medium">Ladino todavía no imprime por máquina fiscal.</p>
+                    <p className="mt-1 text-muted-foreground">
+                      Puedes usar todo lo demás — inventario, clientes, cuentas, compras, tu dinero
+                      — y facturar por tu máquina mientras tanto. Cuando esa función llegue, te
+                      avisamos.
+                    </p>
+                  </div>
+                )}
+                {maquina === false && (vendeA === "personas" || vendeA === "mitad") && (
+                  <div className="rounded-md border border-warning-soft-foreground/40 bg-warning-soft p-3 text-[0.9rem] text-warning-soft-foreground">
+                    <p className="font-medium">Un aviso importante</p>
+                    <p className="mt-1">
+                      Por tu tipo de negocio, es posible que la ley te exija máquina fiscal (art. 8,
+                      PA 00071: ventas del año pasado sobre 1.500 UT, ventas mayormente a consumidor
+                      final y actividad listada — las tres a la vez; algunas actividades la exigen
+                      sin importar el ingreso). Confírmalo con tu contador — y si te aplica,
+                      avísanos: estamos preparando esa función.
+                    </p>
+                  </div>
+                )}
+                {maquina === false && formaLibre !== null && vendeA !== null && (
+                  <p className="text-[0.78rem] text-faint-foreground">
+                    Facturarás con formatos libres de imprenta autorizada ·{" "}
+                    {formaLibre.legal_source}
+                  </p>
+                )}
+
+                <Button
+                  variant="primary"
+                  disabled={vendeA === null || maquina === null || asignar.isPending}
+                  onClick={() =>
+                    asignar.mutate(maquina === true ? "sin_emision" : "formatos_libres")
+                  }
+                >
+                  {maquina === true ? "Entendido, sigo sin facturar desde Ladino" : "Así facturo"}
+                </Button>
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-1">
@@ -664,48 +734,68 @@ function PasoFacturas({
                 ajusta desde el mundo de administración.
               </p>
             )}
-          </div>
-        )}
-
-        {setup.current_regime !== null && setup.current_regime !== "sin_emision" && (
-          <div className="space-y-2 border-t border-border pt-4">
-            <h3 className="font-medium">El IVA que cobras</h3>
-            {setup.iva_general !== null ? (
-              <p className="flex items-center gap-2 text-[0.95rem]">
-                <Check className="size-4 text-success-soft-foreground" />
-                Quedó en {fraccionAPorcentaje(setup.iva_general.rate)}%, aceptado por ti.
-              </p>
-            ) : (
-              <>
-                <p className="text-[0.9rem] text-muted-foreground">
-                  El porcentaje lo fija la ley, no Ladino: escríbelo tú y confírmalo con tu
-                  contador. Al aceptar queda registrado con tu usuario y la fecha de hoy, y así
-                  aparecerá en la auditoría.
+            {setup.current_regime === "sin_facturacion" && (
+              <div className="space-y-2">
+                <p className="text-[0.85rem] text-muted-foreground">
+                  Vendes con recibos (documento no fiscal). Todo lo demás — inventario, clientes,
+                  deudas, cuentas, gastos — funciona completo.
                 </p>
-                <div className="flex flex-wrap items-end gap-2">
-                  <FormField label="Porcentaje (%)">
-                    {(p) => (
-                      <Input
-                        {...p}
-                        value={porcentaje}
-                        onChange={(e) => setPorcentaje(e.target.value)}
-                        inputMode="decimal"
-                        className="w-28"
-                      />
-                    )}
-                  </FormField>
-                  <Button
-                    variant="primary"
-                    disabled={aceptar.isPending || porcentajeAFraccion(porcentaje) === null}
-                    onClick={() => aceptar.mutate()}
-                  >
-                    Acepto este porcentaje
-                  </Button>
-                </div>
-              </>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setTieneRif(true);
+                    setActivandoFacturacion(true);
+                  }}
+                >
+                  Ya tengo RIF: activar facturación
+                </Button>
+              </div>
             )}
           </div>
         )}
+
+        {setup.current_regime !== null &&
+          setup.current_regime !== "sin_emision" &&
+          setup.current_regime !== "sin_facturacion" && (
+            <div className="space-y-2 border-t border-border pt-4">
+              <h3 className="font-medium">El IVA que cobras</h3>
+              {setup.iva_general !== null ? (
+                <p className="flex items-center gap-2 text-[0.95rem]">
+                  <Check className="size-4 text-success-soft-foreground" />
+                  Quedó en {fraccionAPorcentaje(setup.iva_general.rate)}%, aceptado por ti.
+                </p>
+              ) : (
+                <>
+                  <p className="text-[0.9rem] text-muted-foreground">
+                    El porcentaje lo fija la ley, no Ladino: escríbelo tú y confírmalo con tu
+                    contador. Al aceptar queda registrado con tu usuario y la fecha de hoy, y así
+                    aparecerá en la auditoría.
+                  </p>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <FormField label="Porcentaje (%)">
+                      {(p) => (
+                        <Input
+                          {...p}
+                          value={porcentaje}
+                          onChange={(e) => setPorcentaje(e.target.value)}
+                          inputMode="decimal"
+                          className="w-28"
+                        />
+                      )}
+                    </FormField>
+                    <Button
+                      variant="primary"
+                      disabled={aceptar.isPending || porcentajeAFraccion(porcentaje) === null}
+                      onClick={() => aceptar.mutate()}
+                    >
+                      Acepto este porcentaje
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
         {setup.current_regime === "formatos_libres" && setup.iva_general !== null && (
           <div className="space-y-2 border-t border-border pt-4">

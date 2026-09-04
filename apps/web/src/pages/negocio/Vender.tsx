@@ -68,7 +68,13 @@ interface FormaDePago {
   is_active: boolean;
 }
 interface Venta {
-  document: { id: string; series: string; document_number: number | null; status: string };
+  document: {
+    id: string;
+    kind: string;
+    series: string;
+    document_number: number | null;
+    status: string;
+  };
   payments: { payment: Record<string, string> }[];
   change: { amount: string; currency: string } | null;
   document_status: string;
@@ -115,6 +121,14 @@ export function Vender(): React.JSX.Element {
         default_warehouse_id: string | null;
       }>("/v1/company-settings"),
   });
+  const setupFiscal = useQuery({
+    queryKey: ["empezar-fiscal", empresa.id],
+    staleTime: 5 * 60_000,
+    queryFn: () => llamar<{ current_regime: string | null }>("/v1/fiscal/setup"),
+  });
+  // Modo recibos (migración 37): el POS es el MISMO; cambia el documento.
+  const modoRecibos = setupFiscal.data?.current_regime === "sin_facturacion";
+
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],
     staleTime: 5 * 60_000,
@@ -187,7 +201,12 @@ export function Vender(): React.JSX.Element {
     }
   }
 
-  const clienteResuelto = cliente !== null || sinIdentificar;
+  const clienteResuelto = modoRecibos || cliente !== null || sinIdentificar;
+
+  // En modo recibos no hay cédula que pedir primero: el foco va a la búsqueda.
+  useEffect(() => {
+    if (modoRecibos) buscarRef.current?.focus();
+  }, [modoRecibos]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -203,210 +222,224 @@ export function Vender(): React.JSX.Element {
   const items = productos.data?.items ?? [];
 
   return (
-    <div className="flex min-h-[calc(100vh-8rem)] gap-4">
-      {/* ── La cuadrícula ──────────────────────────────────────────────── */}
-      <div className="min-w-0 flex-1 space-y-3">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint-foreground" />
-          <Input
-            ref={buscarRef}
-            value={busqueda}
-            onChange={(e) => setBusqueda(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                onEnterBusqueda();
-              }
-            }}
-            placeholder="Busca o pasa el lector de código de barras…"
-            className="h-11 pl-9 text-[1rem]"
-            aria-label="Buscar productos para vender"
-          />
+    <div className="space-y-2">
+      {modoRecibos && (
+        <div className="flex items-center gap-2 rounded-md border border-border bg-surface-muted/50 px-3 py-1.5 text-[0.82rem] text-muted-foreground">
+          Estás vendiendo con recibos.{" "}
+          <a href="/empezar" className="text-accent-soft-foreground underline">
+            Con tu RIF puedes facturar →
+          </a>
         </div>
-        {productos.isLoading ? (
-          <p className="text-muted-foreground">Cargando…</p>
-        ) : items.length === 0 ? (
-          <p className="py-12 text-center text-muted-foreground">
-            {q === "" ? "No hay productos activos para vender." : "Nada con ese nombre o código."}
-          </p>
-        ) : (
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-4">
-            {items.map((p) => (
-              <TarjetaPos key={p.id} producto={p} onAgregar={() => agregar(p)} />
-            ))}
+      )}
+      <div className="flex min-h-[calc(100vh-8rem)] gap-4">
+        {/* ── La cuadrícula ──────────────────────────────────────────────── */}
+        <div className="min-w-0 flex-1 space-y-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint-foreground" />
+            <Input
+              ref={buscarRef}
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  onEnterBusqueda();
+                }
+              }}
+              placeholder="Busca o pasa el lector de código de barras…"
+              className="h-11 pl-9 text-[1rem]"
+              aria-label="Buscar productos para vender"
+            />
           </div>
+          {productos.isLoading ? (
+            <p className="text-muted-foreground">Cargando…</p>
+          ) : items.length === 0 ? (
+            <p className="py-12 text-center text-muted-foreground">
+              {q === "" ? "No hay productos activos para vender." : "Nada con ese nombre o código."}
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-4">
+              {items.map((p) => (
+                <TarjetaPos key={p.id} producto={p} onAgregar={() => agregar(p)} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── El carrito ─────────────────────────────────────────────────── */}
+        <aside className="flex w-96 shrink-0 flex-col rounded-lg border border-border bg-surface">
+          <IdentificarCliente
+            opcional={modoRecibos}
+            cliente={cliente}
+            sinIdentificar={sinIdentificar}
+            permiteSinIdentificar={ajustes.data?.allow_unidentified_sales ?? true}
+            onCliente={(c) => {
+              setCliente(c);
+              setSinIdentificar(false);
+              buscarRef.current?.focus();
+            }}
+            onSinIdentificar={() => {
+              setSinIdentificar(true);
+              setCliente(null);
+              buscarRef.current?.focus();
+            }}
+            onCambiar={() => {
+              setCliente(null);
+              setSinIdentificar(false);
+            }}
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto px-3">
+            {carrito.size === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center py-16 text-center text-muted-foreground">
+                <ShoppingCart className="size-8 text-faint-foreground" />
+                <p className="mt-2 text-[0.95rem]">Toca un producto para empezar</p>
+              </div>
+            ) : (
+              <ul className="divide-y divide-border">
+                {[...carrito.values()].map((l) => {
+                  const cot = cotizacion.data?.lines.find((x) => x.product_id === l.producto.id);
+                  return (
+                    <li key={l.producto.id} className="flex items-center gap-2 py-2.5">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[0.92rem] font-medium">{l.producto.name}</p>
+                        <p className="text-[0.8rem] text-muted-foreground tabular-nums">
+                          {cot
+                            ? `${mostrarImporte({ amount: cot.unit_price, currency: cotizacion.data!.currency })} c/u`
+                            : "…"}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="iconSm"
+                          aria-label={`Quitar uno de ${l.producto.name}`}
+                          onClick={() => cambiarQty(l.producto.id, -1)}
+                        >
+                          {l.qty === 1 ? <Trash2 /> : <Minus />}
+                        </Button>
+                        <span className="w-7 text-center text-[0.95rem] font-medium tabular-nums">
+                          {l.qty}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="iconSm"
+                          aria-label={`Agregar uno de ${l.producto.name}`}
+                          onClick={() => cambiarQty(l.producto.id, 1)}
+                        >
+                          <Plus />
+                        </Button>
+                      </div>
+                      <span className="w-20 text-right text-[0.92rem] font-medium tabular-nums">
+                        {cot
+                          ? mostrarImporte({
+                              amount: cot.total,
+                              currency: cotizacion.data!.currency,
+                            })
+                          : "…"}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+          <div className="space-y-2 border-t border-border p-3">
+            {cotizacion.data && carrito.size > 0 && (
+              <>
+                <div className="flex justify-between text-[0.88rem] text-muted-foreground">
+                  <span>Sin impuesto</span>
+                  <span className="tabular-nums">
+                    {mostrarImporte({
+                      amount: cotizacion.data.subtotal,
+                      currency: cotizacion.data.currency,
+                    })}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[0.88rem] text-muted-foreground">
+                  <span>IVA</span>
+                  <span className="tabular-nums">
+                    {mostrarImporte({
+                      amount: cotizacion.data.tax_amount,
+                      currency: cotizacion.data.currency,
+                    })}
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[1rem] font-semibold">Total</span>
+                  <span className="text-xl font-semibold tabular-nums">
+                    {mostrarImporte({
+                      amount: cotizacion.data.total,
+                      currency: cotizacion.data.currency,
+                    })}
+                  </span>
+                </div>
+                {cotizacion.data.currency !== cotizacion.data.functional_currency && (
+                  <p className="text-right text-[0.82rem] text-muted-foreground tabular-nums">
+                    ={" "}
+                    {mostrarImporte({
+                      amount: cotizacion.data.functional_total,
+                      currency: cotizacion.data.functional_currency,
+                    })}{" "}
+                    a la tasa de hoy ({mostrarCantidad(cotizacion.data.tasa)})
+                  </p>
+                )}
+              </>
+            )}
+            <Button
+              variant="primary"
+              size="lg"
+              className="h-12 w-full text-[1.05rem]"
+              disabled={
+                carrito.size === 0 || !cotizacion.data || deposito === null || !clienteResuelto
+              }
+              onClick={() => setCobrando(true)}
+            >
+              Cobrar {carrito.size > 0 && clienteResuelto ? "· F2" : ""}
+            </Button>
+            {carrito.size > 0 && !clienteResuelto && (
+              <p className="text-center text-[0.8rem] text-warning-soft-foreground">
+                Primero di quién compra: la cédula arriba, o «Venta sin identificar».
+              </p>
+            )}
+            {deposito === null && (
+              <p className="text-center text-[0.8rem] text-warning-soft-foreground">
+                Falta un depósito para descontar la mercancía. Configúralo en Empezar.
+              </p>
+            )}
+          </div>
+        </aside>
+
+        {cobrando && cotizacion.data && deposito !== null && (
+          <Cobrar
+            cotizacion={cotizacion.data}
+            lineas={lineas}
+            clienteId={cliente?.id ?? null}
+            deposito={deposito}
+            onCerrar={() => setCobrando(false)}
+            onVendida={(v) => {
+              setCobrando(false);
+              setVenta(v);
+              setCarrito(new Map());
+              setCliente(null);
+              setSinIdentificar(false);
+            }}
+          />
+        )}
+        {venta !== null && (
+          <VentaLista
+            venta={venta}
+            onNueva={() => {
+              setVenta(null);
+              // La venta nueva empieza como todas: por la cédula. El foco se
+              // difiere: al cerrarse, el diálogo restaura el foco al elemento
+              // anterior y pisaría este si se pusiera en el mismo tick.
+              requestAnimationFrame(() =>
+                setTimeout(() => document.getElementById("pos-cedula")?.focus(), 0),
+              );
+            }}
+          />
         )}
       </div>
-
-      {/* ── El carrito ─────────────────────────────────────────────────── */}
-      <aside className="flex w-96 shrink-0 flex-col rounded-lg border border-border bg-surface">
-        <IdentificarCliente
-          cliente={cliente}
-          sinIdentificar={sinIdentificar}
-          permiteSinIdentificar={ajustes.data?.allow_unidentified_sales ?? true}
-          onCliente={(c) => {
-            setCliente(c);
-            setSinIdentificar(false);
-            buscarRef.current?.focus();
-          }}
-          onSinIdentificar={() => {
-            setSinIdentificar(true);
-            setCliente(null);
-            buscarRef.current?.focus();
-          }}
-          onCambiar={() => {
-            setCliente(null);
-            setSinIdentificar(false);
-          }}
-        />
-        <div className="min-h-0 flex-1 overflow-y-auto px-3">
-          {carrito.size === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center py-16 text-center text-muted-foreground">
-              <ShoppingCart className="size-8 text-faint-foreground" />
-              <p className="mt-2 text-[0.95rem]">Toca un producto para empezar</p>
-            </div>
-          ) : (
-            <ul className="divide-y divide-border">
-              {[...carrito.values()].map((l) => {
-                const cot = cotizacion.data?.lines.find((x) => x.product_id === l.producto.id);
-                return (
-                  <li key={l.producto.id} className="flex items-center gap-2 py-2.5">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[0.92rem] font-medium">{l.producto.name}</p>
-                      <p className="text-[0.8rem] text-muted-foreground tabular-nums">
-                        {cot
-                          ? `${mostrarImporte({ amount: cot.unit_price, currency: cotizacion.data!.currency })} c/u`
-                          : "…"}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="iconSm"
-                        aria-label={`Quitar uno de ${l.producto.name}`}
-                        onClick={() => cambiarQty(l.producto.id, -1)}
-                      >
-                        {l.qty === 1 ? <Trash2 /> : <Minus />}
-                      </Button>
-                      <span className="w-7 text-center text-[0.95rem] font-medium tabular-nums">
-                        {l.qty}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="iconSm"
-                        aria-label={`Agregar uno de ${l.producto.name}`}
-                        onClick={() => cambiarQty(l.producto.id, 1)}
-                      >
-                        <Plus />
-                      </Button>
-                    </div>
-                    <span className="w-20 text-right text-[0.92rem] font-medium tabular-nums">
-                      {cot
-                        ? mostrarImporte({ amount: cot.total, currency: cotizacion.data!.currency })
-                        : "…"}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-        <div className="space-y-2 border-t border-border p-3">
-          {cotizacion.data && carrito.size > 0 && (
-            <>
-              <div className="flex justify-between text-[0.88rem] text-muted-foreground">
-                <span>Sin impuesto</span>
-                <span className="tabular-nums">
-                  {mostrarImporte({
-                    amount: cotizacion.data.subtotal,
-                    currency: cotizacion.data.currency,
-                  })}
-                </span>
-              </div>
-              <div className="flex justify-between text-[0.88rem] text-muted-foreground">
-                <span>IVA</span>
-                <span className="tabular-nums">
-                  {mostrarImporte({
-                    amount: cotizacion.data.tax_amount,
-                    currency: cotizacion.data.currency,
-                  })}
-                </span>
-              </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-[1rem] font-semibold">Total</span>
-                <span className="text-xl font-semibold tabular-nums">
-                  {mostrarImporte({
-                    amount: cotizacion.data.total,
-                    currency: cotizacion.data.currency,
-                  })}
-                </span>
-              </div>
-              {cotizacion.data.currency !== cotizacion.data.functional_currency && (
-                <p className="text-right text-[0.82rem] text-muted-foreground tabular-nums">
-                  ={" "}
-                  {mostrarImporte({
-                    amount: cotizacion.data.functional_total,
-                    currency: cotizacion.data.functional_currency,
-                  })}{" "}
-                  a la tasa de hoy ({mostrarCantidad(cotizacion.data.tasa)})
-                </p>
-              )}
-            </>
-          )}
-          <Button
-            variant="primary"
-            size="lg"
-            className="h-12 w-full text-[1.05rem]"
-            disabled={
-              carrito.size === 0 || !cotizacion.data || deposito === null || !clienteResuelto
-            }
-            onClick={() => setCobrando(true)}
-          >
-            Cobrar {carrito.size > 0 && clienteResuelto ? "· F2" : ""}
-          </Button>
-          {carrito.size > 0 && !clienteResuelto && (
-            <p className="text-center text-[0.8rem] text-warning-soft-foreground">
-              Primero di quién compra: la cédula arriba, o «Venta sin identificar».
-            </p>
-          )}
-          {deposito === null && (
-            <p className="text-center text-[0.8rem] text-warning-soft-foreground">
-              Falta un depósito para descontar la mercancía. Configúralo en Empezar.
-            </p>
-          )}
-        </div>
-      </aside>
-
-      {cobrando && cotizacion.data && deposito !== null && (
-        <Cobrar
-          cotizacion={cotizacion.data}
-          lineas={lineas}
-          clienteId={cliente?.id ?? null}
-          deposito={deposito}
-          onCerrar={() => setCobrando(false)}
-          onVendida={(v) => {
-            setCobrando(false);
-            setVenta(v);
-            setCarrito(new Map());
-            setCliente(null);
-            setSinIdentificar(false);
-          }}
-        />
-      )}
-      {venta !== null && (
-        <VentaLista
-          venta={venta}
-          onNueva={() => {
-            setVenta(null);
-            // La venta nueva empieza como todas: por la cédula. El foco se
-            // difiere: al cerrarse, el diálogo restaura el foco al elemento
-            // anterior y pisaría este si se pusiera en el mismo tick.
-            requestAnimationFrame(() =>
-              setTimeout(() => document.getElementById("pos-cedula")?.focus(), 0),
-            );
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -474,6 +507,7 @@ function tipoDePrefijo(prefijo: string): { persona: string; contribuyente: strin
  * pide dirección: una factura a una empresa lleva domicilio fiscal.
  */
 function IdentificarCliente({
+  opcional = false,
   cliente,
   sinIdentificar,
   permiteSinIdentificar,
@@ -481,6 +515,8 @@ function IdentificarCliente({
   onSinIdentificar,
   onCambiar,
 }: {
+  /** Modo recibos: identificar sirve para fiar, no lo exige la ley (13.7 es de facturas). */
+  opcional?: boolean;
   cliente: ClienteFila | null;
   sinIdentificar: boolean;
   permiteSinIdentificar: boolean;
@@ -493,6 +529,8 @@ function IdentificarCliente({
   const [prefijo, setPrefijo] = useState<string | null>("V");
   const [digitos, setDigitos] = useState("");
   const [nuevo, setNuevo] = useState(false);
+  // En modo recibos el campo arranca plegado: identificar es opcional.
+  const [mostrarCampo, setMostrarCampo] = useState(!opcional);
   const [nombre, setNombre] = useState("");
   const [telefono, setTelefono] = useState("");
   const [direccion, setDireccion] = useState("");
@@ -593,6 +631,20 @@ function IdentificarCliente({
             Cambiar
           </button>
         </div>
+      </div>
+    );
+  }
+
+  // Modo recibos, plegado: identificar sirve para fiar, no lo exige la ley.
+  if (!mostrarCampo) {
+    return (
+      <div className="border-b border-border px-3 py-2">
+        <button
+          className="text-[0.85rem] text-muted-foreground hover:text-foreground hover:underline"
+          onClick={() => setMostrarCampo(true)}
+        >
+          <User className="mr-1 inline size-3.5" /> Poner cliente (opcional)
+        </button>
       </div>
     );
   }
@@ -1018,6 +1070,7 @@ function PagoFila({
 function VentaLista({ venta, onNueva }: { venta: Venta; onNueva: () => void }): React.JSX.Element {
   const { empresa } = useSesion();
   const toast = useToast();
+  const esRecibo = venta.document.kind === "receipt";
   const numero = `${venta.document.series}-${String(venta.document.document_number ?? "").padStart(8, "0")}`;
 
   async function abrirPdf(): Promise<void> {
@@ -1036,15 +1089,19 @@ function VentaLista({ venta, onNueva }: { venta: Venta; onNueva: () => void }): 
   }
 
   const textoWhatsApp = encodeURIComponent(
-    `Tu compra en ${empresa.legal_name}: factura ${numero}. ¡Gracias!`,
+    `Tu compra en ${empresa.legal_name}: ${venta.document.kind === "receipt" ? "recibo" : "factura"} ${numero}. ¡Gracias!`,
   );
 
   return (
     <Dialog open onOpenChange={(v) => !v && onNueva()}>
       <DialogContent className="max-w-sm text-center">
-        <DialogTitle className="text-center">¡Venta lista!</DialogTitle>
+        <DialogTitle className="text-center">
+          {esRecibo ? "Venta registrada" : "¡Venta lista!"}
+        </DialogTitle>
         <div className="space-y-3 pt-2">
-          <p className="text-[0.95rem] text-muted-foreground">Factura {numero}</p>
+          <p className="text-[0.95rem] text-muted-foreground">
+            {esRecibo ? "Recibo" : "Factura"} {numero}
+          </p>
           {venta.change !== null && (
             <div className="rounded-lg bg-success-soft p-4">
               <p className="text-[0.85rem] text-success-soft-foreground">Vuelto</p>
