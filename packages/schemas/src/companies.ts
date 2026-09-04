@@ -29,10 +29,18 @@ export const CompanyResponse = z
     legal_name: z.string(),
     trade_name: z.string().nullable(),
     tax_id: z.string(),
+    /** Domicilio fiscal del emisor (PA 00071 art. 13.5). NULL hasta que lo cargue. */
+    fiscal_address: z.string().nullable(),
     status: z.enum(["onboarding", "active", "suspended"]),
     created_at: z.string().datetime({ offset: true }),
   })
   .strict();
+
+/** Cargar o corregir el domicilio fiscal del emisor (migración 34). */
+export const SetCompanyFiscalAddressRequest = z
+  .object({ fiscal_address: z.string().trim().min(5).max(500) })
+  .strict();
+export type SetCompanyFiscalAddressRequest = z.infer<typeof SetCompanyFiscalAddressRequest>;
 
 export type CompanyResponse = z.infer<typeof CompanyResponse>;
 

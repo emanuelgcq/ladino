@@ -7,9 +7,10 @@ insert into public.tenants (id, name) values
 on conflict (id) do nothing;
 
 insert into public.companies (id, tenant_id, tax_id, legal_name, trade_name,
-                              functional_currency_code, taxpayer_type_code) values
+                              functional_currency_code, taxpayer_type_code, fiscal_address) values
   ('deade001-0000-4000-8000-0000000000c0', 'deade001-0000-4000-8000-000000000001',
-   'J-31415926-5', 'Distribuidora El Ávila, C.A.', 'El Ávila', 'VES', 'ordinario')
+   'J-31415926-5', 'Distribuidora El Ávila, C.A.', 'El Ávila', 'VES', 'ordinario',
+   'Av. Francisco de Miranda, local PB-3, Chacao, Caracas (dato de demostración)')
 on conflict (id) do nothing;
 
 insert into public.warehouses (id, tenant_id, company_id, code, name) values
@@ -42,7 +43,7 @@ select 'deade001-0000-4000-8000-00000000ee01', k from (values
   ('expense.register'), ('expense.read'), ('cash.close'),
   ('company.settings.manage'),
   -- El asistente de /empezar: asignar régimen y aceptar la alícuota general.
-  ('fiscal.regime.manage'), ('tax.rules.manage')
+  ('fiscal.regime.manage'), ('tax.rules.manage'), ('fiscal.contingency.manage')
 ) as t(k)
 on conflict do nothing;
 

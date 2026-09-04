@@ -4,6 +4,7 @@ export {
   CreateCompanyRequest,
   CompanyResponse,
   ListCompaniesResponse,
+  SetCompanyFiscalAddressRequest,
   ErrorResponse,
 } from "./companies.js";
 export {
@@ -91,6 +92,10 @@ export {
   CreateFiscalRangeRequest,
   FiscalRangeResponse,
   CreateExchangeRateRequest,
+  RegisterContingencyRangeRequest,
+  ContingencyRangeResponse,
+  RegisterContingencyInvoiceRequest,
+  CloseContingencyRequest,
   FiscalSetupResponse,
   AssignFiscalRegimeRequest,
   AcceptIvaGeneralRequest,

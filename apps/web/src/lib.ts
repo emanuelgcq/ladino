@@ -55,6 +55,8 @@ export interface Company {
   legal_name: string;
   trade_name: string | null;
   tax_id: string;
+  /** Domicilio fiscal del emisor (PA 00071 art. 13.5). NULL hasta cargarlo en /empezar. */
+  fiscal_address: string | null;
   status: string;
   created_at: string;
 }

@@ -2,6 +2,7 @@ import { err, ok, type Result } from "@ladino/core";
 import type { UnitOfWork } from "@ladino/db";
 import type { CreateCompanyRequest, CompanyResponse } from "@ladino/schemas";
 import { tenantVisible } from "./tenant-visibility.js";
+import { companyScope, type CompanyScopeError } from "./company-scope.js";
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -253,7 +254,52 @@ export async function createCompany(
     legal_name: fila.legal_name,
     trade_name: fila.trade_name,
     tax_id: fila.tax_id,
+    // Una empresa nace sin domicilio fiscal: /empezar lo pide (migración 34).
+    fiscal_address: null,
     status: fila.status,
     created_at: fila.created_at,
   });
+}
+
+export type SetFiscalAddressError =
+  CompanyScopeError | { code: "VALIDATION_FAILED"; message: string };
+
+/**
+ * Cargar o corregir el DOMICILIO FISCAL del emisor (PA 00071 art. 13.5,
+ * migración 34). Es un dato del maestro, no un ajuste de experiencia: queda
+ * auditado con el valor anterior, y los documentos NO cambian — cada uno
+ * congeló el domicilio vigente el día que nació (R-05, lado emisor).
+ */
+export async function setCompanyFiscalAddress(
+  uow: UnitOfWork,
+  companyId: string,
+  fiscalAddress: string,
+): Promise<Result<{ fiscal_address: string }, SetFiscalAddressError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "Cambiar el domicilio exige un usuario real.",
+    });
+  }
+  const scope = await companyScope(sql, actor.userId, companyId, "company.settings.manage");
+  if (!scope.ok) return scope;
+  if (scope.value.companyStatus === "suspended") {
+    return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
+  }
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  const [anterior] = await sql<{ fiscal_address: string | null }[]>`
+    select fiscal_address from public.companies where id = ${companyId}`;
+  const [fila] = await sql<{ fiscal_address: string }[]>`
+    update public.companies set fiscal_address = ${fiscalAddress}
+     where id = ${companyId}
+    returning fiscal_address`;
+  await sql`
+    insert into public.audit_events
+      (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+       actor_type, occurred_at, rules_version, payload)
+    values (${scope.value.tenantId}, ${companyId}, 'company', ${companyId},
+            'company.fiscal_address_set', 'user', now(), ${RULES_VERSION},
+            ${sql.json({ from: anterior?.fiscal_address ?? null, to: fiscalAddress })})`;
+  return ok(fila!);
 }

@@ -1,7 +1,7 @@
 import type { Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql } from "@ladino/db";
-import { CreateCompanyRequest } from "@ladino/schemas";
-import { createCompany } from "@ladino/domain";
+import { CreateCompanyRequest, SetCompanyFiscalAddressRequest } from "@ladino/schemas";
+import { createCompany, setCompanyFiscalAddress } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { CTX } from "../middleware/context.js";
 
@@ -38,7 +38,7 @@ export function companiesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
       sql,
       actor,
       ({ sql: tx }) => tx`
-        select id, tenant_id, legal_name, trade_name, tax_id, status,
+        select id, tenant_id, legal_name, trade_name, tax_id, fiscal_address, status,
                to_char(created_at at time zone 'utc',
                        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at
           from public.companies
@@ -46,6 +46,30 @@ export function companiesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
          order by legal_name, id`,
     );
     return c.json(filas, 200);
+  });
+
+  /**
+   * El domicilio fiscal del emisor (PA 00071 art. 13.5, migración 34). Los
+   * documentos ya emitidos NO cambian: cada uno congeló el domicilio vigente
+   * el día que nació. /empezar lo pide antes de elegir cómo facturar.
+   */
+  app.put("/v1/companies/fiscal-address", idempotencia, async (c) => {
+    const ctx = c.get(CTX);
+    if (ctx.companyId === null) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Esta operación exige el header X-Company-Id.",
+      });
+    }
+    const companyId = ctx.companyId;
+    const parsed = SetCompanyFiscalAddressRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      setCompanyFiscalAddress(uow, companyId, parsed.data.fiscal_address),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
   });
 
   // La idempotencia se monta POR RUTA Y MÉTODO, no por path con app.use (H-6):

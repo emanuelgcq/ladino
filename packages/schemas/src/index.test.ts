@@ -42,6 +42,8 @@ describe("@ladino/schemas — contratos de companies", () => {
       legal_name: "Empresa C.A.",
       trade_name: null,
       tax_id: "J-1",
+      // Migración 34: el domicilio existe siempre en la respuesta, NULL hasta cargarlo.
+      fiscal_address: null,
       status: "onboarding" as const,
     };
     expect(

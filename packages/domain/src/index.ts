@@ -6,7 +6,13 @@
  * commitea, no conoce HTTP. El patrón de diez pasos, con su plantilla de
  * referencia, está en create-company.ts.
  */
-export { createCompany, RULES_VERSION, type CreateCompanyError } from "./create-company.js";
+export {
+  createCompany,
+  setCompanyFiscalAddress,
+  RULES_VERSION,
+  type CreateCompanyError,
+  type SetFiscalAddressError,
+} from "./create-company.js";
 export { tenantVisible } from "./tenant-visibility.js";
 export { companyScope, type CompanyScopeError } from "./company-scope.js";
 export {
@@ -50,6 +56,12 @@ export {
   quickSale,
   type SalesError,
 } from "./sales.js";
+export {
+  registerContingencyRange,
+  registerContingencyInvoice,
+  closeContingency,
+  type ContingencyError,
+} from "./contingency.js";
 export {
   createSupplier,
   createPurchaseOrder,

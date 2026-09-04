@@ -471,13 +471,31 @@ async function insertarDocumento(
      where id = ${d.customerId} and company_id = ${d.companyId}`;
   if (!contraparte) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
 
+  // Y el EMISOR igual (PA 00071 art. 13.5, migración 34): razón social, RIF
+  // normalizado y domicilio fiscal — más el de la sucursal, si el documento
+  // tiene una. El domicilio puede ser NULL (la empresa aún no lo cargó): el
+  // PDF lo omite honesto; inventarlo aquí sería peor.
+  const [emisor] = await sql<{ name: string; tax_id: string; address: string | null }[]>`
+    select legal_name as name,
+           upper(regexp_replace(tax_id, '[^a-zA-Z0-9]', '', 'g')) as tax_id,
+           fiscal_address as address
+      from public.companies where id = ${d.companyId}`;
+  const [sucursal] =
+    d.branchId === null
+      ? [undefined]
+      : await sql<{ address: string | null }[]>`
+          select fiscal_address as address from public.branches
+           where id = ${d.branchId} and company_id = ${d.companyId}`;
+
   const [doc] = await sql<DocumentResponse[]>`
     insert into public.documents
       (tenant_id, company_id, branch_id, kind, series, customer_id, vendor_id, price_list_id,
        source_document_id, transaction_currency, functional_currency, fx_rate, rate_source,
        rate_timestamp, rounding_policy_id, amount_transaction_currency, functional_amount,
        subtotal_amount, tax_amount, total_amount, notes,
-       customer_name_snapshot, customer_tax_id_snapshot, customer_address_snapshot)
+       customer_name_snapshot, customer_tax_id_snapshot, customer_address_snapshot,
+       issuer_name_snapshot, issuer_tax_id_snapshot, issuer_address_snapshot,
+       issuer_branch_address_snapshot)
     values (${ctx.tenantId}, ${d.companyId}, ${d.branchId}, ${d.kind}, ${d.series},
             ${d.customerId}, ${d.vendorId}, ${d.priceListId === "" ? null : d.priceListId},
             ${d.sourceDocumentId},
@@ -485,7 +503,9 @@ async function insertarDocumento(
             ${d.rateSource}, now(),
             ${DOC_POLICY.id}, ${totales.value.total.toAmountString()}, ${totFunc.toFixed(8)},
             ${subFunc.toFixed(8)}, ${taxFunc.toFixed(8)}, ${totFunc.toFixed(8)}, ${d.notes},
-            ${contraparte.name}, ${contraparte.tax_id}, ${contraparte.address})
+            ${contraparte.name}, ${contraparte.tax_id}, ${contraparte.address},
+            ${emisor!.name}, ${emisor!.tax_id}, ${emisor!.address},
+            ${sucursal?.address ?? null})
     returning ${sql.unsafe(DOC_COLUMNS)}`;
 
   let n = 0;
