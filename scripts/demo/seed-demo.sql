@@ -115,13 +115,26 @@ insert into public.products (id, tenant_id, company_id, sku, name, kind, status,
    'unidad', 'exento')
 on conflict (id) do nothing;
 
--- Listas de precios: PVP en Bs y Mayorista en USD.
+-- Listas de precios. LA DECISIÓN GRABADA del proyecto: precios de lista en
+-- USD; la factura sale en Bs con la tasa BCV del día. La caja usa «Detal USD»
+-- (predeterminada vía company_settings, abajo); «PVP Bolívares» se queda solo
+-- para ilustrar el caso de lista nativa en Bs — la que hay que remarcar a
+-- mano cuando la tasa se mueve.
 insert into public.price_lists (id, tenant_id, company_id, name, currency_code) values
   ('deade001-0000-4000-8000-0000000000e1', 'deade001-0000-4000-8000-000000000001',
    'deade001-0000-4000-8000-0000000000c0', 'PVP Bolívares', 'VES'),
   ('deade001-0000-4000-8000-0000000000e2', 'deade001-0000-4000-8000-000000000001',
-   'deade001-0000-4000-8000-0000000000c0', 'Mayorista USD', 'USD')
+   'deade001-0000-4000-8000-0000000000c0', 'Mayorista USD', 'USD'),
+  ('deade001-0000-4000-8000-0000000000e3', 'deade001-0000-4000-8000-000000000001',
+   'deade001-0000-4000-8000-0000000000c0', 'Detal USD', 'USD')
 on conflict (id) do nothing;
+
+insert into public.company_settings (company_id, tenant_id, default_price_list_id)
+values ('deade001-0000-4000-8000-0000000000c0', 'deade001-0000-4000-8000-000000000001',
+        'deade001-0000-4000-8000-0000000000e3')
+on conflict (company_id) do update set
+  default_price_list_id = coalesce(public.company_settings.default_price_list_id,
+                                   excluded.default_price_list_id);
 
 insert into public.price_list_items (tenant_id, company_id, price_list_id, product_id, amount, effective_from)
 select 'deade001-0000-4000-8000-000000000001', 'deade001-0000-4000-8000-0000000000c0',
@@ -138,7 +151,13 @@ select 'deade001-0000-4000-8000-000000000001', 'deade001-0000-4000-8000-00000000
     ('deade001-0000-4000-8000-0000000000e2', 'deade001-0000-4000-8000-0000000000d3', '0.55000000'),
     ('deade001-0000-4000-8000-0000000000e2', 'deade001-0000-4000-8000-0000000000d4', '0.65000000'),
     ('deade001-0000-4000-8000-0000000000e2', 'deade001-0000-4000-8000-0000000000d5', '1.25000000'),
-    ('deade001-0000-4000-8000-0000000000e2', 'deade001-0000-4000-8000-0000000000d6', '0.50000000')
+    ('deade001-0000-4000-8000-0000000000e2', 'deade001-0000-4000-8000-0000000000d6', '0.50000000'),
+    ('deade001-0000-4000-8000-0000000000e3', 'deade001-0000-4000-8000-0000000000d1', '0.75000000'),
+    ('deade001-0000-4000-8000-0000000000e3', 'deade001-0000-4000-8000-0000000000d2', '1.40000000'),
+    ('deade001-0000-4000-8000-0000000000e3', 'deade001-0000-4000-8000-0000000000d3', '0.55000000'),
+    ('deade001-0000-4000-8000-0000000000e3', 'deade001-0000-4000-8000-0000000000d4', '0.65000000'),
+    ('deade001-0000-4000-8000-0000000000e3', 'deade001-0000-4000-8000-0000000000d5', '1.25000000'),
+    ('deade001-0000-4000-8000-0000000000e3', 'deade001-0000-4000-8000-0000000000d6', '0.50000000')
   ) as t(l, p, a)
  where not exists (select 1 from public.price_list_items i
                     where i.price_list_id = t.l and i.product_id = t.p);

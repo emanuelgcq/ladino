@@ -746,6 +746,14 @@
                 "type": "string",
                 "nullable": true,
                 "format": "date-time"
+              },
+              "equivalent_amount": {
+                "type": "string",
+                "nullable": true
+              },
+              "equivalent_currency": {
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [
@@ -790,6 +798,14 @@
                 "type": "string",
                 "nullable": true,
                 "format": "date-time"
+              },
+              "equivalent_amount": {
+                "type": "string",
+                "nullable": true
+              },
+              "equivalent_currency": {
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [
@@ -1006,6 +1022,9 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "is_caja_default": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -1081,6 +1100,14 @@
             "type": "string",
             "nullable": true,
             "format": "date-time"
+          },
+          "equivalent_amount": {
+            "type": "string",
+            "nullable": true
+          },
+          "equivalent_currency": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -4725,6 +4752,11 @@
             "type": "string",
             "nullable": true,
             "format": "uuid"
+          },
+          "default_price_list_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
           }
         },
         "required": [
@@ -4732,7 +4764,8 @@
           "block_sale_without_stock",
           "allow_unidentified_sales",
           "default_tax_category_code",
-          "default_warehouse_id"
+          "default_warehouse_id",
+          "default_price_list_id"
         ],
         "additionalProperties": false
       },
@@ -4747,6 +4780,11 @@
           },
           "allow_unidentified_sales": {
             "type": "boolean"
+          },
+          "default_price_list_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
           },
           "default_tax_category_code": {
             "type": "string",
@@ -12280,7 +12318,7 @@
     "/v1/price-lists/{id}/prices": {
       "get": {
         "summary": "Historial de precios; con `at` y `product_id`, el vigente A ESA FECHA",
-        "description": "La fecha es parámetro, nunca el reloj del servidor (ADR-0032): un documento de ayer se recalcula con el precio de ayer.",
+        "description": "La fecha es parámetro, nunca el reloj del servidor (ADR-0032): un documento de ayer se recalcula con el precio de ayer. Cada fila trae además su EQUIVALENTE en la otra moneda, calculado por el SERVIDOR con la tasa BCV de HOY (`rate` dice cuál, con fuente y fecha) — es referencia, no dato del precio: la tasa se ancla al documento, no al precio, así que las filas históricas también convierten a la de hoy. Sin tasa vigente, `rate` y los equivalentes vienen null.",
         "security": [
           {
             "bearerAuth": []
@@ -12326,7 +12364,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Historial (y el vigente si se pidió).",
+            "description": "Historial (y el vigente si se pidió), con la tasa de referencia.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12353,11 +12391,32 @@
                         "amount",
                         "currency"
                       ]
+                    },
+                    "rate": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "rate": {
+                          "type": "string"
+                        },
+                        "rate_date": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "rate",
+                        "rate_date",
+                        "source"
+                      ]
                     }
                   },
                   "required": [
                     "items",
-                    "vigente"
+                    "vigente",
+                    "rate"
                   ]
                 }
               }

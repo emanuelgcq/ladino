@@ -361,19 +361,23 @@ async function resolverLista(
     });
   }
 
-  // Sin lista preferida, la del mostrador es la «detal» de la empresa,
-  // resuelta por el SERVIDOR — para el Consumidor final (que está congelado y
-  // no puede tenerla) y también para el cliente recién creado con su cédula
-  // en el POS: el cajero no elige lista, así que no hay atribución que
-  // vigilar. Pedir otra distinta sí sigue exigiendo el override.
+  // Sin lista preferida, la del mostrador la decide el DUEÑO
+  // (company_settings.default_price_list_id, migración 36) — para el
+  // Consumidor final (congelado, no puede tener preferida) y para el cliente
+  // recién creado con su cédula en el POS: el cajero no elige lista, así que
+  // no hay atribución que vigilar. Sin el dato, la heurística de siempre
+  // («detal» por nombre, o la más vieja). Pedir otra distinta sigue
+  // exigiendo el override.
   const defaultEfectiva =
     cliente.default_price_list_id !== null && !cliente.is_system
       ? cliente.default_price_list_id
       : ((
           await sql<{ id: string }[]>`
-            select id from public.price_lists
-             where company_id = ${companyId} and status = 'active'
-             order by (name = 'detal') desc, (name like 'detal%') desc, created_at
+            select l.id from public.price_lists l
+             where l.company_id = ${companyId} and l.status = 'active'
+             order by (l.id = (select cs.default_price_list_id from public.company_settings cs
+                                where cs.company_id = ${companyId})) desc,
+                      (l.name = 'detal') desc, (l.name like 'detal%') desc, l.created_at
              limit 1`
         )[0]?.id ?? null);
 

@@ -247,6 +247,17 @@ describe("ventas de extremo a extremo", () => {
     const cuerpo = (await r.json()) as { code: string; message: string };
     expect(cuerpo.code).toBe("EXCHANGE_RATE_MISSING");
     expect(cuerpo.message).toMatch(/tasa/i);
+
+    // Y el historial de precios, SIN tasa, dice «sin tasa»: rate null y
+    // equivalentes null — nunca un cero que parezca precio.
+    const precios = await pedir("GET", `/v1/price-lists/${LISTA_USD}/prices`, VENDEDOR);
+    expect(precios.status).toBe(200);
+    const historial = (await precios.json()) as {
+      rate: unknown;
+      items: { equivalent_amount: string | null }[];
+    };
+    expect(historial.rate).toBeNull();
+    for (const item of historial.items) expect(item.equivalent_amount).toBeNull();
   });
 
   it("con tasa pero sin regla tributaria NO se cotiza: LAD50, nunca un IVA de cero", async () => {
@@ -671,6 +682,83 @@ describe("ventas de extremo a extremo", () => {
     const [despues] = await sql<{ n: number }[]>`
       select count(*)::int as n from public.documents where company_id = ${COMPANY}`;
     expect(despues!.n).toBe(antes!.n);
+  });
+
+  it("el historial de precios trae el equivalente EN LA OTRA MONEDA, del servidor y con la tasa citada", async () => {
+    // La tasa de HOY es 45 (la dejó el test del diferencial). USD → ×45; VES → ÷45.
+    const usd = (await (
+      await pedir("GET", `/v1/price-lists/${LISTA_USD}/prices?product_id=${PROD}`, VENDEDOR)
+    ).json()) as {
+      rate: { rate: string; source: string; rate_date: string } | null;
+      items: {
+        amount: string;
+        equivalent_amount: string | null;
+        equivalent_currency: string | null;
+      }[];
+    };
+    expect(usd.rate).not.toBeNull();
+    expect(usd.rate!.rate).toBe("45.00000000");
+    expect(usd.items[0]!.amount).toBe("100.00000000");
+    expect(usd.items[0]!.equivalent_amount).toBe("4500.00000000");
+    expect(usd.items[0]!.equivalent_currency).toBe("VES");
+
+    const ves = (await (
+      await pedir("GET", `/v1/price-lists/${LISTA_VES}/prices?product_id=${PROD}`, VENDEDOR)
+    ).json()) as {
+      items: {
+        amount: string;
+        equivalent_amount: string | null;
+        equivalent_currency: string | null;
+      }[];
+    };
+    expect(ves.items[0]!.amount).toBe("4000.00000000");
+    // 4000 / 45 en numeric(…,8): división del SERVIDOR, jamás del cliente.
+    expect(ves.items[0]!.equivalent_amount).toBe("88.88888889");
+    expect(ves.items[0]!.equivalent_currency).toBe("USD");
+  });
+
+  it("«Hacer predeterminada» cambia lo que la caja aplica a un cliente sin preferida", async () => {
+    // El listado marca la default EFECTIVA (hoy, la heurística: LISTA_DETAL
+    // se llama «detal…»).
+    const antes = (await (await pedir("GET", "/v1/price-lists", VENDEDOR)).json()) as {
+      id: string;
+      is_caja_default: boolean;
+    }[];
+    expect(antes.find((l) => l.is_caja_default)?.id).toBe(LISTA_DETAL);
+
+    // El dueño apunta la caja a la lista VES (permiso company.settings.manage).
+    const cambio = await pedir("PUT", "/v1/company-settings", VENDEDOR, {
+      default_price_list_id: LISTA_VES,
+    });
+    expect(cambio.status).toBe(200);
+
+    const marcada = (await (await pedir("GET", "/v1/price-lists", VENDEDOR)).json()) as {
+      id: string;
+      is_caja_default: boolean;
+    }[];
+    expect(marcada.find((l) => l.is_caja_default)?.id).toBe(LISTA_VES);
+
+    // Y la COTIZACIÓN de mostrador (sin cliente) ahora usa esa lista: 4000 VES + 16%.
+    const q = (await (
+      await pedir("POST", "/v1/pos/quote", VENDEDOR, {
+        company_id: COMPANY,
+        lines: [{ product_id: PROD, quantity: "1" }],
+      })
+    ).json()) as { price_list_id: string; currency: string; total: string };
+    expect(q.price_list_id).toBe(LISTA_VES);
+    expect(q.currency).toBe("VES");
+    expect(q.total).toBe("4640.00000000");
+
+    // Se restaura: los tests siguientes cuentan con la «detal» de siempre.
+    const restaurar = await pedir("PUT", "/v1/company-settings", VENDEDOR, {
+      default_price_list_id: null,
+    });
+    expect(restaurar.status).toBe(200);
+    const restaurada = (await (await pedir("GET", "/v1/price-lists", VENDEDOR)).json()) as {
+      id: string;
+      is_caja_default: boolean;
+    }[];
+    expect(restaurada.find((l) => l.is_caja_default)?.id).toBe(LISTA_DETAL);
   });
 
   it("la venta rápida: factura + efectivo con VUELTO del servidor, y el reintento es la MISMA venta", async () => {

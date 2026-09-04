@@ -76,6 +76,8 @@ export const CompanySettingsResponse = z
     allow_unidentified_sales: z.boolean(),
     default_tax_category_code: z.string(),
     default_warehouse_id: uuid.nullable(),
+    /** La lista que la caja aplica sin preferida del cliente (migración 36). NULL = heurística. */
+    default_price_list_id: uuid.nullable(),
   })
   .strict();
 export type CompanySettingsResponse = z.infer<typeof CompanySettingsResponse>;
@@ -85,6 +87,7 @@ export const UpdateCompanySettingsRequest = z
     sells_wholesale: z.boolean().optional(),
     block_sale_without_stock: z.boolean().optional(),
     allow_unidentified_sales: z.boolean().optional(),
+    default_price_list_id: uuid.nullable().optional(),
     default_tax_category_code: z
       .string()
       .regex(/^[a-z][a-z0-9_]{0,39}$/)

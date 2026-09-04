@@ -116,10 +116,16 @@ export function productsRoutes(
         if (listaPedida !== null && UUID_RE.test(listaPedida)) {
           listaId = listaPedida;
         } else {
+          // La MISMA resolución de la caja que resolverLista (migración 36):
+          // el dato del dueño primero, la heurística por nombre después. Si
+          // divergieran, la cuadrícula enseñaría un precio y el carrito
+          // cobraría otro.
           const [l] = await tx<{ id: string }[]>`
-            select id from public.price_lists
-             where company_id = ${companyId} and status = 'active'
-             order by (name = 'detal') desc, (name like 'detal%') desc, created_at
+            select l.id from public.price_lists l
+             where l.company_id = ${companyId} and l.status = 'active'
+             order by (l.id = (select cs.default_price_list_id from public.company_settings cs
+                                where cs.company_id = ${companyId})) desc,
+                      (l.name = 'detal') desc, (l.name like 'detal%') desc, l.created_at
              limit 1`;
           listaId = l?.id ?? null;
         }

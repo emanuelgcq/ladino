@@ -18,6 +18,7 @@ export interface CompanySettings {
   readonly sells_wholesale: boolean;
   readonly block_sale_without_stock: boolean;
   readonly allow_unidentified_sales: boolean;
+  readonly default_price_list_id: string | null;
   readonly default_tax_category_code: string;
   readonly default_warehouse_id: string | null;
 }
@@ -28,6 +29,7 @@ const DEFAULTS: CompanySettings = {
   sells_wholesale: false,
   block_sale_without_stock: false,
   allow_unidentified_sales: true,
+  default_price_list_id: null,
   default_tax_category_code: "gravado_general",
   default_warehouse_id: null,
 };
@@ -45,7 +47,7 @@ export async function getCompanySettings(
   // middleware; aquí se revalida la membresía con el permiso más básico.
   const [fila] = await sql<CompanySettings[]>`
     select sells_wholesale, block_sale_without_stock, allow_unidentified_sales,
-           default_tax_category_code, default_warehouse_id
+           default_tax_category_code, default_warehouse_id, default_price_list_id
       from public.company_settings where company_id = ${companyId}`;
   return ok(fila ?? DEFAULTS);
 }
@@ -68,13 +70,15 @@ export async function setCompanySettings(
   const [fila] = await sql<CompanySettings[]>`
     insert into public.company_settings
       (company_id, tenant_id, sells_wholesale, block_sale_without_stock,
-       allow_unidentified_sales, default_tax_category_code, default_warehouse_id)
+       allow_unidentified_sales, default_tax_category_code, default_warehouse_id,
+       default_price_list_id)
     values (${companyId}, ${scope.value.tenantId},
             ${cambios.sells_wholesale ?? DEFAULTS.sells_wholesale},
             ${cambios.block_sale_without_stock ?? DEFAULTS.block_sale_without_stock},
             ${cambios.allow_unidentified_sales ?? DEFAULTS.allow_unidentified_sales},
             ${cambios.default_tax_category_code ?? DEFAULTS.default_tax_category_code},
-            ${cambios.default_warehouse_id ?? null})
+            ${cambios.default_warehouse_id ?? null},
+            ${cambios.default_price_list_id ?? null})
     on conflict (company_id) do update set
       sells_wholesale = case when ${cambios.sells_wholesale === undefined}
         then public.company_settings.sells_wholesale else excluded.sells_wholesale end,
@@ -88,9 +92,12 @@ export async function setCompanySettings(
         then public.company_settings.default_tax_category_code
         else excluded.default_tax_category_code end,
       default_warehouse_id = case when ${cambios.default_warehouse_id === undefined}
-        then public.company_settings.default_warehouse_id else excluded.default_warehouse_id end
+        then public.company_settings.default_warehouse_id else excluded.default_warehouse_id end,
+      default_price_list_id = case when ${cambios.default_price_list_id === undefined}
+        then public.company_settings.default_price_list_id
+        else excluded.default_price_list_id end
     returning sells_wholesale, block_sale_without_stock, allow_unidentified_sales,
-              default_tax_category_code, default_warehouse_id`;
+              default_tax_category_code, default_warehouse_id, default_price_list_id`;
   await sql`
     insert into public.audit_events
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type,

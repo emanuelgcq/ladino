@@ -15,12 +15,25 @@ export function pricingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
     const filas = await withTransaction(
       sql,
       actor,
+      // `is_caja_default`: la lista que /vender aplica a un cliente sin
+      // preferida — el dato del dueño (migración 36) o, sin él, la MISMA
+      // heurística de resolverLista. Calculado aquí para que el panel no
+      // adivine con otra copia de la regla.
       ({ sql: tx }) => tx<Record<string, unknown>[]>`
-        select id, tenant_id, company_id, name, currency_code, status,
-               to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at
-          from public.price_lists
-         where company_id = ${companyId}
-         order by name`,
+        with caja as (
+          select l.id from public.price_lists l
+           where l.company_id = ${companyId} and l.status = 'active'
+           order by (l.id = (select cs.default_price_list_id from public.company_settings cs
+                              where cs.company_id = ${companyId})) desc,
+                    (l.name = 'detal') desc, (l.name like 'detal%') desc, l.created_at
+           limit 1
+        )
+        select p.id, p.tenant_id, p.company_id, p.name, p.currency_code, p.status,
+               to_char(p.created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at,
+               (p.id = (select id from caja)) as is_caja_default
+          from public.price_lists p
+         where p.company_id = ${companyId}
+         order by p.name`,
     );
     return c.json(filas, 200);
   });
@@ -68,10 +81,34 @@ export function pricingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
         select id, currency_code from public.price_lists
          where id = ${listaId} and company_id = ${companyId}`;
       if (!lista) return null;
+
+      // La EQUIVALENCIA en la otra moneda, con la tasa BCV vigente HOY y en
+      // SQL numeric — cero aritmética en el cliente. Es una REFERENCIA: la
+      // tasa histórica de un precio no existe como dato (se ancla al
+      // documento), así que las filas históricas también convierten a la de
+      // hoy y el encabezado de la pantalla lo dice. Sin tasa: null, y la UI
+      // enseña «sin tasa del día», no un cero.
+      const [tasa] = await tx<{ rate: string; rate_date: string; source: string }[]>`
+        select rate::text as rate, rate_date::text as rate_date, source
+          from public.exchange_rates
+         where from_currency = 'USD' and to_currency = 'VES' and rate_date <= current_date
+         order by rate_date desc, created_at desc
+         limit 1`;
+      const equivalencia =
+        tasa === undefined
+          ? { expr: tx`null`, moneda: null }
+          : lista.currency_code === "VES"
+            ? { expr: tx`round(amount / ${tasa.rate}::numeric, 8)::text`, moneda: "USD" }
+            : lista.currency_code === "USD"
+              ? { expr: tx`round(amount * ${tasa.rate}::numeric, 8)::text`, moneda: "VES" }
+              : { expr: tx`null`, moneda: null };
+
       const filtro = productId === undefined ? tx`` : tx`and product_id = ${productId}`;
       const items = await tx<Record<string, unknown>[]>`
         select id, price_list_id, product_id, amount::text as amount,
                ${lista.currency_code} as currency,
+               ${equivalencia.expr} as equivalent_amount,
+               ${equivalencia.moneda} as equivalent_currency,
                to_char(effective_from at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as effective_from,
                case when effective_to is null then null
                     else to_char(effective_to at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') end as effective_to
@@ -84,7 +121,7 @@ export function pricingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
           select platform.price_at(${listaId}, ${productId}, ${at})::text as amount`;
         vigente = v?.amount != null ? { amount: v.amount, currency: lista.currency_code } : null;
       }
-      return { items, vigente };
+      return { items, vigente, rate: tasa ?? null };
     });
     if (respuesta === null) {
       throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });

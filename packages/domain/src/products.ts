@@ -570,6 +570,35 @@ async function ponerPrecioEnLista(
   precio: MoneyInput,
 ): Promise<Result<PriceItemResponse, ProductError>> {
   const { sql } = uow;
+  // El precio «detal» va a la lista PREDETERMINADA de la caja (migración 36)
+  // cuando el dueño la fijó y su moneda coincide: el alta simple escribe
+  // donde /vender lee. Sin el dato —o en otra moneda—, la variante por nombre
+  // de siempre.
+  if (base === "detal") {
+    const [predeterminada] = await sql<{ id: string; currency_code: string }[]>`
+      select l.id, l.currency_code
+        from public.company_settings cs
+        join public.price_lists l on l.id = cs.default_price_list_id
+       where cs.company_id = ${companyId} and l.status = 'active'`;
+    if (predeterminada !== undefined && predeterminada.currency_code === precio.currency) {
+      const puestoDirecto = await setPrice(uow, predeterminada.id, {
+        company_id: companyId,
+        product_id: productId,
+        amount: precio.amount,
+        effective_from: new Date().toISOString(),
+      });
+      if (!puestoDirecto.ok) {
+        if (
+          puestoDirecto.error.code === "PERMISSION_REQUIRED" ||
+          puestoDirecto.error.code === "NOT_FOUND"
+        ) {
+          return err({ code: puestoDirecto.error.code, message: puestoDirecto.error.message });
+        }
+        return err({ code: "VALIDATION_FAILED", message: puestoDirecto.error.message });
+      }
+      return ok(puestoDirecto.value);
+    }
+  }
   const nombre = precio.currency === funcional ? base : `${base} ${precio.currency}`;
   const [lista] = await sql<{ id: string; currency_code: string }[]>`
     select id, currency_code from public.price_lists

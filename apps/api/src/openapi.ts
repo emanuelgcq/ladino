@@ -440,7 +440,11 @@ export function buildOpenApiDocument(): object {
     summary: "Historial de precios; con `at` y `product_id`, el vigente A ESA FECHA",
     description:
       "La fecha es parámetro, nunca el reloj del servidor (ADR-0032): un documento de " +
-      "ayer se recalcula con el precio de ayer.",
+      "ayer se recalcula con el precio de ayer. Cada fila trae además su EQUIVALENTE en la " +
+      "otra moneda, calculado por el SERVIDOR con la tasa BCV de HOY (`rate` dice cuál, con " +
+      "fuente y fecha) — es referencia, no dato del precio: la tasa se ancla al documento, " +
+      "no al precio, así que las filas históricas también convierten a la de hoy. Sin tasa " +
+      "vigente, `rate` y los equivalentes vienen null.",
     security: [{ bearerAuth: [] }],
     request: {
       params: idParam,
@@ -455,8 +459,11 @@ export function buildOpenApiDocument(): object {
         z.object({
           items: z.array(itemPrecio),
           vigente: z.object({ amount: z.string(), currency: z.string() }).nullable(),
+          rate: z
+            .object({ rate: z.string(), rate_date: z.string(), source: z.string() })
+            .nullable(),
         }),
-        "Historial (y el vigente si se pidió).",
+        "Historial (y el vigente si se pidió), con la tasa de referencia.",
       ),
       ...erroresComunes,
     },

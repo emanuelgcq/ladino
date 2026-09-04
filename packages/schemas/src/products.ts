@@ -116,6 +116,8 @@ export const PriceListResponse = z
     currency_code: z.string(),
     status: z.enum(["active", "inactive"]),
     created_at: z.string().datetime({ offset: true }),
+    /** true si es la que la caja aplica a un cliente sin preferida (migración 36 o heurística). */
+    is_caja_default: z.boolean().optional(),
   })
   .strict();
 export type PriceListResponse = z.infer<typeof PriceListResponse>;
@@ -186,6 +188,13 @@ export const PriceItemResponse = z
     currency: z.string(),
     effective_from: z.string().datetime({ offset: true }),
     effective_to: z.string().datetime({ offset: true }).nullable(),
+    /**
+     * El equivalente EN LA OTRA MONEDA, calculado por el SERVIDOR con la tasa
+     * BCV de HOY — referencia, no dato del precio (la tasa se ancla al
+     * documento, no al precio). NULL sin tasa vigente.
+     */
+    equivalent_amount: z.string().nullable().optional(),
+    equivalent_currency: z.string().nullable().optional(),
   })
   .strict();
 export type PriceItemResponse = z.infer<typeof PriceItemResponse>;
