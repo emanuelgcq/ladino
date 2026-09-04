@@ -1,3 +1,38 @@
+# Handoff — 2026-09-04 (3ª entrega)
+
+## MODO RECIBOS — Ladino para el negocio que aún no tiene RIF
+
+Sin RIF no hay factura (PA 00071 art. 13.5), así que la venta produce un **RECIBO** honesto:
+rotulado «RECIBO» y «Documento no fiscal — no es una factura», sin número de control, sin RIF
+del emisor y sin IVA. Migración 37 (pgTAP 037, suite 960/960):
+
+- `fiscal_regimes` gana `allowed_kinds` y nace `sin_facturacion` (`internal_only`,
+  `{receipt}`); el gate de kind por régimen vive en `assert_document_issuance` (LAD49) **y**
+  en dominio con mensaje de persona — las dos direcciones: `sin_facturacion` no emite
+  factura, y un régimen fiscal NO emite recibos (anti-evasión, R-27 nuevo).
+- El recibo reusa la tubería ENTERA de la venta parametrizada por kind: correlativo gapless
+  propio (serie R), kardex, cobros, CxC, asiento por preset `sales_receipt` (2 líneas, sin
+  IVA), y entra al invariante `accounting_coverage_gaps()` por ENUNCIADO (unión nueva), no
+  por excepción. Libros fiscales lo excluyen por kind, con test.
+- **Dos trampas de «el arreglo introduce otros» cazadas por pgTAP y documentadas EN la
+  migración**: el vocabulario de `source_kind` vive en TRES constraints (y el de
+  `journal_entries` además tiene manual/period_close/year_end_close — la primera
+  reconstrucción los dejó fuera); y la coverage se reconstruyó desde la versión VIGENTE
+  (la 31, con expense y cash_closing), no desde la que la memoria recordaba.
+- Transición en caliente: `POST /v1/fiscal/regime` permite SOLO `sin_facturacion` → otro
+  (cierra la vigencia vieja, audita `fiscal.regime.upgraded`, inserta la nueva); la vuelta
+  atrás NO existe. E2E `e2e-receipts` (5/5): cotiza sin IVA, dos recibos correlativos, PDF
+  sin RIF ni control, factura rechaza 409 con el mensaje de persona, y el hot-swap: recibo
+  antes, factura con control 500 después, libros ven SOLO la factura.
+- /empezar pregunta «¿Tu negocio ya tiene RIF?» ANTES del paso fiscal; «Todavía no» activa
+  recibos sin regaño, con link al SENIAT, y el estado hecho ofrece «Ya tengo RIF: activar
+  facturación». /vender no cambia de forma: banner discreto, «Cobrar» sigue igual, éxito
+  dice «Venta registrada», la cédula pasa a «Poner cliente (opcional)» — identificar sirve
+  para fiar; 13.7 es de facturas.
+
+Compliance: `EMISION_FACTURAS.md` §1-bis + R-27 (el inscrito que se declare «sin RIF»:
+la declaración queda como acta auditada con usuario y fecha; volver a recibos no existe).
+
 # Handoff — 2026-09-04 (2ª entrega)
 
 ## Listas de precios: la predeterminada de la caja es dato, y todo precio se ve en dos monedas

@@ -461,6 +461,26 @@ régimen `per_document` puede habilitarse mientras el adaptador sea el null; la 
 **Deja de ser aceptable:** con el primer cliente que la pida. Mitigación: conseguir la lista
 vigente, elegir proveedor (decisión del operador) y escribir el adaptador real contra ADR-0045.
 
+### R-27 · Un contribuyente inscrito podría declararse «sin RIF» para vender por recibo y evadir
+
+- **Severidad:** Media · **Disparador:** auditoría o fiscalización de un cliente en modo recibos
+- **Dónde:** migración 37 (`sin_facturacion`, gate de kind por régimen en
+  `assert_document_issuance`) · `EMISION_FACTURAS.md` §1-bis
+
+El modo recibos existe para el negocio que AÚN no tiene RIF. Un inscrito que se declare «sin
+RIF» en /empezar vendería sin repercutir IVA y sin libros — evasión con la herramienta puesta.
+
+**Lo que ya está defendido:** la regla dura de kind por régimen vive en el ESQUEMA (LAD49):
+con régimen fiscal no se emite ni un recibo, y cambiar a `sin_facturacion` desde un régimen
+fiscal NO existe como transición (solo la dirección contraria). La declaración del dueño en
+/empezar queda como acta en la auditoría (`fiscal.regime.*`), con su usuario y fecha: si
+mintió, mintió firmando. Los recibos son visibles y etiquetados en reportes — no hay ventas
+invisibles.
+
+**Deja de ser aceptable:** si aparece un mecanismo para volver a `sin_facturacion` desde un
+régimen fiscal, o si el gate de kind gana una excepción. Ladino no puede impedir que un
+inscrito MIENTA al declararse; sí garantiza que la mentira quede firmada y el rastro completo.
+
 > **Sobre la numeración.** R-16 a R-21 nacieron en `HANDOFF.md` durante los módulos de ventas,
 > compras y contabilidad y siguen ahí. Este registro salta de R-15 a R-22 por eso, no porque se
 > hayan perdido entradas. Consolidarlos aquí está pendiente y es trabajo de una sesión, no de esta.

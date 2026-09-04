@@ -25,6 +25,26 @@ empresa lleva inventario, clientes, cuentas, compras, tesorería y contabilidad 
 factura por fuera (típicamente su máquina fiscal). Es exactamente como opera Fina con ese
 segmento, y `/empezar` lo asigna cuando el negocio declara tener máquina fiscal.
 
+## 1-bis. El MODO RECIBOS: el negocio que aún no tiene RIF (migración 37)
+
+**Sin RIF no existe factura**: el art. 13.5 de la PA 00071 exige RIF y domicilio fiscal del
+EMISOR en el documento — un no-inscrito no puede emitir nada que sea factura, y tampoco puede
+repercutir IVA. El modo recibos (`regime_code = 'sin_facturacion'`, `numbering_mode
+internal_only`, `allowed_kinds = {receipt}`) es **administrativo, no fiscal**: la venta
+produce un **RECIBO** rotulado «Documento no fiscal — no es una factura», sin número de
+control, sin RIF del emisor y sin IVA (líneas con tratamiento `no_fiscal`, sin regla
+tributaria). Inventario, cobros, deudas, cuentas y contabilidad funcionan idénticos a una
+venta normal (asiento CxC contra ingresos, sin línea de IVA); el recibo **jamás** entra a
+libros fiscales (el libro de ventas filtra por `kind`, con test).
+
+**La regla dura, en las dos direcciones y en el ESQUEMA** (trigger de emisión, LAD49): un
+régimen fiscal **no puede emitir recibos** — nadie con RIF vende por recibo desde Ladino,
+que es la puerta al uso evasor — y `sin_facturacion` no puede emitir facturas. La PA
+SNAT/2026/00080 hizo el RIF digital y sin caducidad: al obtenerlo, `/empezar` cambia el
+régimen a formatos libres (la vigencia vieja se cierra, append-only por fecha), el POS pasa
+a facturar, y los recibos históricos quedan intactos y visibles — nunca en libros. Riesgo
+del inscrito que se declare «sin RIF»: R-27.
+
 ## 2. Quién DEBE usar máquina fiscal (PA 00071 art. 8)
 
 Obligado quien reúna las **tres condiciones concurrentes**:
