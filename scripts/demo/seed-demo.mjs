@@ -168,7 +168,7 @@ for (const f of [
   if (doc !== null) facturas.push(doc);
 }
 
-paso("factura de AYER preciada desde Mayorista USD (tasa 119.35, ADR-0046: sale en Bs)");
+paso("factura USD de AYER (Mayorista USD, tasa 119.35 — la deuda se ancla en USD, ADR-0047)");
 const usd = await api("POST", "/v1/invoices", {
   company_id: COMPANY,
   customer_id: CLI.andes,
@@ -182,15 +182,14 @@ const usd = await api("POST", "/v1/invoices", {
 
 paso("cobros");
 if (usd !== null) {
-  // ADR-0046: la factura nació en Bs a la tasa de AYER; se abona HOY en
-  // dólares y el servidor convierte con la tasa de HOY — sin diferencial,
-  // porque la deuda en Bs no se revaloriza. 38 USD × 125.50 = 4 769 Bs
-  // (abono parcial: la deuda era 4 817,92 Bs y queda saldo visible en CxC).
+  // Se cobra HOY los USD completos: la deuda está anclada en USD (ADR-0047)
+  // y el diferencial —(24×0.75 + 12×1.40) × 1.16 = 40.368 USD × (125.50 −
+  // 119.35)— lo calcula y asienta el servidor.
   await api("POST", "/v1/payments", {
     company_id: COMPANY,
     document_id: usd.id,
     currency: "USD",
-    amount: "38.00000000",
+    amount: "40.36800000",
     instrument: "zelle",
     reference: "ZLL-88412",
   });

@@ -1,4 +1,38 @@
-# Handoff — 2026-09-04 (4ª entrega)
+# Handoff — 2026-09-04 (5ª entrega)
+
+## ADR-0047 — La deuda se ancla en dólares; el papel habla en bolívares
+
+El dueño tumbó ADR-0046 con una bodega: *lunes 1 USD = 100 Bs, se fía; viernes 1 USD =
+150 Bs; el que fió perdió 50 Bs de margen.* Una deuda expresada en Bs congela el margen en
+la tasa de la venta. Y la revisión destapó que el modelo pre-46 tampoco lo decía completo:
+el saldo vivía en funcional CONGELADO, así que cobrar en Bs días después pedía los Bs del
+día de la venta — la misma pérdida por la puerta del cobro. Migración 39:
+
+- **Denominación restituida** (ADR-0020): el documento nace en la moneda de la lista; cae
+  el gate LAD70 y las columnas `pricing_*` (nunca corrieron bajo una API desplegada).
+  Tests 021/027/e2e-sales restaurados a sus originales.
+- **`document_balance_transaction`**: la deuda EN LA MONEDA DEL DOCUMENTO — cada cobro en
+  otra moneda se valora con la tasa del DÍA DEL PAGO. Es quien decide `paid` para
+  documentos en divisa: pagar los USD completos salda, suba o baje la tasa.
+- **`document_debt_today`**: la deuda del lunes, preguntada el viernes, vale viernes.
+  Deudas, resumen, estado de cuenta y el balance del documento preguntan aquí.
+- **El diferencial se registra para TODO cobro de documento en divisa** — antes solo si el
+  pago venía en la misma moneda. El cobro en Bs valora la porción saldada a la tasa del
+  día, y `functional_at_payment` es lo que DE VERDAD entró, para que el asiento
+  (caja = deuda saldada + diferencial) cuadre al céntimo.
+- **El papel sigue hablando en Bs** (lo vivo de ADR-0046): el PDF imprime líneas y totales
+  del lado funcional congelado y añade «Total en dólares» + tipo de cambio (13.14: ambas
+  monedas presentes, el Bs grande). El carrito enseña Bs grande con el USD al lado, ambos
+  lados POR LÍNEA del servidor (`functional_unit_price`/`functional_total` en la
+  cotización). Listas USD, columnas duales y alta en USD: intactos.
+- pgTAP 039 = el ejemplo del dueño LITERAL (fío 1 USD a 100; hoy a 150 la deuda dice 150;
+  el cobro de 150 Bs la deja en cero y el funcional da −50, que es diferencial, no
+  sobrepago). E2E nuevo con el mismo caso por HTTP: deuda de hoy 5 220, cobro en Bs,
+  `paid`, diferencial 580. Suites: 222/222 E2E, 967/967 pgTAP.
+
+**Nota para el siguiente**: el interregno ADR-0046 vivió solo entre las migraciones 38 y
+39, mismo día, sin deploy — ningún documento productivo nació denominado en funcional por
+esa vía ni con `pricing_*`.
 
 ## ADR-0046 — La venta se denomina en bolívares; el dólar es el ancla de precios
 
