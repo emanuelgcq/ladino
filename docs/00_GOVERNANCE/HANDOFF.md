@@ -1,4 +1,38 @@
-# Handoff — 2026-09-04 (3ª entrega)
+# Handoff — 2026-09-04 (4ª entrega)
+
+## ADR-0046 — La venta se denomina en bolívares; el dólar es el ancla de precios
+
+Orden del dueño: la lista de precios va SIEMPRE en USD con su columna en Bs, el carrito
+enseña las dos monedas, y el documento final —recibo o factura— se imprime **solo en Bs**.
+Eso invierte una decisión deliberada de ADR-0020 (el documento nacía en la moneda de la
+lista para tener diferencial cambiario), y por eso hay ADR nuevo y migración 38:
+
+- `calcularLineas` convierte el precio unitario lista→funcional CON la tasa vigente a la
+  fecha ANTES de calcular; el documento nace `transaction = functional` (los siete campos
+  de ADR-0020 en identidad) y la conversión queda congelada como PROCEDENCIA:
+  `pricing_currency/fx_rate/rate_source/rate_timestamp` (los cuatro viajan juntos, CHECK).
+- **El gate en el esquema** (trigger de emisión, LAD70): un documento de venta emitido en
+  divisa RECHAZA. Una excepción que es espejo, no perdón: la NC/ND hereda la denominación
+  del documento HISTÓRICO que corrige. pgTAP 038 (7 asserts; el histórico se planta con el
+  trigger apagado porque así existen de verdad — el caso probado, la NC, pasa con él
+  encendido). Fixtures de 021 y 027 migrados a la regla (mismos números, otra lectura:
+  sobrepago en vez de diferencial; el libro lee la cabecera congelada).
+- **El diferencial cambiario de VENTAS desaparece por diseño**: la deuda en Bs no se
+  revaloriza. El E2E que lo cubría ahora afirma lo contrario (cobro en USD a otra tasa →
+  convertido al día del pago, `exchange_difference: null`). La tabla y su asiento siguen
+  para históricos y compras. Compras intacta (tablas propias).
+- Carrito y cuadrícula en DOS monedas, todo del servidor: el POS cotiza en Bs con
+  `reference_unit_price` (precio de lista exacto) y `reference_total` (total ÷ tasa);
+  la cuadrícula gana `price_equivalent_*` (tasa de hoy, sin tasa → null). El PDF viste
+  «Bs.» (no el código ISO) y no imprime ni un importe en USD; 13.14 queda para históricos
+  (EMISION_FACTURAS §3 actualizado).
+- /admin listas de precios: columnas «Precio (USD)» | «En bolívares al BCV de hoy»;
+  lista nueva SIEMPRE USD (sin selector); alta simple de producto pide el precio en USD y
+  enseña el ≈ Bs. La demo perdió «PVP Bolívares»: no hay listas en Bs.
+
+E2E: 221/221 (e2e-sales reescrito a la regla); pgTAP 967/967. Los números de los tests de
+emisión NO cambiaron (100 USD a 40 = 4 000 Bs la unidad): la conversión al precio produce
+los mismos totales que la conversión al total — lo que cambió es QUIÉN se denomina.
 
 ## MODO RECIBOS — Ladino para el negocio que aún no tiene RIF
 

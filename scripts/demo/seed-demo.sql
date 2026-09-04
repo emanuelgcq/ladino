@@ -115,14 +115,12 @@ insert into public.products (id, tenant_id, company_id, sku, name, kind, status,
    'unidad', 'exento')
 on conflict (id) do nothing;
 
--- Listas de precios. LA DECISIÓN GRABADA del proyecto: precios de lista en
--- USD; la factura sale en Bs con la tasa BCV del día. La caja usa «Detal USD»
--- (predeterminada vía company_settings, abajo); «PVP Bolívares» se queda solo
--- para ilustrar el caso de lista nativa en Bs — la que hay que remarcar a
--- mano cuando la tasa se mueve.
+-- Listas de precios. LA DECISIÓN GRABADA del proyecto (ADR-0046): la lista se
+-- ancla SIEMPRE en USD; el recibo o la factura sale en Bs con la tasa BCV del
+-- día, y la pantalla enseña las dos monedas. La caja usa «Detal USD»
+-- (predeterminada vía company_settings, abajo). No hay lista en Bs: poner
+-- precios en Bs es remarcar a mano lo que la tasa mueve sola.
 insert into public.price_lists (id, tenant_id, company_id, name, currency_code) values
-  ('deade001-0000-4000-8000-0000000000e1', 'deade001-0000-4000-8000-000000000001',
-   'deade001-0000-4000-8000-0000000000c0', 'PVP Bolívares', 'VES'),
   ('deade001-0000-4000-8000-0000000000e2', 'deade001-0000-4000-8000-000000000001',
    'deade001-0000-4000-8000-0000000000c0', 'Mayorista USD', 'USD'),
   ('deade001-0000-4000-8000-0000000000e3', 'deade001-0000-4000-8000-000000000001',
@@ -140,13 +138,7 @@ insert into public.price_list_items (tenant_id, company_id, price_list_id, produ
 select 'deade001-0000-4000-8000-000000000001', 'deade001-0000-4000-8000-0000000000c0',
        l, p, a::numeric, (current_date - 20)::timestamptz
   from (values
-    ('deade001-0000-4000-8000-0000000000e1'::uuid, 'deade001-0000-4000-8000-0000000000d1'::uuid, '85.00000000'),
-    ('deade001-0000-4000-8000-0000000000e1', 'deade001-0000-4000-8000-0000000000d2', '160.00000000'),
-    ('deade001-0000-4000-8000-0000000000e1', 'deade001-0000-4000-8000-0000000000d3', '60.00000000'),
-    ('deade001-0000-4000-8000-0000000000e1', 'deade001-0000-4000-8000-0000000000d4', '75.00000000'),
-    ('deade001-0000-4000-8000-0000000000e1', 'deade001-0000-4000-8000-0000000000d5', '145.00000000'),
-    ('deade001-0000-4000-8000-0000000000e1', 'deade001-0000-4000-8000-0000000000d6', '55.00000000'),
-    ('deade001-0000-4000-8000-0000000000e2', 'deade001-0000-4000-8000-0000000000d1', '0.75000000'),
+    ('deade001-0000-4000-8000-0000000000e2'::uuid, 'deade001-0000-4000-8000-0000000000d1'::uuid, '0.75000000'),
     ('deade001-0000-4000-8000-0000000000e2', 'deade001-0000-4000-8000-0000000000d2', '1.40000000'),
     ('deade001-0000-4000-8000-0000000000e2', 'deade001-0000-4000-8000-0000000000d3', '0.55000000'),
     ('deade001-0000-4000-8000-0000000000e2', 'deade001-0000-4000-8000-0000000000d4', '0.65000000'),
@@ -162,7 +154,7 @@ select 'deade001-0000-4000-8000-000000000001', 'deade001-0000-4000-8000-00000000
  where not exists (select 1 from public.price_list_items i
                     where i.price_list_id = t.l and i.product_id = t.p);
 
-update public.customers set default_price_list_id = 'deade001-0000-4000-8000-0000000000e1'
+update public.customers set default_price_list_id = 'deade001-0000-4000-8000-0000000000e3'
  where id in ('deade001-0000-4000-8000-0000000000b1', 'deade001-0000-4000-8000-0000000000b2')
    and default_price_list_id is null;
 update public.customers set default_price_list_id = 'deade001-0000-4000-8000-0000000000e2'
