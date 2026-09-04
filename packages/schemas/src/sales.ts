@@ -187,6 +187,10 @@ export const DocumentResponse = z
     functional_currency: z.string(),
     fx_rate: z.string(),
     rate_source: z.string(),
+    /** ADR-0046: procedencia de la conversión lista→funcional (null si la lista ya era funcional). */
+    pricing_currency: z.string().nullable(),
+    pricing_fx_rate: z.string().nullable(),
+    pricing_rate_source: z.string().nullable(),
     subtotal_amount: z.string(),
     tax_amount: z.string(),
     total_amount: z.string(),
@@ -283,6 +287,8 @@ export const PosQuoteLine = z
     description: z.string(),
     quantity: z.string(),
     unit_price: z.string(),
+    /** ADR-0046: el precio de lista exacto en la moneda ancla (USD); null si la lista era funcional. */
+    reference_unit_price: z.string().nullable(),
     subtotal: z.string(),
     tax_rate: z.string(),
     tax_amount: z.string(),
@@ -298,6 +304,11 @@ export const PosQuoteResponse = z
     currency: z.string(),
     fx_rate: z.string(),
     rate_source: z.string(),
+    /** ADR-0046: la conversión lista→Bs que formó estos importes, y el total de referencia en la moneda ancla. */
+    pricing_currency: z.string().nullable(),
+    pricing_fx_rate: z.string().nullable(),
+    pricing_rate_source: z.string().nullable(),
+    reference_total: z.string().nullable(),
     lines: z.array(PosQuoteLine),
     subtotal: z.string(),
     tax_amount: z.string(),

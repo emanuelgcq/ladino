@@ -71,6 +71,7 @@ const DOC_COLUMNS = `id, company_id, kind, series,
   to_char(annulled_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as annulled_at,
   annul_reason, customer_id, vendor_id, price_list_id, source_document_id,
   transaction_currency, functional_currency, fx_rate::text as fx_rate, rate_source,
+  pricing_currency, pricing_fx_rate::text as pricing_fx_rate, pricing_rate_source,
   subtotal_amount::text as subtotal_amount, tax_amount::text as tax_amount,
   total_amount::text as total_amount, regime_version_id, rules_version`;
 
@@ -192,7 +193,14 @@ async function calcularLineas(
   },
 ): Promise<
   Result<
-    { lineas: LineaCalculada[]; fxRate: Decimal; rateSource: string; transactionCurrency: string },
+    {
+      lineas: LineaCalculada[];
+      fxRate: Decimal;
+      rateSource: string;
+      transactionCurrency: string;
+      /** ADR-0046: procedencia de la conversión lista→funcional; null si la lista ya era funcional. */
+      pricing: { currency: string; rate: Decimal; source: string } | null;
+    },
     SalesError
   >
 > {
@@ -257,18 +265,17 @@ async function calcularLineas(
     const cantidad = parseDecimal(l.quantity);
     if (!cantidad.ok) return err({ code: "VALIDATION_FAILED", message: cantidad.error.message });
 
-    // El documento se calcula EN LA MONEDA DE LA LISTA, no en la funcional. Es
-    // la diferencia entre tener diferencial cambiario y no tenerlo: si la
-    // factura naciera ya convertida a bolívares, la tasa quedaría cocida dentro
-    // del total y el cobro posterior no tendría contra qué compararse. Por eso
-    // la conversión va en los siete campos de ADR-0020, no en el importe.
-    const identidad = parseDecimal("1");
-    if (!identidad.ok) return err({ code: "VALIDATION_FAILED", message: "imposible" });
+    // ADR-0046: el documento se denomina EN LA MONEDA FUNCIONAL. La lista en
+    // divisa es un ancla de precios: su tasa se aplica AQUÍ, al precio
+    // unitario, y queda congelada como procedencia en pricing_* — no en los
+    // siete campos de ADR-0020, que en identidad no pueden cargarla sin
+    // mentir sobre su semántica. El diferencial cambiario de ventas deja de
+    // existir a propósito: una deuda expresada en Bs no se revaloriza.
     const resuelto = resolvePrice({
       listed: listado.value,
       quantity: cantidad.value,
-      documentCurrency: lista.currency_code,
-      fxRate: identidad.value,
+      documentCurrency: input.functionalCurrency,
+      fxRate: tasaDecimal,
       roundingPolicy: DOC_POLICY,
     });
     if (!resuelto.ok) {
@@ -339,11 +346,19 @@ async function calcularLineas(
       operationType: contraparte.taxpayer_type_code === "no_domiciliado" ? null : "interna",
     });
   }
+  // Los siete campos de ADR-0020 quedan en identidad (el documento YA está en
+  // funcional); la conversión de la lista viaja aparte, como procedencia.
+  const unoFinal = parseDecimal("1");
+  if (!unoFinal.ok) return err({ code: "VALIDATION_FAILED", message: "imposible" });
   return ok({
     lineas: salida,
-    fxRate: tasaDecimal,
-    rateSource,
-    transactionCurrency: lista.currency_code,
+    fxRate: unoFinal.value,
+    rateSource: "identidad",
+    transactionCurrency: input.functionalCurrency,
+    pricing:
+      lista.currency_code === input.functionalCurrency
+        ? null
+        : { currency: lista.currency_code, rate: tasaDecimal, source: rateSource },
   });
 }
 
@@ -431,6 +446,8 @@ async function insertarDocumento(
     fxRate: Decimal;
     rateSource: string;
     transactionCurrency: string;
+    /** ADR-0046: procedencia lista→funcional; null = lista ya funcional o precios heredados (NC/ND). */
+    pricing: { currency: string; rate: Decimal; source: string } | null;
     notes: string | null;
   },
 ): Promise<Result<DocumentResponse, SalesError>> {
@@ -502,7 +519,9 @@ async function insertarDocumento(
     insert into public.documents
       (tenant_id, company_id, branch_id, kind, series, customer_id, vendor_id, price_list_id,
        source_document_id, transaction_currency, functional_currency, fx_rate, rate_source,
-       rate_timestamp, rounding_policy_id, amount_transaction_currency, functional_amount,
+       rate_timestamp, pricing_currency, pricing_fx_rate, pricing_rate_source,
+       pricing_rate_timestamp,
+       rounding_policy_id, amount_transaction_currency, functional_amount,
        subtotal_amount, tax_amount, total_amount, notes,
        customer_name_snapshot, customer_tax_id_snapshot, customer_address_snapshot,
        issuer_name_snapshot, issuer_tax_id_snapshot, issuer_address_snapshot,
@@ -512,6 +531,8 @@ async function insertarDocumento(
             ${d.sourceDocumentId},
             ${d.transactionCurrency}, ${ctx.functionalCurrency}, ${d.fxRate.toFixed()},
             ${d.rateSource}, now(),
+            ${d.pricing?.currency ?? null}, ${d.pricing?.rate.toFixed() ?? null},
+            ${d.pricing?.source ?? null}, ${d.pricing === null ? null : sql`now()`},
             ${DOC_POLICY.id}, ${totales.value.total.toAmountString()}, ${totFunc.toFixed(8)},
             ${subFunc.toFixed(8)}, ${taxFunc.toFixed(8)}, ${totFunc.toFixed(8)}, ${d.notes},
             ${contraparte.name}, ${contraparte.tax_id}, ${contraparte.address},
@@ -650,6 +671,7 @@ async function crearBorrador(
         fxRate: calculadas.value.fxRate,
         rateSource: calculadas.value.rateSource,
         transactionCurrency: calculadas.value.transactionCurrency,
+        pricing: calculadas.value.pricing,
         notes: input.notes ?? null,
       }),
     );
@@ -846,6 +868,7 @@ async function emitirVenta(
         fxRate: calculadas.value.fxRate,
         rateSource: calculadas.value.rateSource,
         transactionCurrency: calculadas.value.transactionCurrency,
+        pricing: calculadas.value.pricing,
         notes: input.notes ?? null,
       });
       if (!creado.ok) return creado;
@@ -1634,6 +1657,9 @@ async function createInvoiceLike(
     fxRate: tasaOrigen.value,
     rateSource: origen.rate_source,
     transactionCurrency: origen.transaction_currency,
+    // La NC hereda los PRECIOS del documento que corrige: aquí no ocurre
+    // ninguna conversión nueva, y la procedencia de aquellos vive en su origen.
+    pricing: null,
     notes: null,
   });
   if (!creado.ok) return creado;
@@ -1733,17 +1759,32 @@ export async function quotePos(
   );
   if (!totalFuncional.ok) return totalFuncional;
 
+  // ADR-0046: los importes del carrito van en funcional (Bs), que es lo que se
+  // cobrará. El lado en divisa es REFERENCIA: el precio de lista exacto por
+  // línea, y el total dividido por la tasa aplicada — lo calcula el SERVIDOR,
+  // porque la web no hace aritmética de dinero.
+  const pricing = calculadas.value.pricing;
+  const referenciaTotal =
+    pricing === null
+      ? null
+      : totales.value.total.amount.dividedBy(pricing.rate).toDecimalPlaces(8, 4);
+
   return ok({
     customer_id: cliente.value,
     price_list_id: lista.value,
     currency: calculadas.value.transactionCurrency,
     fx_rate: calculadas.value.fxRate.toFixed(),
     rate_source: calculadas.value.rateSource,
+    pricing_currency: pricing?.currency ?? null,
+    pricing_fx_rate: pricing?.rate.toFixed(8) ?? null,
+    pricing_rate_source: pricing?.source ?? null,
+    reference_total: referenciaTotal?.toFixed(8) ?? null,
     lines: calculadas.value.lineas.map((l) => ({
       product_id: l.productId,
       description: l.description,
       quantity: l.calc.quantity.toFixed(),
       unit_price: l.calc.unitPrice.toAmountString(),
+      reference_unit_price: pricing === null ? null : l.unitPriceList.toAmountString(),
       subtotal: l.calc.subtotal.toAmountString(),
       tax_rate: l.calc.taxRate.toFixed(),
       tax_amount: l.calc.taxAmount.toAmountString(),

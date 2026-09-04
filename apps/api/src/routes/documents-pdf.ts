@@ -256,11 +256,15 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
     pdf.moveDown(0.5);
 
     // ── Totales ────────────────────────────────────────────────────────────
+    // ADR-0046: el documento nuevo se denomina en Bs y el PDF lo dice como se
+    // dice en Venezuela — «Bs.», no el código ISO. Un histórico en divisa se
+    // imprime como nació, con su código.
+    const monedaVestida = moneda === "VES" ? "Bs." : moneda;
     const totalFila = (etiqueta: string, importe: string, negrita = false): void => {
       const y = pdf.y;
       pdf.font(negrita ? "Helvetica-Bold" : "Helvetica").fontSize(10);
       pdf.text(etiqueta, 330, y, { width: 140, align: "right" });
-      pdf.text(`${moneda} ${vestirImporte(importe)}`, 470, y, { width: 94, align: "right" });
+      pdf.text(`${monedaVestida} ${vestirImporte(importe)}`, 470, y, { width: 94, align: "right" });
       pdf.moveDown(0.15);
     };
     // El recibo no separa IVA: no hay impuesto que separar (migración 37).

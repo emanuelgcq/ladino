@@ -84,6 +84,9 @@ export const ProductResponse = z
     price_amount: AmountString.nullable().optional(),
     price_currency: z.string().nullable().optional(),
     price_list_id: uuid.nullable().optional(),
+    /** ADR-0046: equivalente en moneda funcional a la tasa de HOY, del servidor; null sin tasa. */
+    price_equivalent_amount: AmountString.nullable().optional(),
+    price_equivalent_currency: z.string().nullable().optional(),
     stock_quantity: z.string().nullable().optional(),
   })
   .strict();

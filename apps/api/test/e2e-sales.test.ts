@@ -327,9 +327,13 @@ describe("ventas de extremo a extremo", () => {
     expect(doc["status"]).toBe("draft");
     // Una cotización NO consume correlativo fiscal.
     expect(doc["document_number"]).toBeNull();
-    // Y nace en la moneda de la lista, no ya convertida.
-    expect(doc["transaction_currency"]).toBe("USD");
+    // ADR-0046: nace DENOMINADA en funcional; la lista USD queda como
+    // procedencia del precio, con su tasa y su fuente congeladas.
+    expect(doc["transaction_currency"]).toBe("VES");
     expect(doc["functional_currency"]).toBe("VES");
+    expect(doc["pricing_currency"]).toBe("USD");
+    expect(doc["pricing_fx_rate"]).toBe("40.00000000");
+    expect(doc["pricing_rate_source"]).toBe(FUENTE_TASA);
   });
 
   it("sin régimen fiscal vigente no se emite, aunque haya tasa y alícuota", async () => {
@@ -388,9 +392,13 @@ describe("ventas de extremo a extremo", () => {
     expect(doc["status"]).toBe("issued");
     expect(doc["document_number"]).toBe(1);
     expect(doc["control_number"]).toBe(1000);
-    // 2 × 100 USD = 200 + 16 % = 232 USD; a 40 Bs = 9 280 Bs.
-    expect(doc["transaction_currency"]).toBe("USD");
-    expect(doc["fx_rate"]).toBe("40.00000000");
+    // ADR-0046: el precio se convirtió AL ENTRAR — 100 USD a 40 = 4 000 Bs la
+    // unidad; 2 × 4 000 = 8 000 + 16 % = 9 280 Bs. El documento NACE en Bs y
+    // la tasa de la lista queda como procedencia, no como denominación.
+    expect(doc["transaction_currency"]).toBe("VES");
+    expect(doc["fx_rate"]).toBe("1.00000000");
+    expect(doc["pricing_currency"]).toBe("USD");
+    expect(doc["pricing_fx_rate"]).toBe("40.00000000");
     expect(doc["total_amount"]).toBe("9280.00000000");
     expect(doc["subtotal_amount"]).toBe("8000.00000000");
     expect(doc["tax_amount"]).toBe("1280.00000000");
@@ -455,7 +463,7 @@ describe("ventas de extremo a extremo", () => {
     expect(((await r.json()) as { code: string }).code).toBe("FISCAL_NUMBERING_INVALID");
   });
 
-  it("el cobro a otra tasa registra el diferencial cambiario y deja la factura pagada", async () => {
+  it("el cobro en divisa convierte a la tasa del DÍA DEL PAGO y NO escribe diferencial: la deuda en Bs no se revaloriza", async () => {
     await pedir("POST", "/v1/fiscal-number-ranges", VENDEDOR, {
       company_id: COMPANY,
       kind: "invoice",
@@ -473,7 +481,7 @@ describe("ventas de extremo a extremo", () => {
     });
     expect(emitida.status).toBe(201);
     const doc = (await emitida.json()) as Record<string, string>;
-    expect(doc["total_amount"]).toBe("4640.00000000"); // 116 USD × 40
+    expect(doc["total_amount"]).toBe("4640.00000000"); // (100 USD a 40) + 16% = 4 640 Bs
 
     // La tasa sube a 45 el día del cobro.
     await pedir("POST", "/v1/exchange-rates", VENDEDOR, {
@@ -488,7 +496,7 @@ describe("ventas de extremo a extremo", () => {
       company_id: COMPANY,
       document_id: doc["id"],
       currency: "USD",
-      amount: "116.00000000",
+      amount: "104.00000000",
       instrument: "zelle",
       reference: "E2E-ZELLE-1",
     });
@@ -499,15 +507,20 @@ describe("ventas de extremo a extremo", () => {
       balance: string;
       document_status: string;
     };
-    // 116 USD a 45 = 5 220 Bs; la factura pesaba 4 640. Diferencia: 580.
-    expect(c.payment["functional_amount"]).toBe("5220.00000000");
-    expect(c.exchange_difference).not.toBeNull();
-    expect(c.exchange_difference!["difference"]).toBe("580.00000000");
+    // 104 USD a la tasa del DÍA DEL PAGO (45) = 4 680 Bs contra una deuda de
+    // 4 640 Bs: pagada, con 40 Bs de más. ADR-0046: el documento se denomina
+    // en Bs, así que no hay nada que revalorizar — cobrar cuando la tasa subió
+    // NO fabrica una ganancia cambiaria.
+    expect(c.payment["fx_rate"]).toBe("45.00000000");
+    expect(c.payment["functional_amount"]).toBe("4680.00000000");
+    expect(c.exchange_difference).toBeNull();
+    expect(c.balance).toBe("-40.00000000");
     expect(c.document_status).toBe("paid");
 
+    // El reporte sigue vivo para los HISTÓRICOS en divisa; esta venta no le
+    // aportó ninguna fila.
     const kpi = await pedir("GET", "/v1/reports/exchange-difference", VENDEDOR);
-    const k = (await kpi.json()) as { neto: string };
-    expect(Number(k.neto)).toBeGreaterThanOrEqual(580);
+    expect(kpi.status).toBe(200);
   });
 
   it("un cobro en la misma moneda del documento y a la misma tasa no escribe diferencial de cero", async () => {
@@ -590,11 +603,12 @@ describe("ventas de extremo a extremo", () => {
     expect(mov).toBeDefined();
     expect(Number(mov!.amount) / Number(mov!.quantity)).toBe(Number(costoOriginal));
 
-    // Y la nota de crédito heredó la moneda del documento origen.
+    // Y la nota de crédito heredó la denominación del documento origen — que
+    // desde ADR-0046 es la funcional: espejo del corregido.
     const nc = await pedir("GET", `/v1/documents/${cf.credit_note_id}`, VENDEDOR);
     const n = (await nc.json()) as { document: Record<string, string> };
     expect(n.document["kind"]).toBe("credit_note");
-    expect(n.document["transaction_currency"]).toBe("USD");
+    expect(n.document["transaction_currency"]).toBe("VES");
     expect(n.document["status"]).toBe("issued");
   });
 
@@ -673,11 +687,19 @@ describe("ventas de extremo a extremo", () => {
     // Sin cliente: el servidor resolvió al Consumidor final y la lista «detal».
     expect(q["customer_id"]).toBe(CONSUMIDOR);
     expect(q["price_list_id"]).toBe(LISTA_DETAL);
-    // 2 × 100 USD + 16% (regla GENERAL: el consumidor final no es «ordinario»).
-    expect(q["subtotal"]).toBe("200.00000000");
-    expect(q["total"]).toBe("232.00000000");
-    expect(q["currency"]).toBe("USD");
-    expect(q["functional_total"]).toBe("10440.00000000"); // 232 × 45
+    // ADR-0046: el carrito cotiza EN BS — 100 USD a 45 = 4 500 la unidad;
+    // 2 × 4 500 = 9 000 + 16% = 10 440 Bs. El lado USD viaja como REFERENCIA
+    // del servidor: el precio de lista exacto y el total dividido por la tasa.
+    expect(q["currency"]).toBe("VES");
+    expect(q["subtotal"]).toBe("9000.00000000");
+    expect(q["total"]).toBe("10440.00000000");
+    expect(q["functional_total"]).toBe("10440.00000000");
+    expect(q["pricing_currency"]).toBe("USD");
+    expect(q["pricing_fx_rate"]).toBe("45.00000000");
+    expect(q["reference_total"]).toBe("232.00000000"); // 10 440 / 45
+    const lineasQ = q["lines"] as Record<string, string>[];
+    expect(lineasQ[0]!["unit_price"]).toBe("4500.00000000");
+    expect(lineasQ[0]!["reference_unit_price"]).toBe("100.00000000");
 
     const [despues] = await sql<{ n: number }[]>`
       select count(*)::int as n from public.documents where company_id = ${COMPANY}`;

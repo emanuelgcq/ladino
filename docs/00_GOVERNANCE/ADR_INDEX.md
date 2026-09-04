@@ -51,6 +51,7 @@ Usa la skill `adr` de Claude Code.
 | [0043](adr/ADR-0043-chart-templates-como-catalogo-global-importable.md) | Plantillas de plan de cuentas como catálogo global importable | Aceptado | SÍ |
 | [0044](adr/ADR-0044-libros-fiscales-como-vista-sobre-snapshot-ampliado.md) | Libros fiscales como consulta sobre snapshot ampliado, nunca tabla | Aceptado | SÍ |
 | [0045](adr/ADR-0045-adaptador-de-imprenta-digital-como-puerto.md) | Adaptador de imprenta digital como puerto; hoy NullDigitalPrintShop que rechaza | Aceptado | SÍ |
+| [0046](adr/ADR-0046-la-venta-se-denomina-en-bolivares.md) | La venta se denomina en Bs; la lista USD es ancla de precios con tasa congelada | Aceptado | SÍ |
 
 ## Decisiones aún abiertas
 

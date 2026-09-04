@@ -131,12 +131,24 @@ export function productsRoutes(
         }
       }
 
+      // ADR-0046: la cuadrícula enseña las DOS monedas — el precio de lista
+      // (ancla, USD) y su equivalente funcional con la tasa vigente HOY,
+      // calculado por el SERVIDOR. Sin tasa → null, jamás un cero. Es una
+      // vista previa: la que manda al cobrar es la que congela el documento.
       const precioJoin = conPrecio
         ? tx`left join lateral (
               select i.amount::text as price_amount, l.currency_code as price_currency,
-                     l.id as price_list_id
+                     l.id as price_list_id,
+                     case when l.currency_code = c.functional_currency_code then null
+                          else round(i.amount * platform.rate_at(l.currency_code,
+                                       c.functional_currency_code, current_date), 8)::text
+                     end as price_equivalent_amount,
+                     case when l.currency_code = c.functional_currency_code then null
+                          else c.functional_currency_code
+                     end as price_equivalent_currency
                 from public.price_list_items i
                 join public.price_lists l on l.id = i.price_list_id
+                join public.companies c on c.id = l.company_id
                where i.price_list_id = ${listaId} and i.product_id = p.id
                  and i.effective_from <= now()
                  and (i.effective_to is null or i.effective_to > now())
@@ -150,7 +162,7 @@ export function productsRoutes(
                where b.company_id = p.company_id and b.product_id = p.id
             ) existencia on true`
         : tx``;
-      const extras = `${conPrecio ? ", precio.price_amount, precio.price_currency, precio.price_list_id" : ""}${conStock ? ", existencia.stock_quantity" : ""}`;
+      const extras = `${conPrecio ? ", precio.price_amount, precio.price_currency, precio.price_list_id, precio.price_equivalent_amount, precio.price_equivalent_currency" : ""}${conStock ? ", existencia.stock_quantity" : ""}`;
 
       return tx<Record<string, unknown>[]>`
         select ${tx.unsafe(PRODUCT_SELECT_P)} ${tx.unsafe(extras)}, count(*) over ()::int as total

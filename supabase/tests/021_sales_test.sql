@@ -346,24 +346,30 @@ select is(
   3::bigint,
   'y el siguiente correlativo es 3, NO 2: anular no libera el número (ADR-0037)');
 
--- ── 9. Cobros, saldo y DIFERENCIAL CAMBIARIO calculado A MANO ──────────────
--- Factura de 100 USD emitida el 1-ago con tasa 40 → 4 000,00 Bs funcionales.
+-- ── 9. Cobros, saldo funcional y los CHECKs del diferencial ─────────────────
+-- ADR-0046: la venta se denomina en funcional. Factura de 4 000,00 Bs emitida
+-- el 1-ago, PRECIADA desde una lista USD a tasa 40 — la procedencia va en los
+-- campos pricing_*, no en la denominación.
 insert into public.documents
   (id, tenant_id, company_id, kind, series, customer_id, document_number, control_number,
    status, issued_at, regime_version_id, rules_version,
    transaction_currency, functional_currency, fx_rate, rate_source, rate_timestamp,
+   pricing_currency, pricing_fx_rate, pricing_rate_source, pricing_rate_timestamp,
    amount_transaction_currency, functional_amount, subtotal_amount, tax_amount, total_amount)
 values ('aaaa0021-0000-4000-8000-00000000f005', 'aaaa0021-0000-4000-8000-00000000000a',
         'aaaa0021-0000-4000-8000-0000000000a2', 'invoice', 'A',
         'aaaa0021-0000-4000-8000-00000000c001', 3, 2002,
         'issued', '2026-08-01T12:00:00Z', 'aaaa0021-0000-4000-8000-00000000e100', 'test-021',
-        'USD', 'VES', 40, 'BCV', '2026-08-01T10:00:00Z',
-        100, 4000, 4000, 0, 4000);
+        'VES', 'VES', 1, 'identidad', '2026-08-01T10:00:00Z',
+        'USD', 40, 'BCV', '2026-08-01T10:00:00Z',
+        4000, 4000, 4000, 0, 4000);
 select is(platform.document_balance('aaaa0021-0000-4000-8000-0000000000a2',
                                     'aaaa0021-0000-4000-8000-00000000f005'),
-  4000.00000000::numeric, 'saldo inicial = total: 4 000,00 Bs (100 USD a 40)');
+  4000.00000000::numeric, 'saldo inicial = total: 4 000,00 Bs (preciada de 100 USD a 40)');
 
--- Se cobra el 1-SEP, cuando la tasa es 50: 100 USD valen ahora 5 000,00 Bs.
+-- Se cobra el 1-SEP en dólares, cuando la tasa es 50: los 100 USD entregados
+-- valen 5 000,00 Bs. La deuda era de 4 000 Bs y NO se revaloriza (ADR-0046):
+-- lo que antes era diferencial hoy es un pago que EXCEDE el saldo en Bs.
 -- Desde la migración 29 todo pago LLEVA cuenta: las de este test, una por moneda.
 insert into public.company_accounts (id, tenant_id, company_id, name, currency, kind) values
   ('aaaa0021-0000-4000-8000-000000000ca1', 'aaaa0021-0000-4000-8000-00000000000a',
@@ -380,9 +386,12 @@ values ('aaaa0021-0000-4000-8000-00000000f105', 'aaaa0021-0000-4000-8000-0000000
 select is(platform.document_balance('aaaa0021-0000-4000-8000-0000000000a2',
                                     'aaaa0021-0000-4000-8000-00000000f005'),
   -1000.00000000::numeric,
-  'A MANO: 4 000 − 5 000 = −1 000. El saldo funcional queda negativo porque los mismos '
-  '100 USD valen más Bs hoy: ESA diferencia es el diferencial cambiario, no un sobrepago');
+  'A MANO: 4 000 − 5 000 = −1 000. El saldo funcional compara Bs con Bs: los 100 USD '
+  'entregados a tasa 50 EXCEDEN la deuda de 4 000 Bs — sobrepago, no diferencial (ADR-0046)');
 
+-- La tabla exchange_gain_loss sigue viva para los documentos HISTÓRICOS
+-- denominados en divisa (pre-ADR-0046). Sus CHECKs se prueban aquí con los
+-- mismos números; la fila es del histórico, no de esta factura en Bs.
 insert into public.exchange_gain_loss
   (tenant_id, company_id, document_id, payment_id, amount_transaction, transaction_currency,
    functional_at_issue, functional_at_payment, difference, fx_rate_issue, fx_rate_payment, occurred_on)
