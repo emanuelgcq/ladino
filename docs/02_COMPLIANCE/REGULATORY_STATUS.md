@@ -1,14 +1,18 @@
 # Estado regulatorio — Venezuela
 
-> **Corte: 2026-08-15.** Este documento es el **punto de entrada** de `docs/02_COMPLIANCE/`.
+> **Corte: 2026-09-02.** Este documento es el **punto de entrada** de `docs/02_COMPLIANCE/`.
 > Antes de leer cualquier otro fichero de esta carpeta, mira aquí si la norma que lo sostiene
 > sigue vigente. Varios documentos describen obligaciones **derogadas** y se conservan a
 > propósito; sin este índice, se leen como si estuvieran en vigor.
 >
-> **Procedencia del dato:** actualización aportada y verificada por el responsable del proyecto el
-> 2026-08-15, con número de providencia, Gaceta y fecha. **No verificada de forma independiente
-> contra el texto de la Gaceta desde este repositorio.** Antes de usarla en un expediente o en una
-> comunicación con un tercero, contrástala con el texto oficial.
+> **Procedencia del dato:** investigación normativa aportada y verificada por el responsable del
+> proyecto contra fuentes primarias al **2026-09-02** (que amplía la del 2026-08-15 con los
+> artículos concretos de la PA 00071 y la PA 102 — ver §2). **No verificada de forma
+> independiente contra el texto de la Gaceta desde este repositorio.** Antes de usarla en un
+> expediente o en una comunicación con un tercero, contrástala con el texto oficial.
+>
+> La vista operativa de todo esto —las tres vías de emisión, quién debe usar cuál y qué cumple
+> Ladino de cada una— vive en **`EMISION_FACTURAS.md`**.
 
 ---
 
@@ -55,10 +59,36 @@ que gobiernan la emisión fiscal hoy.
 
 | Norma | Alcance | Documento en el repo |
 |---|---|---|
-| **PA SNAT/2011/00071** | Normas generales de emisión de facturas y otros documentos | `FISCAL_DOCUMENTS_SPEC.md` |
+| **PA SNAT/2011/00071** | Normas generales de emisión de facturas y otros documentos | `FISCAL_DOCUMENTS_SPEC.md` · `EMISION_FACTURAS.md` |
 | **PA SNAT/2018/0141** | Máquinas fiscales | fuera de alcance actual de Ladino |
-| **PA 102** | Emisión por medios digitales · imprentas digitales | `SENIAT_PA102_DIGITAL_INVOICING.md` |
+| **PA 102** | Emisión por medios digitales · imprentas digitales | `SENIAT_PA102_DIGITAL_INVOICING.md` · `EMISION_FACTURAS.md` |
 | **PA SNAT/2026/00080** | Reforma del RIF | ver §4 |
+
+**Los artículos que gobiernan el trabajo de Ladino, verificados al 2026-09-02 con fuentes
+primarias** (cada punto con su providencia y artículo):
+
+- **PA 00071 art. 6** — tres medios de emisión a **libre elección** del contribuyente (formatos
+  libres elaborados por imprenta autorizada, formas libres, máquina fiscal), **salvo** los
+  obligados del art. 8.
+- **PA 00071 art. 13** — los requisitos de la factura en forma libre. Los que Ladino imprime y
+  dónde: numeral 5 (nombre/razón social, **domicilio fiscal** y RIF del emisor — snapshot
+  congelado, migración 34), 6 (fecha en ocho dígitos), 9 (marcador «(E)» en operaciones
+  exentas/exoneradas/no sujetas), 13 (leyenda «SIN DERECHO A CRÉDITO FISCAL» en toda copia),
+  14 (ambas monedas y tipo de cambio cuando la operación se expresó en moneda extranjera).
+  Mapeo completo en `EMISION_FACTURAS.md`.
+- **PA 00071 art. 8** — obligados a **máquina fiscal** cuando concurren las TRES condiciones:
+  ingresos del año anterior superiores a **1.500 UT**, operaciones **mayoritarias** con
+  consumidor final, y actividad **listada** en el artículo. El **literal j** obliga sin
+  importar el ingreso. `/empezar` lo advierte; Ladino no imprime por máquina fiscal (R-25).
+- **PA 00071 art. 49** — prohibición de documentos previos (presupuestos/proformas que
+  sustituyan factura) para los obligados a máquina fiscal.
+- **PA 102** — vigente, **obligatoria para sus sujetos desde el 01/03/2025**: autorización del
+  emisor (arts. 3/17); la **imprenta digital asigna el número de control DOCUMENTO A
+  DOCUMENTO** (el modo `per_document` de ADR-0037; contrato del adaptador en ADR-0045);
+  formato del control en el **art. 30** («N° de Control» + identificador de DOS dígitos +
+  secuencial de HASTA OCHO dígitos, arrancando 00-1 — `CONTROL_NUMBER_RE` en
+  `packages/fiscal`); **talonarios de contingencia con la palabra «contingencia»**
+  (migración 35, `contingency_ranges`); conservación **10 años**; entrega por medio digital.
 
 Y todo lo tributario sustantivo, que la 121 nunca reguló y que sigue exactamente igual: IVA
 (`IVA_SPEC.md`), ISLR (`ISLR_SPEC.md`), retenciones (`RETENTIONS_SPEC.md`), IGTF (`IGTF_SPEC.md`),

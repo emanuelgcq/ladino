@@ -423,6 +423,44 @@ operaciones, así que la base sale bien clasificada por naturaleza aunque el tip
 **No bloquea operar** ni distorsiona ninguna cifra: hoy `operation_type` no alimenta ninguna columna
 del libro; está capturado para cuando la regla exista.
 
+### R-25 · El segmento retail-consumidor-final con volumen requiere máquina fiscal y Ladino no la tiene
+
+- **Severidad:** Alta · **Disparador:** el primer prospecto de ese perfil
+- **Dónde:** PA 00071 art. 8 (las tres condiciones concurrentes: >1.500 UT del año anterior +
+  operaciones mayoritarias con consumidor final + actividad listada; el literal j obliga sin
+  importar el ingreso) · `EMISION_FACTURAS.md` §2
+
+Un negocio obligado por el art. 8 **no puede** facturar por formatos libres, y el art. 49 le
+prohíbe además los documentos previos. Ladino no imprime por máquina fiscal: para ese perfil,
+hoy no hay emisión legal desde Ladino.
+
+**Lo que ya está defendido:** `/empezar` pregunta a quién le vende y si tiene máquina; al perfil
+de mostrador le muestra la advertencia del art. 8 remitiendo al contador, y al que tiene máquina
+lo deja en modo **administrativo sin emisión** — todo Ladino menos emitir factura, sin bloquear
+el resto (la tercera modalidad del producto, documentada en `EMISION_FACTURAS.md` §1).
+
+**Deja de ser aceptable:** cuando el primer prospecto de ese perfil aparezca. Mitigación en ese
+momento: venderle el modo administrativo y **adelantar la Fase 12** (integración de máquina
+fiscal) en el roadmap.
+
+### R-26 · La vía de emisión digital depende de una imprenta digital autorizada, que es externa
+
+- **Severidad:** Media · **Disparador:** el primer cliente que pida la vía digital (PA 102)
+- **Dónde:** ADR-0045 (`DigitalPrintShopAdapter`, `NullDigitalPrintShop`) · ADR-0037
+  (`per_document`, deshabilitado) · `EMISION_FACTURAS.md` §4
+
+El número de control de la vía digital lo asigna un tercero documento a documento. Ladino tiene
+el **contrato** y el modo de numeración modelados, pero la implementación exige elegir un
+proveedor de la **lista de imprentas digitales autorizadas vigente** — lista que no está en el
+repo y no se inventa (VALIDAR-SENIAT).
+
+**Lo que ya está defendido:** el puerto rechaza con mensaje claro en vez de fingir; ningún
+régimen `per_document` puede habilitarse mientras el adaptador sea el null; la contingencia
+(migración 35) ya modela la rama «la imprenta no responde».
+
+**Deja de ser aceptable:** con el primer cliente que la pida. Mitigación: conseguir la lista
+vigente, elegir proveedor (decisión del operador) y escribir el adaptador real contra ADR-0045.
+
 > **Sobre la numeración.** R-16 a R-21 nacieron en `HANDOFF.md` durante los módulos de ventas,
 > compras y contabilidad y siguen ahí. Este registro salta de R-15 a R-22 por eso, no porque se
 > hayan perdido entradas. Consolidarlos aquí está pendiente y es trabajo de una sesión, no de esta.

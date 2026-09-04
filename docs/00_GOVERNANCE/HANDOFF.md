@@ -1,4 +1,47 @@
-# Handoff — 2026-09-02 (2ª sesión)
+# Handoff — 2026-09-04
+
+## Investigación normativa de facturación aplicada (2026-09-03/04)
+
+Verificada al 2026-09-02 con fuentes primarias; compliance actualizado y los faltantes
+construibles, construidos. Seis unidades:
+
+1. **Snapshot del EMISOR** (migración 34, pgTAP 034): `companies.fiscal_address` y
+   `branches.fiscal_address` nacen NULL honesto; `documents` congela razón social, RIF
+   normalizado, domicilio (y el de la sucursal) al crearse — LAD68 también para el emisor, y
+   rellenar un documento viejo también es LAD68. `PUT /v1/companies/fiscal-address`
+   (auditado con valor anterior); /empezar lo pide ANTES de elegir cómo facturar. E2E: el
+   PDF sigue diciendo el domicilio del día de emisión aunque el vivo cambie.
+2. **PDF legal (PA 00071 art. 13)**: membrete con domicilio del snapshot (13.5), «(E)» junto
+   a la descripción leyendo el `tax_treatment` congelado — lo pre-27 sin tratamiento no se
+   marca (13.9), `?copia=1` imprime «SIN DERECHO A CRÉDITO FISCAL» (13.13), fecha DD/MM/AAAA
+   (13.6), ambas monedas + tasa ya congeladas (13.14). Sigue VALIDAR-SENIAT de layout.
+3. **Contingencia (PA 102, migración 35, pgTAP 035)**: `contingency_ranges` — el talonario
+   ES un `fiscal_number_range` con serie «contingencia…» (LAD69 exige la palabra; el CHECK
+   de serie se amplió de 10 a 30 caracteres en ranges y documents PORQUE la palabra no
+   cabía). `registerContingencyInvoice` entra por `createInvoice` ENTERA (kardex, impuestos,
+   asiento, libros) y exige los números DEL PAPEL en orden: si no cuadran, `err` tras crear
+   → rollback total. Pantalla simple en /admin/facturacion-fiscal (paso 5). E2E: libro de
+   ventas la trae, coverage gaps en cero, números equivocados revierten. **Trampa cazada:**
+   la migración nació sin GRANT a ladino_api — políticas perfectas sobre una tabla
+   inaccesible; el E2E lo destapó como 404.
+4. **Puerto de imprenta digital** (ADR-0045, `packages/fiscal/print-shop.ts`):
+   `DigitalPrintShopAdapter.assignControlNumber()` + `CONTROL_NUMBER_RE` (art. 30:
+   `^\d{2}-\d{1,8}$`) + `NullDigitalPrintShop` que RECHAZA — jamás finge un control.
+   `per_document` sigue deshabilitado hasta adaptador real (dependencia externa: elegir
+   imprenta autorizada de la lista vigente, VALIDAR-SENIAT). ADR_INDEX puesto al día
+   (le faltaban 0039–0044).
+5. **/empezar pregunta la vía**: «¿a quién le vendes?» + «¿tienes máquina fiscal?» →
+   formatos libres (con ADVERTENCIA art. 8 para mostrador), o `sin_emision` con el mensaje
+   honesto — la TERCERA MODALIDAD del producto: administrativo completo sin emisión
+   (documentada en EMISION_FACTURAS.md §1). El domicilio fiscal se pide primero.
+6. **Compliance**: REGULATORY_STATUS al corte 2026-09-02 con artículos citados;
+   `EMISION_FACTURAS.md` NUEVO (las tres vías, art. 8 con sus tres condiciones y el literal
+   j, art. 13 mapeado a dónde lo cumple Ladino, PA 102 con estados, VALIDAR-SENIAT
+   abiertos); R-25 (retail obligado a máquina fiscal) y R-26 (imprenta digital externa) en
+   el RISK_REGISTER.
+
+Pendiente que la orden dejó para DESPUÉS de esto: la corrección legal del consumidor final
+(si aplica) y el lector de códigos de barras.
 
 ## El adaptador BCV dejó de ser null (2026-09-02)
 

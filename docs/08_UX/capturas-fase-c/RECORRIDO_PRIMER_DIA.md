@@ -24,7 +24,13 @@ cuando el servidor confirma cada uno:
    «Agregar cuenta» → nombre → «Crear cuenta» (2 clics + un nombre).
 3. **La tasa del día** — si hay una tasa de ayer, «Sigue igual» la confirma con **1 clic**.
    Si no hay ninguna, se escribe y se guarda.
-4. **Tus facturas** — el paso delicado, y el único con letra seria:
+4. **Tus facturas** — el paso delicado, y el único con letra seria. Desde la investigación
+   normativa (2026-09-04) arranca con la **dirección fiscal** del negocio (va impresa en
+   cada factura) y DOS preguntas: «¿a quién le vendes principalmente?» y «¿tienes máquina
+   fiscal?». Con máquina, el negocio queda en modo administrativo —todo Ladino menos emitir,
+   con el mensaje honesto—; vendiendo a personas de mostrador, se factura con formatos
+   libres pero con la advertencia del art. 8 (PA 00071) a la vista, remitiendo al contador.
+   Después:
    - **¿Vas a dar facturas?** Las opciones llegan del servidor **con su norma citada**
      (formatos libres: Providencia Administrativa SNAT/2011/00071, G.O. 39.795). Se elige
      una vez; cambiarla después es un acto del mundo de administración.
