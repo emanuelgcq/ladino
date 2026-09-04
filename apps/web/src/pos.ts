@@ -11,27 +11,28 @@ export interface LineaCotizada {
   readonly product_id: string;
   readonly description: string;
   readonly quantity: string;
+  /** El precio en la moneda ancla de la lista (USD). */
   readonly unit_price: string;
-  /** El precio de lista exacto en la moneda ancla (contrato: reference_unit_price). */
-  readonly precio_referencia: string | null;
   readonly total: string;
+  /** ADR-0047: el mismo lado en Bs que congelará el documento, por línea. */
+  readonly precio_bs: string;
+  readonly total_bs: string;
 }
 
 export interface CotizacionPos {
   readonly customer_id: string;
   readonly price_list_id: string;
+  /** La moneda ancla del documento (la de la lista: USD, o Bs si la lista es en Bs). */
   readonly currency: string;
   /** La tasa del día que usó el servidor (el contrato la llama fx_rate). */
   readonly tasa: string;
-  /** La moneda ancla de la lista y su tasa aplicada (contrato: pricing_*). */
-  readonly moneda_referencia: string | null;
-  readonly tasa_precios: string | null;
-  /** El total dividido por esa tasa, del servidor (contrato: reference_total). */
-  readonly total_referencia: string | null;
   readonly lines: readonly LineaCotizada[];
   readonly subtotal: string;
   readonly tax_amount: string;
   readonly total: string;
+  /** El pie en Bs, derivado por el servidor igual que en la emisión. */
+  readonly subtotal_bs: string;
+  readonly impuesto_bs: string;
   readonly functional_total: string;
   readonly functional_currency: string;
 }
@@ -47,17 +48,14 @@ export async function cotizarPos(
   },
 ): Promise<CotizacionPos> {
   const r = await llamar<
-    Omit<
-      CotizacionPos,
-      "tasa" | "moneda_referencia" | "tasa_precios" | "total_referencia" | "lines"
-    > & {
+    Omit<CotizacionPos, "tasa" | "subtotal_bs" | "impuesto_bs" | "lines"> & {
       fx_rate: string;
-      pricing_currency: string | null;
-      pricing_fx_rate: string | null;
-      pricing_rate_source: string | null;
-      reference_total: string | null;
-      lines: readonly (Omit<LineaCotizada, "precio_referencia"> & {
-        reference_unit_price: string | null;
+      rate_source: string;
+      functional_subtotal: string;
+      functional_tax_amount: string;
+      lines: readonly (Omit<LineaCotizada, "precio_bs" | "total_bs"> & {
+        functional_unit_price: string;
+        functional_total: string;
       })[];
     }
   >("/v1/pos/quote", {
@@ -66,22 +64,21 @@ export async function cotizarPos(
   });
   const {
     fx_rate,
-    pricing_currency,
-    pricing_fx_rate,
-    pricing_rate_source: _fuente,
-    reference_total,
+    rate_source: _fuente,
+    functional_subtotal,
+    functional_tax_amount,
     lines,
     ...resto
   } = r;
   return {
     ...resto,
     tasa: fx_rate,
-    moneda_referencia: pricing_currency,
-    tasa_precios: pricing_fx_rate,
-    total_referencia: reference_total,
-    lines: lines.map(({ reference_unit_price, ...l }) => ({
+    subtotal_bs: functional_subtotal,
+    impuesto_bs: functional_tax_amount,
+    lines: lines.map(({ functional_unit_price, functional_total, ...l }) => ({
       ...l,
-      precio_referencia: reference_unit_price,
+      precio_bs: functional_unit_price,
+      total_bs: functional_total,
     })),
   };
 }

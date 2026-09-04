@@ -307,11 +307,10 @@ export function Vender(): React.JSX.Element {
                         <p className="text-[0.8rem] text-muted-foreground tabular-nums">
                           {cot
                             ? `${
-                                cot.precio_referencia !== null &&
-                                cotizacion.data!.moneda_referencia !== null
-                                  ? `${mostrarImporte({ amount: cot.precio_referencia, currency: cotizacion.data!.moneda_referencia })} · `
+                                cotizacion.data!.currency !== cotizacion.data!.functional_currency
+                                  ? `${mostrarImporte({ amount: cot.unit_price, currency: cotizacion.data!.currency })} · `
                                   : ""
-                              }${mostrarImporte({ amount: cot.unit_price, currency: cotizacion.data!.currency })} c/u`
+                              }${mostrarImporte({ amount: cot.precio_bs, currency: cotizacion.data!.functional_currency })} c/u`
                             : "…"}
                         </p>
                       </div>
@@ -339,8 +338,8 @@ export function Vender(): React.JSX.Element {
                       <span className="w-20 text-right text-[0.92rem] font-medium tabular-nums">
                         {cot
                           ? mostrarImporte({
-                              amount: cot.total,
-                              currency: cotizacion.data!.currency,
+                              amount: cot.total_bs,
+                              currency: cotizacion.data!.functional_currency,
                             })
                           : "…"}
                       </span>
@@ -357,8 +356,8 @@ export function Vender(): React.JSX.Element {
                   <span>Sin impuesto</span>
                   <span className="tabular-nums">
                     {mostrarImporte({
-                      amount: cotizacion.data.subtotal,
-                      currency: cotizacion.data.currency,
+                      amount: cotizacion.data.subtotal_bs,
+                      currency: cotizacion.data.functional_currency,
                     })}
                   </span>
                 </div>
@@ -366,8 +365,8 @@ export function Vender(): React.JSX.Element {
                   <span>IVA</span>
                   <span className="tabular-nums">
                     {mostrarImporte({
-                      amount: cotizacion.data.tax_amount,
-                      currency: cotizacion.data.currency,
+                      amount: cotizacion.data.impuesto_bs,
+                      currency: cotizacion.data.functional_currency,
                     })}
                   </span>
                 </div>
@@ -375,23 +374,21 @@ export function Vender(): React.JSX.Element {
                   <span className="text-[1rem] font-semibold">Total</span>
                   <span className="text-xl font-semibold tabular-nums">
                     {mostrarImporte({
-                      amount: cotizacion.data.total,
-                      currency: cotizacion.data.currency,
+                      amount: cotizacion.data.functional_total,
+                      currency: cotizacion.data.functional_currency,
                     })}
                   </span>
                 </div>
-                {cotizacion.data.total_referencia !== null &&
-                  cotizacion.data.moneda_referencia !== null &&
-                  cotizacion.data.tasa_precios !== null && (
-                    <p className="text-right text-[0.82rem] text-muted-foreground tabular-nums">
-                      ={" "}
-                      {mostrarImporte({
-                        amount: cotizacion.data.total_referencia,
-                        currency: cotizacion.data.moneda_referencia,
-                      })}{" "}
-                      a la tasa de hoy ({mostrarCantidad(cotizacion.data.tasa_precios)})
-                    </p>
-                  )}
+                {cotizacion.data.currency !== cotizacion.data.functional_currency && (
+                  <p className="text-right text-[0.82rem] text-muted-foreground tabular-nums">
+                    ={" "}
+                    {mostrarImporte({
+                      amount: cotizacion.data.total,
+                      currency: cotizacion.data.currency,
+                    })}{" "}
+                    a la tasa de hoy ({mostrarCantidad(cotizacion.data.tasa)})
+                  </p>
+                )}
               </>
             )}
             <Button
@@ -878,11 +875,6 @@ function Cobrar({
   const exactoEn = (currency: string): string | null => {
     if (currency === cotizacion.currency) return cotizacion.total;
     if (currency === cotizacion.functional_currency) return cotizacion.functional_total;
-    // El equivalente del servidor en la moneda ancla (el total ÷ tasa de hoy):
-    // prellenar con él deja el vuelto en cero para quien paga justo en divisa.
-    if (currency === cotizacion.moneda_referencia && cotizacion.total_referencia !== null) {
-      return cotizacion.total_referencia;
-    }
     return null;
   };
 
@@ -955,15 +947,14 @@ function Cobrar({
           <div className="rounded-lg bg-surface-muted p-3 text-center">
             <p className="text-[0.85rem] text-muted-foreground">Total a cobrar</p>
             <p className="text-3xl font-semibold tabular-nums">
-              {mostrarImporte({ amount: cotizacion.total, currency: cotizacion.currency })}
+              {mostrarImporte({
+                amount: cotizacion.functional_total,
+                currency: cotizacion.functional_currency,
+              })}
             </p>
-            {cotizacion.total_referencia !== null && cotizacion.moneda_referencia !== null && (
+            {cotizacion.currency !== cotizacion.functional_currency && (
               <p className="text-[0.85rem] text-muted-foreground tabular-nums">
-                ={" "}
-                {mostrarImporte({
-                  amount: cotizacion.total_referencia,
-                  currency: cotizacion.moneda_referencia,
-                })}
+                = {mostrarImporte({ amount: cotizacion.total, currency: cotizacion.currency })}
               </p>
             )}
           </div>
