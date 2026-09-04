@@ -86,7 +86,7 @@ export function negocioRoutes(app: Hono, sql: Sql): void {
       // en SQL. Solo los positivos: un sobrepago no «resta deuda de otros».
       const [deben] = await tx<{ total: string }[]>`
         select coalesce(sum(saldo), 0)::text as total
-          from (select greatest(platform.document_balance(${companyId}, d.id), 0) as saldo
+          from (select greatest(platform.document_debt_today(${companyId}, d.id), 0) as saldo
                   from public.documents d
                  where d.company_id = ${companyId} and d.kind = 'invoice'
                    and d.status = 'issued') s`;

@@ -160,7 +160,7 @@ export function salesRoutes(
           from public.exchange_gain_loss where document_id = ${id} order by occurred_on, id`;
       // El saldo lo dice el esquema, no esta capa.
       const [saldo] = await tx<{ balance: string }[]>`
-        select platform.document_balance(${companyId}, ${id})::text as balance`;
+        select platform.document_debt_today(${companyId}, ${id})::text as balance`;
       return {
         document: documento,
         lines,
@@ -401,7 +401,7 @@ export function salesRoutes(
                d.status, d.total_amount::text as total_amount,
                coalesce((select sum(p.functional_amount) from public.payments p
                           where p.document_id = d.id), 0)::text as paid_amount,
-               platform.document_balance(${companyId}, d.id)::text as balance,
+               platform.document_debt_today(${companyId}, d.id)::text as balance,
                greatest(0, (current_date - d.issued_at::date))::int as days_outstanding
           from public.documents d
          where d.company_id = ${companyId} and d.customer_id = ${id}
@@ -413,7 +413,7 @@ export function salesRoutes(
           from public.customer_credits
          where company_id = ${companyId} and customer_id = ${id} order by created_at, id`;
       const [totales] = await tx<{ pendiente: string; credito: string }[]>`
-        select coalesce((select sum(platform.document_balance(${companyId}, d.id))
+        select coalesce((select sum(platform.document_debt_today(${companyId}, d.id))
                            from public.documents d
                           where d.company_id = ${companyId} and d.customer_id = ${id}
                             and d.kind in ('invoice', 'receipt') and d.status in ('issued', 'paid')), 0)::text

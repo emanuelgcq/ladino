@@ -1,6 +1,9 @@
 # ADR-0046 — La venta se denomina en bolívares; el dólar es el ancla de precios
 
-- **Estado:** aceptado (orden del dueño, 2026-09-04)
+- **Estado:** REEMPLAZADO por [ADR-0047](ADR-0047-la-deuda-se-ancla-en-dolares-el-papel-habla-en-bolivares.md)
+  el mismo día (2026-09-04): denominar la deuda en Bs hace perder margen a quien fía en una
+  moneda que se devalúa. Sobreviven las decisiones de pantalla (lista USD con columna Bs,
+  carrito dual, papel en bolívares); la denominación vuelve a ADR-0020, corregida.
 - **Reemplaza parcialmente:** la decisión de ADR-0020 de calcular el documento de venta en la
   moneda de la lista (el diferencial cambiario de VENTAS). ADR-0020 sigue vigente para
   compras, tesorería y para los siete campos de conversión, que no cambian de forma.

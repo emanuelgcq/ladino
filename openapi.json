@@ -3042,18 +3042,6 @@
           "rate_source": {
             "type": "string"
           },
-          "pricing_currency": {
-            "type": "string",
-            "nullable": true
-          },
-          "pricing_fx_rate": {
-            "type": "string",
-            "nullable": true
-          },
-          "pricing_rate_source": {
-            "type": "string",
-            "nullable": true
-          },
           "subtotal_amount": {
             "type": "string"
           },
@@ -3092,9 +3080,6 @@
           "functional_currency",
           "fx_rate",
           "rate_source",
-          "pricing_currency",
-          "pricing_fx_rate",
-          "pricing_rate_source",
           "subtotal_amount",
           "tax_amount",
           "total_amount",
@@ -3195,18 +3180,6 @@
               "rate_source": {
                 "type": "string"
               },
-              "pricing_currency": {
-                "type": "string",
-                "nullable": true
-              },
-              "pricing_fx_rate": {
-                "type": "string",
-                "nullable": true
-              },
-              "pricing_rate_source": {
-                "type": "string",
-                "nullable": true
-              },
               "subtotal_amount": {
                 "type": "string"
               },
@@ -3245,9 +3218,6 @@
               "functional_currency",
               "fx_rate",
               "rate_source",
-              "pricing_currency",
-              "pricing_fx_rate",
-              "pricing_rate_source",
               "subtotal_amount",
               "tax_amount",
               "total_amount",
@@ -3590,18 +3560,6 @@
                 "rate_source": {
                   "type": "string"
                 },
-                "pricing_currency": {
-                  "type": "string",
-                  "nullable": true
-                },
-                "pricing_fx_rate": {
-                  "type": "string",
-                  "nullable": true
-                },
-                "pricing_rate_source": {
-                  "type": "string",
-                  "nullable": true
-                },
                 "subtotal_amount": {
                   "type": "string"
                 },
@@ -3640,9 +3598,6 @@
                 "functional_currency",
                 "fx_rate",
                 "rate_source",
-                "pricing_currency",
-                "pricing_fx_rate",
-                "pricing_rate_source",
                 "subtotal_amount",
                 "tax_amount",
                 "total_amount",
@@ -5253,22 +5208,6 @@
           "rate_source": {
             "type": "string"
           },
-          "pricing_currency": {
-            "type": "string",
-            "nullable": true
-          },
-          "pricing_fx_rate": {
-            "type": "string",
-            "nullable": true
-          },
-          "pricing_rate_source": {
-            "type": "string",
-            "nullable": true
-          },
-          "reference_total": {
-            "type": "string",
-            "nullable": true
-          },
           "lines": {
             "type": "array",
             "items": {
@@ -5287,10 +5226,6 @@
                 "unit_price": {
                   "type": "string"
                 },
-                "reference_unit_price": {
-                  "type": "string",
-                  "nullable": true
-                },
                 "subtotal": {
                   "type": "string"
                 },
@@ -5302,6 +5237,12 @@
                 },
                 "total": {
                   "type": "string"
+                },
+                "functional_unit_price": {
+                  "type": "string"
+                },
+                "functional_total": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -5309,11 +5250,12 @@
                 "description",
                 "quantity",
                 "unit_price",
-                "reference_unit_price",
                 "subtotal",
                 "tax_rate",
                 "tax_amount",
-                "total"
+                "total",
+                "functional_unit_price",
+                "functional_total"
               ],
               "additionalProperties": false
             }
@@ -5325,6 +5267,12 @@
             "type": "string"
           },
           "total": {
+            "type": "string"
+          },
+          "functional_subtotal": {
+            "type": "string"
+          },
+          "functional_tax_amount": {
             "type": "string"
           },
           "functional_total": {
@@ -5340,14 +5288,12 @@
           "currency",
           "fx_rate",
           "rate_source",
-          "pricing_currency",
-          "pricing_fx_rate",
-          "pricing_rate_source",
-          "reference_total",
           "lines",
           "subtotal",
           "tax_amount",
           "total",
+          "functional_subtotal",
+          "functional_tax_amount",
           "functional_total",
           "functional_currency"
         ],
@@ -5556,18 +5502,6 @@
               "rate_source": {
                 "type": "string"
               },
-              "pricing_currency": {
-                "type": "string",
-                "nullable": true
-              },
-              "pricing_fx_rate": {
-                "type": "string",
-                "nullable": true
-              },
-              "pricing_rate_source": {
-                "type": "string",
-                "nullable": true
-              },
               "subtotal_amount": {
                 "type": "string"
               },
@@ -5606,9 +5540,6 @@
               "functional_currency",
               "fx_rate",
               "rate_source",
-              "pricing_currency",
-              "pricing_fx_rate",
-              "pricing_rate_source",
               "subtotal_amount",
               "tax_amount",
               "total_amount",

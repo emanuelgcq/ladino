@@ -121,12 +121,14 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
           left join public.branches b on b.id = d.branch_id
          where d.id = ${id} and d.company_id = ${companyId}`;
       if (!doc) return null;
+      // El PDF habla en bolívares (ADR-0047): las líneas salen del LADO
+      // FUNCIONAL congelado al emitir — no de una conversión de hoy.
       const lineas = await tx<Record<string, string>[]>`
         select description, quantity::text as quantity,
-               unit_price_transaction::text as unit_price,
+               unit_price_functional::text as unit_price,
                tax_rate_snapshot::text as tax_rate,
                tax_treatment,
-               line_total_transaction::text as line_total
+               line_total_functional::text as line_total
           from public.document_lines where document_id = ${id} order by line_number`;
       return { doc, lineas };
     });
@@ -256,15 +258,18 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
     pdf.moveDown(0.5);
 
     // ── Totales ────────────────────────────────────────────────────────────
-    // ADR-0046: el documento nuevo se denomina en Bs y el PDF lo dice como se
-    // dice en Venezuela — «Bs.», no el código ISO. Un histórico en divisa se
-    // imprime como nació, con su código.
-    const monedaVestida = moneda === "VES" ? "Bs." : moneda;
+    // ADR-0047: el papel habla en BOLÍVARES. Los totales del pie
+    // (subtotal/IVA/total) están congelados en moneda funcional desde la
+    // emisión, y se visten «Bs.» como se dice en Venezuela — no el código ISO.
+    const funcionalVestida = funcional === "VES" ? "Bs." : funcional;
     const totalFila = (etiqueta: string, importe: string, negrita = false): void => {
       const y = pdf.y;
       pdf.font(negrita ? "Helvetica-Bold" : "Helvetica").fontSize(10);
       pdf.text(etiqueta, 330, y, { width: 140, align: "right" });
-      pdf.text(`${monedaVestida} ${vestirImporte(importe)}`, 470, y, { width: 94, align: "right" });
+      pdf.text(`${funcionalVestida} ${vestirImporte(importe)}`, 470, y, {
+        width: 94,
+        align: "right",
+      });
       pdf.moveDown(0.15);
     };
     // El recibo no separa IVA: no hay impuesto que separar (migración 37).
@@ -274,16 +279,18 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
     }
     totalFila("TOTAL:", String(doc["total_amount"]), true);
     // PA 00071 art. 13.14: operación expresada en moneda extranjera → el
-    // documento lleva AMBAS monedas y el tipo de cambio aplicable. Los tres
-    // datos vienen congelados en la fila; aquí solo se visten.
+    // documento lleva AMBAS monedas y el tipo de cambio aplicable. El cuerpo
+    // va en Bs (arriba); aquí, el total en la moneda del documento y la tasa
+    // de emisión con su fuente — los tres congelados en la fila. Es además la
+    // deuda ANCLADA (ADR-0047): lo que se fía se debe en esta moneda.
     if (moneda !== funcional) {
       pdf.moveDown(0.2);
       pdf
         .font("Helvetica")
         .fontSize(9)
         .text(
-          `Equivalente en ${funcional === "VES" ? "bolívares" : funcional}: ` +
-            `${funcional === "VES" ? "Bs." : funcional} ${vestirImporte(String(doc["functional_amount"]))}`,
+          `Total en ${moneda === "USD" ? "dólares" : moneda}: ` +
+            `${moneda} ${vestirImporte(String(doc["amount_transaction"]))}`,
           280,
           pdf.y,
           { width: 284, align: "right" },

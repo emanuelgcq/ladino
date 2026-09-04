@@ -251,24 +251,21 @@ select is((select iva_debito from platform.sales_book('aaaa0027-0000-4000-8000-0
              '2026-08-01', '2026-08-31') where document_number = 1), 160::numeric,
   'el IVA sale de la CABECERA, que es lo que se emitió y lo que tiene que cuadrar con el mayor');
 
--- ADR-0046: la venta se denomina en funcional; la lista USD deja su tasa
--- congelada en pricing_*. La base del libro es la del DÍA DE EMISIÓN, leída
--- del documento — si el libro la recalculara con la tasa de hoy, cambiaría sola.
+-- Moneda extranjera: la tasa que manda es la del DÍA DE EMISIÓN, congelada en el
+-- documento. Si el libro la recalculara con la de hoy, la base cambiaría sola.
 insert into public.documents
   (id, tenant_id, company_id, kind, series, customer_id, document_number, control_number,
    status, issued_at, regime_version_id, rules_version,
    transaction_currency, functional_currency, fx_rate, rate_source, rate_timestamp,
-   pricing_currency, pricing_fx_rate, pricing_rate_source, pricing_rate_timestamp,
    amount_transaction_currency, functional_amount, subtotal_amount, tax_amount, total_amount)
 values ('aaaa0027-0000-4000-8000-00000000f005', 'aaaa0027-0000-4000-8000-00000000000a',
         'aaaa0027-0000-4000-8000-0000000000a2', 'invoice', 'B',
         'aaaa0027-0000-4000-8000-00000000c001', 1, 5004, 'issued', '2026-08-07T14:00:00Z',
-        'aaaa0027-0000-4000-8000-00000000e101', 'test-027', 'VES', 'VES', 1, 'identidad',
-        '2026-08-07T10:00:00Z', 'USD', 40, 'BCV', '2026-08-07T10:00:00Z',
-        4000, 4000, 4000, 0, 4000);
-select is((select total_amount from platform.sales_book('aaaa0027-0000-4000-8000-0000000000a2',
-             '2026-08-01', '2026-08-31') where series = 'B'), 4000::numeric,
-  'el total sale de la CABECERA congelada (4 000 Bs, preciada de USD a 40): el libro no recalcula con la tasa de hoy');
+        'aaaa0027-0000-4000-8000-00000000e101', 'test-027', 'USD', 'VES', 40, 'BCV',
+        '2026-08-07T10:00:00Z', 100, 4000, 4000, 0, 4000);
+select is((select fx_rate from platform.sales_book('aaaa0027-0000-4000-8000-0000000000a2',
+             '2026-08-01', '2026-08-31') where series = 'B'), 40::numeric,
+  'el documento en divisa lleva la tasa DEL DÍA DE EMISIÓN, no la de hoy: si no, la base cambiaría sola');
 
 -- ── 7. Libro de retenciones: la que aún no tiene comprobante SÍ está ────────
 insert into public.retention_rules
