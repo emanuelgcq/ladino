@@ -7,3 +7,10 @@
 export const PACKAGE_NAME = "@ladino/fiscal" as const;
 
 export { NullTransmitter, type SeniatTransmitter, type EventoOutbox } from "./transmitter.js";
+export {
+  NullDigitalPrintShop,
+  CONTROL_NUMBER_RE,
+  type DigitalPrintShopAdapter,
+  type DocumentoParaControl,
+  type ControlAsignado,
+} from "./print-shop.js";

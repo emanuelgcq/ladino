@@ -44,6 +44,13 @@ Usa la skill `adr` de Claude Code.
 | [0036](adr/ADR-0036-variantes-como-productos-derivados.md) | Variantes de producto como productos derivados, no como dimensión de existencias | Aceptado | NO |
 | [0037](adr/ADR-0037-numeracion-fiscal-correlativo-y-numero-de-control.md) | Numeración fiscal: el correlativo del emisor y el número de control son dos campos | Aceptado | SÍ |
 | [0038](adr/ADR-0038-motor-tributario-con-catalogo-vacio.md) | Motor tributario: reglas como dato, catálogo vacío, sin emisión sin regla | Aceptado | SÍ |
+| [0039](adr/ADR-0039-retenciones-con-catalogo-vacio-y-formulas-cerradas.md) | Retenciones con catálogo vacío y fórmulas cerradas | Aceptado | SÍ |
+| [0040](adr/ADR-0040-compras-tablas-propias-y-landed-cost-con-variacion.md) | Compras con tablas propias; landed cost tardío genera variación | Aceptado | SÍ |
+| [0041](adr/ADR-0041-mapeo-contable-como-vocabulario-cerrado.md) | Mapeo contable como vocabulario cerrado de propósitos | Aceptado | SÍ |
+| [0042](adr/ADR-0042-cola-de-contabilizacion-pendiente.md) | Cola de contabilización pendiente: documento posteado ⇒ asiento o cola | Aceptado | SÍ |
+| [0043](adr/ADR-0043-chart-templates-como-catalogo-global-importable.md) | Plantillas de plan de cuentas como catálogo global importable | Aceptado | SÍ |
+| [0044](adr/ADR-0044-libros-fiscales-como-vista-sobre-snapshot-ampliado.md) | Libros fiscales como consulta sobre snapshot ampliado, nunca tabla | Aceptado | SÍ |
+| [0045](adr/ADR-0045-adaptador-de-imprenta-digital-como-puerto.md) | Adaptador de imprenta digital como puerto; hoy NullDigitalPrintShop que rechaza | Aceptado | SÍ |
 
 ## Decisiones aún abiertas
 
