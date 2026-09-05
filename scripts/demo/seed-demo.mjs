@@ -125,7 +125,7 @@ await api("POST", "/v1/journal-templates/import-preset", {
   preset_code: "ve_basico",
 });
 
-paso("facturas VES de hoy");
+paso("facturas de HOY (Detal USD, ancladas en USD y cobradas en Bs — ADR-0047)");
 const facturas = [];
 for (const f of [
   {
