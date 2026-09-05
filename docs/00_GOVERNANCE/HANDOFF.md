@@ -1,3 +1,23 @@
+# Handoff — 2026-09-05 (5ª entrega)
+
+## Clientes: arriba la información, abajo la deuda entera
+
+Continuación de la 4ª entrega, por orden del dueño («en clientes arriba solo debe
+aparecer la información de los clientes»):
+
+- **Mostrador**: la lista y la ficha quedaron SOLO informativas (nombre, documento,
+  teléfono, email, dirección). Se fue el «Me debe», el cobro y el WhatsApp; queda un
+  aviso con enlace a Administración → Clientes para quien administra.
+- **Administración → Clientes**: además de la columna «Deuda» de la primera pantalla,
+  la ficha abre con el bloque completo que antes vivía arriba: «Debe hoy» en grande,
+  facturas pendientes con «Cobrar» (gated por sales.payment.register) y estado de
+  cuenta por WhatsApp. Cero funcionalidad perdida.
+- **Inicio**: «Te deben…» y «Ver quién» ahora llevan a /admin/clientes.
+
+Nota de soporte local: tras cada `db:reset` del verify, las cuentas locales que no
+son la demo desaparecen pero la sesión del navegador sobrevive; fundar con esa sesión
+da «NOT_FOUND» (23503→404). Remedio: Salir y crear la cuenta de nuevo. Solo local.
+
 # Handoff — 2026-09-05 (4ª entrega)
 
 ## Arriba se vende y se consulta; abajo se administra (posición, no solo permiso)

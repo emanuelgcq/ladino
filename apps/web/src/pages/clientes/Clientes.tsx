@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Banknote, Lock, LockOpen, Pencil, UserPlus } from "lucide-react";
+import { Banknote, Lock, LockOpen, MessageCircle, Pencil, UserPlus } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
-import { FormField } from "../../components/forms.js";
+import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
 import { Button } from "../../ui/button.js";
 import { Input } from "../../ui/input.js";
@@ -21,12 +21,37 @@ import {
 } from "../../ui/dialog.js";
 import { useToast } from "../../ui/toast.js";
 import { MensajeError } from "../ventas/comunes.js";
+import { fechaRelativa } from "../negocio/comunes.js";
 import { mostrarImporte } from "../../money.js";
-import { esCero } from "../../components/decimal-compare.js";
+import { compararImportes, esCero } from "../../components/decimal-compare.js";
+import { errorDePersona } from "../../lib.js";
 import type { Customer, CodeCatalog, PriceList } from "../../lib.js";
 
 /** La fila con la deuda funcional de HOY que calcula el servidor (ADR-0047). */
 type ClienteConDeuda = Customer & { readonly debt?: string };
+
+/** Las facturas emitidas con saldo, tal como las devuelve el estado de cuenta. */
+interface DocumentoAbierto {
+  id: string;
+  series: string;
+  document_number: number | null;
+  issued_at: string | null;
+  total_amount: string;
+  balance: string;
+  status: string;
+}
+interface EstadoDeCuenta {
+  currency: string;
+  documents: DocumentoAbierto[];
+  total_outstanding: string;
+}
+interface FormaDePago {
+  id: string;
+  name: string;
+  kind: string;
+  account_id: string;
+  is_active: boolean;
+}
 
 /**
  * Clientes — Fase B sobre el patrón de ventas. Toda la funcionalidad de la
@@ -488,6 +513,7 @@ function DetalleCliente({
 
         {!editando ? (
           <div className="mt-3 space-y-3">
+            <DeudaDelCliente cliente={cliente} />
             <div className="grid grid-cols-1 gap-1 text-[0.9rem] sm:grid-cols-2">
               <p className="text-muted-foreground">
                 Dirección: <span className="text-foreground">{cliente.fiscal_address ?? "—"}</span>
@@ -674,6 +700,248 @@ function DetalleCliente({
             <>El cliente vuelve a poder comprar. El bloqueo y su motivo quedan en la auditoría.</>
           )}
         </ConfirmDialog>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * La deuda, bien plasmada donde el dueño decidió que viva (2026-09-05): la
+ * cifra de HOY en grande, las facturas pendientes con su cobro y el estado
+ * de cuenta listo para WhatsApp. Todo lo calcula el servidor; el mostrador
+ * solo muestra la información del cliente.
+ */
+function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element {
+  const { empresa, llamar, puede } = useSesion();
+  const [cobrando, setCobrando] = useState<DocumentoAbierto | null>(null);
+  const qc = useQueryClient();
+
+  const estado = useQuery({
+    queryKey: ["estado-cliente", empresa.id, cliente.id],
+    queryFn: () => llamar<EstadoDeCuenta>(`/v1/customers/${cliente.id}/statement`),
+  });
+
+  const abiertas = (estado.data?.documents ?? []).filter(
+    (d) => d.status === "issued" && compararImportes(d.balance, "0") > 0,
+  );
+
+  const textoEstado = (): string => {
+    if (!estado.data) return "";
+    const filas = abiertas
+      .map(
+        (d) =>
+          `• Factura ${d.series}-${String(d.document_number ?? "")}: ${mostrarImporte({ amount: d.balance, currency: estado.data.currency })}`,
+      )
+      .join("\n");
+    return `Hola ${cliente.legal_name}, te escribe ${empresa.legal_name}. Tu cuenta pendiente:\n${filas}\nTotal: ${mostrarImporte({ amount: estado.data.total_outstanding, currency: estado.data.currency })}. ¡Gracias!`;
+  };
+
+  const telefonoWa = (cliente.phone ?? "").replace(/[^0-9]/g, "").replace(/^0/, "58");
+
+  return (
+    <div className="rounded-lg border border-border bg-surface-muted/40 p-4">
+      <div className="text-center">
+        <p className="text-[0.85rem] text-muted-foreground">Debe hoy</p>
+        <p className="text-3xl font-semibold tabular-nums">
+          {estado.data
+            ? mostrarImporte({
+                amount: estado.data.total_outstanding,
+                currency: estado.data.currency,
+              })
+            : "…"}
+        </p>
+      </div>
+
+      {abiertas.length > 0 && (
+        <div className="mt-3">
+          <p className="pb-1.5 text-[0.9rem] font-medium">Facturas pendientes</p>
+          <div className="divide-y divide-border rounded-md border border-border bg-surface">
+            {abiertas.map((d) => (
+              <div key={d.id} className="flex items-center gap-2 px-3 py-2 text-[0.9rem]">
+                <span className="min-w-0 flex-1">
+                  {d.series}-{String(d.document_number ?? "").padStart(6, "0")}
+                  <span className="text-[0.8rem] text-muted-foreground">
+                    {" "}
+                    · {d.issued_at !== null ? fechaRelativa(d.issued_at) : ""}
+                  </span>
+                </span>
+                <span className="tabular-nums">
+                  {mostrarImporte({
+                    amount: d.balance,
+                    currency: estado.data?.currency ?? "VES",
+                  })}
+                </span>
+                {puede("sales.payment.register") && (
+                  <Button variant="secondary" size="sm" onClick={() => setCobrando(d)}>
+                    Cobrar
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+          {cliente.phone !== null && cliente.phone !== undefined ? (
+            <a
+              className="mt-2 block"
+              href={`https://wa.me/${telefonoWa}?text=${encodeURIComponent(textoEstado())}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <Button variant="secondary" className="w-full">
+                <MessageCircle /> Mandar estado de cuenta por WhatsApp
+              </Button>
+            </a>
+          ) : (
+            <p className="mt-2 text-center text-[0.82rem] text-faint-foreground">
+              Ponle teléfono al cliente para mandarle su cuenta por WhatsApp.
+            </p>
+          )}
+        </div>
+      )}
+
+      {cobrando !== null && estado.data && (
+        <CobrarFactura
+          documento={cobrando}
+          moneda={estado.data.currency}
+          onCerrar={() => setCobrando(null)}
+          onCobrada={() => {
+            setCobrando(null);
+            void qc.invalidateQueries({ queryKey: ["estado-cliente", empresa.id, cliente.id] });
+            void qc.invalidateQueries({ queryKey: ["clientes", empresa.id] });
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+const MONEDA_FORMA: Record<string, string> = {
+  efectivo_bs: "VES",
+  efectivo_usd: "USD",
+  pago_movil: "VES",
+  transferencia: "VES",
+  punto_venta: "VES",
+  tarjeta: "VES",
+  zelle: "USD",
+  usdt: "USD",
+  otro: "VES",
+};
+
+function CobrarFactura({
+  documento,
+  moneda,
+  onCerrar,
+  onCobrada,
+}: {
+  documento: DocumentoAbierto;
+  moneda: string;
+  onCerrar: () => void;
+  onCobrada: () => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [monto, setMonto] = useState(documento.balance);
+  const [forma, setForma] = useState<string | null>(null);
+
+  const formas = useQuery({
+    queryKey: ["formas-pago", empresa.id],
+    staleTime: 60_000,
+    queryFn: () => llamar<{ methods: FormaDePago[] }>("/v1/payment-methods"),
+  });
+  const configuradas = (formas.data?.methods ?? []).filter((f) => f.is_active);
+  const opciones = [
+    ...configuradas.map((f) => ({ value: `m:${f.id}`, label: f.name })),
+    { value: "i:efectivo_bs", label: "Efectivo Bs." },
+    { value: "i:efectivo_usd", label: "Efectivo USD" },
+  ];
+
+  const metodoElegido = forma?.startsWith("m:")
+    ? configuradas.find((f) => `m:${f.id}` === forma)
+    : undefined;
+  const tipoDePago = metodoElegido?.kind ?? (forma !== null ? forma.slice(2) : null);
+  const monedaCobro = tipoDePago !== null ? (MONEDA_FORMA[tipoDePago] ?? moneda) : moneda;
+
+  const cobrar = useMutation({
+    mutationFn: () =>
+      llamar("/v1/payments", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          document_id: documento.id,
+          currency: monedaCobro,
+          amount: monto.trim().replace(",", "."),
+          instrument: tipoDePago,
+          ...(metodoElegido === undefined ? {} : { account_id: metodoElegido.account_id }),
+        }),
+      }),
+    onSuccess: () => {
+      toast.success("Cobro registrado");
+      onCobrada();
+    },
+    onError: (e) => toast.error("No se pudo cobrar", errorDePersona(e)),
+  });
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onCerrar()}>
+      <DialogContent className="max-w-sm">
+        <DialogTitle>
+          Cobrar {documento.series}-{String(documento.document_number ?? "")}
+        </DialogTitle>
+        <DialogDescription>
+          Puede ser un abono: lo que se cobre se resta de la deuda.
+        </DialogDescription>
+        <div className="space-y-3 pt-2">
+          <FormField label="¿Cómo pagó?" required>
+            {(p) => (
+              <SimpleSelect
+                id={p.id}
+                value={forma}
+                onValueChange={(v) => {
+                  // Si la forma nueva vive en OTRA moneda, el monto tecleado
+                  // deja de significar lo mismo: se limpia, no se reinterpreta.
+                  const metodo = v.startsWith("m:")
+                    ? configuradas.find((f) => `m:${f.id}` === v)
+                    : undefined;
+                  const inst = metodo?.kind ?? v.slice(2);
+                  const monedaNueva = MONEDA_FORMA[inst] ?? moneda;
+                  if (monedaNueva !== monedaCobro) setMonto("");
+                  setForma(v);
+                }}
+                options={opciones}
+              />
+            )}
+          </FormField>
+          <FormField
+            label="¿Cuánto pagó?"
+            required
+            {...(monedaCobro !== moneda
+              ? { hint: "En la moneda con la que pagó; el sistema convierte a la tasa de hoy." }
+              : {})}
+          >
+            {(p) => (
+              <MoneyInput
+                {...p}
+                value={monto}
+                onChange={setMonto}
+                currency={monedaCobro === "VES" ? "Bs." : monedaCobro}
+              />
+            )}
+          </FormField>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onCerrar}>
+            Cancelar
+          </Button>
+          <Button
+            variant="primary"
+            disabled={
+              forma === null || !importeValido(monto.trim().replace(",", ".")) || cobrar.isPending
+            }
+            onClick={() => cobrar.mutate()}
+          >
+            Registrar cobro
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

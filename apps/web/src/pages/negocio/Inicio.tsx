@@ -66,7 +66,8 @@ export function Inicio(): React.JSX.Element {
     if (!esCero(r.lo_que_me_deben)) {
       recordatorios.push({
         texto: `Te deben ${mostrarImporte({ amount: r.lo_que_me_deben, currency: moneda })}. Un mensaje a tiempo cobra la mitad.`,
-        a: "/clientes",
+        // La deuda vive en la administración (decisión del dueño, 2026-09-05).
+        a: "/admin/clientes",
       });
     }
   }
@@ -152,7 +153,7 @@ export function Inicio(): React.JSX.Element {
               {r !== null ? mostrarImporte({ amount: r.lo_que_me_deben, currency: moneda }) : "…"}
             </p>
             <Link
-              to="/clientes"
+              to="/admin/clientes"
               className="text-[0.8rem] text-accent-soft-foreground hover:underline"
             >
               Ver quién
