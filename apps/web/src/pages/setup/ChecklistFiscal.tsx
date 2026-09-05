@@ -37,6 +37,42 @@ import { MensajeError } from "../ventas/comunes.js";
  * cotización de prueba y leer la respuesta del motor. Los 409 dejan de parecer
  * avería y se vuelven onboarding.
  */
+function AlertaRangos(): React.JSX.Element | null {
+  const { empresa, llamar } = useSesion();
+  const q = useQuery({
+    queryKey: ["rangos-agotandose", empresa.id],
+    queryFn: () =>
+      llamar<{
+        items: {
+          range_id: string;
+          kind: string;
+          series: string;
+          remaining: number;
+          total: number;
+          pct_remaining: string;
+        }[];
+      }>("/v1/fiscal-number-ranges/exhaustion"),
+  });
+  const items = q.data?.items ?? [];
+  if (items.length === 0) return null;
+  return (
+    <div className="mb-4 rounded-md border border-warning-soft bg-warning-soft/40 p-3">
+      <p className="text-[0.9rem] font-medium text-warning-soft-foreground">
+        Rangos de numeración por agotarse — pide el siguiente a la imprenta ANTES de quedarte sin
+        números:
+      </p>
+      <ul className="mt-1 space-y-0.5 text-[0.88rem]">
+        {items.map((r) => (
+          <li key={r.range_id} className="tabular-nums">
+            Serie {r.series} ({r.kind === "invoice" ? "facturas" : r.kind}): quedan {r.remaining} de{" "}
+            {r.total}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function ChecklistFiscal(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
 
@@ -66,6 +102,7 @@ export function ChecklistFiscal(): React.JSX.Element {
         title="Puesta a punto fiscal"
         description={`Lo que ${empresa.legal_name} necesita antes de su primera factura. Cada paso pendiente responde un 409 al emitir — no es una avería, es esta lista.`}
       />
+      <AlertaRangos />
 
       <div className="space-y-4">
         <Paso

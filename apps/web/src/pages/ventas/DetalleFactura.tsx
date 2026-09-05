@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, BookOpenCheck, HandCoins } from "lucide-react";
+import { Ban, BookOpenCheck, HandCoins, Undo2 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { API_URL, supabase } from "../../lib.js";
 import { useModulosActivos } from "../../app/shell.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DualMoney } from "../../components/DualMoney.js";
@@ -10,11 +11,13 @@ import { FiscalStatusBadge } from "../../components/FiscalStatusBadge.js";
 import { ExchangeDiffIndicator } from "../../components/ExchangeDiffIndicator.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
 import { Button } from "../../ui/button.js";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../ui/dialog.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card.js";
 import { Skeleton } from "../../ui/card.js";
 import { Table, TBody, TD, TDNum, TH, THead, TR } from "../../ui/table.js";
-import { Textarea } from "../../ui/input.js";
+import { Input, Textarea } from "../../ui/input.js";
 import { Badge } from "../../ui/badge.js";
+import { SimpleSelect } from "../../ui/select.js";
 import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
@@ -88,7 +91,7 @@ interface Detalle {
 
 export function DetalleFactura(): React.JSX.Element {
   const { id } = useParams<{ id: string }>();
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const activos = useModulosActivos();
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -96,6 +99,13 @@ export function DetalleFactura(): React.JSX.Element {
   const [anulando, setAnulando] = useState(false);
   const [motivo, setMotivo] = useState("");
   const [pagando, setPagando] = useState(false);
+  const [devolviendo, setDevolviendo] = useState(false);
+  const [confirmandoPedido, setConfirmandoPedido] = useState(false);
+  const [almacenPedido, setAlmacenPedido] = useState<string | null>(null);
+  const depositosPedido = useQuery({
+    queryKey: ["depositos", empresa.id],
+    queryFn: () => llamar<{ id: string; code: string; name: string }[]>("/v1/warehouses"),
+  });
   const [errorAccion, setErrorAccion] = useState<unknown>(null);
 
   const detalle = useQuery({
@@ -153,6 +163,25 @@ export function DetalleFactura(): React.JSX.Element {
   const dual = doc.transaction_currency !== doc.functional_currency;
   const pagable = doc.kind === "invoice" && (doc.status === "issued" || doc.status === "paid");
 
+  /**
+   * La COPIA imprime «SIN DERECHO A CRÉDITO FISCAL» (PA 00071 art. 13.13):
+   * existía en el generador sin ningún botón (Nivel C de la auditoría).
+   */
+  async function abrirPdf(copia: boolean): Promise<void> {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    const r = await fetch(
+      API_URL + "/v1/documents/" + doc.id + "/pdf" + (copia ? "?copia=1" : ""),
+      { headers: { Authorization: "Bearer " + (token ?? ""), "X-Company-Id": empresa.id } },
+    );
+    if (!r.ok) {
+      toast.error("No se pudo abrir el PDF");
+      return;
+    }
+    const url = URL.createObjectURL(await r.blob());
+    window.open(url, "_blank", "noopener");
+  }
+
   async function anular(): Promise<void> {
     setErrorAccion(null);
     try {
@@ -185,9 +214,31 @@ export function DetalleFactura(): React.JSX.Element {
                 <Ban /> Anular
               </Button>
             )}
+            {doc.document_number !== null && (
+              <>
+                <Button variant="ghost" onClick={() => void abrirPdf(false)}>
+                  PDF
+                </Button>
+                {doc.kind !== "receipt" && (
+                  <Button variant="ghost" onClick={() => void abrirPdf(true)}>
+                    PDF copia
+                  </Button>
+                )}
+              </>
+            )}
             {pagable && balance !== null && !esCero(balance) && !balance.startsWith("-") && (
               <Button variant="primary" onClick={() => setPagando(true)}>
                 <HandCoins /> Registrar cobro
+              </Button>
+            )}
+            {pagable && puede("sales.return.manage") && (
+              <Button variant="secondary" onClick={() => setDevolviendo(true)}>
+                <Undo2 /> Devolución
+              </Button>
+            )}
+            {doc.kind === "order" && doc.status === "draft" && puede("sales.order.manage") && (
+              <Button variant="primary" onClick={() => setConfirmandoPedido(true)}>
+                Confirmar pedido…
               </Button>
             )}
           </>
@@ -437,6 +488,52 @@ export function DetalleFactura(): React.JSX.Element {
         </div>
       </ConfirmDialog>
 
+      <ConfirmDialog
+        open={confirmandoPedido}
+        onOpenChange={setConfirmandoPedido}
+        title="Confirmar el pedido"
+        confirmLabel="Confirmar y reservar"
+        onConfirm={async () => {
+          await llamar("/v1/orders/" + doc.id + "/confirm", {
+            method: "POST",
+            headers: { "Idempotency-Key": crypto.randomUUID() },
+            body: JSON.stringify({ company_id: empresa.id, warehouse_id: almacenPedido }),
+          });
+          toast.success("Pedido confirmado", "La existencia quedó reservada; nada se movió.");
+          await qc.invalidateQueries({ queryKey: ["documento", empresa.id, id] });
+        }}
+      >
+        <div className="space-y-2">
+          <p>
+            Confirmar <strong>reserva</strong> las cantidades en el depósito elegido: el disponible
+            baja sin que la mercancía se mueva. La factura, cuando se emita, descargará de verdad.
+          </p>
+          <SimpleSelect
+            ariaLabel="Depósito de la reserva"
+            value={almacenPedido}
+            onValueChange={setAlmacenPedido}
+            placeholder="¿En qué depósito se reserva?"
+            options={(depositosPedido.data ?? []).map((w) => ({
+              value: w.id,
+              label: w.code + " · " + w.name,
+            }))}
+          />
+        </div>
+      </ConfirmDialog>
+
+      {devolviendo && (
+        <Devolucion
+          documento={doc}
+          lineas={lines}
+          onClose={(hecho) => {
+            setDevolviendo(false);
+            if (hecho) {
+              void qc.invalidateQueries({ queryKey: ["documento", empresa.id, id] });
+            }
+          }}
+        />
+      )}
+
       {pagando && (
         <RegistrarPago
           documento={doc}
@@ -473,5 +570,133 @@ function Fila({
       <span className="text-muted-foreground">{etiqueta}</span>
       <span className={destacada ? "font-medium" : undefined}>{children}</span>
     </div>
+  );
+}
+
+/**
+ * DEVOLUCIÓN (Nivel B de la auditoría de superficie): el backend completo
+ * existía —reingreso AL COSTO ORIGINAL, nota de crédito con su propio rango,
+ * saldo a favor— sin ninguna puerta. Dos pasos del contrato (crear y
+ * confirmar) en un solo flujo con la consecuencia dicha.
+ */
+function Devolucion({
+  documento,
+  lineas,
+  onClose,
+}: {
+  documento: Documento;
+  lineas: Linea[];
+  onClose: (hecho: boolean) => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [cantidades, setCantidades] = useState<Record<string, string>>({});
+  const [motivo, setMotivo] = useState("");
+  const [deposito, setDeposito] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  const depositos = useQuery({
+    queryKey: ["depositos", empresa.id],
+    queryFn: () => llamar<{ id: string; name: string }[]>("/v1/warehouses"),
+  });
+  if (deposito === null && (depositos.data?.length ?? 0) > 0) {
+    setDeposito(depositos.data![0]!.id);
+  }
+
+  const elegidas = lineas
+    .map((l) => ({ linea: l, cantidad: (cantidades[l.id] ?? "").trim().replace(",", ".") }))
+    .filter((x) => x.cantidad !== "" && Number(x.cantidad) > 0);
+  const listo = elegidas.length > 0 && motivo.trim().length >= 3 && deposito !== null;
+
+  async function devolver(): Promise<void> {
+    setError(null);
+    setOcupado(true);
+    try {
+      const creada = await llamar<{ id: string }>("/v1/returns", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          source_document_id: documento.id,
+          warehouse_id: deposito,
+          reason: motivo.trim(),
+          lines: elegidas.map((x) => ({ source_line_id: x.linea.id, quantity: x.cantidad })),
+        }),
+      });
+      await llamar(`/v1/returns/${creada.id}/confirm`, {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+      });
+      toast.success(
+        "Devolución confirmada",
+        "La mercancía reingresó a su costo original y la nota de crédito dejó saldo a favor.",
+      );
+      onClose(true);
+    } catch (e) {
+      setError(e);
+      toast.error("No se pudo devolver");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose(false)}>
+      <DialogContent className="max-w-lg">
+        <DialogTitle>Devolución de {numeroDe(documento)}</DialogTitle>
+        <DialogDescription>
+          La mercancía reingresa <strong>al costo con el que salió</strong> —no al de hoy—, y se
+          emite una nota de crédito (exige su propio rango de numeración) que deja el saldo a favor
+          del cliente.
+        </DialogDescription>
+        <div className="space-y-3 pt-2">
+          <div className="divide-y divide-border rounded-md border border-border">
+            {lineas.map((l) => (
+              <div key={l.id} className="flex items-center gap-2 px-3 py-2 text-[0.9rem]">
+                <span className="min-w-0 flex-1 truncate">{l.description}</span>
+                <span className="text-[0.8rem] text-muted-foreground tabular-nums">
+                  vendidos {mostrarCantidad(l.quantity)}
+                </span>
+                <Input
+                  aria-label={`Cantidad a devolver de ${l.description}`}
+                  inputMode="decimal"
+                  placeholder="0"
+                  className="w-20 text-right font-mono"
+                  value={cantidades[l.id] ?? ""}
+                  onChange={(e) => setCantidades({ ...cantidades, [l.id]: e.target.value })}
+                />
+              </div>
+            ))}
+          </div>
+          {(depositos.data?.length ?? 0) > 1 && (
+            <div className="w-56">
+              <SimpleSelect
+                ariaLabel="Depósito al que reingresa"
+                value={deposito}
+                onValueChange={setDeposito}
+                options={(depositos.data ?? []).map((d) => ({ value: d.id, label: d.name }))}
+              />
+            </div>
+          )}
+          <Textarea
+            aria-label="Motivo de la devolución"
+            rows={2}
+            placeholder="Motivo (obligatorio): qué devolvió y por qué"
+            value={motivo}
+            onChange={(e) => setMotivo(e.target.value)}
+          />
+          {error !== null && <MensajeError error={error} />}
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => onClose(false)}>
+            Cancelar
+          </Button>
+          <Button variant="primary" disabled={!listo || ocupado} onClick={() => void devolver()}>
+            {ocupado ? "Devolviendo…" : "Confirmar la devolución"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

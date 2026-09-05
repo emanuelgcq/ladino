@@ -79,7 +79,10 @@ export function Contabilidad(): React.JSX.Element {
           <Mayor />
         </TabsPanel>
         <TabsPanel value="balance">
-          <Comprobacion />
+          <div className="space-y-4">
+            <Comprobacion />
+            <CoberturaContable />
+          </div>
         </TabsPanel>
         <TabsPanel value="cierre">
           <Cierre />
@@ -1538,5 +1541,51 @@ function Estados(): React.JSX.Element {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * COBERTURA CONTABLE (Nivel C de la auditoría de superficie): la pregunta del
+ * invariante de ADR-0042 — ¿todo documento posteado tiene su asiento o su
+ * fila en cola? — respondida en pantalla. La respuesta buena es CERO.
+ */
+function CoberturaContable(): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const q = useQuery({
+    queryKey: ["cobertura", empresa.id],
+    queryFn: () =>
+      llamar<{ items: { source_kind: string; source_id: string; problem: string }[] }>(
+        "/v1/accounting/coverage-gaps",
+      ),
+  });
+  const items = q.data?.items ?? [];
+  return (
+    <Card className={items.length > 0 ? "border-warning-soft" : undefined}>
+      <CardHeader>
+        <CardTitle>Cobertura contable</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {items.length === 0 ? (
+          <CardDescription>
+            Cero huecos: todo documento posteado tiene su asiento o su fila en cola. Es el número
+            que este panel existe para vigilar.
+          </CardDescription>
+        ) : (
+          <>
+            <CardDescription className="mb-2 text-warning-soft-foreground">
+              {String(items.length)} documento(s) SIN asiento NI cola — esto nunca debería ser mayor
+              que cero: avisa.
+            </CardDescription>
+            <ul className="space-y-1 font-mono text-[0.82rem]">
+              {items.map((i) => (
+                <li key={i.source_id}>
+                  {i.source_kind} · {i.source_id} · {i.problem}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }

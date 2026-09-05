@@ -28,6 +28,7 @@ import {
 } from "../../ui/dialog.js";
 import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
+import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
 
@@ -229,14 +230,14 @@ export function Dinero(): React.JSX.Element {
               {(formas.data?.methods ?? []).map((f) => {
                 const cuenta = lista.find((c) => c.id === f.account_id);
                 return (
-                  <span
+                  <FormaDePagoChip
                     key={f.id}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-[0.85rem]"
-                  >
-                    <CreditCard className="size-3.5 text-muted-foreground" />
-                    {f.name}
-                    <span className="text-faint-foreground">→ {cuenta?.name ?? "?"}</span>
-                  </span>
+                    forma={f}
+                    cuentaNombre={cuenta?.name ?? "?"}
+                    onCambio={() =>
+                      void qc.invalidateQueries({ queryKey: ["formas-pago", empresa.id] })
+                    }
+                  />
                 );
               })}
             </div>
@@ -436,6 +437,8 @@ function TarjetaCuenta({
 }): React.JSX.Element {
   const { puede } = useSesion();
   const puedeCerrar = puede("cash.close");
+  const puedeEditar = puede("treasury.account.manage");
+  const [editando, setEditando] = useState(false);
   const Icono = ICONO_CUENTA[cuenta.kind];
   return (
     <Card className={cuenta.is_system ? "border-dashed" : undefined}>
@@ -452,13 +455,106 @@ function TarjetaCuenta({
         <p className="mt-2 text-xl font-semibold tabular-nums">
           {mostrarImporte({ amount: cuenta.balance, currency: cuenta.currency })}
         </p>
-        {cuenta.kind === "cash" && !cuenta.is_system && puedeCerrar && (
-          <div className="mt-2">
+        <div className="mt-2 flex gap-2">
+          {cuenta.kind === "cash" && !cuenta.is_system && puedeCerrar && (
             <CerrarCaja cuenta={cuenta} onCerrada={onCerrada} />
-          </div>
-        )}
+          )}
+          {!cuenta.is_system && puedeEditar && (
+            <Button variant="ghost" size="sm" onClick={() => setEditando(true)}>
+              Editar
+            </Button>
+          )}
+        </div>
       </CardContent>
+      {editando && (
+        <EditarCuenta
+          cuenta={cuenta}
+          onCerrar={(hecho) => {
+            setEditando(false);
+            if (hecho) onCerrada();
+          }}
+        />
+      )}
     </Card>
+  );
+}
+
+/**
+ * EDITAR/APAGAR una cuenta (Nivel B de la auditoría): se creaban y no se
+ * corregían. La moneda y el tipo no se tocan — una cuenta con historia no
+ * cambia de moneda; se apaga y se crea otra.
+ */
+function EditarCuenta({
+  cuenta,
+  onCerrar,
+}: {
+  cuenta: Cuenta;
+  onCerrar: (hecho: boolean) => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [nombre, setNombre] = useState(cuenta.name);
+  const [activa, setActiva] = useState(cuenta.is_active);
+
+  const guardar = useMutation({
+    mutationFn: () =>
+      llamar("/v1/treasury/accounts/" + cuenta.id, {
+        method: "PATCH",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          name: nombre.trim(),
+          is_active: activa,
+        }),
+      }),
+    onSuccess: () => {
+      toast.success("Cuenta actualizada");
+      onCerrar(true);
+    },
+    onError: (e) => toast.error("No se pudo actualizar", errorDePersona(e)),
+  });
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
+      <DialogContent className="max-w-sm">
+        <DialogTitle>Editar {cuenta.name}</DialogTitle>
+        <DialogDescription>
+          La moneda no se cambia: una cuenta con historia no se reinterpreta. Si sobra, apágala.
+        </DialogDescription>
+        <div className="space-y-3 pt-2">
+          <FormField label="Nombre" required>
+            {(a) => (
+              <Input
+                {...a}
+                value={nombre}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNombre(e.target.value)}
+              />
+            )}
+          </FormField>
+          <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+            <span className="text-[0.9rem]">
+              Cuenta activa
+              <span className="block text-[0.78rem] text-muted-foreground">
+                Apagada no recibe cobros ni paga gastos; su historia queda intacta.
+              </span>
+            </span>
+            <Switch checked={activa} onCheckedChange={setActiva} aria-label="Cuenta activa" />
+          </label>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onCerrar(false)}>
+            Cancelar
+          </Button>
+          <Button
+            variant="primary"
+            disabled={nombre.trim() === "" || guardar.isPending}
+            onClick={() => guardar.mutate()}
+          >
+            Guardar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -758,6 +854,94 @@ function CrearFormaDePago({
                 onClick={() => crear.mutate()}
               >
                 Crear
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
+/** El chip de forma de pago, ahora con su edición (renombrar / apagar). */
+function FormaDePagoChip({
+  forma,
+  cuentaNombre,
+  onCambio,
+}: {
+  forma: FormaDePago;
+  cuentaNombre: string;
+  onCambio: () => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [editando, setEditando] = useState(false);
+  const [nombre, setNombre] = useState(forma.name);
+  const [activa, setActiva] = useState(forma.is_active);
+
+  const guardar = useMutation({
+    mutationFn: () =>
+      llamar("/v1/payment-methods/" + forma.id, {
+        method: "PATCH",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          name: nombre.trim(),
+          is_active: activa,
+        }),
+      }),
+    onSuccess: () => {
+      toast.success("Forma de pago actualizada");
+      setEditando(false);
+      onCambio();
+    },
+    onError: (e) => toast.error("No se pudo actualizar", errorDePersona(e)),
+  });
+
+  return (
+    <>
+      <button
+        className={
+          "inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-[0.85rem] hover:border-accent " +
+          (forma.is_active ? "" : "opacity-50")
+        }
+        onClick={() => setEditando(true)}
+        aria-label={"Editar la forma de pago " + forma.name}
+      >
+        <CreditCard className="size-3.5 text-muted-foreground" />
+        {forma.name}
+        <span className="text-faint-foreground">→ {cuentaNombre}</span>
+        {!forma.is_active && <span className="text-faint-foreground">(apagada)</span>}
+      </button>
+      {editando && (
+        <Dialog open onOpenChange={(v) => !v && setEditando(false)}>
+          <DialogContent className="max-w-sm">
+            <DialogTitle>Editar {forma.name}</DialogTitle>
+            <div className="space-y-3 pt-2">
+              <FormField label="Nombre" required>
+                {(a) => (
+                  <Input
+                    {...a}
+                    value={nombre}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNombre(e.target.value)}
+                  />
+                )}
+              </FormField>
+              <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+                <span className="text-[0.9rem]">Activa en el punto de venta</span>
+                <Switch checked={activa} onCheckedChange={setActiva} aria-label="Forma activa" />
+              </label>
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setEditando(false)}>
+                Cancelar
+              </Button>
+              <Button
+                variant="primary"
+                disabled={nombre.trim() === "" || guardar.isPending}
+                onClick={() => guardar.mutate()}
+              >
+                Guardar
               </Button>
             </DialogFooter>
           </DialogContent>

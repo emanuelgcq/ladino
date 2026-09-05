@@ -95,6 +95,8 @@ export function ComprasNegocio(): React.JSX.Element {
   const [pestana, setPestana] = useState<"gastos" | "compras">(puedeGastos ? "gastos" : "compras");
   const [nuevoGasto, setNuevoGasto] = useState(false);
   const [nuevaCompra, setNuevaCompra] = useState(false);
+  const [pagando, setPagando] = useState<FacturaProveedor | null>(null);
+  const puedePagar = puede("purchase.payment.register");
 
   const gastos = useQuery({
     queryKey: ["gastos", empresa.id],
@@ -230,9 +232,16 @@ export function ComprasNegocio(): React.JSX.Element {
               {esCero(f.balance) || compararImportes(f.balance, "0") < 0 ? (
                 <span className="shrink-0 text-[0.8rem] text-success-soft-foreground">Pagada</span>
               ) : (
-                <span className="shrink-0 text-[0.8rem] text-warning-soft-foreground tabular-nums">
-                  Debo {mostrarImporte({ amount: f.balance, currency: f.transaction_currency })}
-                </span>
+                <>
+                  <span className="shrink-0 text-[0.8rem] text-warning-soft-foreground tabular-nums">
+                    Debo {mostrarImporte({ amount: f.balance, currency: f.transaction_currency })}
+                  </span>
+                  {puedePagar && (
+                    <Button variant="secondary" size="sm" onClick={() => setPagando(f)}>
+                      Pagar
+                    </Button>
+                  )}
+                </>
               )}
             </div>
           ))}
@@ -240,6 +249,17 @@ export function ComprasNegocio(): React.JSX.Element {
       )}
 
       {nuevoGasto && <RegistrarGasto onCerrar={() => setNuevoGasto(false)} onListo={recargar} />}
+      {pagando !== null && (
+        <PagarFactura
+          factura={pagando}
+          proveedor={nombreProveedor(pagando.supplier_id)}
+          onCerrar={() => setPagando(null)}
+          onPagada={() => {
+            setPagando(null);
+            recargar();
+          }}
+        />
+      )}
       {nuevaCompra && (
         <RegistrarCompra
           proveedores={proveedores.data?.items ?? []}
@@ -749,6 +769,110 @@ function RegistrarCompra({
             onClick={() => registrar.mutate()}
           >
             {registrar.isPending ? "Registrando…" : "Registrar compra"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const FORMAS_PAGO_COMPRA = [
+  { value: "transferencia", label: "Transferencia", moneda: "VES" },
+  { value: "efectivo_bs", label: "Efectivo Bs.", moneda: "VES" },
+  { value: "efectivo_usd", label: "Efectivo USD", moneda: "USD" },
+  { value: "zelle", label: "Zelle", moneda: "USD" },
+  { value: "usdt", label: "USDT", moneda: "USD" },
+  { value: "cheque", label: "Cheque", moneda: "VES" },
+  { value: "otro", label: "Otra", moneda: "VES" },
+];
+
+/**
+ * PAGAR una factura de proveedor que quedó debiendo (ADR-0049, Nivel B de la
+ * auditoría de superficie): antes solo se podía pagar EN el momento de
+ * registrarla, y una deuda pendiente no tenía botón. El servidor calcula el
+ * saldo y las retenciones; aquí solo se dice cuánto y con qué.
+ */
+function PagarFactura({
+  factura,
+  proveedor,
+  onCerrar,
+  onPagada,
+}: {
+  factura: FacturaProveedor;
+  proveedor: string;
+  onCerrar: () => void;
+  onPagada: () => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [monto, setMonto] = useState(factura.balance);
+  const [forma, setForma] = useState<string | null>("transferencia");
+
+  const pagar = useMutation({
+    mutationFn: () =>
+      llamar("/v1/supplier-payments", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          supplier_invoice_id: factura.id,
+          gross_amount: monto.trim().replace(",", "."),
+          currency: factura.transaction_currency,
+          instrument: forma,
+        }),
+      }),
+    onSuccess: () => {
+      toast.success("Pago registrado", `La deuda con ${proveedor} bajó.`);
+      onPagada();
+    },
+    onError: (e) => toast.error("No se pudo pagar", errorDePersona(e)),
+  });
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onCerrar()}>
+      <DialogContent className="max-w-sm">
+        <DialogTitle>Pagar a {proveedor}</DialogTitle>
+        <DialogDescription>
+          Factura {factura.supplier_document_number} — debes{" "}
+          {mostrarImporte({ amount: factura.balance, currency: factura.transaction_currency })}.
+          Puede ser un abono: lo que pagues se resta.
+        </DialogDescription>
+        <div className="space-y-3 pt-2">
+          <FormField label="¿Cuánto pagas?" required>
+            {(p) => (
+              <MoneyInput
+                {...p}
+                value={monto}
+                onChange={setMonto}
+                currency={
+                  factura.transaction_currency === "VES" ? "Bs." : factura.transaction_currency
+                }
+              />
+            )}
+          </FormField>
+          <FormField label="¿Con qué pagas?" required>
+            {(p) => (
+              <SimpleSelect
+                id={p.id}
+                value={forma}
+                onValueChange={setForma}
+                options={FORMAS_PAGO_COMPRA.map((f) => ({ value: f.value, label: f.label }))}
+              />
+            )}
+          </FormField>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onCerrar}>
+            Cancelar
+          </Button>
+          <Button
+            variant="primary"
+            disabled={
+              forma === null || !importeValido(monto.trim().replace(",", ".")) || pagar.isPending
+            }
+            onClick={() => pagar.mutate()}
+          >
+            {pagar.isPending ? "Pagando…" : "Registrar pago"}
           </Button>
         </DialogFooter>
       </DialogContent>

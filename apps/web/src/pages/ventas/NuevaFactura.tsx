@@ -159,6 +159,28 @@ export function NuevaFactura(): React.JSX.Element {
     }
   }
 
+  // El PEDIDO (Nivel B de la auditoría de superficie): compromete cantidades
+  // y precios sin mover nada; confirmar reserva la existencia. El backend
+  // completo existía sin puerta.
+  async function guardarPedido(): Promise<void> {
+    if (!validar(false)) return;
+    setError(null);
+    setOcupado(true);
+    try {
+      const q = await llamar<DocumentoCreado>("/v1/orders", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify(cuerpo()),
+      });
+      toast.success("Pedido guardado", "Confírmalo desde su detalle para reservar existencia.");
+      void navigate("/admin/ventas/" + q.id);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setOcupado(false);
+    }
+  }
+
   async function emitir(): Promise<void> {
     setError(null);
     try {
@@ -355,6 +377,9 @@ export function NuevaFactura(): React.JSX.Element {
             {/* Peso visual distinto A PROPÓSITO: guardar es reversible, emitir no. */}
             <Button variant="secondary" disabled={ocupado} onClick={() => void guardarCotizacion()}>
               Guardar cotización
+            </Button>
+            <Button variant="secondary" disabled={ocupado} onClick={() => void guardarPedido()}>
+              Guardar pedido
             </Button>
             <Button
               variant="primary"

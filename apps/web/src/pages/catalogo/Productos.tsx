@@ -6,6 +6,7 @@ import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
 import { FormField } from "../../components/forms.js";
+import { ConfirmDialog } from "../../components/ConfirmDialog.js";
 import { Button } from "../../ui/button.js";
 import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
@@ -321,7 +322,7 @@ function DetalleProducto({
   producto: Product;
   onCerrar: (hecho: boolean) => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const [editando, setEditando] = useState(false);
   const [form, setForm] = useState({
@@ -329,7 +330,32 @@ function DetalleProducto({
     status: producto.status,
     barcode: producto.barcode ?? "",
   });
+  const [clasif, setClasif] = useState(producto.tax_category_code);
+  const [confirmandoClasif, setConfirmandoClasif] = useState(false);
   const [error, setError] = useState<unknown>(null);
+
+  const clasificaciones = useQuery({
+    queryKey: ["clasif-tributarias"],
+    staleTime: 300_000,
+    enabled: puede("product.tax_category.set"),
+    queryFn: () => llamar<TaxCategory[]>("/v1/tax-categories"),
+  });
+
+  async function cambiarClasificacion(): Promise<void> {
+    setError(null);
+    try {
+      await llamar("/v1/products/" + producto.id + "/tax-category", {
+        method: "PUT",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ company_id: empresa.id, tax_category_code: clasif }),
+      });
+      toast.success("Clasificación cambiada", "Aplica a las emisiones FUTURAS.");
+      onCerrar(true);
+    } catch (e) {
+      setError(e);
+      toast.error("No se pudo cambiar la clasificación");
+    }
+  }
 
   // El precio VIGENTE por lista, a fecha EXPLÍCITA (hoy, elegido aquí como
   // parámetro — ADR-0032). Un documento con otra fecha pedirá otro vigente.
@@ -421,10 +447,38 @@ function DetalleProducto({
                 ))}
               </ul>
             )}
-            <p className="pt-1 text-[0.8rem] text-faint-foreground">
-              La clasificación tributaria se cambia aparte, con permiso propio del contador — no
-              desde esta edición.
-            </p>
+            {puede("product.tax_category.set") ? (
+              <div className="rounded-md border border-border bg-surface-muted/40 p-3">
+                <p className="text-[0.85rem] font-medium">
+                  Clasificación tributaria — permiso del contador, auditada
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <div className="flex-1">
+                    <SimpleSelect
+                      ariaLabel="Clasificación tributaria"
+                      value={clasif}
+                      onValueChange={setClasif}
+                      options={(clasificaciones.data ?? []).map((t) => ({
+                        value: t.code,
+                        label: t.name,
+                      }))}
+                    />
+                  </div>
+                  <Button
+                    variant="secondary"
+                    disabled={clasif === producto.tax_category_code}
+                    onClick={() => setConfirmandoClasif(true)}
+                  >
+                    Cambiar
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <p className="pt-1 text-[0.8rem] text-faint-foreground">
+                La clasificación tributaria se cambia aparte, con permiso propio del contador — no
+                desde esta edición.
+              </p>
+            )}
           </div>
         ) : (
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -495,6 +549,18 @@ function DetalleProducto({
             </>
           )}
         </DialogFooter>
+
+        <ConfirmDialog
+          open={confirmandoClasif}
+          onOpenChange={setConfirmandoClasif}
+          title="Cambiar la clasificación tributaria"
+          confirmLabel="Cambiar la clasificación"
+          onConfirm={cambiarClasificacion}
+        >
+          De «{producto.tax_category_code}» a «{clasif}». Aplica a las emisiones FUTURAS: lo ya
+          emitido congeló su clasificación al nacer y NO cambia. Queda auditado (VALIDAR-TRIBUTARIO:
+          la confirma el contador).
+        </ConfirmDialog>
       </DialogContent>
     </Dialog>
   );

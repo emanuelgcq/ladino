@@ -1,4 +1,39 @@
-# Handoff — 2026-09-05 (2ª entrega)
+# Handoff — 2026-09-05 (3ª entrega)
+
+## Niveles B y C de la auditoría de superficie: las puertas que faltaban
+
+Todo con el backend YA existente — cero endpoints nuevos, cero migraciones. Nivel B:
+
+- **Pagar una factura de proveedor pendiente** (botón «Pagar» en Compras y gastos, con
+  purchase.payment.register): antes solo se podía pagar al registrarla.
+- **Devoluciones de venta** («Devolución» en el detalle del documento): líneas con
+  cantidades, motivo obligatorio, y el flujo crear+confirmar en un acto — reingreso al
+  costo ORIGINAL, NC con su rango propio, saldo a favor.
+- **Registrar la factura del proveedor contra su orden** («Registrar factura…» en el
+  detalle de orden): líneas nacidas de la orden, ajustadas al papel; el matching vigila.
+- **NC de compras** («NC…» en cada factura de CxP): números del papel, motivo, líneas.
+- **Umbral de reposición** («Definir umbral…» en Alertas de inventario): la alerta de
+  por-reponer por fin puede dispararse.
+- **Clasificación tributaria** (control del contador en el detalle de producto, con
+  confirmación y su VALIDAR-TRIBUTARIO): el «se cambia aparte» por fin tiene aparte.
+- **Definir recetas** («Definir receta…» en Inventario admin): se reemplaza entera, como
+  exige el contrato.
+- **Editar/apagar cuentas de dinero y formas de pago** (PATCH ×2 con sus diálogos).
+- **Pedidos con reserva** («Guardar pedido» en Nueva factura + «Confirmar pedido…» en el
+  detalle, eligiendo depósito): el disponible baja sin mover el kardex.
+
+Nivel C: alerta de **agotamiento de rangos** en Facturación fiscal (el alert_threshold_pct
+por fin se consulta); **PDF y PDF copia** («SIN DERECHO A CRÉDITO FISCAL», 13.13) en el
+detalle; **comprobantes de retención emitidos** en la pestaña Retenciones; **variaciones
+de landed cost** en CxP; **cobertura contable** (coverage-gaps, «la respuesta buena es
+cero») junto a la Comprobación.
+
+**Lo único que queda del informe**: la familia plantillas de producto / variantes / lotes
+(product-templates, stock-by-template, suggest-lot) — backend construido, sin pantalla.
+NO se improvisó a propósito: es un módulo entero con diseño propio (variantes como
+productos derivados, ADR-0036; lotes con FEFO) y merece su orden, no un diálogo a las
+apuradas. Igual siguen pendientes de órdenes anteriores: invitación con correo saliente,
+recorte fino de bindings, sucursales (sin endpoint de creación).
 
 ## ADR-0049 — El primer día real (Nivel A de la auditoría de superficie)
 

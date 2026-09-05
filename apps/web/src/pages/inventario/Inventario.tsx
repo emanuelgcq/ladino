@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { ArrowLeftRight, ArrowDownToLine, ArrowUpFromLine, Scale, TimerReset } from "lucide-react";
 import { useSesion } from "../../app/session.js";
@@ -690,6 +690,8 @@ function Movimiento({
 function Alertas(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const [dias, setDias] = useState("30");
+  const [definiendo, setDefiniendo] = useState(false);
+  const qc = useQueryClient();
 
   const alertas = useQuery({
     queryKey: ["alertas-inv", empresa.id, dias],
@@ -707,6 +709,9 @@ function Alertas(): React.JSX.Element {
       <Card>
         <CardHeader>
           <CardTitle>Por reponer ({alertas.data?.bajo.length ?? 0})</CardTitle>
+          <Button variant="secondary" size="sm" onClick={() => setDefiniendo(true)}>
+            Definir umbral…
+          </Button>
         </CardHeader>
         <CardContent>
           {alertas.isPending ? (
@@ -781,7 +786,142 @@ function Alertas(): React.JSX.Element {
           </p>
         </CardContent>
       </Card>
+
+      {definiendo && (
+        <DefinirUmbral
+          onCerrar={(hecho) => {
+            setDefiniendo(false);
+            if (hecho) void qc.invalidateQueries({ queryKey: ["alertas-inv", empresa.id] });
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * UMBRAL DE REPOSICIÓN (Nivel B de la auditoría de superficie): la alerta de
+ * «por reponer» decía «solo con umbral definido»… y no había dónde definirlo.
+ */
+function DefinirUmbral({ onCerrar }: { onCerrar: (hecho: boolean) => void }): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [producto, setProducto] = useState<EntityOption | null>(null);
+  const [almacen, setAlmacen] = useState<string | null>(null);
+  const [minimo, setMinimo] = useState("");
+  const [maximo, setMaximo] = useState("");
+
+  const almacenes = useQuery({
+    queryKey: ["almacenes", empresa.id],
+    queryFn: () => llamar<Warehouse[]>("/v1/warehouses"),
+  });
+  if (almacen === null && (almacenes.data?.length ?? 0) > 0) {
+    setAlmacen(almacenes.data![0]!.id);
+  }
+
+  const guardar = useMutation({
+    mutationFn: () =>
+      llamar("/v1/inventory/thresholds", {
+        method: "PUT",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          warehouse_id: almacen,
+          product_id: producto?.id ?? "",
+          stock_min: minimo.trim().replace(",", "."),
+          ...(maximo.trim() === "" ? {} : { stock_max: maximo.trim().replace(",", ".") }),
+        }),
+      }),
+    onSuccess: () => {
+      toast.success("Umbral definido", "La alerta de reposición ya lo vigila.");
+      onCerrar(true);
+    },
+    onError: (e) => toast.error("No se pudo definir", e instanceof Error ? e.message : undefined),
+  });
+
+  const listo =
+    producto !== null &&
+    almacen !== null &&
+    /^d{1,16}(.d{1,8})?$/.test(minimo.trim().replace(",", "."));
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Definir umbral de reposición</DialogTitle>
+        <DialogDescription>
+          Cuando la existencia baje del mínimo, el producto aparece en «Por reponer».
+        </DialogDescription>
+        <div className="space-y-3 pt-2">
+          <FormField label="Producto" required>
+            {(a) => (
+              <EntityPicker
+                id={a.id}
+                placeholder="SKU o nombre…"
+                value={producto}
+                onChange={setProducto}
+                buscar={async (q) => {
+                  const r = await llamar<{ items: Product[] }>(
+                    "/v1/products?search=" + encodeURIComponent(q) + "&per_page=10",
+                  );
+                  return r.items
+                    .filter((x) => x.kind === "good")
+                    .map((x) => ({ id: x.id, label: x.name, detalle: x.sku }));
+                }}
+              />
+            )}
+          </FormField>
+          <FormField label="Almacén" required>
+            {(a) => (
+              <SimpleSelect
+                id={a.id}
+                value={almacen}
+                onValueChange={setAlmacen}
+                options={(almacenes.data ?? []).map((w) => ({
+                  value: w.id,
+                  label: w.code + " · " + w.name,
+                }))}
+              />
+            )}
+          </FormField>
+          <div className="grid grid-cols-2 gap-2">
+            <FormField label="Mínimo" required>
+              {(a) => (
+                <Input
+                  id={a.id}
+                  inputMode="decimal"
+                  className="text-right font-mono"
+                  value={minimo}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMinimo(e.target.value)}
+                />
+              )}
+            </FormField>
+            <FormField label="Máximo (opcional)">
+              {(a) => (
+                <Input
+                  id={a.id}
+                  inputMode="decimal"
+                  className="text-right font-mono"
+                  value={maximo}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMaximo(e.target.value)}
+                />
+              )}
+            </FormField>
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => onCerrar(false)}>
+            Cancelar
+          </Button>
+          <Button
+            variant="primary"
+            disabled={!listo || guardar.isPending}
+            onClick={() => guardar.mutate()}
+          >
+            Guardar umbral
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -840,10 +980,15 @@ function Recetas({
     }
   }
 
+  const [definiendo, setDefiniendo] = useState(false);
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Consumo por receta</CardTitle>
+        <Button variant="secondary" size="sm" onClick={() => setDefiniendo(true)}>
+          Definir receta…
+        </Button>
       </CardHeader>
       <CardContent className="space-y-3">
         <CardDescription>
@@ -958,6 +1103,15 @@ function Recetas({
           Consumir receta…
         </Button>
 
+        {definiendo && (
+          <DefinirReceta
+            onCerrar={() => {
+              setDefiniendo(false);
+              // La receta del compuesto elegido se rehace en la próxima consulta.
+            }}
+          />
+        )}
+
         <ConfirmDialog
           open={confirmando}
           onOpenChange={setConfirmando}
@@ -970,5 +1124,172 @@ function Recetas({
         </ConfirmDialog>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * DEFINIR LA RECETA (Nivel B de la auditoría de superficie): consumirla
+ * existía; crearla o corregirla, no. La receta se reemplaza ENTERA — una
+ * receta a medias no es una receta (contrato del servidor).
+ */
+function DefinirReceta({ onCerrar }: { onCerrar: () => void }): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [compuesto, setCompuesto] = useState<EntityOption | null>(null);
+  const [lineas, setLineas] = useState<
+    { ingrediente: EntityOption | null; quantity: string; unit_code: string }[]
+  >([{ ingrediente: null, quantity: "", unit_code: "unidad" }]);
+  const [error, setError] = useState<unknown>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  const unidades = useQuery({
+    queryKey: ["unidades"],
+    staleTime: 300_000,
+    queryFn: () => llamar<{ code: string; name: string }[]>("/v1/units"),
+  });
+
+  const validas = lineas.filter(
+    (l) => l.ingrediente !== null && l.quantity.trim() !== "" && l.unit_code !== "",
+  );
+  const listo = compuesto !== null && validas.length > 0;
+
+  async function guardar(): Promise<void> {
+    setError(null);
+    setOcupado(true);
+    try {
+      await llamar("/v1/products/" + (compuesto?.id ?? "") + "/recipe", {
+        method: "PUT",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          lines: validas.map((l) => ({
+            child_product_id: l.ingrediente!.id,
+            quantity: l.quantity.trim().replace(",", "."),
+            unit_code: l.unit_code,
+          })),
+        }),
+      });
+      toast.success("Receta guardada", "Reemplaza a la anterior por completo.");
+      onCerrar();
+    } catch (e) {
+      setError(e);
+      toast.error("No se pudo guardar la receta");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onCerrar()}>
+      <DialogContent className="max-w-xl">
+        <DialogTitle>Definir la receta</DialogTitle>
+        <DialogDescription>
+          Cuánto de cada ingrediente consume UNA unidad del compuesto. Guardar reemplaza la receta
+          anterior entera; lo ya consumido no cambia.
+        </DialogDescription>
+        <div className="space-y-3 pt-2">
+          <FormField label="Producto compuesto" required>
+            {(a) => (
+              <EntityPicker
+                id={a.id}
+                placeholder="Buscar compuesto…"
+                value={compuesto}
+                onChange={setCompuesto}
+                buscar={async (q) => {
+                  const r = await llamar<{ items: Product[] }>(
+                    "/v1/products?search=" + encodeURIComponent(q) + "&per_page=10",
+                  );
+                  return r.items
+                    .filter((x) => x.is_composed)
+                    .map((x) => ({ id: x.id, label: x.name, detalle: x.sku }));
+                }}
+              />
+            )}
+          </FormField>
+          <div className="space-y-2">
+            {lineas.map((l, i) => (
+              <div key={i} className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <EntityPicker
+                    placeholder="Ingrediente…"
+                    value={l.ingrediente}
+                    onChange={(v) =>
+                      setLineas((prev) =>
+                        prev.map((x, j) => (j === i ? { ...x, ingrediente: v } : x)),
+                      )
+                    }
+                    buscar={async (q) => {
+                      const r = await llamar<{ items: Product[] }>(
+                        "/v1/products?search=" + encodeURIComponent(q) + "&per_page=10",
+                      );
+                      return r.items
+                        .filter((x) => x.kind === "good" && !x.is_composed)
+                        .map((x) => ({ id: x.id, label: x.name, detalle: x.sku }));
+                    }}
+                  />
+                </div>
+                <Input
+                  aria-label="Cantidad por unidad"
+                  placeholder="Cant."
+                  inputMode="decimal"
+                  className="w-20 text-right font-mono"
+                  value={l.quantity}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    setLineas((prev) =>
+                      prev.map((x, j) => (j === i ? { ...x, quantity: e.target.value } : x)),
+                    )
+                  }
+                />
+                <div className="w-32">
+                  <SimpleSelect
+                    ariaLabel="Unidad del ingrediente"
+                    value={l.unit_code}
+                    onValueChange={(v) =>
+                      setLineas((prev) =>
+                        prev.map((x, j) => (j === i ? { ...x, unit_code: v } : x)),
+                      )
+                    }
+                    options={(unidades.data ?? []).map((u) => ({
+                      value: u.code,
+                      label: u.name,
+                    }))}
+                  />
+                </div>
+                <Button
+                  variant="ghost"
+                  size="iconSm"
+                  aria-label="Quitar ingrediente"
+                  disabled={lineas.length <= 1}
+                  onClick={() => setLineas((prev) => prev.filter((_, j) => j !== i))}
+                >
+                  ×
+                </Button>
+              </div>
+            ))}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                setLineas((prev) => [
+                  ...prev,
+                  { ingrediente: null, quantity: "", unit_code: "unidad" },
+                ])
+              }
+            >
+              Otro ingrediente
+            </Button>
+          </div>
+          {error !== null && <MensajeError error={error} />}
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" onClick={onCerrar}>
+            Cancelar
+          </Button>
+          <Button variant="primary" disabled={!listo || ocupado} onClick={() => void guardar()}>
+            {ocupado ? "Guardando…" : "Guardar la receta"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
