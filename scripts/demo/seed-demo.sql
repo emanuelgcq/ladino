@@ -62,6 +62,26 @@ insert into public.scope_bindings (tenant_id, company_id, assignment_id, scope_t
    'deade001-0000-4000-8000-00000000ee03', 'warehouse', 'deade001-0000-4000-8000-0000000000a1')
 on conflict do nothing;
 
+-- ADR-0048/49: el demo es EL DUEÑO de verdad — lleva los roles de SISTEMA del
+-- fundador (owner plano + warehouse_ops con su binding), como los llevaría un
+-- negocio fundado por /v1/onboarding. El rol propio de Fase A se conserva por
+-- historia; estos dos son los que abren Usuarios y roles, Depósitos, Reportes
+-- y todo lo que el catálogo gane mañana (owner cubre el catálogo entero).
+insert into public.user_role_assignments (id, tenant_id, membership_id, role_id, company_id)
+select 'deade001-0000-4000-8000-00000000ee04', 'deade001-0000-4000-8000-000000000001',
+       'deade001-0000-4000-8000-00000000ee02', r.id, null
+  from public.roles r where r.key = 'owner' and r.tenant_id is null
+on conflict (id) do nothing;
+insert into public.user_role_assignments (id, tenant_id, membership_id, role_id, company_id)
+select 'deade001-0000-4000-8000-00000000ee05', 'deade001-0000-4000-8000-000000000001',
+       'deade001-0000-4000-8000-00000000ee02', r.id, null
+  from public.roles r where r.key = 'warehouse_ops' and r.tenant_id is null
+on conflict (id) do nothing;
+insert into public.scope_bindings (tenant_id, company_id, assignment_id, scope_type, scope_id) values
+  ('deade001-0000-4000-8000-000000000001', 'deade001-0000-4000-8000-0000000000c0',
+   'deade001-0000-4000-8000-00000000ee05', 'warehouse', 'deade001-0000-4000-8000-0000000000a1')
+on conflict do nothing;
+
 -- Régimen fiscal vigente (formatos libres → exige número de control de rango).
 insert into public.company_fiscal_regimes (id, tenant_id, company_id, regime_code, effective_from)
 values ('deade001-0000-4000-8000-0000000000f1', 'deade001-0000-4000-8000-000000000001',
