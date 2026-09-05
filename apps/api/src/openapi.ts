@@ -12,6 +12,12 @@ import {
   SetCompanyFiscalAddressRequest,
   CompanyResponse,
   MePermissionsResponse,
+  OnboardBusinessRequest,
+  OnboardBusinessResponse,
+  ListMembersResponse,
+  MemberResponse,
+  AddMemberRequest,
+  SetMemberStatusRequest,
   ErrorResponse,
   CreateProductRequest,
   UpdateProductRequest,
@@ -192,6 +198,105 @@ export function buildOpenApiDocument(): object {
   });
 
   const misPermisos = registry.register("MePermissionsResponse", MePermissionsResponse);
+  const fundar = registry.register("OnboardBusinessRequest", OnboardBusinessRequest);
+  const fundado = registry.register("OnboardBusinessResponse", OnboardBusinessResponse);
+  const miembros = registry.register("ListMembersResponse", ListMembersResponse);
+  const miembro = registry.register("MemberResponse", MemberResponse);
+  const agregarMiembro = registry.register("AddMemberRequest", AddMemberRequest);
+  const estadoMiembro = registry.register("SetMemberStatusRequest", SetMemberStatusRequest);
+
+  registry.registerPath({
+    method: "post",
+    path: "/v1/onboarding",
+    summary: "Fundar el negocio (ADR-0049)",
+    description:
+      "El primer día real: crea tenant, membresía, los dos roles del fundador (dueño plano + " +
+      "operación de almacén con su binding), la empresa, el primer depósito y el plan contable " +
+      "con sus plantillas de asiento — en UNA transacción. Sin X-Company-Id y sin " +
+      "Idempotency-Key: la idempotencia es estructural (un negocio por usuario, LAD81 → 409).",
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { "application/json": { schema: fundar } } } },
+    responses: {
+      201: {
+        description: "El negocio fundado.",
+        content: { "application/json": { schema: fundado } },
+      },
+      409: errorRef("El usuario ya pertenece a un negocio."),
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/members",
+    summary: "Los miembros del negocio y sus roles",
+    description:
+      "ADR-0049: membresías del tenant de la empresa activa, con correo y asignaciones. " +
+      "Exige membership.read a nivel de negocio (rol plano).",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: {
+        description: "La lista de miembros.",
+        content: { "application/json": { schema: miembros } },
+      },
+      403: errorRef("Sin membership.read a nivel de negocio."),
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
+  registry.registerPath({
+    method: "post",
+    path: "/v1/members",
+    summary: "Agregar un miembro por su correo",
+    description:
+      "La persona se registra sola en Ladino y el dueño la agrega por correo con uno de los " +
+      "seis roles de sistema. Un rol acotado recibe bindings a TODOS los almacenes de la " +
+      "empresa. Exige membership.manage a nivel de negocio.",
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { "application/json": { schema: agregarMiembro } } } },
+    responses: {
+      201: {
+        description: "El miembro con sus asignaciones.",
+        content: { "application/json": { schema: miembro } },
+      },
+      404: errorRef("Ese correo no tiene cuenta en Ladino todavía."),
+      403: errorRef("Sin membership.manage a nivel de negocio."),
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
+  registry.registerPath({
+    method: "delete",
+    path: "/v1/members/assignments/{id}",
+    summary: "Quitar un rol asignado",
+    description:
+      "Elimina la asignación y sus bindings. El dueño no puede quitarse a sí mismo el rol de " +
+      "dueño. Exige membership.manage a nivel de negocio.",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: "Asignación eliminada." },
+      403: errorRef("Sin membership.manage a nivel de negocio."),
+      404: errorRef("La asignación no existe en este negocio."),
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
+  registry.registerPath({
+    method: "put",
+    path: "/v1/members/{id}/status",
+    summary: "Activar o desactivar el acceso de un miembro",
+    description:
+      "Desactivar la membresía corta el acceso ENTERO en la consulta siguiente (ADR-0014). " +
+      "Nadie puede desactivarse a sí mismo. Exige membership.manage a nivel de negocio.",
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { "application/json": { schema: estadoMiembro } } } },
+    responses: {
+      200: { description: "Estado cambiado." },
+      403: errorRef("Sin membership.manage a nivel de negocio."),
+      404: errorRef("La membresía no existe en este negocio."),
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
   registry.registerPath({
     method: "get",
     path: "/v1/me/permissions",

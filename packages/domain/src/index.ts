@@ -121,3 +121,11 @@ export {
   type ExportacionHecha,
   type FiscalBookError,
 } from "./fiscal-books.js";
+export { onboardBusiness, type OnboardingError } from "./onboarding.js";
+export {
+  listMembers,
+  addMember,
+  removeAssignment,
+  setMemberStatus,
+  type MembersError,
+} from "./members.js";

@@ -1,4 +1,33 @@
-# Handoff — 2026-09-05
+# Handoff — 2026-09-05 (2ª entrega)
+
+## ADR-0049 — El primer día real (Nivel A de la auditoría de superficie)
+
+La auditoría backend↔frontend (144 endpoints cruzados contra la web) encontró que el
+ARRANQUE no existía fuera del SQL de la demo. Cerrado:
+
+- **Migración 41**: owner PLANO (las operaciones de nivel tenant exigen rol sin alcance —
+  el owner acotado de la mig. 40 no podía ni crear su segunda empresa) + sexto rol
+  `warehouse_ops` con los 8 verbos acotados; el pgTAP exige que el PAR cubra el catálogo.
+  `platform.bootstrap_tenant` (security definer; guard un-negocio-por-usuario LAD81, que
+  ES la idempotencia del onboarding — única ruta mutante sin Idempotency-Key, razonado en
+  el ADR) + `user_id_by_email`/`user_email` (solo id y correo salen de auth).
+- **POST /v1/onboarding**: tenant + empresa (RIF opcional → PEND- determinista; modo
+  recibos vende desde hoy) + depósito W1 con binding + plan contable ve_basico CON el
+  preset de asientos — en UNA transacción. E2E completo: fundar → operar → fundar dos
+  veces = DUPLICATE.
+- **/v1/members** (GET/POST/DELETE asignación/PUT status): agregar POR CORREO con los seis
+  oficios; acotados → bindings a todos los almacenes; guards de timón (ni quitarse el rol
+  de dueño ni desactivarse); sin asignaciones la empresa se vuelve INVISIBLE (404 — regla
+  del catálogo, verificada). Web: «Fundar mi negocio» sustituye al formulario de
+  tenant_id crudo; Configuración gana Usuarios y roles + Depósitos; importar el plan en
+  Contabilidad importa también el preset.
+
+**Pendientes que siguen del informe**: Nivel B (pagar CxP pendiente, devoluciones,
+factura de proveedor contra orden, NC de compras, umbral de reposición, clasificación
+tributaria, recetas, PATCH cuentas/formas, pedidos con reserva) y Nivel C (agotamiento de
+rangos, copia de factura, comprobantes de retención, variaciones de landed cost,
+coverage-gaps, plantillas/lotes). Invitación con correo saliente y recorte fino de
+bindings: declarados en el ADR.
 
 ## ADR-0048 — Los cinco roles con nombre, y lo que cada uno ve
 

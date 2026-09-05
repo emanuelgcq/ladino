@@ -55,6 +55,78 @@ export const ListCompaniesResponse = z.array(CompanyResponse);
 /** ADR-0048: los permisos del usuario en la empresa activa, para formar el menú. */
 export const MePermissionsResponse = z.object({ permissions: z.array(z.string()) }).strict();
 export type MePermissionsResponse = z.infer<typeof MePermissionsResponse>;
+
+/**
+ * ADR-0049: fundar el negocio en un acto — tenant, empresa, depósito, roles
+ * del fundador y plan contable con plantillas. El RIF es opcional: sin él, la
+ * empresa nace con placeholder PEND- y el modo recibos la deja vender ya.
+ */
+export const OnboardBusinessRequest = z
+  .object({
+    business_name: z.string().trim().min(2).max(200),
+    tax_id: z.string().trim().min(1).max(30).nullable().optional(),
+  })
+  .strict();
+export type OnboardBusinessRequest = z.infer<typeof OnboardBusinessRequest>;
+
+export const OnboardBusinessResponse = z
+  .object({
+    tenant_id: z.string().uuid(),
+    company_id: z.string().uuid(),
+    warehouse_id: z.string().uuid(),
+  })
+  .strict();
+export type OnboardBusinessResponse = z.infer<typeof OnboardBusinessResponse>;
+
+/** ADR-0049: miembros del negocio y sus roles. */
+export const MemberAssignment = z
+  .object({
+    id: z.string().uuid(),
+    role_key: z.string(),
+    role_name: z.string(),
+    /** null = asignación a nivel de todo el negocio (el fundador). */
+    company_id: z.string().uuid().nullable(),
+  })
+  .strict();
+export type MemberAssignment = z.infer<typeof MemberAssignment>;
+
+export const MemberResponse = z
+  .object({
+    membership_id: z.string().uuid(),
+    user_id: z.string().uuid(),
+    email: z.string().nullable(),
+    status: z.string(),
+    assignments: z.array(MemberAssignment),
+  })
+  .strict();
+export type MemberResponse = z.infer<typeof MemberResponse>;
+
+export const ListMembersResponse = z.object({ members: z.array(MemberResponse) }).strict();
+export type ListMembersResponse = z.infer<typeof ListMembersResponse>;
+
+export const AddMemberRequest = z
+  .object({
+    company_id: z.string().uuid(),
+    email: z.string().trim().email(),
+    role_key: z.enum([
+      "owner",
+      "cashier",
+      "store_manager",
+      "back_office",
+      "accountant",
+      "warehouse_ops",
+    ]),
+  })
+  .strict();
+export type AddMemberRequest = z.infer<typeof AddMemberRequest>;
+
+export const SetMemberStatusRequest = z
+  .object({
+    company_id: z.string().uuid(),
+    status: z.enum(["active", "inactive"]),
+  })
+  .strict();
+export type SetMemberStatusRequest = z.infer<typeof SetMemberStatusRequest>;
 export type ListCompaniesResponse = z.infer<typeof ListCompaniesResponse>;
 
 /** Cuerpo de error del contrato (`API_SPEC.md` §Errores). */

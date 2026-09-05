@@ -276,22 +276,29 @@ function SelectorEmpresa({
   onRecargar: () => void;
   session: Session;
 }): React.JSX.Element {
-  const [alta, setAlta] = useState({ tenant_id: "", legal_name: "", tax_id: "" });
+  const [alta, setAlta] = useState({ business_name: "", tax_id: "" });
   const [altaError, setAltaError] = useState("");
   const [ocupado, setOcupado] = useState(false);
 
-  async function crear() {
+  // ADR-0049: FUNDAR el negocio en un acto — tenant, empresa, depósito,
+  // roles del fundador y plan contable. Un reintento tras un éxito responde
+  // DUPLICATE y recargar la sesión enseña la empresa igual: por eso el catch
+  // también recarga.
+  async function fundar() {
     setAltaError("");
     setOcupado(true);
     try {
-      await api(session, "/v1/companies", {
+      await api(session, "/v1/onboarding", {
         method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify(alta),
+        body: JSON.stringify({
+          business_name: alta.business_name.trim(),
+          ...(alta.tax_id.trim() === "" ? {} : { tax_id: alta.tax_id.trim() }),
+        }),
       });
       onRecargar();
     } catch (e) {
       setAltaError(mensajeDe(e));
+      onRecargar();
     } finally {
       setOcupado(false);
     }
@@ -322,22 +329,23 @@ function SelectorEmpresa({
             {companies.length === 0 ? (
               <div className="space-y-3">
                 <CardDescription>
-                  No tienes empresas visibles. Crea la primera (necesitas el tenant y
-                  company.manage).
+                  Bienvenido. Ponle nombre a tu negocio y en un minuto tienes todo listo: tu
+                  depósito, tus listas de precios y tu contabilidad armada. El RIF puede esperar —
+                  puedes vender con recibos desde hoy y activar la facturación cuando lo tengas.
                 </CardDescription>
                 <div className="space-y-2">
+                  <Label htmlFor="fundar-nombre">¿Cómo se llama tu negocio?</Label>
                   <Input
-                    placeholder="tenant_id (uuid)"
-                    value={alta.tenant_id}
-                    onChange={(e) => setAlta({ ...alta, tenant_id: e.target.value })}
+                    id="fundar-nombre"
+                    placeholder="Bodega La Esquina"
+                    value={alta.business_name}
+                    autoFocus
+                    onChange={(e) => setAlta({ ...alta, business_name: e.target.value })}
                   />
+                  <Label htmlFor="fundar-rif">RIF (si ya lo tienes)</Label>
                   <Input
-                    placeholder="Razón social"
-                    value={alta.legal_name}
-                    onChange={(e) => setAlta({ ...alta, legal_name: e.target.value })}
-                  />
-                  <Input
-                    placeholder="RIF"
+                    id="fundar-rif"
+                    placeholder="J-12345678-9 — opcional"
                     value={alta.tax_id}
                     onChange={(e) => setAlta({ ...alta, tax_id: e.target.value })}
                   />
@@ -346,8 +354,13 @@ function SelectorEmpresa({
                       {altaError}
                     </p>
                   )}
-                  <Button variant="primary" disabled={ocupado} onClick={() => void crear()}>
-                    Crear empresa
+                  <Button
+                    variant="primary"
+                    className="w-full"
+                    disabled={ocupado || alta.business_name.trim().length < 2}
+                    onClick={() => void fundar()}
+                  >
+                    {ocupado ? "Fundando…" : "Fundar mi negocio"}
                   </Button>
                 </div>
               </div>

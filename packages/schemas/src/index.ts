@@ -5,6 +5,13 @@ export {
   CompanyResponse,
   ListCompaniesResponse,
   MePermissionsResponse,
+  OnboardBusinessRequest,
+  OnboardBusinessResponse,
+  MemberAssignment,
+  MemberResponse,
+  ListMembersResponse,
+  AddMemberRequest,
+  SetMemberStatusRequest,
   SetCompanyFiscalAddressRequest,
   ErrorResponse,
 } from "./companies.js";

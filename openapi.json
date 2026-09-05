@@ -132,6 +132,228 @@
         ],
         "additionalProperties": false
       },
+      "OnboardBusinessRequest": {
+        "type": "object",
+        "properties": {
+          "business_name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 200
+          },
+          "tax_id": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 30
+          }
+        },
+        "required": [
+          "business_name"
+        ],
+        "additionalProperties": false
+      },
+      "OnboardBusinessResponse": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "warehouse_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "company_id",
+          "warehouse_id"
+        ],
+        "additionalProperties": false
+      },
+      "ListMembersResponse": {
+        "type": "object",
+        "properties": {
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "membership_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "user_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "email": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "assignments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "role_key": {
+                        "type": "string"
+                      },
+                      "role_name": {
+                        "type": "string"
+                      },
+                      "company_id": {
+                        "type": "string",
+                        "nullable": true,
+                        "format": "uuid"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "role_key",
+                      "role_name",
+                      "company_id"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "membership_id",
+                "user_id",
+                "email",
+                "status",
+                "assignments"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "members"
+        ],
+        "additionalProperties": false
+      },
+      "MemberResponse": {
+        "type": "object",
+        "properties": {
+          "membership_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "assignments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "role_key": {
+                  "type": "string"
+                },
+                "role_name": {
+                  "type": "string"
+                },
+                "company_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "id",
+                "role_key",
+                "role_name",
+                "company_id"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "membership_id",
+          "user_id",
+          "email",
+          "status",
+          "assignments"
+        ],
+        "additionalProperties": false
+      },
+      "AddMemberRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "role_key": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "cashier",
+              "store_manager",
+              "back_office",
+              "accountant",
+              "warehouse_ops"
+            ]
+          }
+        },
+        "required": [
+          "company_id",
+          "email",
+          "role_key"
+        ],
+        "additionalProperties": false
+      },
+      "SetMemberStatusRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ]
+          }
+        },
+        "required": [
+          "company_id",
+          "status"
+        ],
+        "additionalProperties": false
+      },
       "SetCompanyFiscalAddressRequest": {
         "type": "object",
         "properties": {
@@ -11370,6 +11592,262 @@
           },
           "422": {
             "description": "Forma inválida (VALIDATION_FAILED) o clave fuera de cota.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/onboarding": {
+      "post": {
+        "summary": "Fundar el negocio (ADR-0049)",
+        "description": "El primer día real: crea tenant, membresía, los dos roles del fundador (dueño plano + operación de almacén con su binding), la empresa, el primer depósito y el plan contable con sus plantillas de asiento — en UNA transacción. Sin X-Company-Id y sin Idempotency-Key: la idempotencia es estructural (un negocio por usuario, LAD81 → 409).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardBusinessRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El negocio fundado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardBusinessResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "El usuario ya pertenece a un negocio.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/members": {
+      "get": {
+        "summary": "Los miembros del negocio y sus roles",
+        "description": "ADR-0049: membresías del tenant de la empresa activa, con correo y asignaciones. Exige membership.read a nivel de negocio (rol plano).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "La lista de miembros.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListMembersResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin membership.read a nivel de negocio.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Agregar un miembro por su correo",
+        "description": "La persona se registra sola en Ladino y el dueño la agrega por correo con uno de los seis roles de sistema. Un rol acotado recibe bindings a TODOS los almacenes de la empresa. Exige membership.manage a nivel de negocio.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMemberRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El miembro con sus asignaciones.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin membership.manage a nivel de negocio.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Ese correo no tiene cuenta en Ladino todavía.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/members/assignments/{id}": {
+      "delete": {
+        "summary": "Quitar un rol asignado",
+        "description": "Elimina la asignación y sus bindings. El dueño no puede quitarse a sí mismo el rol de dueño. Exige membership.manage a nivel de negocio.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Asignación eliminada."
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin membership.manage a nivel de negocio.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "La asignación no existe en este negocio.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/members/{id}/status": {
+      "put": {
+        "summary": "Activar o desactivar el acceso de un miembro",
+        "description": "Desactivar la membresía corta el acceso ENTERO en la consulta siguiente (ADR-0014). Nadie puede desactivarse a sí mismo. Exige membership.manage a nivel de negocio.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetMemberStatusRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Estado cambiado."
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin membership.manage a nivel de negocio.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "La membresía no existe en este negocio.",
             "content": {
               "application/json": {
                 "schema": {

@@ -128,6 +128,23 @@ function PlanDeCuentas(): React.JSX.Element {
         },
       );
       toast.success("Plantilla importada", `${r.imported} cuentas y ${r.purposes} papeles.`);
+      // ADR-0049: el plan SIN las plantillas de asiento deja toda venta en la
+      // cola para siempre — la auditoría de superficie encontró este hueco.
+      // Se importan juntas; si el preset ya estaba, el servidor lo dice y no
+      // es un error que detenga nada.
+      try {
+        const t = await llamar<{ imported: number; lines: number }>(
+          "/v1/journal-templates/import-preset",
+          {
+            method: "POST",
+            headers: { "Idempotency-Key": crypto.randomUUID() },
+            body: JSON.stringify({ company_id: empresa.id, preset_code: code }),
+          },
+        );
+        toast.success("Plantillas de asiento importadas", `${t.imported} plantillas.`);
+      } catch {
+        /* preset ya importado o plantilla sin preset: el plan quedó igual */
+      }
       recargar();
     } catch (e) {
       setError(e);

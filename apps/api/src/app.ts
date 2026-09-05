@@ -9,6 +9,7 @@ import { idempotencyMiddleware } from "./middleware/idempotency.js";
 import { rateLimitMiddleware } from "./middleware/rate-limit.js";
 import { timeoutMiddleware } from "./middleware/timeout.js";
 import { companiesRoutes } from "./routes/companies.js";
+import { membersRoutes } from "./routes/members.js";
 import { productsRoutes } from "./routes/products.js";
 import { pricingRoutes, catalogRoutes } from "./routes/pricing.js";
 import { customersRoutes } from "./routes/customers.js";
@@ -162,6 +163,7 @@ export function buildApp(cfg: AppConfig): Hono {
   // sus errores con su propio onError y se saltaría el errorMapper de arriba.
   // El porqué completo está en routes/companies.ts.
   companiesRoutes(app, cfg.sql, idempotencia);
+  membersRoutes(app, cfg.sql, idempotencia);
   productsRoutes(app, cfg.sql, idempotencia, cfg.storage);
   pricingRoutes(app, cfg.sql, idempotencia);
   catalogRoutes(app, cfg.sql);

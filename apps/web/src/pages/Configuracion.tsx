@@ -11,6 +11,8 @@ import { useSesion } from "../app/session.js";
 import { errorDePersona } from "../lib.js";
 import { setTema, temaActual, type ThemeChoice } from "../theme.js";
 import { mostrarTodosLosModulos, setMostrarTodos } from "../app/shell.js";
+import { UsuariosYRoles } from "./configuracion/Usuarios.js";
+import { Depositos } from "./configuracion/Depositos.js";
 
 /**
  * Configuración. Fase A trae lo que gobierna la EXPERIENCIA: tema, divulgación
@@ -21,7 +23,7 @@ import { mostrarTodosLosModulos, setMostrarTodos } from "../app/shell.js";
 export function Configuracion(): React.JSX.Element {
   const [tema, setTemaLocal] = useState<ThemeChoice>(temaActual);
   const [todos, setTodos] = useState(mostrarTodosLosModulos);
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
 
@@ -66,6 +68,11 @@ export function Configuracion(): React.JSX.Element {
           </Link>
         </CardContent>
       </Card>
+
+      {/* ADR-0049: quién entra y con qué oficio — solo para quien gobierna
+          personas (membership.manage, el dueño). */}
+      {puede("membership.manage") && <UsuariosYRoles />}
+      {puede("warehouse.manage") && <Depositos />}
 
       <Card>
         <CardHeader>

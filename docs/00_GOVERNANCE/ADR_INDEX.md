@@ -54,6 +54,7 @@ Usa la skill `adr` de Claude Code.
 | [0046](adr/ADR-0046-la-venta-se-denomina-en-bolivares.md) | La venta se denomina en Bs; la lista USD es ancla de precios con tasa congelada | Reemplazado por 0047 | SÍ |
 | [0047](adr/ADR-0047-la-deuda-se-ancla-en-dolares-el-papel-habla-en-bolivares.md) | La deuda se ancla en USD y se cobra a la tasa del día; el papel habla en Bs | Aceptado | SÍ |
 | [0048](adr/ADR-0048-roles-con-nombre-y-navegacion-por-permiso.md) | Cinco roles de oficio sembrados; el menú y los botones se forman por permiso | Aceptado | SÍ |
+| [0049](adr/ADR-0049-el-primer-dia-real-onboarding-y-miembros.md) | Onboarding autoservicio en un acto; miembros por correo; dueño plano + rol de almacén | Aceptado | SÍ |
 
 ## Decisiones aún abiertas
 

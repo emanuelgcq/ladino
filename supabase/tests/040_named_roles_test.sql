@@ -17,27 +17,31 @@
 begin;
 select plan(20);
 
--- ── 1. Los cinco existen, de sistema y con alcance decidido ──────────────────
+-- ── 1. Los seis existen, de sistema y con alcance decidido ──────────────────
+-- (Migración 41: el owner es PLANO para poder operar el nivel tenant — crear
+-- empresas, gestionar miembros — y warehouse_ops carga los verbos acotados.)
 select is(
   (select count(*) from public.roles
     where tenant_id is null
-      and key in ('owner', 'cashier', 'store_manager', 'back_office', 'accountant')),
-  5::bigint, 'los cinco roles de sistema existen con tenant null');
+      and key in ('owner', 'cashier', 'store_manager', 'back_office', 'accountant',
+                  'warehouse_ops')),
+  6::bigint, 'los seis roles de sistema existen con tenant null');
 select is(
   (select count(*) from public.roles
     where tenant_id is null and requires_scope
-      and key in ('owner', 'store_manager', 'back_office')),
+      and key in ('store_manager', 'back_office', 'warehouse_ops')),
   3::bigint,
   'los que llevan verbos de almacén son ACOTADOS: sin binding no conceden nada (LAD25)');
 
--- ── 2. Owner cubre el catálogo entero (cero, sin lista de perdones) ──────────
+-- ── 2. El PAR owner+warehouse_ops cubre el catálogo entero (cero fuera) ──────
 select is(
   (select count(*) from public.permissions p
     where not exists (select 1 from public.role_permissions rp
                        join public.roles r on r.id = rp.role_id
-                      where r.key = 'owner' and rp.permission_key = p.key)),
+                      where r.key in ('owner', 'warehouse_ops')
+                        and rp.permission_key = p.key)),
   0::bigint,
-  'CERO permisos fuera del owner: un permiso nuevo sin concedérselo pone esto en rojo');
+  'CERO permisos fuera del par del fundador: un permiso nuevo sin concederse pone esto en rojo');
 
 -- ── 3. El cajero: los ejemplos del dueño, literales ─────────────────────────
 create or replace function pg_temp.rol_tiene(p_rol text, p_perm text) returns boolean

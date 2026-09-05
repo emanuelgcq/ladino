@@ -1,7 +1,11 @@
 import type { Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql } from "@ladino/db";
-import { CreateCompanyRequest, SetCompanyFiscalAddressRequest } from "@ladino/schemas";
-import { createCompany, setCompanyFiscalAddress } from "@ladino/domain";
+import {
+  CreateCompanyRequest,
+  OnboardBusinessRequest,
+  SetCompanyFiscalAddressRequest,
+} from "@ladino/schemas";
+import { createCompany, onboardBusiness, setCompanyFiscalAddress } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { CTX } from "../middleware/context.js";
 
@@ -96,6 +100,22 @@ export function companiesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
    * el middleware de scope ya validó membresía y visibilidad de la company, y
    * una sucursal es estructura, no dato sensible.
    */
+  /**
+   * ADR-0049: fundar el negocio. SIN X-Company-Id y SIN el middleware de
+   * idempotencia — los dos exigen un tenant que esta ruta está CREANDO. La
+   * idempotencia aquí es estructural: bootstrap_tenant impone un-negocio-por-
+   * usuario (LAD81), así que el reintento de un éxito responde DUPLICATE y la
+   * web resuelve recargando la sesión — nunca se funda dos veces.
+   */
+  app.post("/v1/onboarding", async (c) => {
+    const parsed = OnboardBusinessRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => onboardBusiness(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
   /**
    * ADR-0048: los permisos del usuario en la empresa activa, DE UNA VEZ. La
    * webapp forma el menú y esconde botones con esta lista; cada operación
