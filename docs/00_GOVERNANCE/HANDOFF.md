@@ -1,4 +1,40 @@
-# Handoff — 2026-09-04 (5ª entrega)
+# Handoff — 2026-09-05
+
+## ADR-0048 — Los cinco roles con nombre, y lo que cada uno ve
+
+El sistema tenía RBAC completo y ningún rol definido; la webapp enseñaba los dos mundos a
+todo el mundo. Migración 40 + navegación por permiso:
+
+- **Roles de sistema sembrados** (tenant null): owner (todo el catálogo, leído de la tabla
+  — pgTAP exige cobertura TOTAL: un permiso nuevo sin concedérselo pone el gate en rojo),
+  cashier (5), store_manager (15), back_office (47), accountant (22). Cada lista se inserta
+  contra `permissions` y se CUENTA: un typo hace fallar la migración, no un rol a medias.
+- **requires_scope decidido rol por rol**: los que llevan verbos de almacén (encargado,
+  administrador, dueño) son acotados — su asignación exige `scope_bindings` y sin binding
+  no conceden nada (probado en pgTAP 040). La trampa que esto destapó: el trigger de
+  coherencia LAD25 rechazó la primera versión con los cinco planos.
+- **`platform.ladino_user_permissions()` + `GET /v1/me/permissions`**: la misma resolución
+  de `has_permission`, entera; la sesión web la carga una vez por empresa y expone
+  `puede()`. El menú, la paleta Cmd+K, la guardia de URL y el aterrizaje (`rutaInicial`)
+  se forman con ella. Fallo cerrado: si la llamada falla, el conjunto es vacío.
+- **Los ejemplos del dueño, como asserts literales** (pgTAP 040 y E2E): el cajero NO ve
+  cuánto ganó el negocio (resumen ya exigía treasury.read; el diferencial cambiario estaba
+  SIN candado y se cerró con treasury.read-o-accounting.read); ve inventario pero SIN los
+  cuatro verbos (botones por inventory.move/adjust/transfer, atajo de compra por
+  purchase.invoice.register).
+- **Compuertas de pantalla**: Productos (alta/Excel/foto tras product.manage), Compras y
+  gastos (pestaña Gastos tras expense.read — el encargado entra directo a Compras), Mi
+  dinero por secciones (deudas/cuentas/formas con treasury.read; cierre con cash.close), y
+  `listCompanyAccounts` con SOLO cash.close devuelve únicamente la caja (E2E nuevo).
+- **Decisiones del dueño registradas en el ADR**: encargado sin órdenes de compra del mundo
+  técnico; cajero sí crea clientes; administrador sin el módulo de Contabilidad (lee KPIs
+  con accounting.read; el módulo se abre con accounting.entry.create).
+
+**Pendientes declarados**: (1) no hay UI de usuarios y roles — asignar un rol (y sus
+bindings de almacén) es por API/SQL hasta que se construya en Configuración; (2) el
+encargado ve la tarjeta de tasa sin el valor vigente (viene del resumen, que es
+treasury.read) — puede traer el BCV y guardar, pero no leerla sin fijarla; (3) la demo
+sigue con su rol propio de pruebas, no con los sembrados.
 
 ## ADR-0047 — La deuda se ancla en dólares; el papel habla en bolívares
 
