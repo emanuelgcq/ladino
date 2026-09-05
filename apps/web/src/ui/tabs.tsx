@@ -24,7 +24,7 @@ export function TabsTab({
     <BaseTabs.Tab
       className={cn(
         "rounded-sm px-2.5 py-1 text-[0.88rem] font-medium text-muted-foreground",
-        "outline-none transition-colors hover:text-foreground",
+        "outline-none transition-[background-color,color,box-shadow] duration-150 ease-out hover:text-foreground",
         "data-[selected]:bg-surface data-[selected]:text-foreground data-[selected]:shadow-soft",
         "focus-visible:ring-2 focus-visible:ring-ring",
         className,

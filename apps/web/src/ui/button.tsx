@@ -8,8 +8,12 @@ import { cn } from "./cn.js";
  * el rojo pierde su significado si aparece en cualquier parte.
  */
 const buttonVariants = cva(
+  // Micro-interacción de PRENSA (guías 2026): 150 ms ease-out, escala 0.98
+  // al pulsar — feedback físico sin teatro. reduced-motion la apaga global.
   "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-sm font-medium " +
-    "transition-colors disabled:pointer-events-none disabled:opacity-50 " +
+    "transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-out " +
+    "active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 " +
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring " +
     "[&_svg]:size-4 [&_svg]:shrink-0 cursor-pointer select-none",
   {
     variants: {

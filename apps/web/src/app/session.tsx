@@ -171,13 +171,16 @@ function PantallaCentrada({ children }: { children: React.ReactNode }): React.JS
 
 function Marca(): React.JSX.Element {
   return (
-    <div className="mb-6 flex items-center gap-2">
-      <span className="flex size-8 items-center justify-center rounded-md bg-accent font-semibold text-accent-foreground">
-        L
+    <div className="mb-8 flex flex-col items-center gap-3 text-center">
+      <span className="relative flex size-12 items-center justify-center rounded-xl bg-accent text-xl font-semibold text-accent-foreground shadow-overlay">
+        L{/* El halo: una sola nota de color sobre el lienzo monocromo. */}
+        <span aria-hidden className="absolute -inset-6 -z-10 rounded-full bg-accent/15 blur-2xl" />
       </span>
       <div>
-        <p className="text-[1.05rem] font-semibold leading-tight">Ladino</p>
-        <p className="text-[0.78rem] text-muted-foreground">Administración y contabilidad</p>
+        <p className="text-[1.35rem] font-semibold leading-tight tracking-tight">Ladino</p>
+        <p className="text-[0.82rem] text-muted-foreground">
+          Administración y contabilidad para tu negocio
+        </p>
       </div>
     </div>
   );
@@ -201,63 +204,84 @@ function Login(): React.JSX.Element {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <div className="w-full max-w-sm">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4">
+      {/* Textura mínima del lienzo: una rejilla que se desvanece hacia los
+          bordes — presencia sin ruido; en oscuro, apenas un susurro. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] bg-[size:44px_44px] opacity-40 [mask-image:radial-gradient(ellipse_60%_50%_at_50%_40%,black,transparent)] dark:opacity-25"
+      />
+      <div className="relative w-full max-w-sm">
         <Marca />
-        <Card>
-          <CardHeader>
-            <CardTitle>Entrar</CardTitle>
-          </CardHeader>
-          <CardContent>
+        <Card className="shadow-overlay">
+          <CardContent className="px-6 pb-6 pt-6">
             <form
-              className="space-y-3"
+              className="space-y-4"
               onSubmit={(e) => {
                 e.preventDefault();
                 void entrar("login");
               }}
             >
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <Label htmlFor="login-email">Correo</Label>
                 <Input
                   id="login-email"
                   type="email"
                   autoComplete="email"
+                  placeholder="tu@correo.com"
+                  className="h-10 px-3 text-[0.95rem]"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
+                  autoFocus
                 />
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <Label htmlFor="login-password">Contraseña</Label>
                 <Input
                   id="login-password"
                   type="password"
                   autoComplete="current-password"
+                  placeholder="••••••••"
+                  className="h-10 px-3 text-[0.95rem]"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
                 />
               </div>
               {error && (
-                <p role="alert" className="text-[0.85rem] text-destructive-soft-foreground">
+                <p
+                  role="alert"
+                  className="rounded-md bg-destructive-soft px-3 py-2 text-[0.85rem] text-destructive-soft-foreground"
+                >
                   {error}
                 </p>
               )}
-              <div className="flex gap-2 pt-1">
-                <Button type="submit" variant="primary" disabled={ocupado} className="flex-1">
-                  Entrar
-                </Button>
-                <Button
-                  variant="secondary"
-                  disabled={ocupado}
-                  onClick={() => void entrar("signup")}
-                >
-                  Crear cuenta
-                </Button>
-              </div>
+              <Button
+                type="submit"
+                variant="primary"
+                size="lg"
+                disabled={ocupado}
+                className="h-10 w-full"
+              >
+                {ocupado ? "Entrando…" : "Entrar"}
+              </Button>
             </form>
+            <div className="mt-4 border-t border-border pt-4 text-center text-[0.85rem] text-muted-foreground">
+              ¿Primera vez?{" "}
+              <button
+                className="font-medium text-accent-soft-foreground hover:underline disabled:opacity-50"
+                disabled={ocupado}
+                onClick={() => void entrar("signup")}
+              >
+                Crea tu cuenta con este correo
+              </button>
+            </div>
           </CardContent>
         </Card>
+        <p className="mt-6 text-center text-[0.78rem] text-faint-foreground">
+          Hecho para el comercio venezolano — factura, recibo y contabilidad en un solo lugar.
+        </p>
       </div>
     </div>
   );
@@ -305,10 +329,14 @@ function SelectorEmpresa({
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <div className="w-full max-w-md">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] bg-[size:44px_44px] opacity-40 [mask-image:radial-gradient(ellipse_60%_50%_at_50%_40%,black,transparent)] dark:opacity-25"
+      />
+      <div className="relative w-full max-w-md">
         <Marca />
-        <Card>
+        <Card className="shadow-overlay">
           <CardHeader>
             <CardTitle>Elige la empresa</CardTitle>
             <Button

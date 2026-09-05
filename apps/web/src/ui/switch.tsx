@@ -17,7 +17,7 @@ export function Switch({
     >
       <BaseSwitch.Thumb
         className={cn(
-          "block size-4 rounded-full bg-surface shadow-soft transition-transform",
+          "block size-4 rounded-full bg-white shadow-soft transition-transform duration-200 ease-out",
           "data-[checked]:translate-x-4",
         )}
       />

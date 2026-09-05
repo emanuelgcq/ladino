@@ -1,20 +1,27 @@
 /**
- * Ladino — EL archivo de tema. Dirección «Esmeralda contable».
+ * Ladino — EL archivo de tema. Dirección «Tinta y esmeralda» (rediseño 2026-09).
  *
  * Todo token visual del sistema vive aquí y solo aquí: colores, radios,
- * tipografía, sombras. Los componentes consumen utilidades de Tailwind v4
- * mapeadas a estos tokens (@theme inline), así que cambiar la identidad es
- * cambiar este archivo — ningún componente lleva un hex propio.
+ * tipografía, sombras, movimiento. Los componentes consumen utilidades de
+ * Tailwind v4 mapeadas a estos tokens (@theme inline), así que cambiar la
+ * identidad es cambiar este archivo — ningún componente lleva un hex propio.
  *
- * Principios (levantamiento 2026, familia Mercury/Ramp, densidad Linear):
+ * Principios (levantamiento 2026: familia Vercel/Geist y Linear, tokens
+ * OKLCH-neutros, guías WCAG 2.2 y dark-mode de elevación tonal):
+ *   · CLARO ES BLANCO, OSCURO ES NEGRO. El lienzo claro es blanco puro y la
+ *     tinta casi negra; el oscuro es negro profundo (#0a0a0a — nunca #000,
+ *     que castiga a la fotosensibilidad) con superficies que se elevan POR
+ *     TONO, no por sombra. Escala NEUTRA de verdad: fuera el tinte azul.
  *   · UN acento: esmeralda. Acciones primarias, éxito y dinero positivo.
  *   · Semánticos con papel fijo: ámbar = advertencia y pérdida cambiaria,
  *     rojo = SOLO destructivo, azul = información.
  *   · La jerarquía la hacen tipografía y espaciado, no decoraciones:
- *     bordes sutiles, radios 6–8 px, sombras mínimas.
+ *     bordes sutiles, radios 6–10 px, sombras por capas SOLO en claro.
+ *   · Movimiento con propósito: 150–200 ms, ease-out, y TODO respeta
+ *     prefers-reduced-motion.
  *   · Dark mode por CLASE (.dark en <html>): light por defecto,
  *     prefers-color-scheme como arranque, toggle manual persistido
- *     (ver theme.ts). Nunca negro puro: slate-900 en adelante.
+ *     (ver theme.ts).
  */
 @import "tailwindcss";
 
@@ -22,78 +29,85 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  /* ── Base light: blancos y gris-perla sobre escala slate ── */
-  --background: #f8fafc; /* slate-50: el lienzo de la app */
-  --surface: #ffffff; /* tarjetas y paneles */
-  --surface-muted: #f1f5f9; /* slate-100: cabeceras de tabla, wells */
-  --border: #e2e8f0; /* slate-200 */
-  --border-strong: #cbd5e1; /* slate-300: inputs, separadores con peso */
+  color-scheme: light;
 
-  --foreground: #0f172a; /* slate-900 */
-  --muted-foreground: #64748b; /* slate-500: etiquetas, metadatos */
-  --faint-foreground: #94a3b8; /* slate-400: placeholders, deshabilitado */
+  /* ── Base light: BLANCO puro y tinta — escala neutra (sin tinte azul) ── */
+  --background: #ffffff; /* el lienzo ES blanco */
+  --surface: #ffffff; /* tarjetas al mismo blanco: separa el borde */
+  --surface-muted: #f5f5f5; /* wells, cabeceras de tabla */
+  --border: #e8e8e8; /* separación sutil */
+  --border-strong: #d4d4d4; /* inputs, separadores con peso */
+
+  --foreground: #171717; /* la tinta (Vercel ink) */
+  --muted-foreground: #6f6f6f; /* etiquetas, metadatos — AA sobre blanco */
+  --faint-foreground: #a3a3a3; /* placeholders, deshabilitado */
 
   /* ── El acento único ── */
   --accent: #059669; /* emerald-600 */
   --accent-hover: #047857; /* emerald-700 */
   --accent-foreground: #ffffff;
-  --accent-soft: #ecfdf5; /* emerald-50: fondos de éxito/positivo */
+  --accent-soft: #ecfdf5; /* emerald-50 */
   --accent-soft-foreground: #047857;
 
   /* ── Semánticos ── */
-  --warning: #d97706; /* amber-600: advertencias y pérdida cambiaria */
-  --warning-soft: #fffbeb; /* amber-50 */
-  --warning-soft-foreground: #b45309; /* amber-700 */
-  --destructive: #dc2626; /* red-600: SOLO errores destructivos */
+  --warning: #d97706;
+  --warning-soft: #fffbeb;
+  --warning-soft-foreground: #b45309;
+  --destructive: #dc2626;
   --destructive-hover: #b91c1c;
   --destructive-foreground: #ffffff;
-  --destructive-soft: #fef2f2; /* red-50 */
+  --destructive-soft: #fef2f2;
   --destructive-soft-foreground: #b91c1c;
-  --info: #2563eb; /* blue-600 */
-  --info-soft: #eff6ff; /* blue-50 */
+  --info: #2563eb;
+  --info-soft: #eff6ff;
   --info-soft-foreground: #1d4ed8;
 
   --ring: #05966955; /* anillo de foco: esmeralda translúcida */
 
-  /* Sombra única y mínima: la elevación real la da el borde. */
-  --shadow-soft: 0 1px 2px 0 rgb(15 23 42 / 0.05);
-  --shadow-overlay: 0 8px 30px -6px rgb(15 23 42 / 0.16);
+  /* Sombras POR CAPAS (solo el claro las necesita): cercana + ambiente. */
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.04), 0 1px 1px rgb(0 0 0 / 0.03);
+  --shadow-overlay:
+    0 0 0 1px rgb(0 0 0 / 0.04), 0 4px 8px rgb(0 0 0 / 0.06), 0 16px 40px -8px rgb(0 0 0 / 0.16);
 }
 
 .dark {
-  /* ── Base dark: slate-900 en adelante, nunca negro puro ── */
-  --background: #0f172a; /* slate-900 */
-  --surface: #1e293b; /* slate-800 */
-  --surface-muted: #24334a; /* entre slate-800 y 700 */
-  --border: #334155; /* slate-700 */
-  --border-strong: #475569; /* slate-600 */
+  color-scheme: dark;
 
-  --foreground: #f1f5f9; /* slate-100 */
-  --muted-foreground: #94a3b8; /* slate-400 */
-  --faint-foreground: #64748b; /* slate-500 */
+  /* ── Base dark: NEGRO profundo; la elevación es TONAL, no de sombra ── */
+  --background: #0a0a0a; /* negro OLED sin llegar a #000 */
+  --surface: #141414; /* primera elevación */
+  --surface-muted: #1e1e1e; /* segunda: wells, cabeceras */
+  --border: #262626;
+  --border-strong: #3a3a3a;
 
-  --accent: #10b981; /* emerald-500: más luz sobre fondo oscuro */
-  --accent-hover: #34d399; /* emerald-400 */
-  --accent-foreground: #052e22; /* texto oscuro sobre esmeralda clara */
-  --accent-soft: rgb(16 185 129 / 0.12);
+  --foreground: #ededed; /* nunca blanco puro sobre negro */
+  --muted-foreground: #9b9b9b;
+  --faint-foreground: #636363;
+
+  --accent: #10b981; /* emerald-500: más luz sobre negro */
+  --accent-hover: #34d399;
+  --accent-foreground: #052e22;
+  --accent-soft: rgb(16 185 129 / 0.13);
   --accent-soft-foreground: #34d399;
 
-  --warning: #f59e0b; /* amber-500 */
-  --warning-soft: rgb(245 158 11 / 0.12);
+  --warning: #f59e0b;
+  --warning-soft: rgb(245 158 11 / 0.13);
   --warning-soft-foreground: #fbbf24;
-  --destructive: #ef4444; /* red-500 */
+  --destructive: #ef4444;
   --destructive-hover: #f87171;
   --destructive-foreground: #ffffff;
-  --destructive-soft: rgb(239 68 68 / 0.12);
+  --destructive-soft: rgb(239 68 68 / 0.13);
   --destructive-soft-foreground: #f87171;
   --info: #3b82f6;
-  --info-soft: rgb(59 130 246 / 0.12);
+  --info-soft: rgb(59 130 246 / 0.13);
   --info-soft-foreground: #60a5fa;
 
   --ring: #10b98166;
 
-  --shadow-soft: 0 1px 2px 0 rgb(0 0 0 / 0.3);
-  --shadow-overlay: 0 8px 30px -6px rgb(0 0 0 / 0.55);
+  /* En negro la sombra apenas existe: separa el TONO; la de overlay solo
+     asienta los diálogos sobre el scrim. */
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-overlay: 0 0 0 1px rgb(255 255 255 / 0.06), 0 16px 48px -8px rgb(0 0 0 / 0.8);
 }
 
 @theme inline {
@@ -128,7 +142,7 @@
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular", monospace;
 
-  /* Radios: 6–8 px. Nada más grande salvo el pill de los badges. */
+  /* Radios: 6–10 px. Nada más grande salvo el pill de los badges. */
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 10px;
@@ -152,6 +166,10 @@
       "tnum" 1,
       "cv11" 1;
     -webkit-font-smoothing: antialiased;
+    /* El cambio de tema se DESLIZA, no parpadea (y reduced-motion lo apaga). */
+    transition:
+      background-color 200ms ease-out,
+      color 200ms ease-out;
   }
   ::selection {
     background-color: var(--accent-soft);
@@ -161,5 +179,36 @@
   :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+  }
+
+  /* Scrollbars del tema: finas y del color de la superficie, no del sistema. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--border-strong);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* Movimiento con consentimiento: quien pidió quietud, la tiene ENTERA. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }

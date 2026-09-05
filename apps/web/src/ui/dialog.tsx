@@ -20,16 +20,18 @@ export function DialogContent({
     <BaseDialog.Portal>
       <BaseDialog.Backdrop
         className={cn(
-          "fixed inset-0 z-40 bg-slate-950/40 backdrop-blur-[1px]",
-          "transition-opacity data-[starting-style]:opacity-0 data-[ending-style]:opacity-0",
+          "fixed inset-0 z-40 bg-black/45 backdrop-blur-[2px] dark:bg-black/65",
+          "transition-opacity duration-200 ease-out",
+          "data-[starting-style]:opacity-0 data-[ending-style]:opacity-0",
         )}
       />
       <BaseDialog.Popup
         className={cn(
           "fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2",
-          "rounded-md border border-border bg-surface p-5 shadow-overlay outline-none",
-          "transition-all data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
-          "data-[ending-style]:scale-95 data-[ending-style]:opacity-0",
+          "rounded-lg border border-border bg-surface p-5 shadow-overlay outline-none",
+          "transition-[opacity,transform,translate,scale] duration-200 ease-out",
+          "data-[starting-style]:scale-[0.97] data-[starting-style]:opacity-0",
+          "data-[ending-style]:scale-[0.97] data-[ending-style]:opacity-0",
           className,
         )}
         {...props}
