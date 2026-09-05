@@ -53,6 +53,7 @@ Usa la skill `adr` de Claude Code.
 | [0045](adr/ADR-0045-adaptador-de-imprenta-digital-como-puerto.md) | Adaptador de imprenta digital como puerto; hoy NullDigitalPrintShop que rechaza | Aceptado | SÍ |
 | [0046](adr/ADR-0046-la-venta-se-denomina-en-bolivares.md) | La venta se denomina en Bs; la lista USD es ancla de precios con tasa congelada | Reemplazado por 0047 | SÍ |
 | [0047](adr/ADR-0047-la-deuda-se-ancla-en-dolares-el-papel-habla-en-bolivares.md) | La deuda se ancla en USD y se cobra a la tasa del día; el papel habla en Bs | Aceptado | SÍ |
+| [0048](adr/ADR-0048-roles-con-nombre-y-navegacion-por-permiso.md) | Cinco roles de oficio sembrados; el menú y los botones se forman por permiso | Aceptado | SÍ |
 
 ## Decisiones aún abiertas
 

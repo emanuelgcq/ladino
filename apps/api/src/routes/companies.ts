@@ -96,6 +96,33 @@ export function companiesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
    * el middleware de scope ya validó membresía y visibilidad de la company, y
    * una sucursal es estructura, no dato sensible.
    */
+  /**
+   * ADR-0048: los permisos del usuario en la empresa activa, DE UNA VEZ. La
+   * webapp forma el menú y esconde botones con esta lista; cada operación
+   * sigue autorizándose por su cuenta en el servidor — esconder es cortesía,
+   * no control. La resolución es la MISMA de ladino_user_has_permission
+   * (platform.ladino_user_permissions, migración 40): dos formas de preguntar
+   * el mismo mecanismo, imposible que diverjan.
+   */
+  app.get("/v1/me/permissions", async (c) => {
+    const ctx = c.get(CTX);
+    if (ctx.companyId === null) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Esta operación exige el header X-Company-Id.",
+      });
+    }
+    const companyId = ctx.companyId;
+    const { actor, userId } = c.get("ladino.auth");
+    const filas = await withTransaction(
+      sql,
+      actor,
+      ({ sql: tx }) => tx<{ permiso: string }[]>`
+        select platform.ladino_user_permissions(${userId}, ${companyId}) as permiso`,
+    );
+    return c.json({ permissions: filas.map((f) => f.permiso) }, 200);
+  });
+
   app.get("/v1/branches", async (c) => {
     const ctx = c.get(CTX);
     if (ctx.companyId === null) {

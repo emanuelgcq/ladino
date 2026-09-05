@@ -4,6 +4,7 @@ export {
   CreateCompanyRequest,
   CompanyResponse,
   ListCompaniesResponse,
+  MePermissionsResponse,
   SetCompanyFiscalAddressRequest,
   ErrorResponse,
 } from "./companies.js";

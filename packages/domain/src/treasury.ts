@@ -169,14 +169,23 @@ export async function listCompanyAccounts(
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Ver el dinero exige un usuario real." });
   }
+  // ADR-0048: con treasury.read se ve TODO el dinero. Con SOLO cash.close se
+  // ve únicamente LA CAJA (efectivo, no de sistema): quien cierra va a contar
+  // ese efectivo de todas formas, pero el banco y el Zelle no son suyos de ver.
   const ctx = await companyScope(sql, actor.userId, companyId, "treasury.read");
-  if (!ctx.ok) return ctx;
+  let soloCaja = false;
+  if (!ctx.ok) {
+    const cierre = await companyScope(sql, actor.userId, companyId, "cash.close");
+    if (!cierre.ok) return ctx;
+    soloCaja = true;
+  }
   const filas = await sql<CompanyAccountResponse[]>`
     select ca.id, ca.name, ca.currency, ca.kind, ca.is_active, ca.is_system,
            ca.ledger_account_id, coalesce(b.balance, 0)::text as balance
       from public.company_accounts ca
       left join public.company_account_balances b on b.account_id = ca.id
      where ca.company_id = ${companyId}
+       ${soloCaja ? sql`and ca.kind = 'cash' and not ca.is_system` : sql``}
      order by ca.is_system, ca.name`;
   return ok(filas);
 }

@@ -160,7 +160,11 @@ select throws_ok(
   '42501', null, 'reservar una clave A NOMBRE DE OTRO ACTOR → 42501');
 select is((select count(*) from public.idempotency_keys where key = 'K-DE-B'), 0::bigint,
   'la clave del actor B no se ve aunque esté en el tenant A');
-select is((select count(*) from public.roles where tenant_id is null), 1::bigint,
+-- Desde la migración 40 existen ADEMÁS los cinco roles de sistema sembrados;
+-- lo que este assert protege es que lo global SE LEE, no cuántos hay.
+select ok(
+  exists (select 1 from public.roles
+           where tenant_id is null and id = 'aaaa0014-0000-4000-8000-0000000000e1'),
   'los roles GLOBALES (tenant_id null) se leen: el JOIN de autorización los necesita');
 reset role;
 

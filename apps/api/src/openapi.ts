@@ -11,6 +11,7 @@ import {
   CreateCompanyRequest,
   SetCompanyFiscalAddressRequest,
   CompanyResponse,
+  MePermissionsResponse,
   ErrorResponse,
   CreateProductRequest,
   UpdateProductRequest,
@@ -185,6 +186,26 @@ export function buildOpenApiDocument(): object {
       200: {
         description: "Las companies visibles (puede ser un array vacío).",
         content: { "application/json": { schema: z.array(company) } },
+      },
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
+  const misPermisos = registry.register("MePermissionsResponse", MePermissionsResponse);
+  registry.registerPath({
+    method: "get",
+    path: "/v1/me/permissions",
+    summary: "Los permisos del usuario en la empresa activa",
+    description:
+      "ADR-0048: el conjunto entero de permisos del actor en la empresa del header " +
+      "`X-Company-Id`, resuelto por `platform.ladino_user_permissions()` — la MISMA " +
+      "resolución que autoriza cada operación. La webapp forma el menú con esto; " +
+      "esconder un botón es cortesía, la autorización real sigue siendo por operación.",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: {
+        description: "La lista de claves de permiso (puede ser vacía).",
+        content: { "application/json": { schema: misPermisos } },
       },
       401: errorRef("Token ausente, inválido o expirado."),
     },

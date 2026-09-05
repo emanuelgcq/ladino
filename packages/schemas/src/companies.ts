@@ -51,6 +51,10 @@ export type CompanyResponse = z.infer<typeof CompanyResponse>;
  * día que haga falta, se envuelve en `{items, next}` como cambio de contrato.
  */
 export const ListCompaniesResponse = z.array(CompanyResponse);
+
+/** ADR-0048: los permisos del usuario en la empresa activa, para formar el menú. */
+export const MePermissionsResponse = z.object({ permissions: z.array(z.string()) }).strict();
+export type MePermissionsResponse = z.infer<typeof MePermissionsResponse>;
 export type ListCompaniesResponse = z.infer<typeof ListCompaniesResponse>;
 
 /** Cuerpo de error del contrato (`API_SPEC.md` §Errores). */

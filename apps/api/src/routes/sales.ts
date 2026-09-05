@@ -654,6 +654,20 @@ export function salesRoutes(
     const desde = c.req.query("from") ?? null;
     const hasta = c.req.query("to") ?? null;
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      // ADR-0048: el dinero agregado nunca viene gratis con la membresía. El
+      // diferencial es KPI de tesorería Y hecho contable: cualquiera de los
+      // dos permisos de lectura lo abre; sin ninguno, 403.
+      if (actor.kind === "user") {
+        const [ok] = await tx<{ t: boolean; a: boolean }[]>`
+          select platform.ladino_user_has_permission(${actor.userId}, 'treasury.read', ${companyId}) as t,
+                 platform.ladino_user_has_permission(${actor.userId}, 'accounting.read', ${companyId}) as a`;
+        if (ok?.t !== true && ok?.a !== true) {
+          throw new DominioError({
+            code: "PERMISSION_REQUIRED",
+            message: "Ver el diferencial cambiario exige treasury.read o accounting.read.",
+          });
+        }
+      }
       // La moneda viaja con el KPI: un neto sin moneda es un número que el
       // cliente tiene que adivinar, y adivinar moneda es cómo se muestran
       // bolívares con símbolo de dólar.

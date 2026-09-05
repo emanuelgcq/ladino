@@ -29,6 +29,10 @@ const GESTOR = crypto.randomUUID();
 const MIRON = crypto.randomUUID();
 const ROL = crypto.randomUUID();
 const ROL_MIRON = crypto.randomUUID();
+const CERRADOR = crypto.randomUUID();
+const ROL_CERRADOR = crypto.randomUUID();
+const MEM_CERRADOR = crypto.randomUUID();
+const ASIG_CERRADOR = crypto.randomUUID();
 const MEM = crypto.randomUUID();
 const MEM_MIRON = crypto.randomUUID();
 const ASIG = crypto.randomUUID();
@@ -82,7 +86,7 @@ beforeAll(async () => {
   sql = createClient(URL_LOCAL);
   sqlApi = createClient(URL_API);
   app = buildApp({ sql: sqlApi, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
-  await sql`insert into auth.users (id) values (${GESTOR}), (${MIRON})
+  await sql`insert into auth.users (id) values (${GESTOR}), (${MIRON}), (${CERRADOR})
             on conflict (id) do nothing`;
   // El caso «sin tasa no hay gasto en divisa» exige empezar SIN tasas USD→VES,
   // vengan de donde vengan: otras suites, la demo local ('BCV'), confirmaciones.
@@ -101,21 +105,25 @@ beforeAll(async () => {
                      'VES', 'ordinario')`;
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values
              (${ROL}, null, ${`e2eteso_${RUN}`}, 'Gestor tesorería', false),
-             (${ROL_MIRON}, null, ${`e2eteso_miron_${RUN}`}, 'Mirón tesorería', false)`;
+             (${ROL_MIRON}, null, ${`e2eteso_miron_${RUN}`}, 'Mirón tesorería', false),
+             (${ROL_CERRADOR}, null, ${`e2eteso_cierre_${RUN}`}, 'Cerrador', false)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
              (${ROL}, 'treasury.read'), (${ROL}, 'treasury.account.manage'),
              (${ROL}, 'expense.register'), (${ROL}, 'expense.read'),
              (${ROL}, 'cash.close'), (${ROL}, 'fx.rate.manage'),
              (${ROL}, 'accounting.account.manage'), (${ROL}, 'accounting.template.manage'),
              (${ROL}, 'accounting.read'),
-             (${ROL_MIRON}, 'treasury.read')
+             (${ROL_MIRON}, 'treasury.read'),
+             (${ROL_CERRADOR}, 'cash.close')
              on conflict do nothing`;
     await tx`insert into public.memberships (id, tenant_id, user_id) values
-             (${MEM}, ${TENANT}, ${GESTOR}), (${MEM_MIRON}, ${TENANT}, ${MIRON})`;
+             (${MEM}, ${TENANT}, ${GESTOR}), (${MEM_MIRON}, ${TENANT}, ${MIRON}),
+             (${MEM_CERRADOR}, ${TENANT}, ${CERRADOR})`;
     await tx`insert into public.user_role_assignments
                (id, tenant_id, membership_id, role_id, company_id) values
              (${ASIG}, ${TENANT}, ${MEM}, ${ROL}, null),
-             (${ASIG_MIRON}, ${TENANT}, ${MEM_MIRON}, ${ROL_MIRON}, null)`;
+             (${ASIG_MIRON}, ${TENANT}, ${MEM_MIRON}, ${ROL_MIRON}, null),
+             (${ASIG_CERRADOR}, ${TENANT}, ${MEM_CERRADOR}, ${ROL_CERRADOR}, null)`;
   });
 });
 
@@ -146,6 +154,18 @@ describe("tesorería de extremo a extremo", () => {
 
     expect(await saldoDe(CAJA)).toBe("0");
     expect(await saldoDe(ZELLE)).toBe("0");
+  });
+
+  it("con SOLO cash.close se ve LA CAJA y nada más: el banco y el Zelle no son suyos de ver (ADR-0048)", async () => {
+    const r = await pedir("GET", "/v1/treasury/accounts", CERRADOR);
+    expect(r.status).toBe(200);
+    const { accounts } = (await r.json()) as {
+      accounts: { id: string; kind: string; is_system: boolean }[];
+    };
+    // Solo efectivo no de sistema: la caja que va a contar, sin la foto del dinero.
+    expect(accounts.length).toBeGreaterThan(0);
+    expect(accounts.every((a) => a.kind === "cash" && !a.is_system)).toBe(true);
+    expect(accounts.some((a) => a.id === ZELLE)).toBe(false);
   });
 
   it("un nombre repetido es 409, no una segunda caja fantasma", async () => {

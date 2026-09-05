@@ -141,6 +141,7 @@ beforeAll(async () => {
              (${ROL_VENTAS}, 'customer.manage'),
              (${ROL_VENTAS}, 'company.settings.manage'),
              (${ROL_VENTAS}, 'sales.payment.register'),
+             (${ROL_VENTAS}, 'treasury.read'),
              (${ROL_CAJA}, 'sales.payment.register'),
              (${ROL_CAJA}, 'ar.read')
              on conflict do nothing`;
@@ -508,6 +509,28 @@ describe("ventas de extremo a extremo", () => {
     const kpi = await pedir("GET", "/v1/reports/exchange-difference", VENDEDOR);
     const k = (await kpi.json()) as { neto: string };
     expect(Number(k.neto)).toBeGreaterThanOrEqual(580);
+
+    // ADR-0048: el dinero agregado nunca viene gratis con la membresía — el
+    // mirón es miembro y aun así el KPI le responde 403.
+    const sinPermiso = await pedir("GET", "/v1/reports/exchange-difference", MIRON);
+    expect(sinPermiso.status).toBe(403);
+    expect(((await sinPermiso.json()) as { code: string }).code).toBe("PERMISSION_REQUIRED");
+  });
+
+  it("GET /v1/me/permissions devuelve el conjunto EXACTO que autoriza cada operación (ADR-0048)", async () => {
+    const r = await pedir("GET", "/v1/me/permissions", VENDEDOR);
+    expect(r.status).toBe(200);
+    const { permissions } = (await r.json()) as { permissions: string[] };
+    // La lista viene de la MISMA resolución que ladino_user_has_permission:
+    // contiene lo que el rol concede y nada de lo que no.
+    expect(permissions).toContain("sales.invoice.issue");
+    expect(permissions).toContain("treasury.read");
+    expect(permissions).not.toContain("accounting.entry.create");
+
+    const mironR = await pedir("GET", "/v1/me/permissions", MIRON);
+    const miron = (await mironR.json()) as { permissions: string[] };
+    expect(miron.permissions).not.toContain("treasury.read");
+    expect(miron.permissions).not.toContain("sales.invoice.issue");
   });
 
   it("EL CASO DEL DUEÑO (ADR-0047): se fía en USD, se cobra en Bs a la tasa del día — nadie pierde margen", async () => {
