@@ -30,7 +30,7 @@ export function CommandPalette({
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }): React.JSX.Element {
-  const { llamar } = useSesion();
+  const { llamar, puede } = useSesion();
   const navigate = useNavigate();
   const [texto, setTexto] = useState("");
   const [indice, setIndice] = useState(0);
@@ -45,8 +45,10 @@ export function CommandPalette({
   }, [open]);
 
   const rutas = useMemo<Accion[]>(() => {
+    // ADR-0048: la paleta ofrece las mismas puertas que el menú — lo que el
+    // rol no abre, tampoco se busca con Cmd+K.
     const items: NavItem[] = [...NAV_NEGOCIO, ...NAV_ADMIN.flatMap((g) => g.items)].filter(
-      (i) => !i.devOnly || import.meta.env.DEV,
+      (i) => (!i.devOnly || import.meta.env.DEV) && (i.permiso === undefined || puede(i.permiso)),
     );
     const filtradas =
       q === "" ? items : items.filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
@@ -60,7 +62,7 @@ export function CommandPalette({
         to: i.to,
       };
     });
-  }, [q]);
+  }, [q, puede]);
 
   // Entidades: solo con 2+ caracteres, con debounce vía staleTime corto de la
   // caché y la clave por texto. La búsqueda es la del SERVIDOR.

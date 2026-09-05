@@ -65,7 +65,10 @@ function useDebounced<T>(valor: T, ms: number): T {
 }
 
 export function ProductosNegocio(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
+  // ADR-0048: agregar, importar y cambiar fotos exige product.manage — el
+  // cajero VE el catálogo (lectura de miembro) sin un solo botón de alta.
+  const puedeGestionar = puede("product.manage");
   const qc = useQueryClient();
   const [busqueda, setBusqueda] = useState("");
   const [vista, setVista] = useState<"cuadricula" | "tabla">(() =>
@@ -113,12 +116,16 @@ export function ProductosNegocio(): React.JSX.Element {
         >
           {vista === "cuadricula" ? <Rows3 /> : <LayoutGrid />}
         </Button>
-        <Button variant="secondary" onClick={() => setImportar(true)}>
-          <FileSpreadsheet /> Importar Excel
-        </Button>
-        <Button variant="primary" onClick={() => setAlta(true)}>
-          <Plus /> Agregar producto
-        </Button>
+        {puedeGestionar && (
+          <>
+            <Button variant="secondary" onClick={() => setImportar(true)}>
+              <FileSpreadsheet /> Importar Excel
+            </Button>
+            <Button variant="primary" onClick={() => setAlta(true)}>
+              <Plus /> Agregar producto
+            </Button>
+          </>
+        )}
       </div>
 
       {productos.isLoading ? (
@@ -134,7 +141,7 @@ export function ProductosNegocio(): React.JSX.Element {
               ? "Agrega el primero con su foto y su precio, o trae de una vez tu Excel completo."
               : "Prueba con otra palabra, o agrégalo si de verdad falta."}
           </p>
-          {q === "" && (
+          {q === "" && puedeGestionar && (
             <div className="mt-4 flex justify-center gap-2">
               <Button variant="primary" onClick={() => setAlta(true)}>
                 <Plus /> Agregar producto
@@ -655,7 +662,7 @@ function DetalleProducto({
   onCerrar: () => void;
   onCambio: () => void;
 }): React.JSX.Element {
-  const { llamar } = useSesion();
+  const { llamar, puede } = useSesion();
   const toast = useToast();
   const fotoRef = useRef<HTMLInputElement>(null);
 
@@ -713,14 +720,16 @@ function DetalleProducto({
             }}
           />
           <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              className="flex-1"
-              disabled={cambiarFoto.isPending}
-              onClick={() => fotoRef.current?.click()}
-            >
-              <Camera /> {producto.image_url ? "Cambiar foto" : "Ponerle foto"}
-            </Button>
+            {puede("product.manage") && (
+              <Button
+                variant="secondary"
+                className="flex-1"
+                disabled={cambiarFoto.isPending}
+                onClick={() => fotoRef.current?.click()}
+              >
+                <Camera /> {producto.image_url ? "Cambiar foto" : "Ponerle foto"}
+              </Button>
+            )}
             <Link to={`/inventario?producto=${producto.id}`} className="flex-1">
               <Button variant="ghost" className="w-full" onClick={onCerrar}>
                 Ver movimientos

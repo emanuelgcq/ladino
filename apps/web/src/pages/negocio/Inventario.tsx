@@ -60,7 +60,7 @@ interface Movimiento {
 const CANT_RE = /^\d{1,16}(\.\d{1,8})?$/;
 
 export function InventarioNegocio(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const qc = useQueryClient();
   const [params] = useSearchParams();
   const productoFiltro = params.get("producto");
@@ -123,26 +123,34 @@ export function InventarioNegocio(): React.JSX.Element {
         />
       </div>
 
+      {/* ADR-0048: los verbos aparecen según el rol — el cajero VE existencias
+          y movimientos, pero no registra si llegó algo o no. */}
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <BotonVerbo
-          icono={ArrowDownToLine}
-          titulo="Entró mercancía"
-          detalle="Llegó producto: al depósito con su costo"
-          onClick={() => setDialogo("entro")}
-        />
-        <BotonVerbo
-          icono={ArrowUpFromLine}
-          titulo="Salió mercancía"
-          detalle="Se dañó, venció o se usó: sale con su motivo"
-          onClick={() => setDialogo("salio")}
-        />
-        <BotonVerbo
-          icono={ClipboardCheck}
-          titulo="Ajustar contando"
-          detalle="Contaste y no cuadra: se corrige con motivo"
-          onClick={() => setDialogo("ajustar")}
-        />
-        {listaDepositos.length > 1 && (
+        {puede("inventory.move") && (
+          <BotonVerbo
+            icono={ArrowDownToLine}
+            titulo="Entró mercancía"
+            detalle="Llegó producto: al depósito con su costo"
+            onClick={() => setDialogo("entro")}
+          />
+        )}
+        {puede("inventory.move") && (
+          <BotonVerbo
+            icono={ArrowUpFromLine}
+            titulo="Salió mercancía"
+            detalle="Se dañó, venció o se usó: sale con su motivo"
+            onClick={() => setDialogo("salio")}
+          />
+        )}
+        {puede("inventory.adjust") && (
+          <BotonVerbo
+            icono={ClipboardCheck}
+            titulo="Ajustar contando"
+            detalle="Contaste y no cuadra: se corrige con motivo"
+            onClick={() => setDialogo("ajustar")}
+          />
+        )}
+        {listaDepositos.length > 1 && puede("inventory.transfer") && (
           <BotonVerbo
             icono={ArrowRightLeft}
             titulo="Mover"
@@ -432,7 +440,7 @@ function EntroMercancia({
   onCerrar: () => void;
   onListo: () => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const [producto, setProducto] = useState<ProductoFila | null>(null);
   const [cantidad, setCantidad] = useState("");
@@ -548,15 +556,18 @@ function EntroMercancia({
               )}
             </FormField>
           )}
-          <label className="flex items-center gap-2 text-[0.9rem]">
-            <input
-              type="checkbox"
-              checked={esCompra}
-              onChange={(e) => setEsCompra(e.target.checked)}
-              className="size-4 accent-[var(--color-accent)]"
-            />
-            Llegó con factura del proveedor (se registra como compra)
-          </label>
+          {/* El atajo registra una COMPRA completa: su permiso es propio. */}
+          {puede("purchase.invoice.register") && (
+            <label className="flex items-center gap-2 text-[0.9rem]">
+              <input
+                type="checkbox"
+                checked={esCompra}
+                onChange={(e) => setEsCompra(e.target.checked)}
+                className="size-4 accent-[var(--color-accent)]"
+              />
+              Llegó con factura del proveedor (se registra como compra)
+            </label>
+          )}
           {esCompra && (
             <div className="space-y-2 rounded-md border border-border p-3">
               <FormField label="Proveedor" required>

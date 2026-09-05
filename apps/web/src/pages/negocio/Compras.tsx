@@ -85,14 +85,20 @@ const CATEGORIAS_GASTO = [
 ];
 
 export function ComprasNegocio(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const qc = useQueryClient();
-  const [pestana, setPestana] = useState<"gastos" | "compras">("gastos");
+  // ADR-0048: el GASTO revela la estructura de costos — es del administrador.
+  // El encargado entra por la mercancía: su pestaña inicial es Compras y la
+  // de Gastos ni se le enseña.
+  const puedeGastos = puede("expense.read");
+  const puedeComprar = puede("purchase.invoice.register");
+  const [pestana, setPestana] = useState<"gastos" | "compras">(puedeGastos ? "gastos" : "compras");
   const [nuevoGasto, setNuevoGasto] = useState(false);
   const [nuevaCompra, setNuevaCompra] = useState(false);
 
   const gastos = useQuery({
     queryKey: ["gastos", empresa.id],
+    enabled: puedeGastos,
     queryFn: () => llamar<{ items: Gasto[]; total: number }>("/v1/expenses"),
   });
   const facturas = useQuery({
@@ -121,18 +127,22 @@ export function ComprasNegocio(): React.JSX.Element {
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-semibold">Compras y gastos</h1>
         <div className="flex-1" />
-        <Button variant="secondary" onClick={() => setNuevaCompra(true)}>
-          <ShoppingCart /> Registrar compra
-        </Button>
-        <Button variant="primary" onClick={() => setNuevoGasto(true)}>
-          <Plus /> Registrar gasto
-        </Button>
+        {puedeComprar && (
+          <Button variant="secondary" onClick={() => setNuevaCompra(true)}>
+            <ShoppingCart /> Registrar compra
+          </Button>
+        )}
+        {puedeGastos && (
+          <Button variant="primary" onClick={() => setNuevoGasto(true)}>
+            <Plus /> Registrar gasto
+          </Button>
+        )}
       </div>
 
       <div className="flex gap-1 border-b border-border">
         {(
           [
-            ["gastos", "Gastos"],
+            ...(puedeGastos ? ([["gastos", "Gastos"]] as const) : []),
             ["compras", "Compras a proveedores"],
           ] as const
         ).map(([clave, etiqueta]) => (

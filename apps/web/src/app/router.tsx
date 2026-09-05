@@ -1,5 +1,7 @@
 import { createBrowserRouter, Navigate } from "react-router";
 import { AppShell } from "./shell.js";
+import { useSesion } from "./session.js";
+import { rutaInicial } from "./nav.js";
 import { Configuracion } from "../pages/Configuracion.js";
 import { Clientes } from "../pages/clientes/Clientes.js";
 import { Productos } from "../pages/catalogo/Productos.js";
@@ -36,12 +38,18 @@ import { Empezar } from "../pages/negocio/Empezar.js";
  * Con /empezar, las ocho pantallas de la persona están construidas: ya no
  * queda ninguna provisional.
  */
+/** ADR-0048: cada rol aterriza en SU pantalla — el cajero no entra por «lo que gané». */
+function AterrizajePorRol(): React.JSX.Element {
+  const { puede } = useSesion();
+  return <Navigate to={rutaInicial(puede)} replace />;
+}
+
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <AppShell />,
     children: [
-      { index: true, element: <Navigate to="/inicio" replace /> },
+      { index: true, element: <AterrizajePorRol /> },
       // ── El mundo de la persona ─────────────────────────────────────────
       { path: "inicio", element: <Inicio /> },
       { path: "vender", element: <Vender /> },

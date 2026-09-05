@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, NavLink, Outlet, useLocation } from "react-router";
+import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   Building2,
@@ -19,7 +19,7 @@ import { Button } from "../ui/button.js";
 import { Tooltip } from "../ui/tooltip.js";
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu.js";
 import { useSesion } from "./session.js";
-import { NAV_NEGOCIO, NAV_ADMIN, NAV_EMPEZAR, CRUMBS, type NavItem } from "./nav.js";
+import { NAV_NEGOCIO, NAV_ADMIN, NAV_EMPEZAR, CRUMBS, rutaInicial, type NavItem } from "./nav.js";
 import { CommandPalette } from "./palette.js";
 import { esOscuroAhora, setTema, temaActual } from "../theme.js";
 
@@ -81,21 +81,9 @@ export function useModulosActivos(): { compras: boolean; contabilidad: boolean; 
  * técnicos reales (contable y fiscal): si el servidor deja pasar cualquiera,
  * el grupo aparece. Sin endpoint de «mis permisos», la sonda ES la verdad.
  */
-function useMundoAdmin(): boolean {
-  const { empresa, llamar } = useSesion();
-  const q = useQuery({
-    queryKey: ["mundo-admin", empresa.id],
-    staleTime: 5 * 60_000,
-    queryFn: async () => {
-      const sondas = await Promise.allSettled([
-        llamar("/v1/accounts"),
-        llamar("/v1/fiscal-books/formats"),
-      ]);
-      return sondas.some((s) => s.status === "fulfilled");
-    },
-  });
-  return q.data ?? false;
-}
+/* useMundoAdmin fue reemplazado en ADR-0048: antes sondeaba endpoints para
+ * adivinar si había mundo técnico; ahora la respuesta es directa — el grupo
+ * de administración existe si el ROL abre al menos una de sus entradas. */
 
 /** ¿Falta la puesta a punto? Sin cuentas de dinero, el negocio no ha empezado. */
 function useEmpezarPendiente(): boolean {
@@ -119,7 +107,7 @@ export function AppShell(): React.JSX.Element {
     () => localStorage.getItem(CLAVE_ADMIN_ABIERTO) === "1",
   );
   const activos = useModulosActivos();
-  const admin = useMundoAdmin();
+  const { puede } = useSesion();
   const empezar = useEmpezarPendiente();
   const [todos, setTodos] = useState(mostrarTodosLosModulos);
   const location = useLocation();
@@ -146,13 +134,39 @@ export function AppShell(): React.JSX.Element {
 
   const visible = (item: NavItem): boolean => {
     if (item.devOnly && !import.meta.env.DEV) return false;
+    // ADR-0048: primero el ROL — sin el permiso, la entrada no existe para
+    // este usuario. El toggle de módulos avanzados filtra DESPUÉS: activa
+    // módulos de la empresa, no abre puertas que el rol cierra.
+    if (item.permiso !== undefined && !puede(item.permiso)) return false;
     if (item.advanced === undefined) return true;
     return todos || activos[item.advanced];
   };
 
+  // El mundo técnico existe si el rol abre al menos una de sus entradas.
+  const admin = NAV_ADMIN.some((g) => g.items.some(visible));
+
   // Dentro de /admin el grupo se muestra abierto aunque estuviera plegado:
   // plegarte el menú de donde estás parado sería esconderte el piso.
   const adminVisible = adminAbierto || enAdmin;
+
+  // La GUARDIA de ruta: si la URL apunta a una entrada que el rol no abre,
+  // se aterriza en la ruta inicial del rol. Cortesía coherente con el menú;
+  // el servidor rechazaría igual las operaciones de esa pantalla.
+  const todasLasEntradas: NavItem[] = [
+    NAV_EMPEZAR,
+    ...NAV_NEGOCIO,
+    ...NAV_ADMIN.flatMap((g) => g.items),
+  ];
+  const entradaActual = todasLasEntradas.find(
+    (i) => location.pathname === i.to || location.pathname.startsWith(`${i.to}/`),
+  );
+  const sinAcceso =
+    (entradaActual !== undefined &&
+      entradaActual.permiso !== undefined &&
+      !puede(entradaActual.permiso)) ||
+    // El Dashboard (/admin, sin entrada propia) es dinero agregado: reportes.
+    (location.pathname === "/admin" && !puede("report.export"));
+  if (sinAcceso) return <Navigate to={rutaInicial(puede)} replace />;
 
   return (
     <div className="flex min-h-screen bg-background">
@@ -174,7 +188,7 @@ export function AppShell(): React.JSX.Element {
         <nav className="flex-1 overflow-y-auto px-2 pb-2" aria-label="Navegación principal">
           {/* El grupo SIN nombre: la app. Objetivos táctiles de 44 px. */}
           <div className="mb-1 space-y-0.5">
-            {(empezar ? [NAV_EMPEZAR, ...NAV_NEGOCIO] : NAV_NEGOCIO).map((item) => (
+            {(empezar ? [NAV_EMPEZAR, ...NAV_NEGOCIO] : NAV_NEGOCIO).filter(visible).map((item) => (
               <ItemNav key={item.to} item={item} colapsada={colapsada} grande />
             ))}
           </div>

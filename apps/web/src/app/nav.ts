@@ -33,6 +33,12 @@ export interface NavItem {
   readonly to: string;
   readonly label: string;
   readonly icon: LucideIcon;
+  /**
+   * ADR-0048: el permiso que abre la entrada — con un array basta CUALQUIERA.
+   * Sin declarar = visible para todo miembro (solo lecturas de catálogo).
+   * La lista la resolvió el servidor; esconder aquí es cortesía, no control.
+   */
+  readonly permiso?: string | readonly string[];
   /** Solo visible si el módulo avanzado está activo o el usuario pidió verlo todo. */
   readonly advanced?: "compras" | "contabilidad" | "libros";
   /** Solo en desarrollo (página de demo de componentes). */
@@ -44,61 +50,150 @@ export interface NavGroup {
   readonly items: NavItem[];
 }
 
-/** El mundo de la PERSONA: el grupo sin nombre que es la app. */
+/**
+ * El mundo de la PERSONA: el grupo sin nombre que es la app.
+ *
+ * Los permisos siguen el mapa de ADR-0048: el mostrador entero se abre con
+ * `sales.invoice.issue` (quien vende ve el catálogo, la existencia y los
+ * clientes — VER es de miembro; los botones de acción se esconden aparte,
+ * pantalla a pantalla); Inicio es «lo que gané» y por eso pide el dinero
+ * agregado; Compras/Mi dinero se abren por lo que cada rol puede HACER ahí.
+ */
 export const NAV_NEGOCIO: NavItem[] = [
-  { to: "/inicio", label: "Inicio", icon: Home },
-  { to: "/vender", label: "Vender", icon: Store },
-  { to: "/productos", label: "Productos", icon: Package },
-  { to: "/inventario", label: "Inventario", icon: Boxes },
-  { to: "/clientes", label: "Clientes", icon: Users },
-  { to: "/compras", label: "Compras y gastos", icon: ShoppingCart },
-  { to: "/dinero", label: "Mi dinero", icon: Wallet },
+  { to: "/inicio", label: "Inicio", icon: Home, permiso: "treasury.read" },
+  { to: "/vender", label: "Vender", icon: Store, permiso: "sales.invoice.issue" },
+  { to: "/productos", label: "Productos", icon: Package, permiso: "sales.invoice.issue" },
+  { to: "/inventario", label: "Inventario", icon: Boxes, permiso: "sales.invoice.issue" },
+  { to: "/clientes", label: "Clientes", icon: Users, permiso: "sales.invoice.issue" },
+  {
+    to: "/compras",
+    label: "Compras y gastos",
+    icon: ShoppingCart,
+    permiso: ["expense.read", "purchase.invoice.register"],
+  },
+  {
+    to: "/dinero",
+    label: "Mi dinero",
+    icon: Wallet,
+    permiso: ["treasury.read", "cash.close"],
+  },
 ];
 
 /** El primer día: visible mientras la puesta a punto no esté completa. */
-export const NAV_EMPEZAR: NavItem = { to: "/empezar", label: "Empezar", icon: Rocket };
+export const NAV_EMPEZAR: NavItem = {
+  to: "/empezar",
+  label: "Empezar",
+  icon: Rocket,
+  permiso: "fiscal.regime.manage",
+};
 
 /** El mundo TÉCNICO, bajo /admin/*: la Fase B intacta + Facturación fiscal. */
 export const NAV_ADMIN: NavGroup[] = [
   {
     label: "Operación",
     items: [
-      { to: "/admin/ventas", label: "Ventas", icon: Receipt },
-      { to: "/admin/cuentas", label: "Cuentas por cobrar", icon: Banknote },
-      { to: "/admin/clientes", label: "Clientes", icon: Users },
+      {
+        to: "/admin/ventas",
+        label: "Ventas",
+        icon: Receipt,
+        permiso: ["sales.invoice.annul", "accounting.read"],
+      },
+      {
+        to: "/admin/cuentas",
+        label: "Cuentas por cobrar",
+        icon: Banknote,
+        permiso: ["sales.invoice.annul", "accounting.read"],
+      },
+      {
+        to: "/admin/clientes",
+        label: "Clientes",
+        icon: Users,
+        permiso: ["customer.tax_id.manage", "accounting.read"],
+      },
     ],
   },
   {
     label: "Catálogo e inventario",
     items: [
-      { to: "/admin/productos", label: "Productos", icon: Package },
-      { to: "/admin/precios", label: "Listas de precios", icon: Tags },
-      { to: "/admin/inventario", label: "Inventario", icon: Boxes },
+      {
+        to: "/admin/productos",
+        label: "Productos",
+        icon: Package,
+        permiso: ["product.variant.manage", "product.tax_category.set"],
+      },
+      {
+        to: "/admin/precios",
+        label: "Listas de precios",
+        icon: Tags,
+        permiso: ["price_list.manage", "accounting.read"],
+      },
+      {
+        to: "/admin/inventario",
+        label: "Inventario",
+        icon: Boxes,
+        permiso: ["inventory.threshold.manage", "accounting.read"],
+      },
     ],
   },
   {
     label: "Contable y fiscal",
     items: [
-      { to: "/admin/compras", label: "Compras", icon: ShoppingCart, advanced: "compras" },
+      {
+        to: "/admin/compras",
+        label: "Compras",
+        icon: ShoppingCart,
+        advanced: "compras",
+        permiso: ["purchase.order.manage", "ap.read"],
+      },
       {
         to: "/admin/contabilidad",
         label: "Contabilidad",
         icon: Calculator,
         advanced: "contabilidad",
+        permiso: "accounting.entry.create",
       },
-      { to: "/admin/libros", label: "Libros fiscales", icon: BookOpenCheck, advanced: "libros" },
-      { to: "/admin/facturacion-fiscal", label: "Facturación fiscal", icon: FileCheck2 },
+      {
+        to: "/admin/libros",
+        label: "Libros fiscales",
+        icon: BookOpenCheck,
+        advanced: "libros",
+        permiso: "fiscal_book.read",
+      },
+      {
+        to: "/admin/facturacion-fiscal",
+        label: "Facturación fiscal",
+        icon: FileCheck2,
+        permiso: ["fiscal.range.manage", "fiscal.audit.read"],
+      },
     ],
   },
   {
     label: "Sistema",
     items: [
-      { to: "/admin/reportes", label: "Reportes", icon: Building },
-      { to: "/admin/configuracion", label: "Configuración", icon: Settings },
+      { to: "/admin/reportes", label: "Reportes", icon: Building, permiso: "report.export" },
+      {
+        to: "/admin/configuracion",
+        label: "Configuración",
+        icon: Settings,
+        permiso: "company.settings.manage",
+      },
       { to: "/dev/components", label: "Componentes (dev)", icon: FlaskConical, devOnly: true },
     ],
   },
 ];
+
+/**
+ * A dónde aterriza cada rol al entrar («/»): el dueño y el administrador a
+ * Inicio; quien vende, al mostrador; el contador, a su contabilidad; y quien
+ * no encaje en nada, a Vender — la pantalla más inofensiva.
+ */
+export function rutaInicial(puede: (p: string | readonly string[]) => boolean): string {
+  if (puede("treasury.read")) return "/inicio";
+  if (puede("sales.invoice.issue")) return "/vender";
+  if (puede("accounting.entry.create")) return "/admin/contabilidad";
+  if (puede("report.export")) return "/admin/reportes";
+  return "/vender";
+}
 
 /** Ruta → miga. Lo consumen breadcrumbs y el título del documento. */
 export const CRUMBS: Record<string, string> = {

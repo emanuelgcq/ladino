@@ -95,11 +95,16 @@ const FORMAS = [
 ];
 
 export function Dinero(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const qc = useQueryClient();
+  // ADR-0048: con treasury.read se ve TODO el dinero; con solo cash.close
+  // (el encargado) la pantalla se reduce a la tasa del día y el cierre de SU
+  // caja — el servidor ya le devuelve únicamente las cuentas de efectivo.
+  const puedeDinero = puede("treasury.read");
 
   const resumen = useQuery({
     queryKey: ["negocio-resumen", empresa.id],
+    enabled: puedeDinero,
     queryFn: () => llamar<Resumen>("/v1/negocio/resumen"),
   });
   const cuentas = useQuery({
@@ -112,6 +117,7 @@ export function Dinero(): React.JSX.Element {
   });
   const cierres = useQuery({
     queryKey: ["cierres", empresa.id],
+    enabled: puedeDinero,
     queryFn: () => llamar<{ items: Cierre[] }>("/v1/cash-closings"),
   });
 
@@ -130,51 +136,55 @@ export function Dinero(): React.JSX.Element {
 
       <TarjetaTasa resumen={resumen.data ?? null} onCambio={recargar} />
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Card>
-          <CardContent className="py-4">
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <ArrowDownToLine className="size-4" />
-              <span className="text-[0.9rem]">Lo que me deben</span>
-            </div>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">
-              {resumen.data
-                ? mostrarImporte({ amount: resumen.data.lo_que_me_deben, currency: funcional })
-                : "…"}
-            </p>
-            <Link
-              to="/clientes"
-              className="text-[0.85rem] text-accent-soft-foreground hover:underline"
-            >
-              Ver quién me debe
-            </Link>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="py-4">
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <ArrowUpFromLine className="size-4" />
-              <span className="text-[0.9rem]">Lo que debo</span>
-            </div>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">
-              {resumen.data
-                ? mostrarImporte({ amount: resumen.data.lo_que_debo, currency: funcional })
-                : "…"}
-            </p>
-            <Link
-              to="/compras"
-              className="text-[0.85rem] text-accent-soft-foreground hover:underline"
-            >
-              Ver qué debo
-            </Link>
-          </CardContent>
-        </Card>
-      </div>
+      {puedeDinero && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Card>
+            <CardContent className="py-4">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <ArrowDownToLine className="size-4" />
+                <span className="text-[0.9rem]">Lo que me deben</span>
+              </div>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">
+                {resumen.data
+                  ? mostrarImporte({ amount: resumen.data.lo_que_me_deben, currency: funcional })
+                  : "…"}
+              </p>
+              <Link
+                to="/clientes"
+                className="text-[0.85rem] text-accent-soft-foreground hover:underline"
+              >
+                Ver quién me debe
+              </Link>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="py-4">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <ArrowUpFromLine className="size-4" />
+                <span className="text-[0.9rem]">Lo que debo</span>
+              </div>
+              <p className="mt-1 text-2xl font-semibold tabular-nums">
+                {resumen.data
+                  ? mostrarImporte({ amount: resumen.data.lo_que_debo, currency: funcional })
+                  : "…"}
+              </p>
+              <Link
+                to="/compras"
+                className="text-[0.85rem] text-accent-soft-foreground hover:underline"
+              >
+                Ver qué debo
+              </Link>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-[1.05rem] font-semibold">Mis cuentas</h2>
-          <CrearCuenta onCreada={recargar} />
+          <h2 className="text-[1.05rem] font-semibold">
+            {puedeDinero ? "Mis cuentas" : "La caja"}
+          </h2>
+          {puede("treasury.account.manage") && <CrearCuenta onCreada={recargar} />}
         </div>
         {cuentas.isLoading ? (
           <p className="text-muted-foreground">Cargando…</p>
@@ -198,39 +208,41 @@ export function Dinero(): React.JSX.Element {
         )}
       </section>
 
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-[1.05rem] font-semibold">Formas de pago</h2>
-          <CrearFormaDePago
-            cuentas={lista}
-            onCreada={() => void qc.invalidateQueries({ queryKey: ["formas-pago", empresa.id] })}
-          />
-        </div>
-        <p className="text-[0.85rem] text-muted-foreground">
-          Cada forma apunta a una cuenta: cuando cobras con ella, la plata entra ahí sola.
-        </p>
-        {(formas.data?.methods ?? []).length === 0 ? (
-          <p className="text-[0.9rem] text-faint-foreground">
-            Sin formas configuradas, los cobros van a «Sin asignar» y luego hay que repartirlos.
-          </p>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {(formas.data?.methods ?? []).map((f) => {
-              const cuenta = lista.find((c) => c.id === f.account_id);
-              return (
-                <span
-                  key={f.id}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-[0.85rem]"
-                >
-                  <CreditCard className="size-3.5 text-muted-foreground" />
-                  {f.name}
-                  <span className="text-faint-foreground">→ {cuenta?.name ?? "?"}</span>
-                </span>
-              );
-            })}
+      {puedeDinero && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-[1.05rem] font-semibold">Formas de pago</h2>
+            <CrearFormaDePago
+              cuentas={lista}
+              onCreada={() => void qc.invalidateQueries({ queryKey: ["formas-pago", empresa.id] })}
+            />
           </div>
-        )}
-      </section>
+          <p className="text-[0.85rem] text-muted-foreground">
+            Cada forma apunta a una cuenta: cuando cobras con ella, la plata entra ahí sola.
+          </p>
+          {(formas.data?.methods ?? []).length === 0 ? (
+            <p className="text-[0.9rem] text-faint-foreground">
+              Sin formas configuradas, los cobros van a «Sin asignar» y luego hay que repartirlos.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {(formas.data?.methods ?? []).map((f) => {
+                const cuenta = lista.find((c) => c.id === f.account_id);
+                return (
+                  <span
+                    key={f.id}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-[0.85rem]"
+                  >
+                    <CreditCard className="size-3.5 text-muted-foreground" />
+                    {f.name}
+                    <span className="text-faint-foreground">→ {cuenta?.name ?? "?"}</span>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
 
       {(cierres.data?.items ?? []).length > 0 && (
         <section className="space-y-2">
@@ -422,6 +434,8 @@ function TarjetaCuenta({
   cuenta: Cuenta;
   onCerrada: () => void;
 }): React.JSX.Element {
+  const { puede } = useSesion();
+  const puedeCerrar = puede("cash.close");
   const Icono = ICONO_CUENTA[cuenta.kind];
   return (
     <Card className={cuenta.is_system ? "border-dashed" : undefined}>
@@ -438,7 +452,7 @@ function TarjetaCuenta({
         <p className="mt-2 text-xl font-semibold tabular-nums">
           {mostrarImporte({ amount: cuenta.balance, currency: cuenta.currency })}
         </p>
-        {cuenta.kind === "cash" && !cuenta.is_system && (
+        {cuenta.kind === "cash" && !cuenta.is_system && puedeCerrar && (
           <div className="mt-2">
             <CerrarCaja cuenta={cuenta} onCerrada={onCerrada} />
           </div>

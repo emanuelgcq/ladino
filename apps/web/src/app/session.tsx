@@ -20,6 +20,13 @@ export interface Sesion {
   readonly setEmpresa: (c: Company) => void;
   /** GET/POST autenticado contra la API, con la empresa activa puesta. */
   readonly llamar: <T>(path: string, init?: RequestInit) => Promise<T>;
+  /**
+   * ADR-0048: ¿tiene el usuario este permiso en la empresa activa? Con un
+   * array, basta CUALQUIERA (any-of). Es la lista que el servidor resolvió
+   * con el MISMO mecanismo que autoriza cada operación: aquí solo decide qué
+   * se enseña — esconder es cortesía, el control vive en la API.
+   */
+  readonly puede: (permiso: string | readonly string[]) => boolean;
 }
 
 const Ctx = createContext<Sesion | null>(null);
@@ -41,6 +48,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   const [cargando, setCargando] = useState(true);
   const [companies, setCompanies] = useState<Company[] | null>(null);
   const [empresa, setEmpresaState] = useState<Company | null>(null);
+  const [permisos, setPermisos] = useState<ReadonlySet<string> | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -85,6 +93,38 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     [session],
   );
 
+  // Los permisos del usuario EN la empresa activa (ADR-0048): una llamada por
+  // elección de empresa; el menú entero se forma con esta lista. Si la
+  // llamada falla, el conjunto queda VACÍO — fallo cerrado: no se enseña lo
+  // que no se pudo confirmar (el servidor rechazaría igual).
+  useEffect(() => {
+    if (!session || !empresa) {
+      setPermisos(null);
+      return;
+    }
+    let vigente = true;
+    setPermisos(null);
+    void api<{ permissions: string[] }>(session, "/v1/me/permissions", { companyId: empresa.id })
+      .then((r) => {
+        if (vigente) setPermisos(new Set(r.permissions));
+      })
+      .catch(() => {
+        if (vigente) setPermisos(new Set());
+      });
+    return () => {
+      vigente = false;
+    };
+  }, [session, empresa]);
+
+  const puede = useCallback(
+    (permiso: string | readonly string[]): boolean => {
+      if (permisos === null) return false;
+      const lista = typeof permiso === "string" ? [permiso] : permiso;
+      return lista.some((p) => permisos.has(p));
+    },
+    [permisos],
+  );
+
   const llamar = useCallback(
     <T,>(path: string, init: RequestInit = {}): Promise<T> => {
       if (!session || !empresa) return Promise.reject(new Error("sin sesión o empresa"));
@@ -95,13 +135,18 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
 
   const valor = useMemo<Sesion | null>(
     () =>
-      session && empresa && companies ? { session, companies, empresa, setEmpresa, llamar } : null,
-    [session, empresa, companies, setEmpresa, llamar],
+      session && empresa && companies && permisos !== null
+        ? { session, companies, empresa, setEmpresa, llamar, puede }
+        : null,
+    [session, empresa, companies, permisos, setEmpresa, llamar, puede],
   );
 
   if (cargando) return <PantallaCentrada>Cargando…</PantallaCentrada>;
   if (!session) return <Login />;
   if (companies === null) return <PantallaCentrada>Cargando empresas…</PantallaCentrada>;
+  if (empresa !== null && permisos === null) {
+    return <PantallaCentrada>Cargando permisos…</PantallaCentrada>;
+  }
   if (valor === null) {
     return (
       <SelectorEmpresa
