@@ -65,18 +65,6 @@ export const NAV_NEGOCIO: NavItem[] = [
   { to: "/productos", label: "Productos", icon: Package, permiso: "sales.invoice.issue" },
   { to: "/inventario", label: "Inventario", icon: Boxes, permiso: "sales.invoice.issue" },
   { to: "/clientes", label: "Clientes", icon: Users, permiso: "sales.invoice.issue" },
-  {
-    to: "/compras",
-    label: "Compras y gastos",
-    icon: ShoppingCart,
-    permiso: ["expense.read", "purchase.invoice.register"],
-  },
-  {
-    to: "/dinero",
-    label: "Mi dinero",
-    icon: Wallet,
-    permiso: ["treasury.read", "cash.close"],
-  },
 ];
 
 /** El primer día: visible mientras la puesta a punto no esté completa. */
@@ -110,6 +98,18 @@ export const NAV_ADMIN: NavGroup[] = [
         icon: Users,
         permiso: ["customer.tax_id.manage", "accounting.read"],
       },
+      {
+        to: "/compras",
+        label: "Compras y gastos",
+        icon: ShoppingCart,
+        permiso: ["expense.read", "purchase.invoice.register"],
+      },
+      {
+        to: "/dinero",
+        label: "Mi dinero",
+        icon: Wallet,
+        permiso: ["treasury.read", "cash.close"],
+      },
     ],
   },
   {
@@ -131,7 +131,9 @@ export const NAV_ADMIN: NavGroup[] = [
         to: "/admin/inventario",
         label: "Inventario",
         icon: Boxes,
-        permiso: ["inventory.threshold.manage", "accounting.read"],
+        // `inventory.move` abre la puerta a quien OPERA el almacén: desde que
+        // el mostrador es solo consulta, los verbos se registran aquí.
+        permiso: ["inventory.threshold.manage", "accounting.read", "inventory.move"],
       },
     ],
   },

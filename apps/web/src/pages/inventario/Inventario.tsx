@@ -47,36 +47,40 @@ type Operacion = "entrada" | "salida" | "ajuste" | "transferencia";
 
 const OPERACION: Record<
   Operacion,
-  { etiqueta: string; icono: React.JSX.Element; consecuencia: string }
+  { etiqueta: string; icono: React.JSX.Element; consecuencia: string; permiso: string }
 > = {
   entrada: {
     etiqueta: "Entrada",
     icono: <ArrowDownToLine />,
+    permiso: "inventory.move",
     consecuencia:
       "El costo promedio del producto en ese almacén se recalculará. El movimiento no se puede editar ni borrar después.",
   },
   salida: {
     etiqueta: "Salida",
     icono: <ArrowUpFromLine />,
+    permiso: "inventory.move",
     consecuencia:
       "Se valorará al costo promedio vigente, que calcula el servidor. Si dejara la existencia en negativo se rechaza, salvo permiso expreso.",
   },
   ajuste: {
     etiqueta: "Ajuste",
     icono: <Scale />,
+    permiso: "inventory.adjust",
     consecuencia:
       "Queda en la auditoría con tu nombre y su motivo. Un ajuste sin motivo no es un ajuste.",
   },
   transferencia: {
     etiqueta: "Transferencia",
     icono: <ArrowLeftRight />,
+    permiso: "inventory.transfer",
     consecuencia:
       "Sale y entra en el mismo instante, al costo de origen: no hay estado «en tránsito». Necesitas permiso sobre los dos almacenes.",
   },
 };
 
 export function Inventario(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const [busqueda, setBusqueda] = useState("");
   const [almacen, setAlmacen] = useState("");
   const [operacion, setOperacion] = useState<Operacion | null>(null);
@@ -166,16 +170,19 @@ export function Inventario(): React.JSX.Element {
         description="Existencias al costo promedio ponderado del servidor; cada movimiento es un hecho que no se edita."
         actions={
           <div className="flex gap-2">
-            {(Object.keys(OPERACION) as Operacion[]).map((op) => (
-              <Button
-                key={op}
-                variant={op === "entrada" ? "primary" : "secondary"}
-                size="sm"
-                onClick={() => setOperacion(op)}
-              >
-                {OPERACION[op].icono} {OPERACION[op].etiqueta}
-              </Button>
-            ))}
+            {/* ADR-0048: cada verbo aparece según el rol; el servidor decide. */}
+            {(Object.keys(OPERACION) as Operacion[])
+              .filter((op) => puede(OPERACION[op].permiso))
+              .map((op) => (
+                <Button
+                  key={op}
+                  variant={op === "entrada" ? "primary" : "secondary"}
+                  size="sm"
+                  onClick={() => setOperacion(op)}
+                >
+                  {OPERACION[op].icono} {OPERACION[op].etiqueta}
+                </Button>
+              ))}
           </div>
         }
       />
@@ -217,11 +224,15 @@ export function Inventario(): React.JSX.Element {
               title: "Sin existencias con ese filtro",
               description:
                 "La primera entrada de mercancía abre el kardex del producto — clic en una fila para verlo.",
-              action: (
-                <Button variant="primary" size="sm" onClick={() => setOperacion("entrada")}>
-                  Registrar entrada
-                </Button>
-              ),
+              ...(puede("inventory.move")
+                ? {
+                    action: (
+                      <Button variant="primary" size="sm" onClick={() => setOperacion("entrada")}>
+                        Registrar entrada
+                      </Button>
+                    ),
+                  }
+                : {}),
             }}
           />
         </TabsPanel>

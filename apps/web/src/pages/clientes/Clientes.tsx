@@ -21,7 +21,12 @@ import {
 } from "../../ui/dialog.js";
 import { useToast } from "../../ui/toast.js";
 import { MensajeError } from "../ventas/comunes.js";
+import { mostrarImporte } from "../../money.js";
+import { esCero } from "../../components/decimal-compare.js";
 import type { Customer, CodeCatalog, PriceList } from "../../lib.js";
+
+/** La fila con la deuda funcional de HOY que calcula el servidor (ADR-0047). */
+type ClienteConDeuda = Customer & { readonly debt?: string };
 
 /**
  * Clientes — Fase B sobre el patrón de ventas. Toda la funcionalidad de la
@@ -50,15 +55,19 @@ export function Clientes(): React.JSX.Element {
   const clientes = useQuery({
     queryKey: ["clientes", empresa.id, busqueda, pagina],
     queryFn: () => {
-      const q = new URLSearchParams({ page: String(pagina), per_page: String(PER_PAGE) });
+      const q = new URLSearchParams({
+        page: String(pagina),
+        per_page: String(PER_PAGE),
+        with_debt: "1",
+      });
       if (busqueda.trim() !== "") q.set("search", busqueda.trim());
-      return llamar<{ items: Customer[]; total: number }>(`/v1/customers?${q.toString()}`);
+      return llamar<{ items: ClienteConDeuda[]; total: number }>(`/v1/customers?${q.toString()}`);
     },
   });
 
   const recargar = () => void qc.invalidateQueries({ queryKey: ["clientes", empresa.id] });
 
-  const columnas = useMemo<ColumnDef<Customer, unknown>[]>(
+  const columnas = useMemo<ColumnDef<ClienteConDeuda, unknown>[]>(
     () => [
       {
         id: "rif",
@@ -90,6 +99,24 @@ export function Clientes(): React.JSX.Element {
             tone: "outline" as const,
           };
           return <Badge tone={e.tone}>{e.etiqueta}</Badge>;
+        },
+      },
+      {
+        id: "deuda",
+        header: "Deuda",
+        enableSorting: false,
+        // La misma deuda que ve el mostrador: funcional de HOY, del servidor.
+        accessorFn: (c) => c.debt,
+        cell: (c) => {
+          const debt = c.getValue<string | undefined>();
+          if (debt === undefined || esCero(debt)) {
+            return <span className="text-[0.82rem] text-muted-foreground">Al día</span>;
+          }
+          return (
+            <span className="font-mono text-[0.84rem] text-warning-soft-foreground">
+              {mostrarImporte({ amount: debt, currency: "VES" })}
+            </span>
+          );
         },
       },
       {

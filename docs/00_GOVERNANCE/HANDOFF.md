@@ -1,3 +1,23 @@
+# Handoff — 2026-09-05 (4ª entrega)
+
+## Arriba se vende y se consulta; abajo se administra (posición, no solo permiso)
+
+El dueño aclaró que lo acordado era MOVER, no solo acotar por rol. Aplicado:
+
+- **Sidebar**: «Compras y gastos» y «Mi dinero» salen del grupo del mostrador y entran a
+  ADMINISTRACIÓN → Operación. Mismas rutas, mismos permisos: solo cambia dónde viven.
+- **Clientes (admin)**: columna «Deuda» con la MISMA cifra del mostrador
+  (`with_debt=1`, deuda funcional de hoy del servidor, ADR-0047). Al día = «Al día».
+- **Inventario (mostrador)**: SOLO CONSULTA. Los cuatro verbos (entró/salió/ajustar/mover)
+  se quitaron; registrar vive únicamente en Administración → Inventario, que ya lo tenía
+  todo — cero duplicación. Para que cierre: `inventory.move` ahora también abre la
+  entrada de Inventario admin (el encargado registra ahí), sus botones de operación se
+  filtran por permiso (ADR-0048, cortesía; decide el servidor), y arriba queda un aviso
+  con enlace para quien puede registrar.
+
+Sin migraciones, sin cambios de API. El gate del glosario cazó «kardex» en un comentario
+del mostrador — reformulado, que para eso está.
+
 # Handoff — 2026-09-05 (3ª entrega)
 
 ## Niveles B y C de la auditoría de superficie: las puertas que faltaban
