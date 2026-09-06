@@ -87,6 +87,19 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
     const { actor } = c.get("ladino.auth");
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigePermiso(tx, actor, companyId, "fiscal.regime.manage", "Asignar el régimen");
+      // El hueco que la migración 43 cerró: aquí se ASUMÍA que no había
+      // documentos anteriores. Ahora se pregunta de verdad — y con documentos
+      // fiscales emitidos (los recibos NO cuentan: su transición es el caso
+      // feliz), el cambio exige motivo y deja acta.
+      const [docs] = await tx<{ tiene: boolean }[]>`
+        select platform.company_has_fiscal_documents(${companyId}) as tiene`;
+      if (docs?.tiene === true && parsed.data.reason === undefined) {
+        throw new DominioError({
+          code: "VALIDATION_FAILED",
+          message:
+            "La empresa ya emitió documentos fiscales: cambiar cómo factura exige un motivo, que queda en la auditoría.",
+        });
+      }
       const [ya] = await tx<{ regime_code: string; regime_version_id: string }[]>`
         select regime_code, regime_version_id from platform.regime_at(${companyId}, now())`;
       // LA ÚNICA transición permitida desde aquí: salir del modo recibos
@@ -115,7 +128,11 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
              actor_type, occurred_at, rules_version, payload)
           values (${empresa!.tenant_id}, ${companyId}, 'company', ${companyId},
                   'fiscal.regime.upgraded', 'user', now(), ${RULES_VERSION},
-                  ${tx.json({ from: ya.regime_code, to: parsed.data.regime_code })})`;
+                  ${tx.json({
+                    from: ya.regime_code,
+                    to: parsed.data.regime_code,
+                    ...(parsed.data.reason === undefined ? {} : { reason: parsed.data.reason }),
+                  })})`;
       }
       // `effective_from` es timestamptz: rige desde ESTE instante. La empresa
       // recién asistida no tiene documentos anteriores que quedarse sin régimen.

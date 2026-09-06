@@ -11,12 +11,27 @@ import { z } from "zod";
  * regex aquí es un cliente decidiendo una regla fiscal (CLAUDE.md §7).
  * Lo defendible sin fuente: no vacío y cota de longitud. Nada más.
  */
+/** Los campos de PERFIL del negocio (registro premium, migración 43). */
+const perfilCampos = {
+  business_type: z.string().trim().min(2).max(40),
+  phone: z.string().trim().min(3).max(40),
+  whatsapp: z.string().trim().min(3).max(40),
+  city: z.string().trim().min(2).max(80),
+  state: z.string().trim().min(2).max(80),
+} as const;
+
 export const CreateCompanyRequest = z
   .object({
     tenant_id: z.string().uuid(),
     legal_name: z.string().trim().min(1).max(200),
     trade_name: z.string().trim().min(1).max(200).optional(),
     tax_id: z.string().trim().min(1).max(30),
+    fiscal_address: z.string().trim().min(5).max(500).optional(),
+    business_type: perfilCampos.business_type.optional(),
+    phone: perfilCampos.phone.optional(),
+    whatsapp: perfilCampos.whatsapp.optional(),
+    city: perfilCampos.city.optional(),
+    state: perfilCampos.state.optional(),
   })
   .strict();
 
@@ -31,10 +46,75 @@ export const CompanyResponse = z
     tax_id: z.string(),
     /** Domicilio fiscal del emisor (PA 00071 art. 13.5). NULL hasta que lo cargue. */
     fiscal_address: z.string().nullable(),
+    business_type: z.string().nullable(),
+    phone: z.string().nullable(),
+    whatsapp: z.string().nullable(),
+    city: z.string().nullable(),
+    state: z.string().nullable(),
+    /** URL FIRMADA del logo (vigencia corta) o null. La ruta vive en el servidor. */
+    logo_url: z.string().nullable(),
     status: z.enum(["onboarding", "active", "suspended"]),
     created_at: z.string().datetime({ offset: true }),
   })
   .strict();
+
+/**
+ * Editar el PERFIL del negocio («Mi empresa»). El RIF NO se toca por aquí:
+ * tiene su endpoint y su permiso (política de tres niveles). `reason` es
+ * obligatorio EN DOMINIO cuando cambian razón social o domicilio con
+ * documentos fiscales ya emitidos — queda en el acta.
+ */
+export const UpdateCompanyProfileRequest = z
+  .object({
+    legal_name: z.string().trim().min(1).max(200).optional(),
+    trade_name: z.string().trim().min(1).max(200).nullable().optional(),
+    fiscal_address: z.string().trim().min(5).max(500).optional(),
+    business_type: perfilCampos.business_type.nullable().optional(),
+    phone: perfilCampos.phone.nullable().optional(),
+    whatsapp: perfilCampos.whatsapp.nullable().optional(),
+    city: perfilCampos.city.nullable().optional(),
+    state: perfilCampos.state.nullable().optional(),
+    reason: z.string().trim().min(3).max(300).optional(),
+  })
+  .strict();
+export type UpdateCompanyProfileRequest = z.infer<typeof UpdateCompanyProfileRequest>;
+
+/**
+ * El RIF del negocio (política de tres niveles, PARTE 4 del registro):
+ * poner el PRIMERO (reemplazar el placeholder PEND-*) o cambiarlo SIN
+ * documentos emitidos — confirmación simple. Con documentos, 422: eso es
+ * la corrección excepcional de abajo.
+ */
+export const SetCompanyTaxIdRequest = z
+  .object({ tax_id: z.string().trim().min(1).max(30) })
+  .strict();
+export type SetCompanyTaxIdRequest = z.infer<typeof SetCompanyTaxIdRequest>;
+
+/** La corrección EXCEPCIONAL del RIF (dedazo tardío): motivo obligatorio, acta. */
+export const CorrectCompanyTaxIdRequest = z
+  .object({
+    tax_id: z.string().trim().min(1).max(30),
+    reason: z.string().trim().min(3).max(300),
+  })
+  .strict();
+export type CorrectCompanyTaxIdRequest = z.infer<typeof CorrectCompanyTaxIdRequest>;
+
+/** La ficha de la persona que administra (users_profile, migración 43). */
+export const MyProfileResponse = z
+  .object({
+    full_name: z.string().nullable(),
+    national_id: z.string().nullable(),
+  })
+  .strict();
+export type MyProfileResponse = z.infer<typeof MyProfileResponse>;
+
+export const SetMyProfileRequest = z
+  .object({
+    full_name: z.string().trim().min(2).max(200),
+    national_id: z.string().trim().min(3).max(30).nullable().optional(),
+  })
+  .strict();
+export type SetMyProfileRequest = z.infer<typeof SetMyProfileRequest>;
 
 /** Cargar o corregir el domicilio fiscal del emisor (migración 34). */
 export const SetCompanyFiscalAddressRequest = z
@@ -65,6 +145,18 @@ export const OnboardBusinessRequest = z
   .object({
     business_name: z.string().trim().min(2).max(200),
     tax_id: z.string().trim().min(1).max(30).nullable().optional(),
+    /** Con RIF, la razón social y el domicilio fiscal son OBLIGATORIOS (regla
+     *  dura de la migración 43, impuesta en dominio con 422). */
+    legal_name: z.string().trim().min(1).max(200).optional(),
+    fiscal_address: z.string().trim().min(5).max(500).optional(),
+    business_type: perfilCampos.business_type.optional(),
+    phone: perfilCampos.phone.optional(),
+    whatsapp: perfilCampos.whatsapp.optional(),
+    city: perfilCampos.city.optional(),
+    state: perfilCampos.state.optional(),
+    /** «Ahora tú»: la ficha del responsable (users_profile). */
+    owner_full_name: z.string().trim().min(2).max(200).optional(),
+    owner_national_id: z.string().trim().min(3).max(30).nullable().optional(),
   })
   .strict();
 export type OnboardBusinessRequest = z.infer<typeof OnboardBusinessRequest>;

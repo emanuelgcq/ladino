@@ -44,6 +44,13 @@ describe("@ladino/schemas — contratos de companies", () => {
       tax_id: "J-1",
       // Migración 34: el domicilio existe siempre en la respuesta, NULL hasta cargarlo.
       fiscal_address: null,
+      // Migración 43: el perfil del registro premium — siempre presentes, NULL sin llenar.
+      business_type: null,
+      phone: null,
+      whatsapp: null,
+      city: null,
+      state: null,
+      logo_url: null,
       status: "onboarding" as const,
     };
     expect(

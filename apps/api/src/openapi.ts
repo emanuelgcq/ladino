@@ -10,6 +10,11 @@ extendZodWithOpenApi(z);
 import {
   CreateCompanyRequest,
   SetCompanyFiscalAddressRequest,
+  UpdateCompanyProfileRequest,
+  SetCompanyTaxIdRequest,
+  CorrectCompanyTaxIdRequest,
+  MyProfileResponse,
+  SetMyProfileRequest,
   CompanyResponse,
   MePermissionsResponse,
   OnboardBusinessRequest,
@@ -351,6 +356,7 @@ export function buildOpenApiDocument(): object {
     "SetCompanyFiscalAddressRequest",
     SetCompanyFiscalAddressRequest,
   );
+
   // ── Módulo de productos (migraciones 16-17, ADR-0032) ─────────────────────
   // Todo lo company-scoped exige X-Company-Id, validado por el middleware de
   // scope contra ladino_user_company_ids(). Los importes son STRING decimal
@@ -383,6 +389,144 @@ export function buildOpenApiDocument(): object {
     404: errorRef("Company o recurso no visible — indistinguible de inexistente."),
     422: errorRef("Forma inválida, o company_id del cuerpo ≠ X-Company-Id."),
   };
+
+  // ── Mi empresa y la política de RIF en tres niveles (migración 43) ────────
+  const editarPerfil = registry.register(
+    "UpdateCompanyProfileRequest",
+    UpdateCompanyProfileRequest,
+  );
+  const ponerRif = registry.register("SetCompanyTaxIdRequest", SetCompanyTaxIdRequest);
+  const corregirRif = registry.register("CorrectCompanyTaxIdRequest", CorrectCompanyTaxIdRequest);
+  const miFicha = registry.register("MyProfileResponse", MyProfileResponse);
+  const ponerMiFicha = registry.register("SetMyProfileRequest", SetMyProfileRequest);
+
+  registry.registerPath({
+    method: "patch",
+    path: "/v1/companies/profile",
+    summary: "Editar el perfil del negocio («Mi empresa», permiso company.settings.manage)",
+    description:
+      "Nombre comercial, rubro, contacto, ciudad/estado, razón social y dirección fiscal. El " +
+      "RIF NO se toca por aquí (tiene su endpoint y su permiso). Con documentos fiscales ya " +
+      "emitidos, cambiar razón social o dirección exige `reason`, que queda en el acta de " +
+      "auditoría; las facturas emitidas conservan su snapshot (migración 34).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: editarPerfil } } },
+    },
+    responses: {
+      200: okJson(z.object({}).passthrough(), "El perfil actualizado."),
+      401: errorRef("Token ausente, inválido o expirado."),
+      403: errorRef("Sin company.settings.manage."),
+      422: errorRef("Identidad del emisor con documentos emitidos y sin motivo."),
+    },
+  });
+
+  registry.registerPath({
+    method: "put",
+    path: "/v1/companies/tax-id",
+    summary: "Poner el primer RIF o cambiarlo SIN documentos (permiso company.tax_id.manage)",
+    description:
+      "Niveles 1 de la política de RIF: reemplazar el placeholder PEND-* (la transición de " +
+      "recibos a facturación — los recibos emitidos no la bloquean) o cambiarlo cuando no hay " +
+      "documentos fiscales. Con documentos responde 422: el RIF identifica al contribuyente y " +
+      "no se cambia; el dedazo tardío va por /v1/companies/tax-id/correct. Exige la dirección " +
+      "fiscal cargada. El acta con el valor anterior la escribe el trigger (migración 20).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: ponerRif } } },
+    },
+    responses: {
+      200: okJson(z.object({ tax_id: z.string() }), "El RIF quedó puesto."),
+      401: errorRef("Token ausente, inválido o expirado."),
+      403: errorRef("Sin company.tax_id.manage."),
+      409: errorRef("Ya existe una empresa con ese RIF en el tenant."),
+      422: errorRef("RIF bloqueado por documentos emitidos, o falta la dirección fiscal."),
+    },
+  });
+
+  registry.registerPath({
+    method: "post",
+    path: "/v1/companies/tax-id/correct",
+    summary: "Corrección EXCEPCIONAL del RIF (motivo obligatorio, acta propia)",
+    description:
+      "Nivel 3: el dedazo descubierto tarde. Funciona aunque haya documentos emitidos — " +
+      "corregir un error de tipeo no es cambiar de contribuyente — pero exige motivo, deja su " +
+      "acta (company.tax_id_corrected) además de la del trigger, y la UI aconseja consultar " +
+      "al contador sobre la reemisión de lo ya facturado.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: corregirRif } } },
+    },
+    responses: {
+      200: okJson(z.object({ tax_id: z.string() }), "El RIF corregido."),
+      401: errorRef("Token ausente, inválido o expirado."),
+      403: errorRef("Sin company.tax_id.manage."),
+      409: errorRef("Ya existe una empresa con ese RIF en el tenant."),
+      422: errorRef("Falta el motivo o la dirección fiscal."),
+    },
+  });
+
+  registry.registerPath({
+    method: "post",
+    path: "/v1/companies/logo",
+    summary: "Subir el logo del negocio (permiso company.settings.manage)",
+    description:
+      "Multipart con el campo `file` (JPG/PNG/WebP, hasta 6 MB). Patrón product-images: el " +
+      "servidor genera logo-256/logo-64 en webp para la app y logo-pdf.png (512px, aplanado " +
+      "a blanco) porque pdfkit no lee webp; guarda la RUTA y sirve URL firmada. El logo es " +
+      "presentación: no entra al snapshot del emisor ni a ningún dato fiscal.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: {
+        content: {
+          "multipart/form-data": {
+            schema: z.object({ file: z.string().openapi({ format: "binary" }) }),
+          },
+        },
+      },
+    },
+    responses: {
+      201: okJson(
+        z.object({ logo_path: z.string(), logo_url: z.string().nullable() }),
+        "El logo subido, con su URL firmada.",
+      ),
+      401: errorRef("Token ausente, inválido o expirado."),
+      403: errorRef("Sin company.settings.manage."),
+      422: errorRef("Archivo ausente, tipo no soportado o imagen ilegible."),
+    },
+  });
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/me/profile",
+    summary: "La ficha de quien administra (users_profile)",
+    description: "Cada quien lee SOLO la suya. Campos en null si todavía no la llenó.",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: okJson(miFicha, "La ficha propia."),
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
+  registry.registerPath({
+    method: "put",
+    path: "/v1/me/profile",
+    summary: "Guardar la ficha propia (nombre completo, cédula opcional)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: ponerMiFicha } } },
+    },
+    responses: {
+      200: okJson(miFicha, "La ficha guardada."),
+      401: errorRef("Token ausente, inválido o expirado."),
+      422: errorRef("Forma inválida."),
+    },
+  });
 
   registry.registerPath({
     method: "get",

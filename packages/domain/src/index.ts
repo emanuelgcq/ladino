@@ -123,6 +123,15 @@ export {
 } from "./fiscal-books.js";
 export { onboardBusiness, type OnboardingError } from "./onboarding.js";
 export {
+  updateCompanyProfile,
+  setCompanyTaxId,
+  correctCompanyTaxId,
+  setCompanyLogo,
+  getMyProfile,
+  setMyProfile,
+  type CompanyProfileError,
+} from "./company-profile.js";
+export {
   listMembers,
   addMember,
   removeAssignment,

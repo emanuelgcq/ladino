@@ -65,17 +65,48 @@ export async function onboardBusiness(
   // Sin RIF todavía (el modo recibos existe para eso): placeholder DERIVADO
   // del tenant — determinista, único, y honesto en su prefijo. /empezar
   // recoge el RIF real cuando exista (PA SNAT/2026/00080: hoy es digital).
-  const taxId =
-    input.tax_id !== undefined && input.tax_id !== null && input.tax_id.trim() !== ""
-      ? input.tax_id.trim()
-      : `PEND-${tenantId.replace(/-/g, "").slice(0, 10).toUpperCase()}`;
+  const conRif = input.tax_id !== undefined && input.tax_id !== null && input.tax_id.trim() !== "";
+  const taxId = conRif
+    ? input.tax_id!.trim()
+    : `PEND-${tenantId.replace(/-/g, "").slice(0, 10).toUpperCase()}`;
+
+  // LA REGLA DURA (migración 43, impuesta aquí a propósito): con RIF real, la
+  // razón social y el domicilio fiscal son obligatorios — son lo que la
+  // factura imprime (PA 00071 art. 13.5). Sin RIF, nada de esto aplica.
+  if (conRif && (input.legal_name === undefined || input.fiscal_address === undefined)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Con RIF, la razón social y la dirección fiscal son obligatorias: son las que salen en tus facturas.",
+    });
+  }
+
   const empresa = await createCompany(uow, {
     tenant_id: tenantId,
-    legal_name: input.business_name,
+    // Con RIF: la razón social LEGAL es legal_name y el nombre comercial va a
+    // trade_name. Sin RIF: el nombre del negocio ocupa ambos papeles.
+    legal_name: conRif ? input.legal_name! : input.business_name,
+    trade_name: input.business_name,
     tax_id: taxId,
+    ...(input.fiscal_address === undefined ? {} : { fiscal_address: input.fiscal_address }),
+    ...(input.business_type === undefined ? {} : { business_type: input.business_type }),
+    ...(input.phone === undefined ? {} : { phone: input.phone }),
+    ...(input.whatsapp === undefined ? {} : { whatsapp: input.whatsapp }),
+    ...(input.city === undefined ? {} : { city: input.city }),
+    ...(input.state === undefined ? {} : { state: input.state }),
   });
   if (!empresa.ok) return empresa;
   const companyId = empresa.value.id;
+
+  // ── 2-bis. «Ahora tú»: la ficha del responsable (users_profile) ───────────
+  if (input.owner_full_name !== undefined) {
+    await sql`
+      insert into public.users_profile (user_id, full_name, national_id)
+      values (${actor.userId}, ${input.owner_full_name}, ${input.owner_national_id ?? null})
+      on conflict (user_id) do update
+        set full_name = excluded.full_name,
+            national_id = excluded.national_id`;
+  }
 
   // ── 3. El primer depósito, y el binding que enciende los verbos ───────────
   const [almacen] = await sql<{ id: string }[]>`

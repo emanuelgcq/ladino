@@ -69,3 +69,25 @@ export async function firmarUrls(
   }
   return firmadas;
 }
+
+/**
+ * Descarga un objeto con la credencial de servicio (para incrustarlo en un
+ * PDF, no para servirlo). `null` si no existe o el storage no responde: el
+ * llamante decide el fallback — nunca un error de usuario por un adorno.
+ */
+export async function descargarObjeto(
+  cfg: StorageConfig,
+  bucket: string,
+  path: string,
+): Promise<Buffer | null> {
+  try {
+    const r = await fetch(`${cfg.url}/object/${bucket}/${path}`, {
+      headers: { Authorization: `Bearer ${cfg.serviceKey}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!r.ok) return null;
+    return Buffer.from(await r.arrayBuffer());
+  } catch {
+    return null;
+  }
+}

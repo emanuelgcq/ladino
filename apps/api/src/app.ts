@@ -86,7 +86,8 @@ export function buildApp(cfg: AppConfig): Hono {
       c.req.method === "POST" &&
       ((c.req.path.startsWith("/v1/products/") && c.req.path.endsWith("/image")) ||
         c.req.path === "/v1/products/import" ||
-        c.req.path === "/v1/expenses/attachment");
+        c.req.path === "/v1/expenses/attachment" ||
+        c.req.path === "/v1/companies/logo");
     // El Context de un `app.use("*")` colapsa su tercer genérico a `any`; los
     // dos handlers son bodyLimit reales y el dispatch es solo por tamaño.
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
@@ -162,7 +163,7 @@ export function buildApp(cfg: AppConfig): Hono {
   // Registradas SOBRE esta app, nunca con app.route(): una sub-app gestiona
   // sus errores con su propio onError y se saltaría el errorMapper de arriba.
   // El porqué completo está en routes/companies.ts.
-  companiesRoutes(app, cfg.sql, idempotencia);
+  companiesRoutes(app, cfg.sql, idempotencia, cfg.storage);
   membersRoutes(app, cfg.sql, idempotencia);
   productsRoutes(app, cfg.sql, idempotencia, cfg.storage);
   pricingRoutes(app, cfg.sql, idempotencia);
@@ -175,7 +176,7 @@ export function buildApp(cfg: AppConfig): Hono {
   fiscalBooksRoutes(app, cfg.sql, idempotencia);
   inventoryExtensionsRoutes(app, cfg.sql, idempotencia);
   treasuryRoutes(app, cfg.sql, idempotencia, cfg.storage);
-  documentsPdfRoutes(app, cfg.sql);
+  documentsPdfRoutes(app, cfg.sql, cfg.storage);
   negocioRoutes(app, cfg.sql);
   fiscalSetupRoutes(app, cfg.sql, idempotencia);
   contingencyRoutes(app, cfg.sql, idempotencia);

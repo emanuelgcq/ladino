@@ -598,7 +598,11 @@ export const FiscalSetupResponse = z
 export type FiscalSetupResponse = z.infer<typeof FiscalSetupResponse>;
 
 export const AssignFiscalRegimeRequest = z
-  .object({ regime_code: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/) })
+  .object({
+    regime_code: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/),
+    /** Con documentos fiscales ya emitidos, el cambio exige MOTIVO (acta). */
+    reason: z.string().trim().min(3).max(300).optional(),
+  })
   .strict();
 export type AssignFiscalRegimeRequest = z.infer<typeof AssignFiscalRegimeRequest>;
 

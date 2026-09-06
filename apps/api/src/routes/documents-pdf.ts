@@ -2,6 +2,8 @@ import type { Hono } from "hono";
 import { withTransaction, type Sql } from "@ladino/db";
 import { DominioError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
+import { descargarObjeto } from "../storage.js";
+import type { StorageConfig } from "../config.js";
 
 /**
  * El PDF de un documento de venta — FORMATO LIBRE, y lo dice en el pie.
@@ -84,7 +86,7 @@ export function vestirDocumento(crudo: string): string {
   return `${prefijo}-${resto}`;
 }
 
-export function documentsPdfRoutes(app: Hono, sql: Sql): void {
+export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig): void {
   app.get("/v1/documents/:id/pdf", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
@@ -107,6 +109,7 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
                d.functional_amount::text as functional_amount,
                d.amount_transaction_currency::text as amount_transaction,
                d.annul_reason,
+               e.logo_path as company_logo_path,
                coalesce(d.issuer_name_snapshot, e.legal_name) as company_name,
                coalesce(d.issuer_tax_id_snapshot, e.tax_id) as company_tax_id,
                coalesce(d.issuer_address_snapshot, e.fiscal_address) as company_address,
@@ -137,6 +140,17 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
     }
     const { doc, lineas } = datos;
 
+    // El LOGO: presentación pura, FUERA del snapshot del emisor (LAD68
+    // intacto — la ley congela nombre/RIF/domicilio; el logo vive y puede
+    // cambiar). pdfkit no lee webp: se incrusta la variante logo-pdf.png
+    // generada al subir. Fallback SILENCIOSO a solo-texto: sin logo, sin
+    // storage o con la descarga caída, el papel sale igual de legal.
+    let logo: Buffer | null = null;
+    if (storage !== undefined && doc["company_logo_path"]) {
+      const rutaPng = String(doc["company_logo_path"]).replace(/logo-256\.webp$/, "logo-pdf.png");
+      logo = await descargarObjeto(storage, "company-logos", rutaPng);
+    }
+
     const { default: PDFDocument } = await import("pdfkit");
     const pdf = new PDFDocument({ size: "LETTER", margin: 48 });
     const trozos: Buffer[] = [];
@@ -152,6 +166,14 @@ export function documentsPdfRoutes(app: Hono, sql: Sql): void {
     //    desde la migración 34 salen del SNAPSHOT congelado — el coalesce al
     //    vivo existe solo para documentos anteriores) ─────────────────────────
     const esRecibo = doc["kind"] === "receipt";
+    if (logo !== null) {
+      try {
+        // Arriba a la derecha, junto al membrete: ~90px (68pt), contenido.
+        pdf.image(logo, 612 - 48 - 68, 44, { fit: [68, 68] });
+      } catch {
+        // Un PNG corrupto no tumba la factura: sale solo el texto.
+      }
+    }
     pdf.font("Helvetica-Bold").fontSize(14).text(String(doc["company_name"]));
     pdf.font("Helvetica").fontSize(10);
     // El RECIBO (migración 37) no lleva RIF del emisor: el negocio aún no lo

@@ -33,6 +33,36 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 30
+          },
+          "fiscal_address": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          },
+          "business_type": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 40
+          },
+          "phone": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 40
+          },
+          "whatsapp": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 40
+          },
+          "city": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "state": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
           }
         },
         "required": [
@@ -67,6 +97,30 @@
             "type": "string",
             "nullable": true
           },
+          "business_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "whatsapp": {
+            "type": "string",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "logo_url": {
+            "type": "string",
+            "nullable": true
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -87,6 +141,12 @@
           "trade_name",
           "tax_id",
           "fiscal_address",
+          "business_type",
+          "phone",
+          "whatsapp",
+          "city",
+          "state",
+          "logo_url",
           "status",
           "created_at"
         ],
@@ -144,6 +204,52 @@
             "type": "string",
             "nullable": true,
             "minLength": 1,
+            "maxLength": 30
+          },
+          "legal_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "fiscal_address": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          },
+          "business_type": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 40
+          },
+          "phone": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 40
+          },
+          "whatsapp": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 40
+          },
+          "city": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "state": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "owner_full_name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 200
+          },
+          "owner_national_id": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 3,
             "maxLength": 30
           }
         },
@@ -1382,6 +1488,135 @@
           "currency",
           "effective_from",
           "effective_to"
+        ],
+        "additionalProperties": false
+      },
+      "UpdateCompanyProfileRequest": {
+        "type": "object",
+        "properties": {
+          "legal_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "trade_name": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "fiscal_address": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 500
+          },
+          "business_type": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 2,
+            "maxLength": 40
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 3,
+            "maxLength": 40
+          },
+          "whatsapp": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 3,
+            "maxLength": 40
+          },
+          "city": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "state": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 2,
+            "maxLength": 80
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 300
+          }
+        },
+        "additionalProperties": false
+      },
+      "SetCompanyTaxIdRequest": {
+        "type": "object",
+        "properties": {
+          "tax_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          }
+        },
+        "required": [
+          "tax_id"
+        ],
+        "additionalProperties": false
+      },
+      "CorrectCompanyTaxIdRequest": {
+        "type": "object",
+        "properties": {
+          "tax_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 30
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "tax_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "MyProfileResponse": {
+        "type": "object",
+        "properties": {
+          "full_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "national_id": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "full_name",
+          "national_id"
+        ],
+        "additionalProperties": false
+      },
+      "SetMyProfileRequest": {
+        "type": "object",
+        "properties": {
+          "full_name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 200
+          },
+          "national_id": {
+            "type": "string",
+            "nullable": true,
+            "minLength": 3,
+            "maxLength": 30
+          }
+        },
+        "required": [
+          "full_name"
         ],
         "additionalProperties": false
       },
@@ -5139,6 +5374,11 @@
           "regime_code": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]{0,39}$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 300
           }
         },
         "required": [
@@ -11889,6 +12129,450 @@
           },
           "401": {
             "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/companies/profile": {
+      "patch": {
+        "summary": "Editar el perfil del negocio («Mi empresa», permiso company.settings.manage)",
+        "description": "Nombre comercial, rubro, contacto, ciudad/estado, razón social y dirección fiscal. El RIF NO se toca por aquí (tiene su endpoint y su permiso). Con documentos fiscales ya emitidos, cambiar razón social o dirección exige `reason`, que queda en el acta de auditoría; las facturas emitidas conservan su snapshot (migración 34).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCompanyProfileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "El perfil actualizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin company.settings.manage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Identidad del emisor con documentos emitidos y sin motivo.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/companies/tax-id": {
+      "put": {
+        "summary": "Poner el primer RIF o cambiarlo SIN documentos (permiso company.tax_id.manage)",
+        "description": "Niveles 1 de la política de RIF: reemplazar el placeholder PEND-* (la transición de recibos a facturación — los recibos emitidos no la bloquean) o cambiarlo cuando no hay documentos fiscales. Con documentos responde 422: el RIF identifica al contribuyente y no se cambia; el dedazo tardío va por /v1/companies/tax-id/correct. Exige la dirección fiscal cargada. El acta con el valor anterior la escribe el trigger (migración 20).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCompanyTaxIdRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "El RIF quedó puesto.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tax_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tax_id"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin company.tax_id.manage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ya existe una empresa con ese RIF en el tenant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "RIF bloqueado por documentos emitidos, o falta la dirección fiscal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/companies/tax-id/correct": {
+      "post": {
+        "summary": "Corrección EXCEPCIONAL del RIF (motivo obligatorio, acta propia)",
+        "description": "Nivel 3: el dedazo descubierto tarde. Funciona aunque haya documentos emitidos — corregir un error de tipeo no es cambiar de contribuyente — pero exige motivo, deja su acta (company.tax_id_corrected) además de la del trigger, y la UI aconseja consultar al contador sobre la reemisión de lo ya facturado.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectCompanyTaxIdRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "El RIF corregido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tax_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tax_id"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin company.tax_id.manage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ya existe una empresa con ese RIF en el tenant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Falta el motivo o la dirección fiscal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/companies/logo": {
+      "post": {
+        "summary": "Subir el logo del negocio (permiso company.settings.manage)",
+        "description": "Multipart con el campo `file` (JPG/PNG/WebP, hasta 6 MB). Patrón product-images: el servidor genera logo-256/logo-64 en webp para la app y logo-pdf.png (512px, aplanado a blanco) porque pdfkit no lee webp; guarda la RUTA y sirve URL firmada. El logo es presentación: no entra al snapshot del emisor ni a ningún dato fiscal.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El logo subido, con su URL firmada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "logo_path": {
+                      "type": "string"
+                    },
+                    "logo_url": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "logo_path",
+                    "logo_url"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin company.settings.manage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Archivo ausente, tipo no soportado o imagen ilegible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me/profile": {
+      "get": {
+        "summary": "La ficha de quien administra (users_profile)",
+        "description": "Cada quien lee SOLO la suya. Campos en null si todavía no la llenó.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "La ficha propia.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Guardar la ficha propia (nombre completo, cédula opcional)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetMyProfileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "La ficha guardada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida.",
             "content": {
               "application/json": {
                 "schema": {

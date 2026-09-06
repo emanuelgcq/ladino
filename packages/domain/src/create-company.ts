@@ -38,6 +38,12 @@ interface CompanyRow {
   legal_name: string;
   trade_name: string | null;
   tax_id: string;
+  fiscal_address: string | null;
+  business_type: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  city: string | null;
+  state: string | null;
   status: "onboarding" | "active" | "suspended";
   created_at: string;
 }
@@ -163,10 +169,15 @@ export async function createCompany(
   try {
     fila = await sql.savepoint(async (sp) => {
       const [creada] = await sp<CompanyRow[]>`
-        insert into public.companies (tenant_id, legal_name, trade_name, tax_id)
+        insert into public.companies
+          (tenant_id, legal_name, trade_name, tax_id, fiscal_address,
+           business_type, phone, whatsapp, city, state)
         values (${input.tenant_id}, ${input.legal_name}, ${input.trade_name ?? null},
-                ${input.tax_id})
-        returning id, tenant_id, legal_name, trade_name, tax_id, status,
+                ${input.tax_id}, ${input.fiscal_address ?? null},
+                ${input.business_type ?? null}, ${input.phone ?? null},
+                ${input.whatsapp ?? null}, ${input.city ?? null}, ${input.state ?? null})
+        returning id, tenant_id, legal_name, trade_name, tax_id, fiscal_address,
+                  business_type, phone, whatsapp, city, state, status,
                   -- ISO 8601 explícito: el texto por defecto de timestamptz usa
                   -- espacio y offset corto, y depender del parseo laxo de Date
                   -- es depender de un detalle del motor.
@@ -254,8 +265,16 @@ export async function createCompany(
     legal_name: fila.legal_name,
     trade_name: fila.trade_name,
     tax_id: fila.tax_id,
-    // Una empresa nace sin domicilio fiscal: /empezar lo pide (migración 34).
-    fiscal_address: null,
+    // Desde el registro premium el domicilio puede venir en el alta (rama con
+    // RIF); sin él, /empezar lo pide (migración 34).
+    fiscal_address: fila.fiscal_address,
+    business_type: fila.business_type,
+    phone: fila.phone,
+    whatsapp: fila.whatsapp,
+    city: fila.city,
+    state: fila.state,
+    // El logo se sube DESPUÉS de existir la empresa (patrón product-images).
+    logo_url: null,
     status: fila.status,
     created_at: fila.created_at,
   });

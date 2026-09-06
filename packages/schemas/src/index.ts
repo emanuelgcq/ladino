@@ -13,6 +13,11 @@ export {
   AddMemberRequest,
   SetMemberStatusRequest,
   SetCompanyFiscalAddressRequest,
+  UpdateCompanyProfileRequest,
+  SetCompanyTaxIdRequest,
+  CorrectCompanyTaxIdRequest,
+  MyProfileResponse,
+  SetMyProfileRequest,
   ErrorResponse,
 } from "./companies.js";
 export {
