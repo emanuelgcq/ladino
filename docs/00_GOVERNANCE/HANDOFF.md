@@ -1,3 +1,19 @@
+# Handoff — 2026-09-05 (9ª entrega)
+
+## El seed sembraba la tasa en un día que no existe (fecha-contra-reloj, 4ª vez)
+
+El dueño trajo la tasa real del BCV y la tarjeta no cambiaba: `seed-demo.mjs`
+calculaba «hoy» con `toISOString()` (día UTC) y de noche eso ya es MAÑANA en
+Caracas — la tasa ficticia del futuro tapaba a la real (el resumen ordena por
+`rate_date desc` y tolera +1 día). Corregido con el corte de Caracas, el mismo del
+`es_de_hoy`. Cuarta aparición de la familia fecha-contra-reloj del CLAUDE.md; la
+novedad: también un SEED siembra bugs de horario.
+
+Nota de sábado: el BCV no publica fin de semana — DolarAPI repite el viernes, la
+fila no se duplica (único por par/fuente/día) y «Sigue igual» cubre el día. La demo
+sigue sembrando sus tasas ficticias (su historia del fiado las necesita), ya nunca
+en el futuro.
+
 # Handoff — 2026-09-05 (8ª entrega)
 
 ## La tasa BCV se actualiza sola para todos — y la base es la caché

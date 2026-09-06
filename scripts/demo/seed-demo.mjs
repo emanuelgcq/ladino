@@ -30,9 +30,16 @@ const PROD = {
 };
 const ALMACEN = "deade001-0000-4000-8000-0000000000a1";
 
-const hoy = new Date();
-const iso = (d) => d.toISOString().slice(0, 10);
-const ayer = new Date(hoy.getTime() - 86_400_000);
+// El día se corta en CARACAS, como en todo el sistema (el `es_de_hoy` del
+// resumen). `toISOString()` es el día UTC: de noche ya es «mañana», y una
+// tasa sembrada en el futuro le gana a la real del BCV — pasó el 2026-09-05.
+const diaCaracas = (desplazamientoDias = 0) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: "America/Caracas" }).format(
+    new Date(Date.now() + desplazamientoDias * 86_400_000),
+  );
+const hoy = diaCaracas();
+const iso = (d) => d;
+const ayer = diaCaracas(-1);
 
 async function auth() {
   let r = await fetch(`${SUPA}/auth/v1/token?grant_type=password`, {
