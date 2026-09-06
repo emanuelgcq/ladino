@@ -142,7 +142,9 @@ export function ClientesNegocio(): React.JSX.Element {
       )}
 
       {alta && <AltaCliente onCerrar={() => setAlta(false)} onCreado={recargar} />}
-      {ficha !== null && <FichaCliente cliente={ficha} onCerrar={() => setFicha(null)} />}
+      {ficha !== null && (
+        <FichaCliente cliente={ficha} onCerrar={() => setFicha(null)} onCambio={recargar} />
+      )}
     </div>
   );
 }
@@ -270,39 +272,145 @@ function AltaCliente({
   );
 }
 
-/** La ficha es SOLO informativa: nombre, documento y cómo contactarlo. */
+/**
+ * La ficha muestra los datos del cliente y permite CORREGIRLOS (nombre,
+ * teléfono, email, dirección). El documento se cambia en la administración
+ * —permiso propio, auditado— y la deuda vive allá entera.
+ */
 function FichaCliente({
   cliente,
   onCerrar,
+  onCambio,
 }: {
   cliente: ClienteFila;
   onCerrar: () => void;
+  onCambio: () => void;
 }): React.JSX.Element {
+  const { empresa, llamar, puede } = useSesion();
+  const toast = useToast();
+  const [editando, setEditando] = useState(false);
+  const [form, setForm] = useState({
+    legal_name: cliente.legal_name,
+    phone: cliente.phone ?? "",
+    email: cliente.email ?? "",
+    fiscal_address: cliente.fiscal_address ?? "",
+  });
+
+  const oNull = (v: string) => (v.trim() === "" ? null : v.trim());
+  const guardar = useMutation({
+    mutationFn: () =>
+      llamar(`/v1/customers/${cliente.id}`, {
+        method: "PATCH",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          legal_name: form.legal_name.trim(),
+          phone: oNull(form.phone),
+          email: oNull(form.email),
+          fiscal_address: oNull(form.fiscal_address),
+        }),
+      }),
+    onSuccess: () => {
+      toast.success("Cliente actualizado");
+      onCambio();
+      onCerrar();
+    },
+    onError: (e) => toast.error("No se pudo guardar", errorDePersona(e)),
+  });
+
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
       <DialogContent className="max-w-sm">
         <DialogTitle>{cliente.legal_name}</DialogTitle>
-        <div className="space-y-2 pt-2 text-[0.92rem]">
-          <p className="text-muted-foreground">
-            Documento:{" "}
-            <span className="text-foreground tabular-nums">
-              {cliente.tax_id !== null ? formatearDocumento(cliente.tax_id) : "—"}
-            </span>
-          </p>
-          <p className="text-muted-foreground">
-            Teléfono: <span className="text-foreground">{cliente.phone ?? "—"}</span>
-          </p>
-          <p className="text-muted-foreground">
-            Email: <span className="text-foreground">{cliente.email ?? "—"}</span>
-          </p>
-          <p className="text-muted-foreground">
-            Dirección: <span className="text-foreground">{cliente.fiscal_address ?? "—"}</span>
-          </p>
-        </div>
+        {!editando ? (
+          <div className="space-y-2 pt-2 text-[0.92rem]">
+            <p className="text-muted-foreground">
+              Documento:{" "}
+              <span className="text-foreground tabular-nums">
+                {cliente.tax_id !== null ? formatearDocumento(cliente.tax_id) : "—"}
+              </span>
+            </p>
+            <p className="text-muted-foreground">
+              Teléfono: <span className="text-foreground">{cliente.phone ?? "—"}</span>
+            </p>
+            <p className="text-muted-foreground">
+              Email: <span className="text-foreground">{cliente.email ?? "—"}</span>
+            </p>
+            <p className="text-muted-foreground">
+              Dirección: <span className="text-foreground">{cliente.fiscal_address ?? "—"}</span>
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3 pt-2">
+            <FormField label="Nombre" required>
+              {(p) => (
+                <Input
+                  {...p}
+                  value={form.legal_name}
+                  onChange={(e) => setForm({ ...form, legal_name: e.target.value })}
+                />
+              )}
+            </FormField>
+            <FormField label="Teléfono">
+              {(p) => (
+                <Input
+                  {...p}
+                  inputMode="tel"
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                />
+              )}
+            </FormField>
+            <FormField label="Email">
+              {(p) => (
+                <Input
+                  {...p}
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                />
+              )}
+            </FormField>
+            <FormField
+              label="Dirección"
+              hint="El documento (RIF o cédula) se cambia en la administración."
+            >
+              {(p) => (
+                <Input
+                  {...p}
+                  value={form.fiscal_address}
+                  onChange={(e) => setForm({ ...form, fiscal_address: e.target.value })}
+                />
+              )}
+            </FormField>
+          </div>
+        )}
         <DialogFooter>
-          <Button variant="ghost" onClick={onCerrar}>
-            Cerrar
-          </Button>
+          {!editando ? (
+            <>
+              <Button variant="ghost" onClick={onCerrar}>
+                Cerrar
+              </Button>
+              {puede("customer.manage") && (
+                <Button variant="secondary" onClick={() => setEditando(true)}>
+                  Editar
+                </Button>
+              )}
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" onClick={() => setEditando(false)}>
+                Volver
+              </Button>
+              <Button
+                variant="primary"
+                disabled={form.legal_name.trim() === "" || guardar.isPending}
+                onClick={() => guardar.mutate()}
+              >
+                Guardar cambios
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

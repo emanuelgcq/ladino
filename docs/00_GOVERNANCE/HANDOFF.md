@@ -1,3 +1,14 @@
+# Handoff — 2026-09-05 (6ª entrega)
+
+## La ficha del mostrador edita los DATOS del cliente (no el documento, no la deuda)
+
+Orden del dueño: ambos mundos deben poder corregir los datos del cliente. Abajo ya
+podía; arriba la ficha gana «Editar» para nombre, teléfono, email y dirección, con
+PATCH /v1/customers/:id (cuerpo parcial — el contrato ya lo permitía) y gated por
+customer.manage (la cajera sí; quien solo mira, no). El documento sigue siendo de la
+administración (permiso propio, auditado) y la deuda ni aparece. Smoke real contra el
+servidor con la demo: 200, datos cambiados, documento y estado intactos.
+
 # Handoff — 2026-09-05 (5ª entrega)
 
 ## Clientes: arriba la información, abajo la deuda entera
