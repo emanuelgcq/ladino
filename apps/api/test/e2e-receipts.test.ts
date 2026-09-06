@@ -355,4 +355,46 @@ describe("modo recibos", () => {
        where company_id = ${COMPANY} and kind = 'receipt'`;
     expect(conteo!.n).toBe("2");
   });
+
+  it("cobrar con Cashea: instrumento nuevo (migración 42), referencia guardada y el dinero cae en «Sin asignar» hasta configurar la API", async () => {
+    const v = await pedir("POST", "/v1/pos/sales", {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      series: "A",
+      lines: [{ product_id: PROD, quantity: "1" }],
+      payments: [
+        {
+          instrument: "cashea",
+          amount: "58.00000000",
+          currency: "VES",
+          reference: "CASHEA-778899",
+        },
+      ],
+    });
+    expect(v.status).toBe(201);
+    const venta = (await v.json()) as { document: { id: string }; document_status: string };
+    expect(venta.document_status).toBe("paid");
+
+    // El pago existe con SU instrumento y SU referencia, y sin forma de pago
+    // configurada la cuenta es la de sistema «Sin asignar (VES)» — visible
+    // para que el contador la redistribuya cuando Cashea liquide.
+    const [pago] = await sql<
+      {
+        instrument: string;
+        reference: string | null;
+        cuenta: string | null;
+        is_system: boolean | null;
+      }[]
+    >`
+      select p.instrument, p.reference, ca.name as cuenta, ca.is_system
+        from public.payments p
+        left join public.company_accounts ca on ca.id = p.account_id
+       where p.document_id = ${venta.document.id}`;
+    expect(pago).toMatchObject({
+      instrument: "cashea",
+      reference: "CASHEA-778899",
+      cuenta: "Sin asignar (VES)",
+      is_system: true,
+    });
+  });
 });

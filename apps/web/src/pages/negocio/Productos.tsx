@@ -662,9 +662,34 @@ function DetalleProducto({
   onCerrar: () => void;
   onCambio: () => void;
 }): React.JSX.Element {
-  const { llamar, puede } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const fotoRef = useRef<HTMLInputElement>(null);
+  const [barras, setBarras] = useState(producto.barcode ?? "");
+
+  // La pistola termina aquí: cursor en el campo, escaneas (la pistola teclea
+  // el código y manda Enter) y queda guardado. El POS lo agrega al escanear.
+  const guardarBarras = useMutation({
+    mutationFn: () =>
+      llamar(`/v1/products/${producto.id}`, {
+        method: "PATCH",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          barcode: barras.trim() === "" ? null : barras.trim(),
+        }),
+      }),
+    onSuccess: () => {
+      toast.success(
+        barras.trim() === "" ? "Código de barras quitado" : "Código de barras guardado",
+        barras.trim() === "" ? undefined : "Escanéalo en Vender y se agrega solo.",
+      );
+      onCambio();
+      onCerrar();
+    },
+    onError: (e) => toast.error("No se pudo guardar el código", errorDePersona(e)),
+  });
+  const barrasCambio = barras.trim() !== (producto.barcode ?? "");
 
   const cambiarFoto = useMutation({
     mutationFn: async (f: File) => {
@@ -702,10 +727,41 @@ function DetalleProducto({
             <span className="text-muted-foreground">Código</span>
             <span className="font-mono text-[0.85rem]">{producto.sku}</span>
           </div>
-          {producto.barcode !== null && (
+          {!puede("product.manage") && producto.barcode !== null && (
             <div className="flex items-center justify-between text-[0.95rem]">
               <span className="text-muted-foreground">Código de barras</span>
               <span className="font-mono text-[0.85rem]">{producto.barcode}</span>
+            </div>
+          )}
+          {puede("product.manage") && (
+            <div className="rounded-md border border-border bg-surface-muted/40 p-3">
+              <p className="text-[0.85rem] font-medium">Código de barras</p>
+              <p className="text-[0.8rem] text-muted-foreground">
+                Pon el cursor en el campo y pásale la pistola: se guarda solo.
+              </p>
+              <div className="mt-2 flex gap-2">
+                <Input
+                  aria-label="Código de barras"
+                  className="font-mono"
+                  placeholder="Escanéalo o escríbelo"
+                  value={barras}
+                  onChange={(e) => setBarras(e.target.value)}
+                  onKeyDown={(e) => {
+                    // El Enter que manda la pistola al final del código.
+                    if (e.key === "Enter" && barrasCambio && !guardarBarras.isPending) {
+                      e.preventDefault();
+                      guardarBarras.mutate();
+                    }
+                  }}
+                />
+                <Button
+                  variant="secondary"
+                  disabled={!barrasCambio || guardarBarras.isPending}
+                  onClick={() => guardarBarras.mutate()}
+                >
+                  Guardar
+                </Button>
+              </div>
             </div>
           )}
           <input

@@ -823,8 +823,21 @@ const MONEDA_FORMA: Record<string, string> = {
   tarjeta: "VES",
   zelle: "USD",
   usdt: "USD",
+  cashea: "VES",
   otro: "VES",
 };
+
+/** Los instrumentos que se ofrecen SIEMPRE, configurados o no (2026-09-05). */
+const INSTRUMENTOS_BASE: { kind: string; etiqueta: string }[] = [
+  { kind: "efectivo_bs", etiqueta: "Efectivo Bs." },
+  { kind: "efectivo_usd", etiqueta: "Efectivo USD" },
+  { kind: "punto_venta", etiqueta: "Punto de venta" },
+  { kind: "pago_movil", etiqueta: "Pago móvil" },
+  { kind: "transferencia", etiqueta: "Transferencia" },
+  { kind: "zelle", etiqueta: "Zelle" },
+  { kind: "usdt", etiqueta: "USDT" },
+  { kind: "cashea", etiqueta: "Cashea" },
+];
 
 function CobrarFactura({
   documento,
@@ -841,6 +854,7 @@ function CobrarFactura({
   const toast = useToast();
   const [monto, setMonto] = useState(documento.balance);
   const [forma, setForma] = useState<string | null>(null);
+  const [referencia, setReferencia] = useState("");
 
   const formas = useQuery({
     queryKey: ["formas-pago", empresa.id],
@@ -848,10 +862,14 @@ function CobrarFactura({
     queryFn: () => llamar<{ methods: FormaDePago[] }>("/v1/payment-methods"),
   });
   const configuradas = (formas.data?.methods ?? []).filter((f) => f.is_active);
+  // Las configuradas (con su cuenta) primero; después los instrumentos base
+  // que ninguna cubra — cobrar no espera a que se configure la API del método.
   const opciones = [
     ...configuradas.map((f) => ({ value: `m:${f.id}`, label: f.name })),
-    { value: "i:efectivo_bs", label: "Efectivo Bs." },
-    { value: "i:efectivo_usd", label: "Efectivo USD" },
+    ...INSTRUMENTOS_BASE.filter((b) => !configuradas.some((f) => f.kind === b.kind)).map((b) => ({
+      value: `i:${b.kind}`,
+      label: b.etiqueta,
+    })),
   ];
 
   const metodoElegido = forma?.startsWith("m:")
@@ -871,6 +889,7 @@ function CobrarFactura({
           currency: monedaCobro,
           amount: monto.trim().replace(",", "."),
           instrument: tipoDePago,
+          ...(referencia.trim() === "" ? {} : { reference: referencia.trim() }),
           ...(metodoElegido === undefined ? {} : { account_id: metodoElegido.account_id }),
         }),
       }),
@@ -927,6 +946,18 @@ function CobrarFactura({
               />
             )}
           </FormField>
+          {tipoDePago !== null && !tipoDePago.startsWith("efectivo") && (
+            <FormField label="Referencia" hint="La del comprobante del pago, si la tienes.">
+              {(p) => (
+                <Input
+                  {...p}
+                  className="font-mono"
+                  value={referencia}
+                  onChange={(e) => setReferencia(e.target.value)}
+                />
+              )}
+            </FormField>
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onCerrar}>

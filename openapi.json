@@ -3602,6 +3602,7 @@
                     "punto_venta",
                     "pago_movil",
                     "tarjeta",
+                    "cashea",
                     "saldo_a_favor",
                     "otro"
                   ]
@@ -4152,6 +4153,7 @@
               "punto_venta",
               "pago_movil",
               "tarjeta",
+              "cashea",
               "saldo_a_favor",
               "otro"
             ]
@@ -4227,6 +4229,7 @@
                   "punto_venta",
                   "pago_movil",
                   "tarjeta",
+                  "cashea",
                   "saldo_a_favor",
                   "otro"
                 ]
@@ -5609,6 +5612,7 @@
                     "punto_venta",
                     "pago_movil",
                     "tarjeta",
+                    "cashea",
                     "otro"
                   ]
                 },
@@ -5831,6 +5835,7 @@
                         "punto_venta",
                         "pago_movil",
                         "tarjeta",
+                        "cashea",
                         "saldo_a_favor",
                         "otro"
                       ]
@@ -10863,6 +10868,7 @@
               "punto_venta",
               "pago_movil",
               "tarjeta",
+              "cashea",
               "otro"
             ]
           },
@@ -10909,6 +10915,7 @@
                     "punto_venta",
                     "pago_movil",
                     "tarjeta",
+                    "cashea",
                     "otro"
                   ]
                 },
@@ -10959,6 +10966,7 @@
               "punto_venta",
               "pago_movil",
               "tarjeta",
+              "cashea",
               "otro"
             ]
           },

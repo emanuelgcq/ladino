@@ -33,6 +33,8 @@ const INSTRUMENTOS = [
   { value: "usdt", label: "USDT" },
   { value: "transferencia", label: "Transferencia" },
   { value: "punto_venta", label: "Punto de venta" },
+  { value: "pago_movil", label: "Pago móvil" },
+  { value: "cashea", label: "Cashea" },
   { value: "otro", label: "Otro" },
 ];
 

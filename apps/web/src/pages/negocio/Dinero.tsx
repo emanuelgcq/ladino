@@ -92,6 +92,7 @@ const FORMAS = [
   { value: "tarjeta", label: "Tarjeta" },
   { value: "zelle", label: "Zelle" },
   { value: "usdt", label: "USDT" },
+  { value: "cashea", label: "Cashea" },
   { value: "otro", label: "Otra" },
 ];
 

@@ -31,6 +31,7 @@ export const PaymentMethodKind = z.enum([
   "punto_venta",
   "pago_movil",
   "tarjeta",
+  "cashea",
   "otro",
 ]);
 export type PaymentMethodKind = z.infer<typeof PaymentMethodKind>;

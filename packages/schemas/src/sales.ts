@@ -40,6 +40,9 @@ export const PaymentInstrument = z.enum([
   "punto_venta",
   "pago_movil",
   "tarjeta",
+  // Crédito de consumo (compra ahora, paga después): cobra la VENTA; a un
+  // proveedor no se le paga así (PurchaseInstrument no lo tiene). Migración 42.
+  "cashea",
   "saldo_a_favor",
   "otro",
 ]);

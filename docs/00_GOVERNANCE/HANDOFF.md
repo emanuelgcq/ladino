@@ -1,3 +1,28 @@
+# Handoff — 2026-09-05 (7ª entrega)
+
+## Cobrar con todas las formas de pago + la pistola cierra su ciclo
+
+Orden del dueño: cobrar por POS, pago móvil, Zelle, USDT, Cashea y transferencia YA,
+con referencia y monto precargado; las APIs de cada método llegan después.
+
+- **Migración 42** (estructural, ordenada explícitamente): los CHECK de `payments` y
+  `payment_methods` ganan `cashea` (crédito de consumo). `supplier_payments` NO, a
+  propósito. pgTAP 042 (4 asserts) + e2e real: venta POS pagada con Cashea + referencia
+  → 201, pagada, y el dinero en «Sin asignar (VES)» hasta configurar la forma.
+- **Contrato**: `PaymentInstrument` y `PaymentMethodKind` ganan `cashea`; openapi.json
+  regenerado. `reference` ya existía en el contrato — solo faltaba la UI.
+- **POS + ficha del cliente + Registrar pago (admin)**: se ofrecen SIEMPRE las formas
+  base (efectivo ×2, punto de venta, pago móvil, transferencia, Zelle, USDT, Cashea),
+  deduplicadas contra las configuradas; todo lo no-efectivo muestra campo Referencia
+  (opcional); monto precargado y editable, como pidió. «Mi dinero» lista Cashea entre
+  los tipos configurables para cuando lleguen las APIs.
+- **Pistola de códigos**: el detalle de producto gana el campo «Código de barras» —
+  cursor en el campo, se escanea y el Enter de la pistola guarda (product.manage).
+  El POS ya agregaba/incrementaba al escanear; con esto el ciclo queda completo.
+
+El gate del glosario volvió a morder («instrumento» en comentarios del mostrador) y se
+reformuló a «forma de pago». Dos veces en dos entregas: el gate funciona.
+
 # Handoff — 2026-09-05 (6ª entrega)
 
 ## La ficha del mostrador edita los DATOS del cliente (no el documento, no la deuda)

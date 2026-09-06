@@ -793,6 +793,7 @@ const ETIQUETA_FORMA: Record<string, string> = {
   tarjeta: "Tarjeta",
   zelle: "Zelle",
   usdt: "USDT",
+  cashea: "Cashea",
   otro: "Otra",
 };
 const MONEDA_FORMA: Record<string, string> = {
@@ -804,13 +805,32 @@ const MONEDA_FORMA: Record<string, string> = {
   tarjeta: "VES",
   zelle: "USD",
   usdt: "USD",
+  cashea: "VES",
   otro: "VES",
 };
+
+/**
+ * Las formas que se OFRECEN SIEMPRE, configuradas o no (decisión del dueño,
+ * 2026-09-05): el cobro registra la forma de pago + referencia desde hoy; la
+ * cuenta la refina una forma configurada, y sin ella el dinero cae en
+ * «Sin asignar» hasta que se conecten las APIs (POS, pago móvil, Cashea…).
+ */
+const FORMAS_BASE = [
+  "efectivo_bs",
+  "efectivo_usd",
+  "punto_venta",
+  "pago_movil",
+  "transferencia",
+  "zelle",
+  "usdt",
+  "cashea",
+] as const;
 
 interface PagoElegido {
   instrument: string;
   currency: string;
   amount: string;
+  reference?: string;
   account_id?: string;
 }
 
@@ -842,8 +862,8 @@ function Cobrar({
     queryFn: () => llamar<{ methods: FormaDePago[] }>("/v1/payment-methods"),
   });
 
-  // Las formas que se OFRECEN: las configuradas del negocio; el efectivo
-  // existe siempre aunque nadie lo configure — la gaveta no necesita alta.
+  // Las formas que se OFRECEN: las configuradas del negocio (con su cuenta)
+  // más TODAS las formas base que ninguna configurada cubra.
   const botones = useMemo(() => {
     const configuradas = (formas.data?.methods ?? []).filter((f) => f.is_active);
     const base: {
@@ -859,13 +879,13 @@ function Cobrar({
       currency: MONEDA_FORMA[f.kind] ?? "VES",
       account_id: f.account_id,
     }));
-    for (const efectivo of ["efectivo_bs", "efectivo_usd"] as const) {
-      if (!configuradas.some((f) => f.kind === efectivo)) {
+    for (const inst of FORMAS_BASE) {
+      if (!configuradas.some((f) => f.kind === inst)) {
         base.push({
-          clave: efectivo,
-          etiqueta: ETIQUETA_FORMA[efectivo]!,
-          instrument: efectivo,
-          currency: MONEDA_FORMA[efectivo]!,
+          clave: inst,
+          etiqueta: ETIQUETA_FORMA[inst]!,
+          instrument: inst,
+          currency: MONEDA_FORMA[inst]!,
         });
       }
     }
@@ -913,6 +933,9 @@ function Cobrar({
             instrument: p.instrument,
             currency: p.currency,
             amount: p.amount.trim().replace(",", "."),
+            ...(p.reference === undefined || p.reference.trim() === ""
+              ? {}
+              : { reference: p.reference.trim() }),
             ...(p.account_id === undefined ? {} : { account_id: p.account_id }),
           })),
         }),
@@ -989,6 +1012,9 @@ function Cobrar({
               onCambiar={(amount) =>
                 setPagos((prev) => prev.map((x, j) => (j === i ? { ...x, amount } : x)))
               }
+              onReferencia={(reference) =>
+                setPagos((prev) => prev.map((x, j) => (j === i ? { ...x, reference } : x)))
+              }
               onQuitar={() => setPagos((prev) => prev.filter((_, j) => j !== i))}
             />
           ))}
@@ -1013,12 +1039,14 @@ function PagoFila({
   pago,
   cotizacion,
   onCambiar,
+  onReferencia,
   onQuitar,
 }: {
   indice: number;
   pago: PagoElegido;
   cotizacion: CotizacionPos;
   onCambiar: (v: string) => void;
+  onReferencia: (v: string) => void;
   onQuitar: () => void;
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
@@ -1063,6 +1091,17 @@ function PagoFila({
         ariaDescribedby={undefined}
         ariaInvalid={undefined}
       />
+      {/* Todo lo que no es efectivo trae un comprobante: la referencia
+          acompaña al pago desde hoy, la API del método llegará después. */}
+      {!esEfectivo && (
+        <Input
+          aria-label="Referencia del pago"
+          className="font-mono"
+          placeholder="Referencia (opcional)"
+          value={pago.reference ?? ""}
+          onChange={(e) => onReferencia(e.target.value)}
+        />
+      )}
       {esEfectivo && cambio !== null && cambio > 0 && (
         <p className="text-[0.88rem] text-success-soft-foreground tabular-nums">
           Vuelto:{" "}
