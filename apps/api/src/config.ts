@@ -94,6 +94,9 @@ export interface ServerConfig {
   readonly storage?: StorageConfig | undefined;
   /** Base de DolarAPI para la tasa oficial del BCV. Siempre hay default. */
   readonly bcvUrl: string;
+  /** Cada cuántos minutos el refresco automático mira si falta la tasa del
+   *  día (base primero; la fuente solo si falta). 0 = apagado. */
+  readonly bcvRefreshMinutes: number;
   /** Peticiones por minuto y usuario autenticado en /v1/*. */
   readonly rateLimitPorMinuto: number;
   /** Plazo máximo de una petición a /v1/*, en ms. */
@@ -119,6 +122,10 @@ export function configServidor(env: Entorno): ServerConfig {
     // DolarAPI publica la tasa oficial del BCV; la env existe para apuntar a
     // un mock en pruebas o cambiar de proveedor sin tocar código.
     bcvUrl: env["BCV_API_URL"] ?? "https://ve.dolarapi.com",
+    // «0» apaga el refresco (p. ej. en pruebas); cualquier otro valor pasa
+    // por la validación normal de entero > 0.
+    bcvRefreshMinutes:
+      env["BCV_REFRESH_MINUTES"] === "0" ? 0 : entero(env, "BCV_REFRESH_MINUTES", 30),
     rateLimitPorMinuto: entero(env, "RATE_LIMIT_PER_MINUTE", 300),
     // 30 s: MUY por debajo de los 15 min del reaper de idempotencia (F-10):
     // ninguna petición puede seguir viva cuando el reaper libera su clave.

@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { assertServiceRole, createClient } from "@ladino/db";
 import { buildApp } from "./app.js";
 import { ConfigError, configServidor } from "./config.js";
+import { iniciarRefrescoBcv } from "./tasa-oficial.js";
 
 /**
  * Punto de entrada del contenedor `ladino-api`. Toda la configuración entra
@@ -52,6 +53,18 @@ const server = serve({ fetch: app.fetch, port: cfg.port, hostname: "0.0.0.0" }, 
   log("info", "api.listening", { port: cfg.port });
 });
 
+// La tasa oficial se refresca sola para TODOS los tenants: base primero,
+// DolarAPI solo si falta la del día, guardada global. Vive en el proceso del
+// servidor (no en cada petición) y se detiene con él.
+const detenerRefrescoBcv =
+  cfg.bcvRefreshMinutes > 0
+    ? iniciarRefrescoBcv(
+        sql,
+        { url: cfg.bcvUrl },
+        { intervaloMs: cfg.bcvRefreshMinutes * 60_000, log },
+      )
+    : () => {};
+
 // Un rechazo sin manejar o una excepción fuera de Hono NO se ignoran: se
 // registran y el proceso sale, para que `restart: unless-stopped` actúe. Un
 // proceso vivo en estado desconocido es el peor de los modos de fallo.
@@ -76,6 +89,7 @@ for (const señal of ["SIGTERM", "SIGINT"] as const) {
     if (cerrando) return; // una segunda señal no dispara un segundo cierre
     cerrando = true;
     log("info", "api.shutdown", { señal });
+    detenerRefrescoBcv();
     const respaldo = setTimeout(() => {
       log("error", "api.shutdown_timeout", { ms: 8000 });
       process.exit(1);

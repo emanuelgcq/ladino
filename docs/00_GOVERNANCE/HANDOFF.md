@@ -1,3 +1,27 @@
+# Handoff — 2026-09-05 (8ª entrega)
+
+## La tasa BCV se actualiza sola para todos — y la base es la caché
+
+Orden del dueño: la tasa oficial debe llegar automática a todos los tenants, guardada
+en base para no hacer miles de llamadas a la API.
+
+- `exchange_rates` ya era GLOBAL (sin tenant): una fila sirve a todos. Lo nuevo es el
+  refresco: `apps/api/src/tasa-oficial.ts`, arrancado por `server.ts` — cada 30 min
+  (BCV_REFRESH_MINUTES; 0 = apagado) pregunta PRIMERO a la base si hay tasa USD→VES
+  del día Caracas (el mismo corte que `es_de_hoy`); solo si falta hace UNA llamada a
+  DolarAPI y la inserta con la MISMA fuente citada e idempotencia por (par, fuente,
+  día) que el botón manual. Tick en vuelo único, timer unref, jamás tumba el proceso.
+- El botón manual y la carga tecleada (ADR-0028) quedan como fallback intactos.
+- El worker NO podía ser la casa: `ladino_worker` tiene revocado el insert de tasas;
+  el rol del API es el único autorizado — el refresco vive con él, fuera del camino
+  de las peticiones.
+- Tests (4, mock DolarAPI con contador): falta → UNA llamada y fila con fuente; ya
+  está → CERO llamadas; fin de semana (fuente repite día hábil) → sin duplicados;
+  fuente caída → sin fila y sin excepción.
+
+Sin migraciones, sin cambio de contrato. El refresco no corre en los e2e (vive en
+server.ts, no en buildApp).
+
 # Handoff — 2026-09-05 (7ª entrega)
 
 ## Cobrar con todas las formas de pago + la pistola cierra su ciclo
