@@ -48,7 +48,7 @@ export function CommandPalette({
     // ADR-0048: la paleta ofrece las mismas puertas que el menú — lo que el
     // rol no abre, tampoco se busca con Cmd+K.
     const items: NavItem[] = [...NAV_NEGOCIO, ...NAV_ADMIN.flatMap((g) => g.items)].filter(
-      (i) => (!i.devOnly || import.meta.env.DEV) && (i.permiso === undefined || puede(i.permiso)),
+      (i) => i.permiso === undefined || puede(i.permiso),
     );
     const filtradas =
       q === "" ? items : items.filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));

@@ -103,6 +103,10 @@ export function Empezar(): React.JSX.Element {
     { titulo: "Tus facturas", listo: fiscalListo, saltable: false },
   ];
   const todoListo = pasos.every((p) => p.listo);
+  // La puerta de salida abre cuando lo OBLIGATORIO está listo: productos es
+  // saltable a propósito (se puede vender describiendo la venta), y a pantalla
+  // completa un último paso «listo» sin botón de salida es una pared.
+  const listoParaVender = pasos.every((p) => p.listo || p.saltable);
 
   // P10 del registro premium: /empezar habla el MISMO idioma visual — pantalla
   // completa, una cosa a la vez, progreso fino, transición suave. La LÓGICA no
@@ -180,13 +184,15 @@ export function Empezar(): React.JSX.Element {
           )}
         </div>
 
-        {todoListo && (
+        {listoParaVender && (
           <Card className="mt-6 border-success-soft-foreground/40">
             <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
               <div>
                 <p className="font-medium">¡Listo! Tu negocio ya puede vender.</p>
                 <p className="text-[0.9rem] text-muted-foreground">
-                  Lo demás se va ajustando sobre la marcha.
+                  {todoListo
+                    ? "Lo demás se va ajustando sobre la marcha."
+                    : "Puedes vender describiendo la venta y cargar tus productos después."}
                 </p>
               </div>
               <Button variant="primary" size="lg" onClick={() => void navigate("/vender")}>

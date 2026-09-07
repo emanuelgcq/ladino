@@ -5,7 +5,6 @@ import {
   Building,
   Calculator,
   FileCheck2,
-  FlaskConical,
   Home,
   Package,
   Receipt,
@@ -41,8 +40,6 @@ export interface NavItem {
   readonly permiso?: string | readonly string[];
   /** Solo visible si el módulo avanzado está activo o el usuario pidió verlo todo. */
   readonly advanced?: "compras" | "contabilidad" | "libros";
-  /** Solo en desarrollo (página de demo de componentes). */
-  readonly devOnly?: boolean;
 }
 
 export interface NavGroup {
@@ -179,7 +176,6 @@ export const NAV_ADMIN: NavGroup[] = [
         icon: Settings,
         permiso: "company.settings.manage",
       },
-      { to: "/dev/components", label: "Componentes (dev)", icon: FlaskConical, devOnly: true },
     ],
   },
 ];
@@ -221,5 +217,4 @@ export const CRUMBS: Record<string, string> = {
   "/admin/reportes": "Reportes",
   "/admin/configuracion": "Configuración",
   "/admin/facturacion-fiscal": "Facturación fiscal",
-  "/dev/components": "Componentes",
 };

@@ -134,7 +134,6 @@ export function AppShell(): React.JSX.Element {
   }, []);
 
   const visible = (item: NavItem): boolean => {
-    if (item.devOnly && !import.meta.env.DEV) return false;
     // ADR-0048: primero el ROL — sin el permiso, la entrada no existe para
     // este usuario. El toggle de módulos avanzados filtra DESPUÉS: activa
     // módulos de la empresa, no abre puertas que el rol cierra.

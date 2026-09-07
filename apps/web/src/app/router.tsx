@@ -17,7 +17,6 @@ import { NuevaFactura } from "../pages/ventas/NuevaFactura.js";
 import { DetalleFactura } from "../pages/ventas/DetalleFactura.js";
 import { Cuentas } from "../pages/ventas/Cuentas.js";
 import { ChecklistFiscal } from "../pages/setup/ChecklistFiscal.js";
-import { DemoComponentes } from "../pages/dev/DemoComponentes.js";
 import { Dinero } from "../pages/negocio/Dinero.js";
 import { ProductosNegocio } from "../pages/negocio/Productos.js";
 import { Vender } from "../pages/negocio/Vender.js";
@@ -84,7 +83,6 @@ export const router = createBrowserRouter([
       { path: "admin/reportes", element: <Reportes /> },
       { path: "admin/configuracion", element: <Configuracion /> },
       { path: "admin/facturacion-fiscal", element: <ChecklistFiscal /> },
-      { path: "dev/components", element: <DemoComponentes /> },
     ],
   },
 ]);
