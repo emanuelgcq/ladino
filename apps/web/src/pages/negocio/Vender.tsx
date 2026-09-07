@@ -16,6 +16,15 @@ import {
 import { useSesion } from "../../app/session.js";
 import { errorDePersona, API_URL } from "../../lib.js";
 import { cotizarPos, type CotizacionPos } from "../../pos.js";
+import {
+  aNube,
+  crearSincronizador,
+  escribirCuentasLocales,
+  leerCuentasLocales,
+  siguienteEtiqueta,
+  type ClientePos,
+  type CuentaAbierta,
+} from "../../pos-cuentas.js";
 import { supabase } from "../../lib.js";
 import { mostrarImporte, mostrarCantidad } from "../../money.js";
 import { compararImportes } from "../../components/decimal-compare.js";
@@ -38,6 +47,13 @@ import { formatearDocumento } from "./comunes.js";
  * /v1/pos/quote, el vuelto lo calcula /v1/pos/change, y la venta entera es
  * UNA transacción en /v1/pos/sales con el id de venta como llave — repetir el
  * clic no repite la factura.
+ *
+ * VARIAS CUENTAS A LA VEZ (orden del dueño, 2026-09-08): la cajera lleva
+ * fichas — «Cuenta 1», «Vecina Carmen» — y cada una se guarda sola: en el
+ * disco de la caja EN CADA TOQUE (síncrono: la capa antiapagón) y en la nube
+ * al instante, coalescido (pos-cuentas.ts). Una cuenta solo se cierra al
+ * COBRARSE — el servidor borra su fila en la transacción de la venta — o
+ * descartándola a propósito con confirmación.
  *
  * Teclado, sin ratón: cédula → Enter → (si es nuevo: nombre → Tab → teléfono
  * → Enter) → buscar producto → Enter agrega → F2 abre Cobrar → Enter cobra.
@@ -82,8 +98,13 @@ interface Venta {
   document_status: string;
 }
 
-function useDebounced<T>(valor: T, ms: number): T {
+function useDebounced<T>(valor: T, ms: number, salto?: unknown): T {
   const [v, setV] = useState(valor);
+  // Al cambiar el «salto» (la cuenta activa), el valor pasa SIN esperar: la
+  // ficha recién abierta no debe cotizar 300 ms con las líneas de la anterior.
+  useEffect(() => {
+    setV(valor);
+  }, [salto]);
   useEffect(() => {
     const t = setTimeout(() => setV(valor), ms);
     return () => clearTimeout(t);
@@ -91,17 +112,148 @@ function useDebounced<T>(valor: T, ms: number): T {
   return v;
 }
 
+function cuentaNueva(existentes: CuentaAbierta[]): CuentaAbierta {
+  return {
+    id: crypto.randomUUID(),
+    etiqueta: siguienteEtiqueta(existentes),
+    cliente: null,
+    sinIdentificar: false,
+    lineas: [],
+  };
+}
+
 export function Vender(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [busqueda, setBusqueda] = useState("");
   const buscarRef = useRef<HTMLInputElement>(null);
-  const [carrito, setCarrito] = useState<Map<string, { producto: ProductoFila; qty: number }>>(
-    new Map(),
+
+  // ── Las CUENTAS ABIERTAS: varias a la vez, cada una con su cliente ────────
+  // Nacen del disco de la caja (síncrono: lo que el apagón no se llevó) y se
+  // completan con la nube al montar. Cada toque escribe el disco EN EL ACTO
+  // y dispara la nube coalescida — ver pos-cuentas.ts.
+  const [cuentas, setCuentas] = useState<CuentaAbierta[]>(() => {
+    const locales = leerCuentasLocales(empresa.id);
+    return locales.length > 0 ? locales : [cuentaNueva([])];
+  });
+  const [activaId, setActivaId] = useState<string>("");
+  const activa = cuentas.find((c) => c.id === activaId) ?? cuentas[0]!;
+  const [descartando, setDescartando] = useState<CuentaAbierta | null>(null);
+
+  const sincronizador = useMemo(
+    () =>
+      crearSincronizador(
+        (cuenta) =>
+          llamar(`/v1/pos/carts/${cuenta.id}`, {
+            method: "PUT",
+            body: JSON.stringify({
+              company_id: empresa.id,
+              label: cuenta.label,
+              customer_id: cuenta.customer_id,
+              lines: cuenta.lines,
+            }),
+          }).then(() => undefined),
+        (id) => llamar(`/v1/pos/carts/${id}`, { method: "DELETE" }).then(() => undefined),
+      ),
+    [llamar, empresa.id],
   );
-  const [cliente, setCliente] = useState<ClienteFila | null>(null);
-  // «Venta sin identificar»: una DECISIÓN explícita del cajero, no un default.
-  const [sinIdentificar, setSinIdentificar] = useState(false);
+
+  /** TODA mutación de cuentas pasa por aquí: estado + disco síncrono + nube. */
+  function tocar(id: string, cambio: (c: CuentaAbierta) => CuentaAbierta): void {
+    const siguientes = cuentas.map((c) => (c.id === id ? cambio(c) : c));
+    setCuentas(siguientes);
+    escribirCuentasLocales(empresa.id, siguientes);
+    const cambiada = siguientes.find((c) => c.id === id);
+    if (cambiada) sincronizador.guardar(aNube(cambiada));
+  }
+
+  function abrirCuenta(): void {
+    const nueva = cuentaNueva(cuentas);
+    const siguientes = [...cuentas, nueva];
+    setCuentas(siguientes);
+    escribirCuentasLocales(empresa.id, siguientes);
+    setActivaId(nueva.id);
+    // Vacía no viaja a la nube: viajará con su primer producto o cliente.
+  }
+
+  function quitarCuenta(id: string, avisarNube: boolean): void {
+    const restantes = cuentas.filter((c) => c.id !== id);
+    const siguientes = restantes.length > 0 ? restantes : [cuentaNueva([])];
+    setCuentas(siguientes);
+    escribirCuentasLocales(empresa.id, siguientes);
+    if (avisarNube) sincronizador.borrar(id);
+    if (activa.id === id) setActivaId(siguientes[0]!.id);
+  }
+
+  // La lista de la nube, una vez al montar: lo de allá que aquí no está,
+  // entra (venía de otro día o de otra caja); lo local manda sobre lo suyo y
+  // se reempuja — es el que quedó huérfano si el apagón cortó la subida.
+  const nube = useQuery({
+    queryKey: ["pos-cuentas", empresa.id],
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    queryFn: () =>
+      llamar<{
+        items: {
+          id: string;
+          label: string;
+          customer_id: string | null;
+          lines: { product_id: string; qty: string }[];
+        }[];
+      }>("/v1/pos/carts"),
+  });
+  const fusionado = useRef(false);
+  useEffect(() => {
+    if (fusionado.current || !nube.data) return;
+    fusionado.current = true;
+    const entrantes = nube.data.items
+      .filter((s) => !cuentas.some((c) => c.id === s.id))
+      .map((s): CuentaAbierta => ({
+        id: s.id,
+        etiqueta: s.label,
+        cliente:
+          s.customer_id === null
+            ? null
+            : { id: s.customer_id, legal_name: s.label, tax_id: null, phone: null },
+        sinIdentificar: false,
+        lineas: s.lines.map((l) => ({
+          product_id: l.product_id,
+          qty: Number(l.qty),
+          nombre: "", // lo dirá la cotización al abrir la ficha
+        })),
+      }));
+    // La «Cuenta 1» recién nacida y vacía no estorba… salvo que ya venga algo.
+    const base =
+      entrantes.length > 0
+        ? cuentas.filter((c) => c.lineas.length > 0 || c.cliente !== null)
+        : cuentas;
+    const siguientes = base.length + entrantes.length > 0 ? [...base, ...entrantes] : cuentas;
+    if (siguientes !== cuentas) {
+      setCuentas(siguientes);
+      escribirCuentasLocales(empresa.id, siguientes);
+      if (activa.lineas.length === 0 && activa.cliente === null && !base.includes(activa)) {
+        setActivaId(siguientes[0]!.id);
+      }
+    }
+    for (const c of base) {
+      if (c.lineas.length > 0 || c.cliente !== null) sincronizador.guardar(aNube(c));
+    }
+    // El nombre completo del cliente restaurado (cédula y teléfono para el
+    // chip) se trae aparte; si falla, la etiqueta ya dice quién es.
+    for (const s of entrantes) {
+      if (s.cliente === null) continue;
+      void llamar<ClientePos>(`/v1/customers/${s.cliente.id}`)
+        .then((cli) => {
+          setCuentas((prev) => {
+            const conNombre = prev.map((c) => (c.id === s.id ? { ...c, cliente: cli } : c));
+            escribirCuentasLocales(empresa.id, conNombre);
+            return conNombre;
+          });
+        })
+        .catch(() => undefined);
+    }
+  }, [nube.data]);
+
   const [cobrando, setCobrando] = useState(false);
   const [venta, setVenta] = useState<Venta | null>(null);
   const q = useDebounced(busqueda.trim(), 200);
@@ -139,24 +291,29 @@ export function Vender(): React.JSX.Element {
 
   const deposito = ajustes.data?.default_warehouse_id ?? depositos.data?.[0]?.id ?? null;
 
-  // La cotización del carrito: SIEMPRE del servidor, con debounce.
+  // La cotización de la cuenta ACTIVA (solo ella: N fichas, UNA cotización),
+  // SIEMPRE del servidor, con debounce — y sin debounce al cambiar de ficha.
   const lineas = useMemo(
-    () =>
-      [...carrito.values()].map((l) => ({
-        product_id: l.producto.id,
-        quantity: String(l.qty),
-      })),
-    [carrito],
+    () => activa.lineas.map((l) => ({ product_id: l.product_id, quantity: String(l.qty) })),
+    [activa],
   );
-  const lineasDebounced = useDebounced(lineas, 300);
+  const lineasDebounced = useDebounced(lineas, 300, activa.id);
   const cotizacion = useQuery({
-    queryKey: ["pos-quote", empresa.id, cliente?.id ?? "mostrador", lineasDebounced],
+    queryKey: [
+      "pos-quote",
+      empresa.id,
+      activa.id,
+      activa.cliente?.id ?? "mostrador",
+      lineasDebounced,
+    ],
     enabled: lineasDebounced.length > 0,
-    placeholderData: (prev) => prev,
+    // El «mientras llega» solo vale dentro de la MISMA ficha: los totales de
+    // una cuenta jamás se pintan un instante sobre la otra.
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[2] === activa.id ? prev : undefined),
     queryFn: () =>
       cotizarPos(llamar, {
         company_id: empresa.id,
-        ...(cliente === null ? {} : { customer_id: cliente.id }),
+        ...(activa.cliente === null ? {} : { customer_id: activa.cliente.id }),
         lines: lineasDebounced,
       }),
   });
@@ -171,24 +328,24 @@ export function Vender(): React.JSX.Element {
       toast.warning("Sin existencia", "Registra la entrada de mercancía antes de venderlo.");
       return;
     }
-    setCarrito((prev) => {
-      const s = new Map(prev);
-      const actual = s.get(p.id);
-      s.set(p.id, { producto: p, qty: (actual?.qty ?? 0) + 1 });
-      return s;
+    tocar(activa.id, (c) => {
+      const ya = c.lineas.find((l) => l.product_id === p.id);
+      return {
+        ...c,
+        lineas: ya
+          ? c.lineas.map((l) => (l.product_id === p.id ? { ...l, qty: l.qty + 1 } : l))
+          : [...c.lineas, { product_id: p.id, qty: 1, nombre: p.name }],
+      };
     });
   }
 
-  function cambiarQty(id: string, delta: number): void {
-    setCarrito((prev) => {
-      const s = new Map(prev);
-      const l = s.get(id);
-      if (!l) return prev;
-      const qty = l.qty + delta;
-      if (qty <= 0) s.delete(id);
-      else s.set(id, { ...l, qty });
-      return s;
-    });
+  function cambiarQty(productId: string, delta: number): void {
+    tocar(activa.id, (c) => ({
+      ...c,
+      lineas: c.lineas
+        .map((l) => (l.product_id === productId ? { ...l, qty: l.qty + delta } : l))
+        .filter((l) => l.qty > 0),
+    }));
   }
 
   // Enter en la búsqueda: agrega la coincidencia EXACTA de código de barras, o
@@ -203,7 +360,7 @@ export function Vender(): React.JSX.Element {
     }
   }
 
-  const clienteResuelto = modoRecibos || cliente !== null || sinIdentificar;
+  const clienteResuelto = modoRecibos || activa.cliente !== null || activa.sinIdentificar;
 
   // En modo recibos no hay cédula que pedir primero: el foco va a la búsqueda.
   useEffect(() => {
@@ -212,14 +369,14 @@ export function Vender(): React.JSX.Element {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "F2" && carrito.size > 0 && clienteResuelto) {
+      if (e.key === "F2" && activa.lineas.length > 0 && clienteResuelto) {
         e.preventDefault();
         setCobrando(true);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [carrito.size, clienteResuelto]);
+  }, [activa.lineas.length, clienteResuelto]);
 
   const items = productos.data?.items ?? [];
 
@@ -270,40 +427,96 @@ export function Vender(): React.JSX.Element {
 
         {/* ── El carrito ─────────────────────────────────────────────────── */}
         <aside className="flex w-96 shrink-0 flex-col rounded-lg border border-border bg-surface">
+          {/* Las FICHAS: una por cuenta abierta. Cada una guarda sola — en el
+              disco de la caja al instante y en la nube detrás — y solo se
+              cierra al cobrarse (o descartándola a propósito). */}
+          <div
+            className="flex items-center gap-1 overflow-x-auto border-b border-border p-1.5"
+            role="tablist"
+            aria-label="Cuentas abiertas"
+          >
+            {cuentas.map((c) => {
+              const esActiva = c.id === activa.id;
+              return (
+                <span
+                  key={c.id}
+                  className={`flex shrink-0 items-center gap-0.5 rounded-md ${
+                    esActiva ? "bg-accent-soft" : "hover:bg-surface-muted"
+                  }`}
+                >
+                  <button
+                    role="tab"
+                    aria-selected={esActiva}
+                    className={`max-w-40 truncate py-1.5 pl-2.5 text-[0.82rem] font-medium ${
+                      esActiva ? "text-accent-soft-foreground" : "text-muted-foreground"
+                    } ${cuentas.length > 1 ? "pr-0.5" : "pr-2.5"}`}
+                    onClick={() => setActivaId(c.id)}
+                  >
+                    {c.cliente?.legal_name ?? c.etiqueta}
+                    {c.lineas.length > 0 && (
+                      <span className="ml-1 tabular-nums opacity-70">{c.lineas.length}</span>
+                    )}
+                  </button>
+                  {cuentas.length > 1 && (
+                    <button
+                      className="rounded p-1 text-faint-foreground hover:text-foreground"
+                      aria-label={`Cerrar ${c.cliente?.legal_name ?? c.etiqueta}`}
+                      onClick={() => {
+                        if (c.lineas.length > 0 || c.cliente !== null) setDescartando(c);
+                        else quitarCuenta(c.id, true);
+                      }}
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  )}
+                </span>
+              );
+            })}
+            <button
+              className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-surface-muted hover:text-foreground"
+              aria-label="Abrir otra cuenta"
+              title="Otra cuenta en espera"
+              onClick={abrirCuenta}
+            >
+              <Plus className="size-4" />
+            </button>
+          </div>
           <IdentificarCliente
+            key={activa.id}
             opcional={modoRecibos}
-            cliente={cliente}
-            sinIdentificar={sinIdentificar}
+            cliente={activa.cliente}
+            sinIdentificar={activa.sinIdentificar}
             permiteSinIdentificar={ajustes.data?.allow_unidentified_sales ?? true}
             onCliente={(c) => {
-              setCliente(c);
-              setSinIdentificar(false);
+              tocar(activa.id, (x) => ({ ...x, cliente: c, sinIdentificar: false }));
               buscarRef.current?.focus();
             }}
             onSinIdentificar={() => {
-              setSinIdentificar(true);
-              setCliente(null);
+              tocar(activa.id, (x) => ({ ...x, cliente: null, sinIdentificar: true }));
               buscarRef.current?.focus();
             }}
             onCambiar={() => {
-              setCliente(null);
-              setSinIdentificar(false);
+              tocar(activa.id, (x) => ({ ...x, cliente: null, sinIdentificar: false }));
             }}
           />
           <div className="min-h-0 flex-1 overflow-y-auto px-3">
-            {carrito.size === 0 ? (
+            {activa.lineas.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center py-16 text-center text-muted-foreground">
                 <ShoppingCart className="size-8 text-faint-foreground" />
                 <p className="mt-2 text-[0.95rem]">Toca un producto para empezar</p>
               </div>
             ) : (
               <ul className="divide-y divide-border">
-                {[...carrito.values()].map((l) => {
-                  const cot = cotizacion.data?.lines.find((x) => x.product_id === l.producto.id);
+                {activa.lineas.map((l) => {
+                  const cot = cotizacion.data?.lines.find((x) => x.product_id === l.product_id);
                   return (
-                    <li key={l.producto.id} className="flex items-center gap-2 py-2.5">
+                    <li key={l.product_id} className="flex items-center gap-2 py-2.5">
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[0.92rem] font-medium">{l.producto.name}</p>
+                        <p className="truncate text-[0.92rem] font-medium">
+                          {/* La restaurada de la nube trae solo la intención:
+                              el nombre lo pone la cotización al llegar. */}
+                          {l.nombre !== "" ? l.nombre : (cot?.description ?? "…")}
+                        </p>
                         <p className="text-[0.8rem] text-muted-foreground tabular-nums">
                           {cot
                             ? `${
@@ -318,8 +531,8 @@ export function Vender(): React.JSX.Element {
                         <Button
                           variant="ghost"
                           size="iconSm"
-                          aria-label={`Quitar uno de ${l.producto.name}`}
-                          onClick={() => cambiarQty(l.producto.id, -1)}
+                          aria-label={`Quitar uno de ${l.nombre !== "" ? l.nombre : "este producto"}`}
+                          onClick={() => cambiarQty(l.product_id, -1)}
                         >
                           {l.qty === 1 ? <Trash2 /> : <Minus />}
                         </Button>
@@ -329,8 +542,8 @@ export function Vender(): React.JSX.Element {
                         <Button
                           variant="ghost"
                           size="iconSm"
-                          aria-label={`Agregar uno de ${l.producto.name}`}
-                          onClick={() => cambiarQty(l.producto.id, 1)}
+                          aria-label={`Agregar uno de ${l.nombre !== "" ? l.nombre : "este producto"}`}
+                          onClick={() => cambiarQty(l.product_id, 1)}
                         >
                           <Plus />
                         </Button>
@@ -350,7 +563,7 @@ export function Vender(): React.JSX.Element {
             )}
           </div>
           <div className="space-y-2 border-t border-border p-3">
-            {cotizacion.data && carrito.size > 0 && (
+            {cotizacion.data && activa.lineas.length > 0 && (
               <>
                 <div className="flex justify-between text-[0.88rem] text-muted-foreground">
                   <span>Sin impuesto</span>
@@ -396,13 +609,16 @@ export function Vender(): React.JSX.Element {
               size="lg"
               className="h-12 w-full text-[1.05rem]"
               disabled={
-                carrito.size === 0 || !cotizacion.data || deposito === null || !clienteResuelto
+                activa.lineas.length === 0 ||
+                !cotizacion.data ||
+                deposito === null ||
+                !clienteResuelto
               }
               onClick={() => setCobrando(true)}
             >
-              Cobrar {carrito.size > 0 && clienteResuelto ? "· F2" : ""}
+              Cobrar {activa.lineas.length > 0 && clienteResuelto ? "· F2" : ""}
             </Button>
-            {carrito.size > 0 && !clienteResuelto && (
+            {activa.lineas.length > 0 && !clienteResuelto && (
               <p className="text-center text-[0.8rem] text-warning-soft-foreground">
                 Primero di quién compra: la cédula arriba, o «Venta sin identificar».
               </p>
@@ -419,17 +635,47 @@ export function Vender(): React.JSX.Element {
           <Cobrar
             cotizacion={cotizacion.data}
             lineas={lineas}
-            clienteId={cliente?.id ?? null}
+            clienteId={activa.cliente?.id ?? null}
+            cartId={activa.id}
             deposito={deposito}
             onCerrar={() => setCobrando(false)}
             onVendida={(v) => {
               setCobrando(false);
               setVenta(v);
-              setCarrito(new Map());
-              setCliente(null);
-              setSinIdentificar(false);
+              // La cuenta cobrada MUERE: el servidor la borró en la MISMA
+              // transacción de la venta (cart_id); aquí solo cae la ficha.
+              quitarCuenta(activa.id, false);
             }}
           />
+        )}
+        {descartando !== null && (
+          <Dialog open onOpenChange={(v) => !v && setDescartando(null)}>
+            <DialogContent className="max-w-sm">
+              <DialogTitle>¿Descartar esta cuenta?</DialogTitle>
+              <div className="space-y-3 pt-1">
+                <p className="text-[0.92rem] text-muted-foreground">
+                  «{descartando.cliente?.legal_name ?? descartando.etiqueta}»
+                  {descartando.lineas.length > 0
+                    ? ` tiene ${String(descartando.lineas.length)} producto${descartando.lineas.length === 1 ? "" : "s"} anotado${descartando.lineas.length === 1 ? "" : "s"}. Se pierden — nada se cobra ni se descuenta.`
+                    : " se cierra sin cobrar nada."}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button variant="secondary" onClick={() => setDescartando(null)} autoFocus>
+                    Volver
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => {
+                      quitarCuenta(descartando.id, true);
+                      setDescartando(null);
+                    }}
+                  >
+                    Descartar
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
         )}
         {venta !== null && (
           <VentaLista
@@ -838,6 +1084,7 @@ function Cobrar({
   cotizacion,
   lineas,
   clienteId,
+  cartId,
   deposito,
   onCerrar,
   onVendida,
@@ -845,6 +1092,9 @@ function Cobrar({
   cotizacion: CotizacionPos;
   lineas: { product_id: string; quantity: string }[];
   clienteId: string | null;
+  /** La cuenta abierta que este cobro CIERRA: el servidor la borra en la
+      misma transacción de la venta. */
+  cartId: string;
   deposito: string;
   onCerrar: () => void;
   onVendida: (v: Venta) => void;
@@ -927,6 +1177,7 @@ function Cobrar({
         body: JSON.stringify({
           company_id: empresa.id,
           warehouse_id: deposito,
+          cart_id: cartId,
           ...(clienteId === null ? {} : { customer_id: clienteId }),
           lines: lineas,
           payments: pagos.map((p) => ({

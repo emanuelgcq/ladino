@@ -3,7 +3,12 @@ import { assertServiceRole, createClient } from "@ladino/db";
 import { NullTransmitter } from "@ladino/fiscal";
 import { crearBucle } from "./loop.js";
 import { procesarLote } from "./outbox.js";
-import { purgarIdempotencia, reaperIdempotencia, reaperOutbox } from "./reapers.js";
+import {
+  purgarCarritosPos,
+  purgarIdempotencia,
+  reaperIdempotencia,
+  reaperOutbox,
+} from "./reapers.js";
 
 /**
  * Punto de entrada del contenedor `ladino-worker`. Un bucle, cuatro tareas:
@@ -56,6 +61,7 @@ async function ciclo(): Promise<void> {
           outbox: await reaperOutbox(sql),
           idem: await reaperIdempotencia(sql),
           purga: await purgarIdempotencia(sql),
+          carritos: await purgarCarritosPos(sql),
         }
       : null;
   const out = await procesarLote(sql, transmitter);

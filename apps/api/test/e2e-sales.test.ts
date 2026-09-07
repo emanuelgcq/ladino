@@ -1056,4 +1056,93 @@ describe("ventas de extremo a extremo", () => {
     expect(c["change_currency"]).toBe("USD");
     expect(c["rate"]).toBe("45.00000000");
   });
+
+  // ── CUENTAS ABIERTAS del POS (migración 44) ───────────────────────────────
+
+  it("la cuenta abierta vive en la nube y MUERE en la transacción del cobro", async () => {
+    const CARRITO = crypto.randomUUID();
+
+    // Nace SIN `Idempotency-Key` a propósito: el PUT es idempotente por
+    // naturaleza (el id lo pone la caja) y la ruta no exige la llave.
+    const crear = await app.request(`/v1/pos/carts/${CARRITO}`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${await tokenDe(VENDEDOR)}`,
+        "X-Company-Id": COMPANY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        company_id: COMPANY,
+        label: "Cuenta 1",
+        customer_id: null,
+        lines: [{ product_id: PROD, qty: "1" }],
+      }),
+    });
+    expect(crear.status).toBe(200);
+    const nacido = (await crear.json()) as { id: string; label: string; updated_at: string };
+    expect(nacido.id).toBe(CARRITO);
+
+    // Se pisa con la MISMA clave: mismo carrito, ninguna fila nueva.
+    const pisar = await pedir("PUT", `/v1/pos/carts/${CARRITO}`, VENDEDOR, {
+      company_id: COMPANY,
+      label: "Vecina Carmen",
+      customer_id: null,
+      lines: [{ product_id: PROD, qty: "2" }],
+    });
+    expect(pisar.status).toBe(200);
+    const pisado = (await pisar.json()) as { label: string; lines: { qty: string }[] };
+    expect(pisado.label).toBe("Vecina Carmen");
+    expect(pisado.lines[0]!.qty).toBe("2");
+
+    const lista = await pedir("GET", "/v1/pos/carts", VENDEDOR);
+    expect(lista.status).toBe(200);
+    const items = ((await lista.json()) as { items: { id: string }[] }).items;
+    expect(items.filter((x) => x.id === CARRITO)).toHaveLength(1);
+
+    // El COBRO con `cart_id`: la venta sale y el carrito muere EN LA MISMA
+    // transacción — no un segundo viaje que un apagón podría cortar.
+    const venta = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      series: "C",
+      cart_id: CARRITO,
+      lines: [{ product_id: PROD, quantity: "2" }],
+      payments: [{ instrument: "efectivo_usd", amount: "232.00000000", currency: "USD" }],
+    });
+    expect(venta.status).toBe(201);
+    const filas = await sql<{ id: string }[]>`
+      select id from public.pos_carts where company_id = ${COMPANY} and id = ${CARRITO}`;
+    expect(filas).toHaveLength(0);
+
+    // Descartar lo ya muerto no es un error: responde qué pasó.
+    const otraVez = await pedir("DELETE", `/v1/pos/carts/${CARRITO}`, VENDEDOR);
+    expect(otraVez.status).toBe(200);
+    expect(((await otraVez.json()) as { deleted: boolean }).deleted).toBe(false);
+  });
+
+  it("la cuenta abierta exige el permiso de vender, y rechaza lo que no es intención sana", async () => {
+    const sinPermiso = await pedir("PUT", `/v1/pos/carts/${crypto.randomUUID()}`, MIRON, {
+      company_id: COMPANY,
+      label: "Colada",
+      customer_id: null,
+      lines: [],
+    });
+    expect(sinPermiso.status).toBe(403);
+
+    const qtyCero = await pedir("PUT", `/v1/pos/carts/${crypto.randomUUID()}`, VENDEDOR, {
+      company_id: COMPANY,
+      label: "Rota",
+      customer_id: null,
+      lines: [{ product_id: PROD, qty: "0" }],
+    });
+    expect(qtyCero.status).toBe(422);
+
+    const clienteAjeno = await pedir("PUT", `/v1/pos/carts/${crypto.randomUUID()}`, VENDEDOR, {
+      company_id: COMPANY,
+      label: "Fantasma",
+      customer_id: crypto.randomUUID(),
+      lines: [],
+    });
+    expect(clienteAjeno.status).toBe(422);
+  });
 });

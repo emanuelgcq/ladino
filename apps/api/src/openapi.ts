@@ -75,6 +75,9 @@ import {
   QuickSaleRequest,
   QuickSaleResponse,
   PosChangeResponse,
+  UpsertPosCartRequest,
+  PosCartResponse,
+  ListPosCartsResponse,
   ReturnResponse,
   AgingResponse,
   CustomerStatementResponse,
@@ -1714,6 +1717,54 @@ export function buildOpenApiDocument(): object {
       }),
     },
     responses: { 200: okJson(vueltoResp, "El vuelto calculado."), ...erroresComunes },
+  });
+
+  // ── Cuentas abiertas del POS (migración 44) ────────────────────────────────
+  const guardarCarrito = registry.register("UpsertPosCartRequest", UpsertPosCartRequest);
+  const carrito = registry.register("PosCartResponse", PosCartResponse);
+  const carritos = registry.register("ListPosCartsResponse", ListPosCartsResponse);
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/pos/carts",
+    summary: "Las cuentas abiertas de la caja (permiso sales.invoice.issue)",
+    description:
+      "La INTENCIÓN de cada venta en armado: productos, cantidades, cliente y nota — nunca " +
+      "precios (al retomar se recotiza a la tasa de HOY). Ordenadas por último toque.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(carritos, "Las cuentas abiertas."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/pos/carts/{id}",
+    summary: "Guardar una cuenta abierta (crea o pisa; permiso sales.invoice.issue)",
+    description:
+      "El id lo pone la CAJA: misma clave, mismo carrito — idempotente por naturaleza, sin " +
+      "`Idempotency-Key`. Última escritura gana. No reserva mercancía ni congela precios: " +
+      "para eso están el pedido y la factura. La cuenta solo muere al cobrarse " +
+      "(`cart_id` en /v1/pos/sales, misma transacción) o purgada tras 30 días sin tocar.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: guardarCarrito } } },
+    },
+    responses: { 200: okJson(carrito, "La cuenta guardada."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "delete",
+    path: "/v1/pos/carts/{id}",
+    summary: "Descartar una cuenta abierta (permiso sales.invoice.issue)",
+    description:
+      "Para la que se abandona SIN venta. Descartar lo ya borrado no es error: responde " +
+      "`deleted: false`. El cierre normal es el cobro, no este endpoint.",
+    security: [{ bearerAuth: [] }],
+    request: { params: z.object({ id: z.string().uuid() }), headers: companyHeader },
+    responses: {
+      200: okJson(z.object({ deleted: z.boolean() }).openapi("DeletePosCartResponse"), "Qué pasó."),
+      ...erroresComunes,
+    },
   });
 
   registry.registerPath({

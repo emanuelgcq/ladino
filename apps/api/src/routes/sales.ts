@@ -10,6 +10,7 @@ import {
   RegisterPaymentRequest,
   PosQuoteRequest,
   QuickSaleRequest,
+  UpsertPosCartRequest,
   CreateReturnRequest,
   CreateFiscalRangeRequest,
   CreateExchangeRateRequest,
@@ -26,6 +27,9 @@ import {
   quotePos,
   quickSale,
   previsualizarConversion,
+  listPosCarts,
+  upsertPosCart,
+  deletePosCart,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -274,6 +278,51 @@ export function salesRoutes(
     const r = await withTransaction(sql, actor, (uow) => quickSale(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
+  });
+
+  // ── Cuentas abiertas del POS (migración 44) ───────────────────────────────
+  // El PUT es idempotente POR NATURALEZA (el id lo pone la caja: misma clave,
+  // mismo carrito), así que no lleva `Idempotency-Key` — el mismo principio
+  // que la subida de imágenes de producto. El borrado real al cobrar lo hace
+  // quickSale dentro de su transacción con `cart_id`.
+
+  app.get("/v1/pos/carts", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => listPosCarts(uow, companyId));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
+
+  app.put("/v1/pos/carts/:id", async (c) => {
+    const { companyId } = requireCompany(c);
+    const cartId = c.req.param("id");
+    if (!UUID_RE.test(cartId)) {
+      throw new DominioError({ code: "VALIDATION_FAILED", message: "El id no es un uuid." });
+    }
+    const parsed = UpsertPosCartRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      upsertPosCart(uow, cartId.toLowerCase(), parsed.data),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
+
+  app.delete("/v1/pos/carts/:id", async (c) => {
+    const { companyId } = requireCompany(c);
+    const cartId = c.req.param("id");
+    if (!UUID_RE.test(cartId)) {
+      throw new DominioError({ code: "VALIDATION_FAILED", message: "El id no es un uuid." });
+    }
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      deletePosCart(uow, companyId, cartId.toLowerCase()),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
   });
 
   /** El vuelto EN VIVO, antes de confirmar: puro cálculo del servidor. */

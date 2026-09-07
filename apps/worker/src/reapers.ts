@@ -126,6 +126,33 @@ export interface OpcionesPurga {
  * bastante más que cualquier ventana de reintento razonable, y escrita en
  * SECURITY.md. Por lotes, para no bloquear la tabla con un DELETE masivo.
  */
+/**
+ * Purga de cuentas abiertas ABANDONADAS del POS (migración 44). Un carrito
+ * vivo se borra al cobrarse, en la transacción de la venta; lo que llega aquí
+ * es lo que nadie tocó en 30 días — la cuenta que la cajera abrió y olvidó.
+ * No toca dinero ni documentos: es intención, y la intención caduca.
+ * El grant del worker sobre `pos_carts` es SOLO select y delete.
+ */
+export async function purgarCarritosPos(
+  sql: Sql,
+  opciones: OpcionesPurga = {},
+): Promise<{ borradas: number }> {
+  const dias = opciones.diasRetencion ?? 30;
+  const lote = opciones.lote ?? 1000;
+
+  return withTransaction(sql, { kind: "system" }, async ({ sql: tx }) => {
+    const borradas = await tx<{ id: string }[]>`
+      delete from public.pos_carts
+       where id in (
+         select id from public.pos_carts
+          where updated_at < now() - make_interval(days => ${dias})
+          limit ${lote}
+       )
+      returning id`;
+    return { borradas: borradas.length };
+  });
+}
+
 export async function purgarIdempotencia(
   sql: Sql,
   opciones: OpcionesPurga = {},

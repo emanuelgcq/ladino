@@ -350,9 +350,53 @@ export const QuickSaleRequest = z
     lines: z.array(DocumentLineRequest).min(1).max(200),
     /** Hasta DOS formas de pago (decisión de la fase: más es otra pantalla). */
     payments: z.array(QuickSalePaymentInput).max(2).optional(),
+    /** La cuenta abierta que esta venta CIERRA: se borra en la MISMA
+     *  transacción (migración 44 — un carrito solo muere al cobrarse). */
+    cart_id: uuid.optional(),
   })
   .strict();
 export type QuickSaleRequest = z.infer<typeof QuickSaleRequest>;
+
+/**
+ * CUENTAS ABIERTAS del POS (migración 44): la INTENCIÓN de una venta en
+ * armado — productos y cantidades, nunca precios (al retomar se recotiza a
+ * la tasa de HOY). El id lo pone la CAJA: el upsert es idempotente por
+ * naturaleza y el eco local del navegador y la nube hablan del mismo
+ * carrito.
+ */
+export const PosCartLine = z
+  .object({
+    product_id: uuid,
+    qty: z.string().regex(/^\d{1,16}(\.\d{1,8})?$/, "cantidad decimal como string"),
+  })
+  .strict();
+export type PosCartLine = z.infer<typeof PosCartLine>;
+
+export const UpsertPosCartRequest = z
+  .object({
+    company_id: uuid,
+    label: z.string().trim().min(1).max(80),
+    customer_id: uuid.nullable().optional(),
+    lines: z.array(PosCartLine).max(500),
+    note: z.string().trim().min(1).max(500).nullable().optional(),
+  })
+  .strict();
+export type UpsertPosCartRequest = z.infer<typeof UpsertPosCartRequest>;
+
+export const PosCartResponse = z
+  .object({
+    id: uuid,
+    label: z.string(),
+    customer_id: uuid.nullable(),
+    lines: z.array(PosCartLine),
+    note: z.string().nullable(),
+    updated_at: z.string(),
+  })
+  .strict();
+export type PosCartResponse = z.infer<typeof PosCartResponse>;
+
+export const ListPosCartsResponse = z.object({ items: z.array(PosCartResponse) }).strict();
+export type ListPosCartsResponse = z.infer<typeof ListPosCartsResponse>;
 
 export const QuickSaleResponse = z
   .object({

@@ -1,3 +1,48 @@
+# Handoff — 2026-09-08 (14ª entrega)
+
+## El POS lleva varias cuentas a la vez, y ninguna se pierde con el apagón
+
+Orden del dueño: la cajera atiende a varios («Cuenta 1», «Vecina Carmen»…),
+la luz se va sin avisar, y «un carrito se cierra hasta que se cobre». Lo
+construido, de abajo arriba:
+
+- **Migración 44** (`pos_open_carts`): la tabla `pos_carts` guarda la
+  INTENCIÓN de cada venta en armado — productos y cantidades, cliente, nota;
+  **nunca precios** (al retomar se recotiza a la tasa de HOY, ADR-0047). No
+  es documento fiscal: muta y se borra a propósito. El id lo pone la CAJA
+  (uuid del cliente) → el PUT es idempotente por naturaleza y NO lleva
+  `Idempotency-Key`, mismo principio que la subida de imágenes. RLS force,
+  policies por operación, ancla de aislamiento (familia 006 sin excepciones),
+  worker con grant de solo select+delete.
+- **Dominio + API**: `listPosCarts` / `upsertPosCart` / `deletePosCart`
+  (permiso sales.invoice.issue; el cliente se pre-verifica para no condenar
+  la transacción con el FK; colisión de uuid contra otra empresa no pisa
+  nada). **`quickSale` acepta `cart_id` y borra el carrito EN LA MISMA
+  transacción de la venta** — si la venta no commitea, la cuenta sobrevive.
+  GET/PUT/DELETE `/v1/pos/carts` en el OpenAPI.
+- **Worker**: `purgarCarritosPos` — las abandonadas >30 días, por lotes, en
+  el ciclo de mantenimiento (cada 30 vueltas).
+- **Web (Vender.tsx + pos-cuentas.ts)**: fichas de cuentas sobre el carrito;
+  cada toque escribe **localStorage SÍNCRONO** (la capa antiapagón: cuando se
+  va la luz se va el módem, la nube no habría alcanzado) y dispara la nube
+  **inmediata con coalescencia por cuenta** (si hay un envío en vuelo, el
+  estado nuevo espera y viaja UNA vez — cero timers, cero spam). Al montar:
+  local primero (síncrono), la lista de la nube se fusiona (lo de otra caja
+  entra; lo local se reempuja por si el apagón cortó la subida), el nombre
+  del cliente restaurado se trae de `/v1/customers/:id`. Solo la cuenta
+  ACTIVA cotiza (N fichas, UNA cotización; el placeholder no cruza fichas).
+  Cobrar pasa `cart_id`; descartar pide confirmación si hay productos.
+- **Tests**: pgTAP 044 (ancla, mutabilidad a propósito, CHECK de array,
+  inmovilidad de tenant) + dos e2e en ventas: el ciclo entero (PUT sin
+  llave → pisar con la misma clave → cobrar con `cart_id` → la fila muere
+  en la transacción → DELETE de lo muerto responde `deleted:false`) y los
+  rechazos (403 sin permiso, 422 qty cero, 422 cliente ajeno).
+
+Decisiones que conviene recordar: las cuentas abiertas NO reservan stock
+(eso es el pedido); «last write wins» entre cajas (conflicto humano, no técnico); las
+líneas NO se validan producto a producto al guardar (se guarda en cada
+tecleo — lo rechaza la cotización al retomar, que es donde importa).
+
 # Handoff — 2026-09-08 (13ª entrega)
 
 ## La tasa del inventario es automática (y el histórico del diferencial, sagrado)

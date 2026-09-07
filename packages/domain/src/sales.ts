@@ -1980,6 +1980,14 @@ export async function quickSale(
     documento = doc ?? documento;
   }
 
+  // La cuenta abierta que esta venta cierra (migración 44): se borra AQUÍ,
+  // en la misma transacción — si la venta no commitea, el carrito sobrevive.
+  // Cero filas no es error: pudo cobrarse desde otra pestaña o nunca sincronizar.
+  if (input.cart_id !== undefined) {
+    await sql`delete from public.pos_carts
+       where company_id = ${input.company_id} and id = ${input.cart_id}`;
+  }
+
   return ok({
     document: documento,
     payments: cobros,
