@@ -17,6 +17,8 @@ coverage/
 # Entorno y secretos — nunca en el repositorio (ver DEVOPS_CI_CD.md)
 .env
 .env.*
+api.env
+worker.env
 !.env.example
 *.pem
 *.key

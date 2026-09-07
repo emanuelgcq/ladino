@@ -1,0 +1,174 @@
+# Ladino en el VPS Hostinger COMPARTIDO — la vía «clonar y construir», gemela
+# del patrón Afterlaria: `cd /opt/apps/ladino && docker compose up -d --build`.
+# La guía completa: DEPLOY_HOSTINGER.md (este archivo no se usa en local).
+#
+# Reglas del VPS que este archivo respeta a rajatabla:
+#   · n8n NO se toca; Traefik ya existe y aquí solo se le ponen labels;
+#   · la red del proxy es la de n8n (`n8n_default`) y es EXTERNAL — no se crea;
+#   · el certresolver real se llama `mytlschallenge` (no «letsencrypt»);
+#   · NINGÚN puerto expuesto: todo el tráfico entra por Traefik;
+#   · nombres de contenedor y de router ÚNICOS en el VPS (ladino-*);
+#   · límites de CPU/memoria en todos — el blast radius de Ladino jamás puede
+#     ser el servidor entero (ahí vive n8n).
+#
+# Secretos: en api.env y worker.env DENTRO de esta carpeta del VPS (fuera de
+# git — plantillas en infra/compose/*.env.example). Los valores no-secretos
+# (dominios, VITE_*) van en .env (plantilla: .env.example).
+#
+# La vía formal por DIGEST (releases/manifest.json) sigue existiendo en
+# infra/compose/docker-compose.ladino.yml; esta es la pragmática del VPS.
+
+name: ladino
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.api
+    container_name: ladino-api
+    restart: unless-stopped
+    # Mayor que el respaldo de apagado de la API (8 s): el proceso sale solo
+    # antes de que Docker mande SIGKILL.
+    stop_grace_period: 20s
+    env_file:
+      - ./api.env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      LADINO_AUTH_MODE: jwks
+    networks:
+      - ladino-net
+      - proxy
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+          pids: 256
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-n8n_default}
+      # Las sondas NO se publican: /healthz y /readyz responden 404 desde
+      # afuera A PROPÓSITO (las lee el healthcheck desde dentro).
+      traefik.http.routers.ladino-api.rule: Host(`${LADINO_API_HOST:?falta LADINO_API_HOST en .env}`) && !Path(`/healthz`) && !Path(`/readyz`)
+      traefik.http.routers.ladino-api.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.ladino-api.tls: "true"
+      traefik.http.routers.ladino-api.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-mytlschallenge}
+      traefik.http.services.ladino-api.loadbalancer.server.port: "3000"
+      traefik.http.routers.ladino-api.middlewares: ladino-api-headers,ladino-api-ratelimit
+      # Límite por IP en el borde, LAXO a propósito (el NAT móvil agrupa a
+      # miles tras una IP); el fino, por usuario, vive en la API.
+      traefik.http.middlewares.ladino-api-ratelimit.ratelimit.average: "100"
+      traefik.http.middlewares.ladino-api-ratelimit.ratelimit.burst: "200"
+      traefik.http.middlewares.ladino-api-headers.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.ladino-api-headers.headers.contentTypeNosniff: "true"
+      traefik.http.middlewares.ladino-api-headers.headers.frameDeny: "true"
+
+  worker:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.worker
+    container_name: ladino-worker
+    restart: unless-stopped
+    stop_grace_period: 20s
+    env_file:
+      - ./worker.env
+    environment:
+      NODE_ENV: production
+      WORKER_INTERVAL_MS: "2000"
+    # Solo la red interna: el worker no recibe tráfico de nadie.
+    networks:
+      - ladino-net
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp] # el latido del healthcheck se escribe aquí
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+          pids: 128
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "test $(( $(date +%s) - $(stat -c %Y /tmp/ladino-worker.heartbeat 2>/dev/null || echo 0) )) -lt 60 || exit 1",
+        ]
+      interval: 30s
+      timeout: 3s
+      start_period: 15s
+      retries: 2
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.web
+      args:
+        # Vite las HORNEA en el bundle: ninguna es secreta (la publishable key
+        # es pública por diseño). Viven en .env de esta carpeta.
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:?falta VITE_SUPABASE_URL en .env}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:?falta VITE_SUPABASE_PUBLISHABLE_KEY en .env}
+        VITE_API_URL: ${VITE_API_URL:?falta VITE_API_URL en .env}
+    container_name: ladino-web
+    restart: unless-stopped
+    # Estático puro: sin secretos, sin env_file.
+    networks:
+      - proxy
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    # nginx-unprivileged escribe pid y caché bajo /tmp.
+    tmpfs: [/tmp]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+          pids: 64
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-n8n_default}
+      traefik.http.routers.ladino-web.rule: Host(`${LADINO_WEB_HOST:?falta LADINO_WEB_HOST en .env}`)
+      traefik.http.routers.ladino-web.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.ladino-web.tls: "true"
+      traefik.http.routers.ladino-web.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-mytlschallenge}
+      traefik.http.services.ladino-web.loadbalancer.server.port: "8080"
+      traefik.http.routers.ladino-web.middlewares: ladino-web-headers
+      traefik.http.middlewares.ladino-web-headers.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.ladino-web-headers.headers.contentTypeNosniff: "true"
+      # frameDeny NO va aquí: lo pone el propio nginx (X-Frame-Options DENY).
+
+networks:
+  ladino-net:
+    name: ladino-net
+  # La red del proxy YA EXISTE (es la de n8n, compartida). Ladino se une;
+  # no la crea, no la borra, no la renombra.
+  proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:-n8n_default}

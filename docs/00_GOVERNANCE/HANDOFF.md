@@ -1,3 +1,32 @@
+# Handoff — 2026-09-07 (11ª entrega)
+
+## El paquete de deploy al VPS (patrón Afterlaria) + remates de UX
+
+El dueño despliega ÉL, por la terminal de Hostinger, con su patrón probado
+(clonar en /opt/apps, red n8n_default, certresolver mytlschallenge, build en el
+VPS). Lo preparado para que salga a la primera:
+
+- **docker-compose.yml en la RAÍZ** (vía «clonar y construir»): los tres
+  servicios con build a los Dockerfiles de infra/, defaults reales del VPS
+  (n8n_default / mytlschallenge / websecure), cero puertos expuestos, límites
+  de recursos, healthchecks, routers ladino-* únicos. La vía formal por digest
+  (infra/compose/) queda intacta.
+- **compose.env.example** (dominios + VITE_*) y .gitignore amplía api.env/
+  worker.env. Secretos SIEMPRE en la carpeta del VPS, fuera de git.
+- **DEPLOY_HOSTINGER.md**: la guía gemela de la de Afterlaria con los valores
+  de Ladino — incluye lo previo al VPS (contraseñas de roles por SQL editor,
+  pooler 6543 con usuario sufijado, publishable y service key, rotar sbp_),
+  el humo (UNAUTHENTICATED = perfecto; /healthz 404 desde afuera = diseño),
+  y el troubleshooting propio (privileged_role_refused, CORS de un origen).
+  Migraciones remotas: 43/43 ya aplicadas.
+
+Remates que viajan en este push: la tarjeta de salida de /empezar aparece
+cuando lo OBLIGATORIO está listo (productos es saltable y a pantalla completa
+faltaba la puerta); el módulo de componentes (dev) eliminado por completo
+(ruta, página y maquinaria devOnly); y el LOGO real de la marca colocado en
+apps/web/public/brand/ (recortado de márgenes para la interfaz + original
+intacto) — login, sidebar, registro y empezar ya lo pintan.
+
 # Handoff — 2026-09-07 (10ª entrega)
 
 ## Registro premium (frontend) + rebranding «Azul Ladino, glass»
