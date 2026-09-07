@@ -55,6 +55,7 @@ Usa la skill `adr` de Claude Code.
 | [0047](adr/ADR-0047-la-deuda-se-ancla-en-dolares-el-papel-habla-en-bolivares.md) | La deuda se ancla en USD y se cobra a la tasa del día; el papel habla en Bs | Aceptado | SÍ |
 | [0048](adr/ADR-0048-roles-con-nombre-y-navegacion-por-permiso.md) | Cinco roles de oficio sembrados; el menú y los botones se forman por permiso | Aceptado | SÍ |
 | [0049](adr/ADR-0049-el-primer-dia-real-onboarding-y-miembros.md) | Onboarding autoservicio en un acto; miembros por correo; dueño plano + rol de almacén | Aceptado | SÍ |
+| [0050](adr/ADR-0050-politica-de-rif-en-tres-niveles.md) | El RIF en tres niveles (libre sin documentos, bloqueado con ellos, corrección con acta); perfil y logo del negocio | Aceptado | SÍ |
 
 ## Decisiones aún abiertas
 

@@ -1,3 +1,38 @@
+# Handoff — 2026-09-07 (10ª entrega)
+
+## Registro premium (frontend) + rebranding «Azul Ladino, glass»
+
+**Rebranding** (orden del dueño con el logo en mano: el logo NO se toca; la UX cambia):
+el acento esmeralda murió — el sistema entero habla el AZUL del logo (tokens en
+theme.css: acento #2563eb/#3b82f6, éxito = misma voz, información pasó a cian), con
+dirección GLASS en los planos que flotan (sidebar, cabecera, diálogos, paleta:
+`bg-glass` + blur; las superficies de lectura siguen sólidas). Los tokens `success-*`
+que se usaban SIN definir quedaron definidos. `LogoLadino` pinta el archivo real de
+la marca desde `public/brand/ladino-logo.png` con fallback al monograma y pastilla
+blanca en oscuro — **PENDIENTE del dueño: colocar el archivo del logo en esa ruta**
+(hasta entonces se ve el monograma).
+
+**Registro premium /registro** (P1–P9 del encargo): pantalla completa en la cascada de
+sesión (como el Login — el router nace con «/» congelada, por eso el aterrizaje
+post-fundación viaja por sessionStorage y lo consume AterrizajePorRol una vez). Una
+pregunta por pantalla, teclado completo, validación amable, rubros con icono, RIF que
+se formatea en vivo, recorte de logo con canvas nativo (cuadrado+circular en vivo),
+estados→ciudades encadenados, resumen con la tarjeta armada y micro-celebración.
+Fundación por POST /v1/onboarding + logo después (si el logo falla, la fundación NO se
+bloquea). El formulario viejo del selector murió. **/empezar re-vestido** con el mismo
+idioma (solo la piel; lógica y endpoints intactos). **Mi empresa** en Configuración:
+tarjeta editable, datos fiscales aparte, política de RIF en la UI (nivel 2 pide motivo
+en el mismo diálogo con las advertencias del papel preimpreso; corrección con acta).
+Gate del glosario extendido a `pages/registro`. ADR-0050 + índice + RECORRIDO
+arranca en /registro + capturas 01–15 en `docs/08_UX/capturas-registro/` (15 es el
+PDF real con el logo embebido).
+
+**Pendientes nuevos**: (1) el archivo del logo de marca en `public/brand/` — lo tiene
+el dueño; (2) la deuda con 8 decimales que se ve en Inicio/Dinero: el formateador es
+honesto a propósito (formatear no redondea) y el arreglo correcto es que el SERVIDOR
+redondee la deuda funcional al servirla (resumen, with_debt, statement) — rigor de
+dinero, va como trabajo propio.
+
 # Handoff — 2026-09-05 (9ª entrega)
 
 ## El seed sembraba la tasa en un día que no existe (fecha-contra-reloj, 4ª vez)

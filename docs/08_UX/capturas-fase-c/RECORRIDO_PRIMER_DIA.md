@@ -11,6 +11,45 @@ tres del mini-formulario, y está bien. Detalle abajo.
 
 ---
 
+## 0. El recorrido ahora ARRANCA en `/registro` (capturas en `../capturas-registro/`)
+
+Desde el registro premium (2026-09-07), el primer día empieza ANTES de la app: María no
+tiene cuenta, no tiene empresa, no tiene nada. Escribe su correo y una contraseña en el
+login («Crea tu cuenta con este correo») y Ladino la recibe a pantalla completa, una
+pregunta a la vez, como configurar un teléfono nuevo — todo se puede completar solo con
+el teclado (Enter avanza, Esc retrocede):
+
+1. **Bienvenida** — «Vamos a montar tu negocio en Ladino. Te toma menos de dos minutos»
+   (captura 01). Enter.
+2. **«¿Cómo se llama tu negocio?»** — el nombre con el que la conoce la gente (02).
+3. **«¿A qué se dedica?»** — cuadrícula de rubros con icono, flechas + Enter (03).
+4. **«¿Tu negocio ya tiene RIF?»** — la bifurcación honesta (04). «Todavía no» la manda
+   directo al logo y vende con recibos desde hoy; «Sí» abre los tres datos fiscales:
+   el RIF que se formatea mientras escribe (05), la razón social (06) y la dirección
+   fiscal que saldrá en sus facturas (07). Sin razón social o sin dirección el servidor
+   no funda: la regla es de dominio, no de pantalla.
+5. **«Ponle la cara a tu negocio»** — arrastra su logo, lo recorta con zoom y lo ve en
+   vivo como saldrá en la factura y en la app (08). Saltable sin culpa.
+6. **«¿Cómo te contactan?»** — teléfono/WhatsApp y estado→ciudad encadenados (09).
+7. **«Ahora tú»** — su nombre y su cédula opcional; queda en su ficha (10).
+8. **El resumen premium** — la tarjeta del negocio armada con logo, rubro, ciudad, razón
+   social y RIF formateado (11). «Crear mi negocio» funda TODO en una transacción
+   (tenant, empresa, depósito, roles, plan contable) y aterriza SIN pantalla intermedia
+   en `/empezar`, que ahora habla el mismo idioma visual (12).
+
+El doble clic no funda dos veces (candado por usuario + LAD81), y el logo sube después
+de nacer la empresa por el patrón de fotos de producto: si fallara, la fundación no se
+bloquea — se reintenta desde «Mi empresa».
+
+**Mi empresa** (Configuración, captura 13): la tarjeta editable, los datos fiscales
+aparte y la política del RIF a la vista — cambiarlo es directo mientras no haya
+documentos (14); con UNA factura emitida queda bloqueado con su explicación, y el
+dedazo va por «Corregir RIF» con motivo y acta (ADR-0050). La factura en PDF imprime
+el logo arriba del membrete (15 — el PDF real, con la imagen embebida verificada por
+el e2e).
+
+---
+
 ## 1. La puesta a punto (`/empezar`, capturas 20–24)
 
 María abre Ladino por primera vez. La app la recibe con cuatro pasos que se marcan solos
