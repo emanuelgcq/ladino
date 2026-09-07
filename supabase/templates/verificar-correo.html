@@ -1,0 +1,106 @@
+<!-- Ladino · Verificación de cuenta. Se pega en Supabase → Authentication →
+     Email Templates → «Confirm signup». Asunto sugerido:
+     «Verifica tu correo para entrar a Ladino».
+     Todo el CSS va inline: es correo, no web. -->
+<table
+  role="presentation"
+  width="100%"
+  cellpadding="0"
+  cellspacing="0"
+  style="background-color: #f5f7fb; padding: 32px 16px; font-family: Arial, Helvetica, sans-serif"
+>
+  <tr>
+    <td align="center">
+      <table
+        role="presentation"
+        width="600"
+        cellpadding="0"
+        cellspacing="0"
+        style="
+          max-width: 600px;
+          width: 100%;
+          background-color: #ffffff;
+          border-radius: 12px;
+          border: 1px solid #e6e9f0;
+          overflow: hidden;
+        "
+      >
+        <tr>
+          <td align="center" style="padding: 36px 40px 8px 40px">
+            <img
+              src="https://app.ladinosystem.com/brand/ladino-logo.png"
+              alt="Ladino"
+              width="170"
+              style="display: block; max-width: 170px; height: auto"
+            />
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding: 20px 40px 0 40px">
+            <p
+              style="
+                margin: 0;
+                font-size: 22px;
+                line-height: 30px;
+                font-weight: bold;
+                color: #16336e;
+              "
+            >
+              Ya casi está tu cuenta
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding: 12px 48px 0 48px">
+            <p style="margin: 0; font-size: 15px; line-height: 23px; color: #4b5563">
+              Verifica que este correo es tuyo y sigues directo a montar tu negocio: inventario,
+              clientes, cuentas y ventas desde el primer día.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding: 28px 40px">
+            <a
+              href="{{ .ConfirmationURL }}"
+              style="
+                display: inline-block;
+                background-color: #2563eb;
+                color: #ffffff;
+                font-size: 16px;
+                font-weight: bold;
+                line-height: 20px;
+                text-decoration: none;
+                padding: 14px 40px;
+                border-radius: 8px;
+              "
+            >
+              Verificar mi correo
+            </a>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding: 0 48px 8px 48px">
+            <p style="margin: 0; font-size: 12px; line-height: 18px; color: #9ca3af">
+              Si el botón no funciona, copia y pega este enlace en tu navegador:
+            </p>
+            <p style="margin: 6px 0 0 0; font-size: 12px; line-height: 18px; word-break: break-all">
+              <a href="{{ .ConfirmationURL }}" style="color: #2563eb; text-decoration: underline"
+                >{{ .ConfirmationURL }}</a
+              >
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding: 24px 48px 32px 48px; border-top: 1px solid #eef1f6">
+            <p style="margin: 16px 0 0 0; font-size: 12px; line-height: 18px; color: #9ca3af">
+              ¿No creaste una cuenta en Ladino? Ignora este correo y no pasará nada.
+            </p>
+          </td>
+        </tr>
+      </table>
+      <p style="margin: 20px 0 0 0; font-size: 11px; line-height: 16px; color: #9ca3af">
+        Ladino — administración y contabilidad para el comercio venezolano.
+      </p>
+    </td>
+  </tr>
+</table>

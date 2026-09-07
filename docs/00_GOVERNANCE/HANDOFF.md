@@ -1,3 +1,27 @@
+# Handoff — 2026-09-07 (12ª entrega)
+
+## Ladino SALIÓ A PRODUCCIÓN + registro con verificación de correo
+
+**PRODUCCIÓN**: el dueño desplegó por la terminal de Hostinger siguiendo
+DEPLOY_HOSTINGER.md — app.ladinosystem.com y api.ladinosystem.com vivos, los
+tres contenedores healthy, roles dedicados por el pooler 6543, SSL emitido,
+n8n/afterlaria intactos, y el refresco BCV trajo la tasa oficial a la base
+remota solo (api.bcv_refresh_saved en el primer arranque). Pendientes de
+producción ya conocidos: rotar el sbp_, observabilidad, dump lógico propio.
+
+**Registro con correo de verdad** (orden del dueño, con Resend):
+- Login reformado: crear cuenta es modo propio (correo + contraseña +
+  CONFIRMACIÓN, mínimo 8, coincidencia validada amablemente) → pantalla
+  «Revisa tu correo»; «¿Olvidaste tu contraseña?» con aviso neutro (no revela
+  existencia); el enlace de recuperación abre «Crea tu contraseña nueva»
+  (evento PASSWORD_RECOVERY) antes de dejar pasar; errores de auth traducidos
+  a voz de persona.
+- Plantillas HTML de marca en supabase/templates/ (verificar-correo,
+  recuperar-contrasena) + README con la configuración completa: dominio en
+  Resend (SPF/DKIM), SMTP de Supabase (smtp.resend.com:465, la key la pega el
+  dueño — jamás en el repo), Site URL y Confirm email ON al final.
+- En local nada cambia (Inbucket, sin verificación).
+
 # Handoff — 2026-09-07 (11ª entrega)
 
 ## El paquete de deploy al VPS (patrón Afterlaria) + remates de UX

@@ -53,12 +53,19 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   const [permisos, setPermisos] = useState<ReadonlySet<string> | null>(null);
   const [error, setError] = useState("");
 
+  // El enlace de «recuperar contraseña» abre una sesión de RECUPERACIÓN:
+  // antes de dejar pasar a la app se exige la contraseña nueva.
+  const [recuperando, setRecuperando] = useState(false);
+
   useEffect(() => {
     void supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setCargando(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_ev, s) => setSession(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((ev, s) => {
+      if (ev === "PASSWORD_RECOVERY") setRecuperando(true);
+      setSession(s);
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -145,6 +152,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
 
   if (cargando) return <PantallaCentrada>Cargando…</PantallaCentrada>;
   if (!session) return <Login />;
+  if (recuperando) return <NuevaClave onLista={() => setRecuperando(false)} />;
   if (companies === null) return <PantallaCentrada>Cargando empresas…</PantallaCentrada>;
   // Sin ninguna empresa: EL REGISTRO PREMIUM (pantalla completa, como el
   // Login). El formulario chiquito del selector murió con él.
@@ -197,104 +205,331 @@ function Marca(): React.JSX.Element {
   );
 }
 
+/** Los errores de Supabase llegan en inglés; aquí se traducen a voz de persona. */
+function vozDeAuth(mensaje: string): string {
+  const m = mensaje.toLowerCase();
+  if (m.includes("invalid login credentials")) return "Correo o contraseña incorrectos.";
+  if (m.includes("email not confirmed"))
+    return "Tu correo todavía no está verificado: busca el mensaje de Ladino en tu bandeja.";
+  if (m.includes("user already registered")) return "Ese correo ya tiene cuenta: entra con él.";
+  if (m.includes("rate limit") || m.includes("too many"))
+    return "Demasiados intentos seguidos. Espera un minuto y prueba otra vez.";
+  if (m.includes("password should be")) return "La contraseña necesita al menos 8 caracteres.";
+  return mensaje;
+}
+
 function Login(): React.JSX.Element {
+  const [modo, setModo] = useState<"entrar" | "crear" | "olvide">("entrar");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmacion, setConfirmacion] = useState("");
   const [error, setError] = useState("");
   const [ocupado, setOcupado] = useState(false);
+  /** Tras crear cuenta o pedir recuperación: la pantalla de «revisa tu correo». */
+  const [correoEnviado, setCorreoEnviado] = useState<"verificacion" | "recuperacion" | null>(null);
 
-  async function entrar(modo: "login" | "signup") {
+  const cambiarModo = (m: "entrar" | "crear" | "olvide") => {
+    setModo(m);
     setError("");
+    setConfirmacion("");
+  };
+
+  async function enviar(): Promise<void> {
+    setError("");
+    if (modo === "crear") {
+      if (password.length < 8) {
+        setError("La contraseña necesita al menos 8 caracteres.");
+        return;
+      }
+      if (password !== confirmacion) {
+        setError("Las contraseñas no coinciden.");
+        return;
+      }
+    }
     setOcupado(true);
-    const r =
-      modo === "login"
-        ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password });
+    if (modo === "entrar") {
+      const r = await supabase.auth.signInWithPassword({ email, password });
+      if (r.error) setError(vozDeAuth(r.error.message));
+    } else if (modo === "crear") {
+      // Con la verificación de correo activa, signUp NO abre sesión: manda el
+      // correo y aquí se enseña «revisa tu bandeja». (En local, sin
+      // verificación, la sesión llega directa y el provider sigue solo.)
+      const r = await supabase.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: window.location.origin },
+      });
+      if (r.error) setError(vozDeAuth(r.error.message));
+      else if (r.data.session === null) setCorreoEnviado("verificacion");
+    } else {
+      const r = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      });
+      if (r.error) setError(vozDeAuth(r.error.message));
+      else setCorreoEnviado("recuperacion");
+    }
     setOcupado(false);
-    if (r.error) setError(r.error.message);
+  }
+
+  if (correoEnviado !== null) {
+    return (
+      <PantallaAuth>
+        <Card className="shadow-overlay">
+          <CardContent className="px-6 pb-6 pt-6 text-center">
+            <p className="text-[1.1rem] font-semibold">Revisa tu correo</p>
+            <p className="mt-2 text-[0.92rem] text-muted-foreground">
+              {correoEnviado === "verificacion"
+                ? `Te mandamos un enlace a ${email} para verificar tu cuenta. Ábrelo y sigues aquí mismo.`
+                : `Si ${email} tiene cuenta en Ladino, te llegará un enlace para crear una contraseña nueva.`}
+            </p>
+            <p className="mt-3 text-[0.82rem] text-faint-foreground">
+              ¿No llega? Mira en el correo no deseado, o{" "}
+              <button
+                className="text-accent-soft-foreground hover:underline"
+                onClick={() => {
+                  setCorreoEnviado(null);
+                  cambiarModo(correoEnviado === "verificacion" ? "crear" : "olvide");
+                }}
+              >
+                vuelve a intentarlo
+              </button>
+              .
+            </p>
+          </CardContent>
+        </Card>
+      </PantallaAuth>
+    );
   }
 
   return (
+    <PantallaAuth>
+      <Card className="shadow-overlay">
+        <CardContent className="px-6 pb-6 pt-6">
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void enviar();
+            }}
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="login-email">Correo</Label>
+              <Input
+                id="login-email"
+                type="email"
+                autoComplete="email"
+                placeholder="tu@correo.com"
+                className="h-10 px-3 text-[0.95rem]"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            {modo !== "olvide" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="login-password">Contraseña</Label>
+                <Input
+                  id="login-password"
+                  type="password"
+                  autoComplete={modo === "crear" ? "new-password" : "current-password"}
+                  placeholder="••••••••"
+                  className="h-10 px-3 text-[0.95rem]"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={modo === "crear" ? 8 : undefined}
+                />
+              </div>
+            )}
+            {modo === "crear" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="login-confirmacion">Confirma la contraseña</Label>
+                <Input
+                  id="login-confirmacion"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="••••••••"
+                  className="h-10 px-3 text-[0.95rem]"
+                  value={confirmacion}
+                  onChange={(e) => setConfirmacion(e.target.value)}
+                  required
+                />
+                {confirmacion !== "" && confirmacion !== password && (
+                  <p className="text-[0.8rem] text-warning-soft-foreground">
+                    Todavía no coinciden.
+                  </p>
+                )}
+              </div>
+            )}
+            {error && (
+              <p
+                role="alert"
+                className="rounded-md bg-destructive-soft px-3 py-2 text-[0.85rem] text-destructive-soft-foreground"
+              >
+                {error}
+              </p>
+            )}
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              disabled={ocupado}
+              className="h-10 w-full"
+            >
+              {ocupado
+                ? "Un momento…"
+                : modo === "entrar"
+                  ? "Entrar"
+                  : modo === "crear"
+                    ? "Crear mi cuenta"
+                    : "Mandarme el enlace"}
+            </Button>
+          </form>
+          {modo === "entrar" && (
+            <p className="mt-2 text-center">
+              <button
+                className="text-[0.82rem] text-faint-foreground hover:text-foreground"
+                onClick={() => cambiarModo("olvide")}
+              >
+                ¿Olvidaste tu contraseña?
+              </button>
+            </p>
+          )}
+          <div className="mt-4 border-t border-border pt-4 text-center text-[0.85rem] text-muted-foreground">
+            {modo === "entrar" ? (
+              <>
+                ¿Primera vez?{" "}
+                <button
+                  className="font-medium text-accent-soft-foreground hover:underline"
+                  onClick={() => cambiarModo("crear")}
+                >
+                  Crea tu cuenta
+                </button>
+              </>
+            ) : (
+              <>
+                ¿Ya tienes cuenta?{" "}
+                <button
+                  className="font-medium text-accent-soft-foreground hover:underline"
+                  onClick={() => cambiarModo("entrar")}
+                >
+                  Entra aquí
+                </button>
+              </>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </PantallaAuth>
+  );
+}
+
+/** El lienzo compartido de las pantallas de autenticación. */
+function PantallaAuth({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4">
-      {/* Textura mínima del lienzo: una rejilla que se desvanece hacia los
-          bordes — presencia sin ruido; en oscuro, apenas un susurro. */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] bg-[size:44px_44px] opacity-40 [mask-image:radial-gradient(ellipse_60%_50%_at_50%_40%,black,transparent)] dark:opacity-25"
       />
       <div className="relative w-full max-w-sm">
         <Marca />
-        <Card className="shadow-overlay">
-          <CardContent className="px-6 pb-6 pt-6">
-            <form
-              className="space-y-4"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void entrar("login");
-              }}
-            >
-              <div className="space-y-1.5">
-                <Label htmlFor="login-email">Correo</Label>
-                <Input
-                  id="login-email"
-                  type="email"
-                  autoComplete="email"
-                  placeholder="tu@correo.com"
-                  className="h-10 px-3 text-[0.95rem]"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  autoFocus
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="login-password">Contraseña</Label>
-                <Input
-                  id="login-password"
-                  type="password"
-                  autoComplete="current-password"
-                  placeholder="••••••••"
-                  className="h-10 px-3 text-[0.95rem]"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
-              </div>
-              {error && (
-                <p
-                  role="alert"
-                  className="rounded-md bg-destructive-soft px-3 py-2 text-[0.85rem] text-destructive-soft-foreground"
-                >
-                  {error}
-                </p>
-              )}
-              <Button
-                type="submit"
-                variant="primary"
-                size="lg"
-                disabled={ocupado}
-                className="h-10 w-full"
-              >
-                {ocupado ? "Entrando…" : "Entrar"}
-              </Button>
-            </form>
-            <div className="mt-4 border-t border-border pt-4 text-center text-[0.85rem] text-muted-foreground">
-              ¿Primera vez?{" "}
-              <button
-                className="font-medium text-accent-soft-foreground hover:underline disabled:opacity-50"
-                disabled={ocupado}
-                onClick={() => void entrar("signup")}
-              >
-                Crea tu cuenta con este correo
-              </button>
-            </div>
-          </CardContent>
-        </Card>
+        {children}
         <p className="mt-6 text-center text-[0.78rem] text-faint-foreground">
           Hecho para el comercio venezolano — factura, recibo y contabilidad en un solo lugar.
         </p>
       </div>
     </div>
+  );
+}
+
+/**
+ * El enlace de «recuperar contraseña» abre sesión de RECUPERACIÓN: antes de
+ * dejar pasar a la app, aquí se fija la contraseña nueva (con confirmación).
+ */
+function NuevaClave({ onLista }: { onLista: () => void }): React.JSX.Element {
+  const [password, setPassword] = useState("");
+  const [confirmacion, setConfirmacion] = useState("");
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  async function guardar(): Promise<void> {
+    setError("");
+    if (password.length < 8) {
+      setError("La contraseña necesita al menos 8 caracteres.");
+      return;
+    }
+    if (password !== confirmacion) {
+      setError("Las contraseñas no coinciden.");
+      return;
+    }
+    setOcupado(true);
+    const r = await supabase.auth.updateUser({ password });
+    setOcupado(false);
+    if (r.error) setError(vozDeAuth(r.error.message));
+    else onLista();
+  }
+
+  return (
+    <PantallaAuth>
+      <Card className="shadow-overlay">
+        <CardContent className="px-6 pb-6 pt-6">
+          <p className="text-center text-[1.1rem] font-semibold">Crea tu contraseña nueva</p>
+          <form
+            className="mt-4 space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void guardar();
+            }}
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="nueva-clave">Contraseña nueva</Label>
+              <Input
+                id="nueva-clave"
+                type="password"
+                autoComplete="new-password"
+                className="h-10 px-3 text-[0.95rem]"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={8}
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="nueva-confirmacion">Confírmala</Label>
+              <Input
+                id="nueva-confirmacion"
+                type="password"
+                autoComplete="new-password"
+                className="h-10 px-3 text-[0.95rem]"
+                value={confirmacion}
+                onChange={(e) => setConfirmacion(e.target.value)}
+                required
+              />
+            </div>
+            {error && (
+              <p
+                role="alert"
+                className="rounded-md bg-destructive-soft px-3 py-2 text-[0.85rem] text-destructive-soft-foreground"
+              >
+                {error}
+              </p>
+            )}
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              disabled={ocupado}
+              className="h-10 w-full"
+            >
+              {ocupado ? "Guardando…" : "Guardar y entrar"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </PantallaAuth>
   );
 }
 
