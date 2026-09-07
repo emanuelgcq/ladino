@@ -19582,6 +19582,100 @@
         }
       }
     },
+    "/v1/exchange-rates/preview": {
+      "get": {
+        "summary": "Vista previa de conversión a la tasa de HOY (aritmética del servidor)",
+        "description": "El número que las pantallas enseñan al lado de un monto en la otra moneda: entre el ancla (USD) y la funcional, con la tasa vigente del día Caracas y su fuente. El cliente tiene prohibido calcular dinero, incluso para previsualizar.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "amount",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "currency",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "La conversión del día, a 2 decimales (display).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rate": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "rate_date": {
+                      "type": "string"
+                    },
+                    "in_functional": {
+                      "type": "string"
+                    },
+                    "in_anchor": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "rate",
+                    "source",
+                    "rate_date",
+                    "in_functional",
+                    "in_anchor"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No hay tasa vigente todavía (EXCHANGE_RATE_MISSING).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Monto o moneda inválidos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/exchange-rates": {
       "get": {
         "summary": "Últimas tasas cargadas para un par de monedas",

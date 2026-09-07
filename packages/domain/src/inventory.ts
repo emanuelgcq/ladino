@@ -50,6 +50,7 @@ export type InventoryError =
   | { code: "DUPLICATE"; message: string }
   | { code: "VALIDATION_FAILED"; message: string }
   | { code: "NEGATIVE_STOCK"; message: string }
+  | { code: "EXCHANGE_RATE_MISSING"; message: string }
   | { code: "UNIT_CONVERSION_MISSING"; message: string };
 
 const MOVE_COLUMNS = `id, company_id, warehouse_id, product_id, lot_id, kind,
@@ -351,11 +352,37 @@ export async function receiveStock(
   const occurredAt = input.occurred_at ?? null;
   const momentoTasa = ahora(input.occurred_at);
 
+  // Sin `fx` explícito, la tasa se RESUELVE de exchange_rates — la última
+  // vigente a la fecha del movimiento (día Caracas), con su fuente citada:
+  // la MISMA semántica y la misma consulta que usan las ventas. La tasa
+  // oficial llega sola cada día (refresco BCV), así que el camino feliz ya
+  // no pide tasa a nadie; el override explícito sigue mandando (mercancía
+  // pactada a otra tasa, fechas viejas). El movimiento congela tasa, fuente
+  // y monto original: el histórico del diferencial queda entero.
+  let fx = input.fx;
+  if (fx === undefined && input.currency !== ctx.value.functionalCurrency) {
+    const [t] = await sql<{ rate: string; source: string | null; at: string }[]>`
+      select r.rate::text as rate, r.source,
+             to_char(r.rate_timestamp at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as at
+        from public.exchange_rates r
+       where r.from_currency = ${input.currency}
+         and r.to_currency = ${ctx.value.functionalCurrency}
+         and r.rate_date <= ((${momentoTasa}::timestamptz) at time zone 'America/Caracas')::date
+       order by r.rate_date desc, r.created_at desc limit 1`;
+    if (!t) {
+      return err({
+        code: "EXCHANGE_RATE_MISSING",
+        message: `No hay tasa de ${input.currency} a ${ctx.value.functionalCurrency} para esa fecha. Confírmala en Mi dinero, o escribe la tuya con su fuente.`,
+      });
+    }
+    fx = { rate: t.rate, source: t.source ?? "manual", at: t.at };
+  }
+
   const hecho = hechoMonetario(
     input.amount,
     input.currency,
     ctx.value.functionalCurrency,
-    input.fx,
+    fx,
     momentoTasa,
   );
   if (!hecho.ok) return hecho;

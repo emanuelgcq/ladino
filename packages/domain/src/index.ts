@@ -102,6 +102,7 @@ export {
 } from "./company-settings.js";
 export {
   listCompanyAccounts,
+  previsualizarConversion,
   createCompanyAccount,
   updateCompanyAccount,
   listPaymentMethods,

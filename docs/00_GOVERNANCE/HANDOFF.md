@@ -1,3 +1,31 @@
+# Handoff — 2026-09-08 (13ª entrega)
+
+## La tasa del inventario es automática (y el histórico del diferencial, sagrado)
+
+El dueño cazó el diálogo de «Entrada de existencias» pidiendo tasa y fuente a
+mano — era de la era pre-refresco. Ahora:
+
+- **Dominio**: receiveStock sin `fx` resuelve la ÚLTIMA tasa vigente a la
+  fecha del movimiento (día Caracas) desde exchange_rates — la misma consulta
+  de las ventas — citando la fuente guardada; sin tasa para esa fecha,
+  EXCHANGE_RATE_MISSING (nada se inventa, ADR-0020 intacto). El override
+  explícito sigue mandando. El movimiento congela tasa+fuente+monto original
+  +funcional: el histórico del diferencial inflacionario queda entero, y el
+  e2e lo asevera campo a campo.
+- **Vista previa del servidor**: GET /v1/exchange-rates/preview (USD↔Bs a la
+  tasa del día, 2 decimales, numeric de Postgres) — la web tiene PROHIBIDA la
+  aritmética de dinero incluso para previsualizar, así que el «≈ Bs. X» del
+  diálogo viene de aquí.
+- **Diálogo**: moneda por defecto USD (los productos vienen en USD), la
+  equivalencia visible al escribir, y «usar otra tasa» plegado para el caso
+  raro. El test unitario viejo fijaba el contrato manual y se reescribió a
+  las DOS caras del nuevo — con fechas propias y separadas para ser
+  idempotente (aquí no hay rollback y el refresco vivo contamina el «hoy»).
+
+También viaja la carpeta **landing/** (brief LEEME-LANDING.md + 12 capturas
+reales del producto azul + logo) para construir el sitio en su propio repo,
+excluida del contexto Docker.
+
 # Handoff — 2026-09-07 (12ª entrega)
 
 ## Ladino SALIÓ A PRODUCCIÓN + registro con verificación de correo

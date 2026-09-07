@@ -25,6 +25,7 @@ import {
   confirmReturn,
   quotePos,
   quickSale,
+  previsualizarConversion,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -515,6 +516,33 @@ export function salesRoutes(
           from platform.range_exhaustion(${companyId})`,
     );
     return c.json(filas, 200);
+  });
+
+  /**
+   * Vista previa de conversión a la tasa de HOY: el número que la pantalla
+   * enseña al lado de un monto en la otra moneda. La aritmética es del
+   * SERVIDOR (numeric) — el cliente tiene prohibido calcular dinero, incluso
+   * para previsualizar.
+   */
+  app.get("/v1/exchange-rates/preview", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const amount = c.req.query("amount") ?? "";
+    const currency = c.req.query("currency") ?? "USD";
+    if (!/^\d{1,16}(\.\d{1,8})?$/.test(amount)) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "amount debe ser un decimal en string.",
+      });
+    }
+    if (!/^[A-Z]{3}$/.test(currency)) {
+      throw new DominioError({ code: "VALIDATION_FAILED", message: "currency inválida." });
+    }
+    const r = await withTransaction(sql, actor, ({ sql: tx }) =>
+      previsualizarConversion(tx, companyId, amount, currency),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
   });
 
   app.get("/v1/exchange-rates", async (c) => {

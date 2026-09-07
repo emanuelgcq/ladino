@@ -302,4 +302,65 @@ describe("inventario de extremo a extremo", () => {
       expect(r.status).toBe(404);
     }
   });
+
+  it("una entrada en USD SIN tasa se valora sola con la tasa del día — y el movimiento congela tasa, fuente y monto original", async () => {
+    // El test es dueño de su día de tasas (tabla GLOBAL): limpia el par y
+    // planta la suya con fuente distintiva. 100 Bs por USD.
+    await sql`delete from public.exchange_rates
+               where from_currency = 'USD' and to_currency = 'VES'
+                 and rate_date = (now() at time zone 'America/Caracas')::date`;
+    await sql`insert into public.exchange_rates
+                (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+              values ('USD', 'VES', 100, 'BCV e2e-inventario',
+                      (now() at time zone 'America/Caracas')::date, now())`;
+
+    const r = await pedir("POST", "/v1/inventory/receipts", JEFE, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      product_id: PROD,
+      quantity: "2",
+      amount: "3",
+      currency: "USD",
+      // SIN fx: la resuelve el servidor. El histórico del diferencial queda
+      // entero: el movimiento guarda tasa, fuente y el monto en USD.
+    });
+    expect(r.status).toBe(201);
+    const mov = (await r.json()) as {
+      functional_amount: string;
+      fx_rate: string;
+      rate_source: string;
+      transaction_currency: string;
+      amount_transaction_currency: string;
+    };
+    // El HECHO congelado: 3 USD × 100 = 300 Bs (el promedio resultante lo
+    // arrastra la historia previa del almacén y no es de este assert).
+    expect(mov.functional_amount).toBe("300.00000000");
+    expect(mov.fx_rate).toBe("100.00000000");
+    expect(mov.rate_source).toBe("BCV e2e-inventario");
+    expect(mov.transaction_currency).toBe("USD");
+    expect(mov.amount_transaction_currency).toBe("3.00000000");
+
+    // La vista previa del servidor dice lo mismo que se va a registrar.
+    const vista = await pedir("GET", "/v1/exchange-rates/preview?amount=3&currency=USD", JEFE);
+    expect(vista.status).toBe(200);
+    const v = (await vista.json()) as { in_functional: string; in_anchor: string; rate: string };
+    expect(v.in_functional).toBe("300.00");
+    expect(v.rate).toBe("100.00000000");
+    // Y al revés: bolívares expresados en el ancla.
+    const vuelta = await pedir("GET", "/v1/exchange-rates/preview?amount=300&currency=VES", JEFE);
+    expect(((await vuelta.json()) as { in_anchor: string }).in_anchor).toBe("3.00");
+
+    // Una fecha sin tasa NO se inventa: 409 con la voz clara.
+    const sinTasa = await pedir("POST", "/v1/inventory/receipts", JEFE, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      product_id: PROD,
+      quantity: "1",
+      amount: "1",
+      currency: "USD",
+      occurred_at: "2020-01-01T12:00:00.000Z",
+    });
+    expect(sinTasa.status).toBe(409);
+    expect(((await sinTasa.json()) as { code: string }).code).toBe("EXCHANGE_RATE_MISSING");
+  });
 });

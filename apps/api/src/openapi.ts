@@ -1804,6 +1804,35 @@ export function buildOpenApiDocument(): object {
   });
   registry.registerPath({
     method: "get",
+    path: "/v1/exchange-rates/preview",
+    summary: "Vista previa de conversión a la tasa de HOY (aritmética del servidor)",
+    description:
+      "El número que las pantallas enseñan al lado de un monto en la otra moneda: entre el " +
+      "ancla (USD) y la funcional, con la tasa vigente del día Caracas y su fuente. El " +
+      "cliente tiene prohibido calcular dinero, incluso para previsualizar.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ amount: z.string(), currency: z.string().optional() }),
+    },
+    responses: {
+      200: okJson(
+        z.object({
+          rate: z.string(),
+          source: z.string(),
+          rate_date: z.string(),
+          in_functional: z.string(),
+          in_anchor: z.string(),
+        }),
+        "La conversión del día, a 2 decimales (display).",
+      ),
+      409: errorRef("No hay tasa vigente todavía (EXCHANGE_RATE_MISSING)."),
+      422: errorRef("Monto o moneda inválidos."),
+    },
+  });
+
+  registry.registerPath({
+    method: "get",
     path: "/v1/exchange-rates",
     summary: "Últimas tasas cargadas para un par de monedas",
     security: [{ bearerAuth: [] }],

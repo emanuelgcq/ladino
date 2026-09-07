@@ -680,3 +680,67 @@ export async function keepDailyRate(
               source`;
   return ok(fila!);
 }
+
+/**
+ * PREVISUALIZAR una conversión con la tasa vigente de HOY (día Caracas) — el
+ * dato que las pantallas enseñan al lado de un monto en la otra moneda. La
+ * aritmética vive AQUÍ (numeric de Postgres), jamás en el cliente; redondeo a
+ * 2 decimales porque es DISPLAY: el valor contable lo calcula cada caso de
+ * uso con su propia política al persistir.
+ */
+export interface VistaConversion {
+  readonly rate: string;
+  readonly source: string;
+  readonly rate_date: string;
+  /** El monto expresado en la moneda funcional (Bs), a 2 decimales. */
+  readonly in_functional: string;
+  /** El monto expresado en el ancla (USD), a 2 decimales. */
+  readonly in_anchor: string;
+}
+
+export async function previsualizarConversion(
+  sql: TransactionSql,
+  companyId: string,
+  amount: string,
+  currency: string,
+): Promise<
+  Result<VistaConversion, { code: "EXCHANGE_RATE_MISSING" | "VALIDATION_FAILED"; message: string }>
+> {
+  const [empresa] = await sql<{ functional_currency_code: string }[]>`
+    select functional_currency_code from public.companies where id = ${companyId}`;
+  const funcional = empresa?.functional_currency_code ?? "VES";
+  const ancla = "USD";
+  if (currency !== funcional && currency !== ancla) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `La vista previa solo convierte entre ${ancla} y ${funcional}.`,
+    });
+  }
+  const [t] = await sql<{ rate: string; source: string; rate_date: string }[]>`
+    select r.rate::text as rate, r.source, r.rate_date::text as rate_date
+      from public.exchange_rates r
+     where r.from_currency = ${ancla} and r.to_currency = ${funcional}
+       and r.rate_date <= (now() at time zone 'America/Caracas')::date
+     order by r.rate_date desc, r.created_at desc limit 1`;
+  if (!t) {
+    return err({
+      code: "EXCHANGE_RATE_MISSING",
+      message: `No hay tasa de ${ancla} a ${funcional} todavía. Confírmala en Mi dinero.`,
+    });
+  }
+  const [calc] = await sql<{ in_functional: string; in_anchor: string }[]>`
+    select case when ${currency} = ${ancla}
+                then round(${amount}::numeric(24,8) * ${t.rate}::numeric(24,8), 2)::text
+                else round(${amount}::numeric(24,8), 2)::text end as in_functional,
+           case when ${currency} = ${ancla}
+                then round(${amount}::numeric(24,8), 2)::text
+                else round(${amount}::numeric(24,8) / ${t.rate}::numeric(24,8), 2)::text
+                end as in_anchor`;
+  return ok({
+    rate: t.rate,
+    source: t.source,
+    rate_date: t.rate_date,
+    in_functional: calc!.in_functional,
+    in_anchor: calc!.in_anchor,
+  });
+}

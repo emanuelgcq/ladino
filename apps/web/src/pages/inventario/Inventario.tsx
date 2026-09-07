@@ -424,14 +424,29 @@ function Movimiento({
     to_warehouse_id: "",
     quantity: "",
     amount: "",
-    currency: "VES",
+    currency: "USD",
     fx_rate: "",
     fx_source: "",
     reason: "",
     reference: "",
   });
+  // La tasa del día es el camino feliz (la resuelve el servidor, con su
+  // fuente); «usar otra tasa» abre el override para el caso raro.
+  const [otraTasa, setOtraTasa] = useState(false);
   const [confirmando, setConfirmando] = useState(false);
   const [error, setError] = useState<unknown>(null);
+
+  // Vista previa de la conversión — ARITMÉTICA DEL SERVIDOR, nunca de aquí.
+  const montoLimpio = form.amount.trim().replace(",", ".");
+  const vista = useQuery({
+    queryKey: ["fx-preview", empresa.id, montoLimpio, form.currency],
+    enabled: operacion === "entrada" && importeValido(montoLimpio),
+    staleTime: 30_000,
+    queryFn: () =>
+      llamar<{ rate: string; source: string; in_functional: string; in_anchor: string }>(
+        `/v1/exchange-rates/preview?amount=${montoLimpio}&currency=${form.currency}`,
+      ),
+  });
 
   const def = OPERACION[operacion];
   const cantidadValida =
@@ -443,8 +458,10 @@ function Movimiento({
     form.warehouse_id !== "" &&
     cantidadValida &&
     (operacion !== "entrada" ||
-      (importeValido(form.amount) &&
-        (form.currency === "VES" || (form.fx_rate !== "" && form.fx_source.trim() !== "")))) &&
+      (importeValido(montoLimpio) &&
+        (form.currency === "VES" ||
+          !otraTasa ||
+          (form.fx_rate !== "" && form.fx_source.trim() !== "")))) &&
     (operacion !== "ajuste" || form.reason.trim().length >= 3) &&
     (operacion !== "transferencia" ||
       (form.to_warehouse_id !== "" && form.to_warehouse_id !== form.warehouse_id));
@@ -465,9 +482,11 @@ function Movimiento({
             ...comun,
             warehouse_id: form.warehouse_id,
             quantity: form.quantity,
-            amount: form.amount,
+            amount: montoLimpio,
             currency: form.currency,
-            ...(form.currency !== "VES"
+            // Sin fx, el SERVIDOR resuelve la tasa del día (con su fuente) —
+            // el override solo viaja cuando la persona eligió otra tasa.
+            ...(form.currency !== "VES" && otraTasa
               ? {
                   fx: {
                     rate: form.fx_rate,
@@ -616,7 +635,25 @@ function Movimiento({
                   />
                 )}
               </FormField>
-              {form.currency !== "VES" && (
+              {/* La equivalencia del día, calculada por el servidor: se ve lo
+                  que vale en la otra moneda ANTES de registrar, y queda claro
+                  con qué tasa y de qué fuente se valorará. */}
+              {importeValido(montoLimpio) && vista.data && !otraTasa && (
+                <p className="text-[0.85rem] text-muted-foreground tabular-nums sm:col-span-2">
+                  {form.currency === "USD"
+                    ? `≈ Bs. ${vista.data.in_functional} a la tasa del día (${vista.data.rate} · ${vista.data.source.split(" ")[0]})`
+                    : `≈ USD ${vista.data.in_anchor} a la tasa del día (${vista.data.rate})`}
+                  {" · "}
+                  <button
+                    type="button"
+                    className="text-accent-soft-foreground hover:underline"
+                    onClick={() => setOtraTasa(true)}
+                  >
+                    usar otra tasa
+                  </button>
+                </p>
+              )}
+              {form.currency !== "VES" && otraTasa && (
                 <>
                   <FormField label="Tasa a VES" required>
                     {(a) => (
@@ -633,12 +670,21 @@ function Movimiento({
                     {(a) => (
                       <Input
                         id={a.id}
-                        placeholder="BCV"
+                        placeholder="Pactada con el proveedor…"
                         value={form.fx_source}
                         onChange={(e) => setForm({ ...form, fx_source: e.target.value })}
                       />
                     )}
                   </FormField>
+                  <p className="text-[0.8rem] text-muted-foreground sm:col-span-2">
+                    <button
+                      type="button"
+                      className="text-accent-soft-foreground hover:underline"
+                      onClick={() => setOtraTasa(false)}
+                    >
+                      volver a la tasa del día
+                    </button>
+                  </p>
                 </>
               )}
             </>

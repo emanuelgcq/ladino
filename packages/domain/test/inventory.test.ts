@@ -126,12 +126,47 @@ describe("costeo promedio ponderado móvil, de punta a punta", () => {
     expect(r.value.rounding_policy_id).toBe("inventory:cost:8:HALF_UP");
   });
 
-  it("una entrada en moneda ajena SIN fuente de tasa no se persiste (ADR-0020)", async () => {
-    const r = await como(JEFE, (uow) =>
-      receiveStock(uow, { ...posicion(), quantity: "1", amount: "1", currency: "USD" }),
+  it("SIN fx la tasa se RESUELVE de la guardada del día del movimiento; sin tasa para esa fecha, no se persiste", async () => {
+    // El contrato cambió con el refresco BCV (2026-09-08): omitir fx ya no es
+    // error — es «usa la tasa guardada, con su fuente». Lo que sigue siendo
+    // sagrado (ADR-0020): una fecha SIN tasa guardada jamás se inventa.
+    // Fechas antiguas propias para no depender del refresco vivo — y la cara
+    // «sin tasa» queda ANTES de la sembrada: el test es idempotente aunque la
+    // siembra de la otra cara persista entre corridas (aquí no hay rollback).
+    const sin = await como(JEFE, (uow) =>
+      receiveStock(uow, {
+        ...posicion(),
+        quantity: "1",
+        amount: "1",
+        currency: "USD",
+        occurred_at: "2019-05-31T12:00:00.000Z",
+      }),
     );
-    expect(!r.ok && r.error.code).toBe("VALIDATION_FAILED");
-    expect(!r.ok && r.error.message).toContain("fuente");
+    expect(!sin.ok && sin.error.code).toBe("EXCHANGE_RATE_MISSING");
+    expect(!sin.ok && sin.error.message).toContain("tasa");
+
+    await como(JEFE, async ({ sql }) => {
+      await sql`
+        insert into public.exchange_rates
+          (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+        values ('USD', 'VES', 50, 'BCV unit-inventario', '2019-06-02',
+                '2019-06-02T12:00:00Z')
+        on conflict on constraint exchange_rates_day_key do nothing`;
+    });
+    const con = await como(JEFE, (uow) =>
+      receiveStock(uow, {
+        ...posicion(),
+        quantity: "1",
+        amount: "2",
+        currency: "USD",
+        occurred_at: "2019-06-02T13:00:00.000Z",
+      }),
+    );
+    expect(con.ok).toBe(true);
+    if (!con.ok) return;
+    expect(con.value.fx_rate).toBe("50.00000000");
+    expect(con.value.rate_source).toBe("BCV unit-inventario");
+    expect(con.value.functional_amount).toBe("100.00000000");
   });
 });
 
