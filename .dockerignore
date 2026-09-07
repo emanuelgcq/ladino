@@ -13,3 +13,4 @@ supabase/.temp
 docs
 *.md
 !README.md
+landing
