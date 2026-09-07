@@ -120,7 +120,7 @@ export function CommandPalette({
         <BaseDialog.Popup
           className={cn(
             "fixed left-1/2 top-24 z-50 w-full max-w-lg -translate-x-1/2 overflow-hidden",
-            "rounded-md border border-border bg-surface shadow-overlay outline-none",
+            "rounded-md border border-glass-border bg-glass shadow-overlay outline-none backdrop-blur-xl backdrop-saturate-150",
             "transition-all data-[starting-style]:scale-95 data-[starting-style]:opacity-0",
           )}
           initialFocus={inputRef}

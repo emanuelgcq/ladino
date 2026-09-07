@@ -1,20 +1,25 @@
 /**
- * Ladino — EL archivo de tema. Dirección «Tinta y esmeralda» (rediseño 2026-09).
+ * Ladino — EL archivo de tema. Dirección «Azul Ladino, glass» (rebranding
+ * 2026-09-07: el acento sale del LOGO — la cinta azul — y el verde se va).
  *
  * Todo token visual del sistema vive aquí y solo aquí: colores, radios,
  * tipografía, sombras, movimiento. Los componentes consumen utilidades de
  * Tailwind v4 mapeadas a estos tokens (@theme inline), así que cambiar la
  * identidad es cambiar este archivo — ningún componente lleva un hex propio.
  *
- * Principios (levantamiento 2026: familia Vercel/Geist y Linear, tokens
- * OKLCH-neutros, guías WCAG 2.2 y dark-mode de elevación tonal):
+ * Principios (los del levantamiento 2026, con la marca encima):
  *   · CLARO ES BLANCO, OSCURO ES NEGRO. El lienzo claro es blanco puro y la
  *     tinta casi negra; el oscuro es negro profundo (#0a0a0a — nunca #000,
  *     que castiga a la fotosensibilidad) con superficies que se elevan POR
- *     TONO, no por sombra. Escala NEUTRA de verdad: fuera el tinte azul.
- *   · UN acento: esmeralda. Acciones primarias, éxito y dinero positivo.
+ *     TONO, no por sombra. Escala NEUTRA de verdad.
+ *   · UN acento: EL AZUL DEL LOGO. Acciones primarias, éxito y dinero
+ *     positivo hablan azul Ladino; el verde no existe en el sistema.
  *   · Semánticos con papel fijo: ámbar = advertencia y pérdida cambiaria,
- *     rojo = SOLO destructivo, azul = información.
+ *     rojo = SOLO destructivo, cian = información (cedió el azul al acento).
+ *   · GLASS con mesura: los planos que FLOTAN (diálogos, sidebar, cabeceras
+ *     pegajosas, paleta) son translúcidos con desenfoque — `bg-glass` +
+ *     `backdrop-blur`; las superficies de LECTURA (tablas, tarjetas de
+ *     datos) siguen sólidas: un ERP se lee, no se adivina.
  *   · La jerarquía la hacen tipografía y espaciado, no decoraciones:
  *     bordes sutiles, radios 6–10 px, sombras por capas SOLO en claro.
  *   · Movimiento con propósito: 150–200 ms, ease-out, y TODO respeta
@@ -42,12 +47,18 @@
   --muted-foreground: #6f6f6f; /* etiquetas, metadatos — AA sobre blanco */
   --faint-foreground: #a3a3a3; /* placeholders, deshabilitado */
 
-  /* ── El acento único ── */
-  --accent: #059669; /* emerald-600 */
-  --accent-hover: #047857; /* emerald-700 */
+  /* ── El acento único: el azul del logo ── */
+  --accent: #2563eb; /* el azul vivo de la cinta */
+  --accent-hover: #1d4ed8;
   --accent-foreground: #ffffff;
-  --accent-soft: #ecfdf5; /* emerald-50 */
-  --accent-soft-foreground: #047857;
+  --accent-soft: #eff6ff;
+  --accent-soft-foreground: #1d4ed8;
+
+  /* Éxito y dinero positivo hablan la MISMA voz que el acento (el verde no
+     existe): tokens propios para que el semántico quede nombrado. */
+  --success: #2563eb;
+  --success-soft: #eff6ff;
+  --success-soft-foreground: #1d4ed8;
 
   /* ── Semánticos ── */
   --warning: #d97706;
@@ -58,11 +69,15 @@
   --destructive-foreground: #ffffff;
   --destructive-soft: #fef2f2;
   --destructive-soft-foreground: #b91c1c;
-  --info: #2563eb;
-  --info-soft: #eff6ff;
-  --info-soft-foreground: #1d4ed8;
+  --info: #0e7490; /* cian: la información cedió el azul al acento */
+  --info-soft: #ecfeff;
+  --info-soft-foreground: #0e7490;
 
-  --ring: #05966955; /* anillo de foco: esmeralda translúcida */
+  --ring: #2563eb55; /* anillo de foco: azul Ladino translúcido */
+
+  /* GLASS: el plano que flota — translúcido, con blur desde la utilidad. */
+  --glass: rgb(255 255 255 / 0.72);
+  --glass-border: rgb(0 0 0 / 0.08);
 
   /* Sombras POR CAPAS (solo el claro las necesita): cercana + ambiente. */
   --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.04), 0 1px 1px rgb(0 0 0 / 0.03);
@@ -84,11 +99,15 @@
   --muted-foreground: #9b9b9b;
   --faint-foreground: #636363;
 
-  --accent: #10b981; /* emerald-500: más luz sobre negro */
-  --accent-hover: #34d399;
-  --accent-foreground: #052e22;
-  --accent-soft: rgb(16 185 129 / 0.13);
-  --accent-soft-foreground: #34d399;
+  --accent: #3b82f6; /* más luz sobre negro */
+  --accent-hover: #60a5fa;
+  --accent-foreground: #081a3d;
+  --accent-soft: rgb(59 130 246 / 0.15);
+  --accent-soft-foreground: #60a5fa;
+
+  --success: #3b82f6;
+  --success-soft: rgb(59 130 246 / 0.15);
+  --success-soft-foreground: #60a5fa;
 
   --warning: #f59e0b;
   --warning-soft: rgb(245 158 11 / 0.13);
@@ -98,11 +117,14 @@
   --destructive-foreground: #ffffff;
   --destructive-soft: rgb(239 68 68 / 0.13);
   --destructive-soft-foreground: #f87171;
-  --info: #3b82f6;
-  --info-soft: rgb(59 130 246 / 0.13);
-  --info-soft-foreground: #60a5fa;
+  --info: #22d3ee;
+  --info-soft: rgb(34 211 238 / 0.12);
+  --info-soft-foreground: #67e8f9;
 
-  --ring: #10b98166;
+  --ring: #3b82f666;
+
+  --glass: rgb(20 20 20 / 0.62);
+  --glass-border: rgb(255 255 255 / 0.09);
 
   /* En negro la sombra apenas existe: separa el TONO; la de overlay solo
      asienta los diálogos sobre el scrim. */
@@ -125,6 +147,11 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-accent-soft: var(--accent-soft);
   --color-accent-soft-foreground: var(--accent-soft-foreground);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-success-soft-foreground: var(--success-soft-foreground);
+  --color-glass: var(--glass);
+  --color-glass-border: var(--glass-border);
   --color-warning: var(--warning);
   --color-warning-soft: var(--warning-soft);
   --color-warning-soft-foreground: var(--warning-soft-foreground);

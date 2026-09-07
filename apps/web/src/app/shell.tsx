@@ -21,6 +21,7 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "../ui/m
 import { useSesion } from "./session.js";
 import { NAV_NEGOCIO, NAV_ADMIN, NAV_EMPEZAR, CRUMBS, rutaInicial, type NavItem } from "./nav.js";
 import { CommandPalette } from "./palette.js";
+import { LogoLadino } from "../components/LogoLadino.js";
 import { esOscuroAhora, setTema, temaActual } from "../theme.js";
 
 /**
@@ -172,7 +173,7 @@ export function AppShell(): React.JSX.Element {
     <div className="flex min-h-screen bg-background">
       <aside
         className={cn(
-          "sticky top-0 flex h-screen shrink-0 flex-col border-r border-border bg-surface",
+          "sticky top-0 flex h-screen shrink-0 flex-col border-r border-glass-border bg-glass backdrop-blur-xl backdrop-saturate-150",
           "transition-[width] duration-200",
           colapsada ? "w-14" : "w-64",
         )}
@@ -180,10 +181,13 @@ export function AppShell(): React.JSX.Element {
         <div
           className={cn("flex items-center gap-2 px-3 py-3", colapsada && "justify-center px-0")}
         >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-accent text-[0.9rem] font-semibold text-accent-foreground">
-            L
-          </span>
-          {!colapsada && <span className="truncate font-semibold">Ladino</span>}
+          {colapsada ? (
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-accent text-[0.9rem] font-semibold text-accent-foreground">
+              L
+            </span>
+          ) : (
+            <LogoLadino alto="h-7" />
+          )}
         </div>
         <nav className="flex-1 overflow-y-auto px-2 pb-2" aria-label="Navegación principal">
           {/* El grupo SIN nombre: la app. Objetivos táctiles de 44 px. */}
@@ -298,7 +302,7 @@ function ItemNav({
 function TopBar({ onBuscar }: { onBuscar: () => void }): React.JSX.Element {
   const { session, empresa } = useSesion();
   return (
-    <header className="sticky top-0 z-30 flex h-12 items-center gap-2 border-b border-border bg-surface/95 px-4 backdrop-blur">
+    <header className="sticky top-0 z-30 flex h-12 items-center gap-2 border-b border-glass-border bg-glass px-4 backdrop-blur-xl backdrop-saturate-150">
       <CompanySwitcher />
       <div className="flex-1" />
       <Button
