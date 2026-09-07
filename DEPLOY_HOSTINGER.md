@@ -25,10 +25,12 @@ Red Docker compartida: n8n_default
 Supabase GESTIONADO (proyecto udacvwnhwpsdzbouhqhl) — la base NO vive en el VPS
 ```
 
-Diferencia clave con Afterlaria: **la base de datos no está en el VPS**. Ladino
-habla con Supabase gestionado por el pooler (puerto 6543), con dos roles de
-servicio dedicados y sin superusuario — la API **se niega a arrancar** si la
-conectas como `postgres` (es una defensa, no un bug).
+La base es **Supabase Cloud** (proyecto `udacvwnhwpsdzbouhqhl`), igual que
+Afterlaria usa el suyo — en el VPS no corre ninguna base de datos. La
+diferencia de Ladino está en CÓMO se conecta: por el pooler (puerto 6543,
+modo transacción), con dos roles de servicio dedicados y sin superusuario —
+la API **se niega a arrancar** si la conectas como `postgres` (es una
+defensa, no un bug).
 
 ---
 
