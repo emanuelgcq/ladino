@@ -57,6 +57,14 @@ export interface Company {
   tax_id: string;
   /** Domicilio fiscal del emisor (PA 00071 art. 13.5). NULL hasta cargarlo en /empezar. */
   fiscal_address: string | null;
+  /** El perfil del registro premium (migración 43). */
+  business_type: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  city: string | null;
+  state: string | null;
+  /** URL firmada del logo (vigencia corta) o null. */
+  logo_url: string | null;
   status: string;
   created_at: string;
 }

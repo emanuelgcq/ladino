@@ -5,6 +5,8 @@ import { api, supabase, LlamadaApiError, type Company } from "../lib.js";
 import { Button } from "../ui/button.js";
 import { Input, Label } from "../ui/input.js";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../ui/card.js";
+import { LogoLadino } from "../components/LogoLadino.js";
+import { Registro } from "../pages/registro/Registro.js";
 
 /**
  * Sesión y empresa activa, para todo el árbol.
@@ -144,6 +146,18 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   if (cargando) return <PantallaCentrada>Cargando…</PantallaCentrada>;
   if (!session) return <Login />;
   if (companies === null) return <PantallaCentrada>Cargando empresas…</PantallaCentrada>;
+  // Sin ninguna empresa: EL REGISTRO PREMIUM (pantalla completa, como el
+  // Login). El formulario chiquito del selector murió con él.
+  if (companies.length === 0 && error === "") {
+    return (
+      <Registro
+        token={session.access_token}
+        correo={session.user.email ?? ""}
+        onSalir={() => void supabase.auth.signOut()}
+        onListo={() => void recargar(session)}
+      />
+    );
+  }
   if (empresa !== null && permisos === null) {
     return <PantallaCentrada>Cargando permisos…</PantallaCentrada>;
   }
@@ -154,7 +168,6 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
         error={error}
         onElegir={setEmpresa}
         onRecargar={() => void recargar(session)}
-        session={session}
       />
     );
   }
@@ -172,16 +185,14 @@ function PantallaCentrada({ children }: { children: React.ReactNode }): React.JS
 function Marca(): React.JSX.Element {
   return (
     <div className="mb-8 flex flex-col items-center gap-3 text-center">
-      <span className="relative flex size-12 items-center justify-center rounded-xl bg-accent text-xl font-semibold text-accent-foreground shadow-overlay">
-        L{/* El halo: una sola nota de color sobre el lienzo monocromo. */}
-        <span aria-hidden className="absolute -inset-6 -z-10 rounded-full bg-accent/15 blur-2xl" />
+      <span className="relative">
+        <LogoLadino alto="h-14" />
+        {/* El halo: una sola nota de color sobre el lienzo monocromo. */}
+        <span aria-hidden className="absolute -inset-8 -z-10 rounded-full bg-accent/12 blur-2xl" />
       </span>
-      <div>
-        <p className="text-[1.35rem] font-semibold leading-tight tracking-tight">Ladino</p>
-        <p className="text-[0.82rem] text-muted-foreground">
-          Administración y contabilidad para tu negocio
-        </p>
-      </div>
+      <p className="text-[0.82rem] text-muted-foreground">
+        Administración y contabilidad para tu negocio
+      </p>
     </div>
   );
 }
@@ -292,42 +303,12 @@ function SelectorEmpresa({
   error,
   onElegir,
   onRecargar,
-  session,
 }: {
   companies: Company[];
   error: string;
   onElegir: (c: Company) => void;
   onRecargar: () => void;
-  session: Session;
 }): React.JSX.Element {
-  const [alta, setAlta] = useState({ business_name: "", tax_id: "" });
-  const [altaError, setAltaError] = useState("");
-  const [ocupado, setOcupado] = useState(false);
-
-  // ADR-0049: FUNDAR el negocio en un acto — tenant, empresa, depósito,
-  // roles del fundador y plan contable. Un reintento tras un éxito responde
-  // DUPLICATE y recargar la sesión enseña la empresa igual: por eso el catch
-  // también recarga.
-  async function fundar() {
-    setAltaError("");
-    setOcupado(true);
-    try {
-      await api(session, "/v1/onboarding", {
-        method: "POST",
-        body: JSON.stringify({
-          business_name: alta.business_name.trim(),
-          ...(alta.tax_id.trim() === "" ? {} : { tax_id: alta.tax_id.trim() }),
-        }),
-      });
-      onRecargar();
-    } catch (e) {
-      setAltaError(mensajeDe(e));
-      onRecargar();
-    } finally {
-      setOcupado(false);
-    }
-  }
-
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4">
       <div
@@ -350,48 +331,19 @@ function SelectorEmpresa({
           </CardHeader>
           <CardContent className="space-y-2">
             {error && (
-              <p role="alert" className="text-[0.85rem] text-destructive-soft-foreground">
-                {error}
-              </p>
+              <div className="space-y-2">
+                <p role="alert" className="text-[0.85rem] text-destructive-soft-foreground">
+                  {error}
+                </p>
+                <Button variant="secondary" size="sm" onClick={onRecargar}>
+                  Reintentar
+                </Button>
+              </div>
             )}
             {companies.length === 0 ? (
-              <div className="space-y-3">
-                <CardDescription>
-                  Bienvenido. Ponle nombre a tu negocio y en un minuto tienes todo listo: tu
-                  depósito, tus listas de precios y tu contabilidad armada. El RIF puede esperar —
-                  puedes vender con recibos desde hoy y activar la facturación cuando lo tengas.
-                </CardDescription>
-                <div className="space-y-2">
-                  <Label htmlFor="fundar-nombre">¿Cómo se llama tu negocio?</Label>
-                  <Input
-                    id="fundar-nombre"
-                    placeholder="Bodega La Esquina"
-                    value={alta.business_name}
-                    autoFocus
-                    onChange={(e) => setAlta({ ...alta, business_name: e.target.value })}
-                  />
-                  <Label htmlFor="fundar-rif">RIF (si ya lo tienes)</Label>
-                  <Input
-                    id="fundar-rif"
-                    placeholder="J-12345678-9 — opcional"
-                    value={alta.tax_id}
-                    onChange={(e) => setAlta({ ...alta, tax_id: e.target.value })}
-                  />
-                  {altaError && (
-                    <p role="alert" className="text-[0.85rem] text-destructive-soft-foreground">
-                      {altaError}
-                    </p>
-                  )}
-                  <Button
-                    variant="primary"
-                    className="w-full"
-                    disabled={ocupado || alta.business_name.trim().length < 2}
-                    onClick={() => void fundar()}
-                  >
-                    {ocupado ? "Fundando…" : "Fundar mi negocio"}
-                  </Button>
-                </div>
-              </div>
+              <CardDescription>
+                No se pudieron cargar tus empresas. Revisa tu conexión y reintenta.
+              </CardDescription>
             ) : (
               companies.map((c) => (
                 <button

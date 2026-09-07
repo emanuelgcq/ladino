@@ -18,7 +18,9 @@ import { violaciones, TERMINOS_PROHIBIDOS } from "../src/i18n/glosario.js";
  * términos tiene que disparar todos, y uno limpio, ninguno.
  */
 const RAIZ = fileURLToPath(new URL("..", import.meta.url));
-const NEGOCIO = join(RAIZ, "src", "pages", "negocio");
+// El gate cubre el mundo de la persona Y el registro premium: las dos
+// superficies donde la voz es de mostrador (PARTE 7 del encargo).
+const CARPETAS = [join(RAIZ, "src", "pages", "negocio"), join(RAIZ, "src", "pages", "registro")];
 
 function archivosDe(dir: string): string[] {
   let entradas: string[];
@@ -68,7 +70,7 @@ describe("el glosario de persona (gate de Fase C)", () => {
   });
 
   it("ninguna pantalla de negocio usa un término prohibido", () => {
-    const archivos = archivosDe(NEGOCIO);
+    const archivos = CARPETAS.flatMap((c) => archivosDe(c));
     const problemas: string[] = [];
     for (const a of archivos) {
       const fuente = readFileSync(a, "utf8");

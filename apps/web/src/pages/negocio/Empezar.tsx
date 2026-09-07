@@ -1,16 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Check,
-  ChevronRight,
-  CircleDashed,
-  FileSpreadsheet,
-  Package,
-  Plus,
-  Store,
-} from "lucide-react";
+import { Check, ChevronRight, FileSpreadsheet, Package, Plus, Store } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { LogoLadino } from "../../components/LogoLadino.js";
 import { errorDePersona } from "../../lib.js";
 import { mostrarCantidad } from "../../money.js";
 import { Button } from "../../ui/button.js";
@@ -111,78 +104,99 @@ export function Empezar(): React.JSX.Element {
   ];
   const todoListo = pasos.every((p) => p.listo);
 
+  // P10 del registro premium: /empezar habla el MISMO idioma visual — pantalla
+  // completa, una cosa a la vez, progreso fino, transición suave. La LÓGICA no
+  // cambió: mismos pasos, mismas consultas, mismos endpoints; solo la piel.
+  const AYUDAS = [
+    "Con dos o tres basta para arrancar. Puedes traerlos desde Excel.",
+    "Dónde te pagan: efectivo, pago móvil, tu cuenta del banco.",
+    "Un toque al día y todos tus precios quedan al día.",
+    "Cómo factura tu negocio, con su norma delante. Tú decides.",
+  ];
   return (
-    <div className="mx-auto max-w-2xl space-y-5">
-      <div>
-        <h1 className="text-xl font-semibold">Empezar</h1>
-        <p className="mt-1 text-[0.95rem] text-muted-foreground">
-          Cuatro pasos y quedas listo para vender. Puedes salir y volver: cada paso queda guardado.
-        </p>
-      </div>
-
-      {/* La escalera: cada paso con su estado real, tomado del servidor. */}
-      <div className="flex items-center gap-1.5">
-        {pasos.map((p, i) => (
+    <div className="fixed inset-0 z-40 overflow-y-auto bg-background">
+      <header className="sticky top-0 z-10 bg-background/90 backdrop-blur-sm">
+        <div className="mx-auto flex h-14 max-w-2xl items-center gap-4 px-6">
+          <LogoLadino alto="h-6" />
+          {/* La escalera, en versión hilo: estado REAL de cada paso, clicable. */}
+          <div className="flex flex-1 items-center justify-center gap-1.5">
+            {pasos.map((p, i) => (
+              <button
+                key={p.titulo}
+                onClick={() => setPaso(i)}
+                aria-label={`${p.titulo}${p.listo ? " — listo" : ""}`}
+                className={`h-1.5 rounded-full transition-all duration-300 ${
+                  paso === i ? "w-10" : "w-6"
+                } ${p.listo ? "bg-accent" : paso === i ? "bg-border-strong" : "bg-border"}`}
+              />
+            ))}
+          </div>
           <button
-            key={p.titulo}
-            onClick={() => setPaso(i)}
-            className={`flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-md border px-2 py-2 text-[0.82rem] ${
-              paso === i
-                ? "border-accent bg-accent-soft text-accent-soft-foreground"
-                : "border-border bg-surface text-muted-foreground hover:text-foreground"
-            }`}
+            onClick={() => void navigate("/")}
+            className="rounded-md px-2 py-1 text-[0.82rem] text-faint-foreground transition-colors hover:text-foreground"
           >
-            {p.listo ? (
-              <Check className="size-4 text-success-soft-foreground" />
-            ) : (
-              <CircleDashed className="size-4" />
-            )}
-            <span className="truncate">{p.titulo}</span>
+            Ir a la app
           </button>
-        ))}
-      </div>
+        </div>
+      </header>
 
-      {paso === 0 && (
-        <PasoProductos
-          hayProductos={hayProductos}
-          total={productos.data?.total ?? 0}
-          onCambio={recargar}
-          onSeguir={() => setPaso(1)}
-        />
-      )}
-      {paso === 1 && (
-        <PasoCuentas
-          cuentas={cuentas.data?.accounts ?? []}
-          onCambio={recargar}
-          onSeguir={() => setPaso(2)}
-        />
-      )}
-      {paso === 2 && (
-        <PasoTasa
-          tasa={resumen.data?.tasa_del_dia ?? null}
-          onCambio={recargar}
-          onSeguir={() => setPaso(3)}
-        />
-      )}
-      {paso === 3 && facturacion !== null && (
-        <PasoFacturas setup={facturacion} hayTalonario={hayTalonario} onCambio={recargar} />
-      )}
+      <main className="mx-auto max-w-2xl px-6 pb-24 pt-8">
+        <div key={paso} className="motion-safe:animate-[empezar-entrar_240ms_ease-out]">
+          <div className="mb-6 text-center">
+            <p className="text-[0.82rem] font-medium uppercase tracking-wider text-faint-foreground">
+              Paso {paso + 1} de {pasos.length}
+              {pasos[paso]!.listo ? " · listo" : ""}
+            </p>
+            <h1 className="mt-1 text-balance text-[2rem] font-semibold leading-tight tracking-tight">
+              {pasos[paso]!.titulo}
+            </h1>
+            <p className="mt-2 text-[0.98rem] text-muted-foreground">{AYUDAS[paso]}</p>
+          </div>
 
-      {todoListo && (
-        <Card className="border-success-soft-foreground/40">
-          <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
-            <div>
-              <p className="font-medium">¡Listo! Tu negocio ya puede vender.</p>
-              <p className="text-[0.9rem] text-muted-foreground">
-                Lo demás se va ajustando sobre la marcha.
-              </p>
-            </div>
-            <Button variant="primary" size="lg" onClick={() => void navigate("/vender")}>
-              <Store /> Ir a vender
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+          {paso === 0 && (
+            <PasoProductos
+              hayProductos={hayProductos}
+              total={productos.data?.total ?? 0}
+              onCambio={recargar}
+              onSeguir={() => setPaso(1)}
+            />
+          )}
+          {paso === 1 && (
+            <PasoCuentas
+              cuentas={cuentas.data?.accounts ?? []}
+              onCambio={recargar}
+              onSeguir={() => setPaso(2)}
+            />
+          )}
+          {paso === 2 && (
+            <PasoTasa
+              tasa={resumen.data?.tasa_del_dia ?? null}
+              onCambio={recargar}
+              onSeguir={() => setPaso(3)}
+            />
+          )}
+          {paso === 3 && facturacion !== null && (
+            <PasoFacturas setup={facturacion} hayTalonario={hayTalonario} onCambio={recargar} />
+          )}
+        </div>
+
+        {todoListo && (
+          <Card className="mt-6 border-success-soft-foreground/40">
+            <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+              <div>
+                <p className="font-medium">¡Listo! Tu negocio ya puede vender.</p>
+                <p className="text-[0.9rem] text-muted-foreground">
+                  Lo demás se va ajustando sobre la marcha.
+                </p>
+              </div>
+              <Button variant="primary" size="lg" onClick={() => void navigate("/vender")}>
+                <Store /> Ir a vender
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+      </main>
+      <style>{`@keyframes empezar-entrar { from { opacity: 0; transform: translateX(24px) } to { opacity: 1; transform: none } }`}</style>
     </div>
   );
 }

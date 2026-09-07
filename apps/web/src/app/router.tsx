@@ -41,6 +41,15 @@ import { Empezar } from "../pages/negocio/Empezar.js";
 /** ADR-0048: cada rol aterriza en SU pantalla — el cajero no entra por «lo que gané». */
 function AterrizajePorRol(): React.JSX.Element {
   const { puede } = useSesion();
+  // El registro premium deja aquí su destino (una sola vez): el router nace
+  // ANTES de que exista la sesión —con la URL «/» congelada— y un
+  // replaceState previo al montaje se pierde. El recién fundado aterriza en
+  // /empezar sin pantalla intermedia; todos los demás, por su rol.
+  const destino = sessionStorage.getItem("ladino.aterrizar");
+  if (destino !== null) {
+    sessionStorage.removeItem("ladino.aterrizar");
+    return <Navigate to={destino} replace />;
+  }
   return <Navigate to={rutaInicial(puede)} replace />;
 }
 

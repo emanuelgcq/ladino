@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardCheck } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card.js";
+import { MiEmpresa } from "./configuracion/MiEmpresa.js";
 import { SimpleSelect } from "../ui/select.js";
 import { Switch } from "../ui/switch.js";
 import { Label } from "../ui/input.js";
@@ -50,6 +51,8 @@ export function Configuracion(): React.JSX.Element {
   return (
     <div className="max-w-2xl space-y-4">
       <h1 className="text-xl font-semibold">Configuración</h1>
+
+      <MiEmpresa />
 
       <Card>
         <CardHeader>
