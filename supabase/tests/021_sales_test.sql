@@ -20,6 +20,12 @@
 begin;
 select plan(65);
 
+-- El API de desarrollo puede estar VIVO durante el gate y su refresco BCV
+-- (tasa-oficial.ts) inserta la tasa real del día en esta tabla GLOBAL en
+-- plena ventana del test. Este test es dueño de su mundo de tasas: limpia el
+-- par dentro de SU transacción (el rollback lo restaura todo).
+delete from public.exchange_rates where from_currency = 'USD' and to_currency = 'VES';
+
 -- ── Fixtures ─────────────────────────────────────────────────────────────────
 insert into auth.users (id) values ('aaaa0021-0000-4000-8000-0000000000a1');
 insert into public.tenants (id, name) values
