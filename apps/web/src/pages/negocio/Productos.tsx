@@ -5,7 +5,6 @@ import {
   Camera,
   ChevronDown,
   ChevronRight,
-  FileSpreadsheet,
   LayoutGrid,
   Package,
   Plus,
@@ -80,7 +79,6 @@ export function ProductosNegocio(): React.JSX.Element {
     localStorage.getItem(CLAVE_VISTA) === "tabla" ? "tabla" : "cuadricula",
   );
   const [alta, setAlta] = useState(false);
-  const [importar, setImportar] = useState(false);
   const [detalle, setDetalle] = useState<ProductoFila | null>(null);
   const q = useDebounced(busqueda.trim(), 250);
 
@@ -121,15 +119,12 @@ export function ProductosNegocio(): React.JSX.Element {
         >
           {vista === "cuadricula" ? <Rows3 /> : <LayoutGrid />}
         </Button>
+        {/* Importar es tarea ADMINISTRATIVA (regla de los dos mundos): el
+            botón vive en Administración → Productos, no aquí. */}
         {puedeGestionar && (
-          <>
-            <Button variant="secondary" onClick={() => setImportar(true)}>
-              <FileSpreadsheet /> Importar Excel
-            </Button>
-            <Button variant="primary" onClick={() => setAlta(true)}>
-              <Plus /> Agregar producto
-            </Button>
-          </>
+          <Button variant="primary" onClick={() => setAlta(true)}>
+            <Plus /> Agregar producto
+          </Button>
         )}
       </div>
 
@@ -143,16 +138,13 @@ export function ProductosNegocio(): React.JSX.Element {
           </p>
           <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
             {q === ""
-              ? "Agrega el primero con su foto y su precio, o trae de una vez tu Excel completo."
+              ? "Agrega el primero con su foto y su precio. Para traer tu archivo completo: Administración → Productos → Importar."
               : "Prueba con otra palabra, o agrégalo si de verdad falta."}
           </p>
           {q === "" && puedeGestionar && (
             <div className="mt-4 flex justify-center gap-2">
               <Button variant="primary" onClick={() => setAlta(true)}>
                 <Plus /> Agregar producto
-              </Button>
-              <Button variant="secondary" onClick={() => setImportar(true)}>
-                <FileSpreadsheet /> Importar Excel
               </Button>
             </div>
           )}
@@ -199,7 +191,6 @@ export function ProductosNegocio(): React.JSX.Element {
       )}
 
       {alta && <AltaSimple onCerrar={() => setAlta(false)} onCreado={recargar} />}
-      {importar && <ImportarExcel onCerrar={() => setImportar(false)} onListo={recargar} />}
       {detalle !== null && (
         <DetalleProducto producto={detalle} onCerrar={() => setDetalle(null)} onCambio={recargar} />
       )}

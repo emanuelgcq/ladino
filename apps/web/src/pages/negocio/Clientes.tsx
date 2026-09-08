@@ -1,13 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Plus, Search, Upload, Users } from "lucide-react";
+import { ArrowRight, Plus, Search, Users } from "lucide-react";
 import { useSesion } from "../../app/session.js";
-import {
-  ImportarArchivo,
-  PLANTILLA_CLIENTES,
-  NOTA_FORMATO_CLIENTES,
-} from "../../components/importar.js";
 import { errorDePersona } from "../../lib.js";
 import { Button } from "../../ui/button.js";
 import { Card } from "../../ui/card.js";
@@ -54,7 +49,6 @@ export function ClientesNegocio(): React.JSX.Element {
   const { empresa, llamar, puede } = useSesion();
   const [busqueda, setBusqueda] = useState("");
   const [alta, setAlta] = useState(false);
-  const [importando, setImportando] = useState(false);
   const [ficha, setFicha] = useState<ClienteFila | null>(null);
   const qc = useQueryClient();
   const q = useDebounced(busqueda.trim(), 250);
@@ -87,27 +81,12 @@ export function ClientesNegocio(): React.JSX.Element {
             aria-label="Buscar clientes"
           />
         </div>
-        {puede("customer.manage") && (
-          <Button variant="secondary" onClick={() => setImportando(true)}>
-            <Upload /> Importar
-          </Button>
-        )}
+        {/* Importar es tarea ADMINISTRATIVA (regla de los dos mundos): el
+            botón vive en Administración → Clientes, no aquí. */}
         <Button variant="primary" onClick={() => setAlta(true)}>
           <Plus /> Agregar cliente
         </Button>
       </div>
-
-      {importando && (
-        <ImportarArchivo
-          titulo="Importar clientes"
-          descripcion="Descarga la plantilla, llénala y súbela. Las filas buenas entran; las malas se explican con su número."
-          notaFormato={NOTA_FORMATO_CLIENTES}
-          endpoint="/v1/customers/import"
-          plantilla={PLANTILLA_CLIENTES}
-          onCerrar={() => setImportando(false)}
-          onListo={recargar}
-        />
-      )}
 
       {/* Quien administra encuentra aquí la puerta a la deuda y los cobros. */}
       {puede(["customer.tax_id.manage", "accounting.read"]) && (

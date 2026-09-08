@@ -1,7 +1,12 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { PackagePlus, Pencil } from "lucide-react";
+import { PackagePlus, Pencil, Upload } from "lucide-react";
+import {
+  ImportarArchivo,
+  PLANTILLA_PRODUCTOS,
+  NOTA_FORMATO_PRODUCTOS,
+} from "../../components/importar.js";
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
@@ -46,6 +51,7 @@ export function Productos(): React.JSX.Element {
   const [busqueda, setBusqueda] = useState("");
   const [pagina, setPagina] = useState(1);
   const [creando, setCreando] = useState(false);
+  const [importando, setImportando] = useState(false);
   const [detalle, setDetalle] = useState<Product | null>(null);
   const qc = useQueryClient();
 
@@ -106,11 +112,28 @@ export function Productos(): React.JSX.Element {
         title="Productos"
         description="El catálogo: SKU, unidad y clasificación tributaria — la clasificación se congela en cada documento al emitir."
         actions={
-          <Button variant="primary" onClick={() => setCreando(true)}>
-            <PackagePlus /> Nuevo producto
-          </Button>
+          <>
+            <Button variant="secondary" onClick={() => setImportando(true)}>
+              <Upload /> Importar
+            </Button>
+            <Button variant="primary" onClick={() => setCreando(true)}>
+              <PackagePlus /> Nuevo producto
+            </Button>
+          </>
         }
       />
+
+      {importando && (
+        <ImportarArchivo
+          titulo="Importar productos"
+          descripcion="Descarga la plantilla, llénala en Excel o en cualquier editor, y súbela. Las filas buenas entran; las malas se explican con su número."
+          notaFormato={NOTA_FORMATO_PRODUCTOS}
+          endpoint="/v1/products/import"
+          plantilla={PLANTILLA_PRODUCTOS}
+          onCerrar={() => setImportando(false)}
+          onListo={recargar}
+        />
+      )}
       <DataTable
         columns={columnas}
         data={productos.data?.items}
