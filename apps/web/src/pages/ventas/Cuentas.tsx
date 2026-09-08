@@ -41,11 +41,12 @@ interface Statement {
   credits: { id: string; amount: string; applied_amount: string; status: string }[];
   total_outstanding: string;
   total_credit_available: string;
-  aging: {
-    reference_date: string;
-    buckets: { bucket: string; document_count: number; amount: string }[];
-    total: string;
-  };
+}
+/** La antigüedad viene de SU endpoint (/aging): la fuente canónica del bucket. */
+interface Aging {
+  reference_date: string;
+  buckets: { bucket: string; document_count: number; amount: string }[];
+  total: string;
 }
 
 export function Cuentas(): React.JSX.Element {
@@ -79,6 +80,13 @@ export function Cuentas(): React.JSX.Element {
     queryKey: ["statement", empresa.id, cliente?.id],
     enabled: cliente !== null,
     queryFn: () => llamar<Statement>(`/v1/customers/${cliente?.id}/statement`),
+  });
+  // La antigüedad, de su endpoint canónico (2026-09-08): `platform.ar_aging`
+  // servida por /aging — el statement deja de ser su segunda puerta aquí.
+  const aging = useQuery({
+    queryKey: ["aging", empresa.id, cliente?.id],
+    enabled: cliente !== null,
+    queryFn: () => llamar<Aging>(`/v1/customers/${cliente?.id}/aging`),
   });
 
   return (
@@ -115,7 +123,7 @@ export function Cuentas(): React.JSX.Element {
           title="Elige un cliente"
           description="Su estado de cuenta aparece aquí: saldo pendiente, aging y documentos."
         />
-      ) : statement.isPending || statement.data === undefined ? (
+      ) : statement.data === undefined || aging.data === undefined ? (
         <div className="space-y-3">
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-48 w-full" />
@@ -123,6 +131,7 @@ export function Cuentas(): React.JSX.Element {
       ) : (
         <EstadoDeCuenta
           data={statement.data}
+          aging={aging.data}
           onAbrirDocumento={(id) => void navigate(`/admin/ventas/${id}`)}
         />
       )}
@@ -140,12 +149,14 @@ const ETIQUETA_BUCKET: Record<string, string> = {
 
 function EstadoDeCuenta({
   data,
+  aging,
   onAbrirDocumento,
 }: {
   data: Statement;
+  aging: Aging;
   onAbrirDocumento: (id: string) => void;
 }): React.JSX.Element {
-  const barras = data.aging.buckets.map((b) => ({
+  const barras = aging.buckets.map((b) => ({
     nombre: ETIQUETA_BUCKET[b.bucket] ?? b.bucket,
     // SOLO altura de barra; la cifra visible es el string del servidor.
     v: Number(b.amount),
@@ -175,12 +186,10 @@ function EstadoDeCuenta({
       <Card className="lg:col-span-2">
         <CardHeader>
           <CardTitle>Antigüedad de saldos</CardTitle>
-          <span className="text-[0.8rem] text-muted-foreground">
-            al {data.aging.reference_date}
-          </span>
+          <span className="text-[0.8rem] text-muted-foreground">al {aging.reference_date}</span>
         </CardHeader>
         <CardContent>
-          {barras.length === 0 || esCero(data.aging.total) ? (
+          {barras.length === 0 || esCero(aging.total) ? (
             <p className="text-[0.88rem] text-muted-foreground">Nada vencido ni por vencer.</p>
           ) : (
             <div className="h-36">
@@ -202,7 +211,7 @@ function EstadoDeCuenta({
             </div>
           )}
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[0.8rem] text-muted-foreground">
-            {data.aging.buckets.map((b) => (
+            {aging.buckets.map((b) => (
               <span key={b.bucket} className="font-mono">
                 {ETIQUETA_BUCKET[b.bucket] ?? b.bucket}:{" "}
                 {mostrarImporte({ amount: b.amount, currency: data.currency })} ({b.document_count})

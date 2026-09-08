@@ -39,6 +39,8 @@ interface DocumentoAbierto {
   total_amount: string;
   balance: string;
   status: string;
+  /** Días desde la emisión, contados por el servidor. */
+  days_outstanding: number;
 }
 interface EstadoDeCuenta {
   currency: string;
@@ -725,6 +727,17 @@ function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element 
     (d) => d.status === "issued" && compararImportes(d.balance, "0") > 0,
   );
 
+  // «Desde hace N días»: la factura abierta MÁS VIEJA manda, con el color de
+  // su bucket de antigüedad (los mismos cortes de Cuentas por cobrar). Los
+  // días los contó el servidor; aquí solo se elige el máximo.
+  const diasDeuda = abiertas.reduce((max, d) => Math.max(max, d.days_outstanding), 0);
+  const colorDeuda =
+    diasDeuda > 60
+      ? "text-destructive-soft-foreground"
+      : diasDeuda > 30
+        ? "text-warning-soft-foreground"
+        : "text-muted-foreground";
+
   const textoEstado = (): string => {
     if (!estado.data) return "";
     const filas = abiertas
@@ -750,6 +763,13 @@ function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element 
               })
             : "…"}
         </p>
+        {abiertas.length > 0 && (
+          <p className={`text-[0.85rem] ${colorDeuda}`}>
+            {diasDeuda === 0
+              ? "desde hoy"
+              : `desde hace ${String(diasDeuda)} día${diasDeuda === 1 ? "" : "s"}`}
+          </p>
+        )}
       </div>
 
       {abiertas.length > 0 && (
