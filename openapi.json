@@ -17824,6 +17824,15 @@
             "required": true,
             "name": "X-Company-Id",
             "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
           }
         ],
         "requestBody": {

@@ -1444,7 +1444,7 @@ export function buildOpenApiDocument(): object {
       "fiscal — la defensa real contra vender sin existencia sigue siendo la del kardex.",
     security: [{ bearerAuth: [] }],
     request: {
-      headers: companyHeader,
+      headers: idemHeader,
       body: { content: { "application/json": { schema: editarAjustes } } },
     },
     responses: { 200: okJson(ajustesNegocio, "Los ajustes resultantes."), ...erroresComunes },

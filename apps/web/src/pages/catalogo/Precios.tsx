@@ -247,6 +247,7 @@ function PreciosDeLista({
     try {
       await llamar("/v1/company-settings", {
         method: "PUT",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({ default_price_list_id: lista.id }),
       });
       toast.success("Lista predeterminada", "Las próximas ventas de caja usarán esta lista.");

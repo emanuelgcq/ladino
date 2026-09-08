@@ -1,4 +1,4 @@
-import type { Hono } from "hono";
+import type { Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql, type TransactionSql } from "@ladino/db";
 import { UpdateCompanySettingsRequest } from "@ladino/schemas";
 import { getCompanySettings, setCompanySettings } from "@ladino/domain";
@@ -35,7 +35,7 @@ async function exigeTreasuryRead(
   }
 }
 
-export function negocioRoutes(app: Hono, sql: Sql): void {
+export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler): void {
   app.get("/v1/negocio/resumen", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
@@ -213,7 +213,9 @@ export function negocioRoutes(app: Hono, sql: Sql): void {
     return c.json(r.value, 200);
   });
 
-  app.put("/v1/company-settings", async (c) => {
+  // Con `Idempotency-Key` como TODAS sus hermanas mutantes (cierre del
+  // 2026-09-08): era la única mutación persistente sin la llave.
+  app.put("/v1/company-settings", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);
     const parsed = UpdateCompanySettingsRequest.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) throw new ValidacionError(parsed.error.issues);

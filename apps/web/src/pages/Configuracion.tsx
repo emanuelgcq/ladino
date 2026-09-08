@@ -36,6 +36,7 @@ export function Configuracion(): React.JSX.Element {
     mutationFn: (v: boolean) =>
       llamar("/v1/company-settings", {
         method: "PUT",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({ allow_unidentified_sales: v }),
       }),
     onSuccess: () => {

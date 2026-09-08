@@ -177,7 +177,7 @@ export function buildApp(cfg: AppConfig): Hono {
   inventoryExtensionsRoutes(app, cfg.sql, idempotencia);
   treasuryRoutes(app, cfg.sql, idempotencia, cfg.storage);
   documentsPdfRoutes(app, cfg.sql, cfg.storage);
-  negocioRoutes(app, cfg.sql);
+  negocioRoutes(app, cfg.sql, idempotencia);
   fiscalSetupRoutes(app, cfg.sql, idempotencia);
   contingencyRoutes(app, cfg.sql, idempotencia);
 

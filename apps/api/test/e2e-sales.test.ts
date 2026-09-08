@@ -1057,6 +1057,20 @@ describe("ventas de extremo a extremo", () => {
     expect(c["rate"]).toBe("45.00000000");
   });
 
+  it("PUT /v1/company-settings sin Idempotency-Key se rechaza: dejó de ser la excepción", async () => {
+    const r = await app.request("/v1/company-settings", {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${await tokenDe(VENDEDOR)}`,
+        "X-Company-Id": COMPANY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ allow_unidentified_sales: true }),
+    });
+    expect(r.status).toBe(400);
+    expect(((await r.json()) as { code: string }).code).toBe("IDEMPOTENCY_KEY_REQUIRED");
+  });
+
   // ── CIERRE RBAC DE LECTURA (2026-09-08) ───────────────────────────────────
   // «Puede ver la empresa» dejó de abrir el plan de cuentas, los períodos, las
   // compras y la numeración. La cara positiva la fijan las suites que ya leen
