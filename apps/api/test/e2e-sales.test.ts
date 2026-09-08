@@ -1118,6 +1118,113 @@ describe("ventas de extremo a extremo", () => {
     expect((await pedir("GET", "/v1/products?per_page=1", MIRON)).status).toBe(200);
   });
 
+  // ── FIAR DESDE LA CAJA (orden del dueño, 2026-09-08) ──────────────────────
+  // La venta rápida sin pagos (o con pagos cortos) emite y deja la deuda —
+  // pero SOLO con cliente identificado: el «Consumidor final» de sistema no
+  // es un deudor al que se le pueda cobrar después.
+
+  it("FIAR total: la venta sin pagos emite, deja el saldo y aparece en «me deben»", async () => {
+    const resumenAntes = (await (await pedir("GET", "/v1/negocio/resumen", VENDEDOR)).json()) as {
+      lo_que_me_deben: string;
+    };
+
+    const r = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
+      company_id: COMPANY,
+      customer_id: CLIENTE,
+      warehouse_id: W1,
+      series: "C",
+      lines: [{ product_id: PROD, quantity: "1" }],
+      // SIN payments: eso ES fiar.
+    });
+    expect(r.status).toBe(201);
+    const v = (await r.json()) as {
+      document: { id: string; status: string; total_amount: string };
+      document_status: string;
+      balance: string;
+      payments: unknown[];
+    };
+    expect(v.document_status).toBe("issued");
+    expect(v.payments).toHaveLength(0);
+    // El saldo es el total FUNCIONAL entero: 116 USD a tasa 45 = 5220 Bs.
+    expect(v.balance).toBe("5220.00000000");
+    expect(v.document.total_amount).toBe(v.balance);
+
+    // Y la deuda del negocio creció: «me deben» de Inicio/Mi dinero la ve YA.
+    const resumenDespues = (await (await pedir("GET", "/v1/negocio/resumen", VENDEDOR)).json()) as {
+      lo_que_me_deben: string;
+    };
+    expect(Number(resumenDespues.lo_que_me_deben)).toBeGreaterThan(
+      Number(resumenAntes.lo_que_me_deben),
+    );
+
+    // COBRO POSTERIOR (el flujo de Clientes): los 116 USD cierran el saldo.
+    const cobro = await pedir("POST", "/v1/payments", VENDEDOR, {
+      company_id: COMPANY,
+      document_id: v.document.id,
+      currency: "USD",
+      amount: "116.00000000",
+      instrument: "efectivo_usd",
+    });
+    expect(cobro.status).toBe(201);
+    const c = (await cobro.json()) as { document_status: string; balance: string };
+    expect(c.document_status).toBe("paid");
+    expect(c.balance).toBe("0.00000000");
+  });
+
+  it("FIAR parcial: lo pagado se abona y el resto queda debido", async () => {
+    const r = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
+      company_id: COMPANY,
+      customer_id: CLIENTE,
+      warehouse_id: W1,
+      series: "C",
+      lines: [{ product_id: PROD, quantity: "1" }],
+      payments: [{ instrument: "efectivo_usd", amount: "16.00000000", currency: "USD" }],
+    });
+    expect(r.status).toBe(201);
+    const v = (await r.json()) as {
+      document_status: string;
+      balance: string;
+      payments: { payment: Record<string, string> }[];
+      change: unknown;
+    };
+    // 16 USD abonados (720 Bs a tasa 45); quedan 100 USD = 4500 Bs. Sin vuelto.
+    expect(v.payments[0]!.payment["amount"]).toBe("16.00000000");
+    expect(v.change).toBeNull();
+    expect(v.document_status).toBe("issued");
+    expect(v.balance).toBe("4500.00000000");
+  });
+
+  it("FIAR al mostrador se rechaza — y el rechazo NO deja factura fantasma", async () => {
+    const [antes] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.documents where company_id = ${COMPANY}`;
+
+    const sinPagos = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      series: "C",
+      lines: [{ product_id: PROD, quantity: "1" }],
+    });
+    expect(sinPagos.status).toBe(422);
+    expect(((await sinPagos.json()) as { message: string }).message).toContain(
+      "identifica al cliente",
+    );
+
+    const pagoCorto = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      series: "C",
+      lines: [{ product_id: PROD, quantity: "1" }],
+      payments: [{ instrument: "efectivo_usd", amount: "16.00000000", currency: "USD" }],
+    });
+    expect(pagoCorto.status).toBe(422);
+
+    // La lección del documento fantasma (accounting_coverage_gaps): el err
+    // tiene que REVERTIR. Ni el intento sin pagos ni el corto dejaron fila.
+    const [despues] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.documents where company_id = ${COMPANY}`;
+    expect(despues!.n).toBe(antes!.n);
+  });
+
   // ── CUENTAS ABIERTAS del POS (migración 44) ───────────────────────────────
 
   it("la cuenta abierta vive en la nube y MUERE en la transacción del cobro", async () => {

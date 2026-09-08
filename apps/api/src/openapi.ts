@@ -1687,7 +1687,9 @@ export function buildOpenApiDocument(): object {
       "Emite por el MISMO camino que /v1/invoices (numeración gapless, kardex, asiento) y " +
       "registra hasta dos cobros. El vuelto del efectivo lo calcula el servidor; una tarjeta " +
       "no da vuelto. El `Idempotency-Key` es el id de venta del cliente: reintentar devuelve " +
-      "LA MISMA venta, nunca una segunda factura.",
+      "LA MISMA venta, nunca una segunda factura. Sin `payments` (o con pagos que no " +
+      "alcanzan) la venta queda FIADA y `balance` dice el saldo — solo con cliente " +
+      "identificado: una venta de mostrador con saldo se rechaza (422).",
     security: [{ bearerAuth: [] }],
     request: {
       headers: idemHeader,

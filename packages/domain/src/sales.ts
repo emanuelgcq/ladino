@@ -1973,6 +1973,18 @@ export async function quickSale(
     estado = cobrado.value.document_status;
   }
 
+  // FIAR exige un cliente con nombre (orden del dueño, 2026-09-08): una deuda
+  // del «Consumidor final» de sistema no se puede cobrar después — no hay a
+  // quién. La caja solo ofrece «Fiar» con cliente identificado; ESTA
+  // comprobación es la que vale, y cubre también el pago parcial que se queda
+  // corto. `withTransaction` revierte con el err: no queda factura fantasma.
+  if (mostrador?.is_system === true && estado !== "paid") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Una venta de mostrador se cobra completa. Para fiar, identifica al cliente.",
+    });
+  }
+
   if (cobros.length > 0) {
     const [doc] = await sql<DocumentResponse[]>`
       select ${sql.unsafe(DOC_COLUMNS)} from public.documents

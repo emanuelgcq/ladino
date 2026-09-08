@@ -214,10 +214,14 @@ describe("modo recibos", () => {
     expect(venta1.document_status).toBe("paid");
     RECIBO_1 = venta1.document.id;
 
+    // Pagada completa: desde el 2026-09-08 una venta de MOSTRADOR con saldo se
+    // rechaza (fiar exige cliente identificado). Lo que este caso prueba es la
+    // numeración correlativa, y eso no cambia.
     const v2 = await pedir("POST", "/v1/pos/sales", {
       company_id: COMPANY,
       warehouse_id: W1,
       lines: [{ product_id: PROD, quantity: "1" }],
+      payments: [{ instrument: "efectivo_bs", amount: "50.00000000", currency: "VES" }],
     });
     expect(
       ((await v2.json()) as { document: { document_number: number } }).document.document_number,
@@ -317,11 +321,14 @@ describe("modo recibos", () => {
     ).toBe(201);
 
     // 3. La MISMA venta del POS ahora es FACTURA: con IVA y con control.
+    // Pagada completa (100 + 16% = 116): el mostrador ya no puede quedar
+    // debiendo — fiar exige cliente identificado (2026-09-08).
     const v = await pedir("POST", "/v1/pos/sales", {
       company_id: COMPANY,
       warehouse_id: W1,
       series: "A",
       lines: [{ product_id: PROD, quantity: "2" }],
+      payments: [{ instrument: "efectivo_bs", amount: "116.00000000", currency: "VES" }],
     });
     expect(v.status).toBe(201);
     const factura = (await v.json()) as {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Banknote,
   CreditCard,
@@ -92,10 +92,13 @@ interface Venta {
     series: string;
     document_number: number | null;
     status: string;
+    functional_currency: string;
   };
   payments: { payment: Record<string, string> }[];
   change: { amount: string; currency: string } | null;
   document_status: string;
+  /** Lo que quedó debiendo, en moneda funcional. "0.00000000" = pagada. */
+  balance: string;
 }
 
 function useDebounced<T>(valor: T, ms: number, salto?: unknown): T {
@@ -256,6 +259,10 @@ export function Vender(): React.JSX.Element {
 
   const [cobrando, setCobrando] = useState(false);
   const [venta, setVenta] = useState<Venta | null>(null);
+  // El nombre del que quedó debiendo, capturado al vender: la ficha de la
+  // cuenta ya murió cuando el diálogo de éxito lo enseña.
+  const [deudor, setDeudor] = useState<string | null>(null);
+  const qc = useQueryClient();
   const q = useDebounced(busqueda.trim(), 200);
 
   const productos = useQuery({
@@ -639,12 +646,17 @@ export function Vender(): React.JSX.Element {
             cartId={activa.id}
             deposito={deposito}
             onCerrar={() => setCobrando(false)}
+            clienteNombre={activa.sinIdentificar ? null : (activa.cliente?.legal_name ?? null)}
             onVendida={(v) => {
               setCobrando(false);
               setVenta(v);
+              setDeudor(activa.cliente?.legal_name ?? null);
               // La cuenta cobrada MUERE: el servidor la borró en la MISMA
               // transacción de la venta (cart_id); aquí solo cae la ficha.
               quitarCuenta(activa.id, false);
+              // «Me deben» de Inicio y Mi dinero se refresca al instante: la
+              // venta fiada es deuda desde ya.
+              void qc.invalidateQueries({ queryKey: ["negocio-resumen", empresa.id] });
             }}
           />
         )}
@@ -680,8 +692,10 @@ export function Vender(): React.JSX.Element {
         {venta !== null && (
           <VentaLista
             venta={venta}
+            deudor={deudor}
             onNueva={() => {
               setVenta(null);
+              setDeudor(null);
               // La venta nueva empieza como todas: por la cédula. El foco se
               // difiere: al cerrarse, el diálogo restaura el foco al elemento
               // anterior y pisaría este si se pusiera en el mismo tick.
@@ -1088,6 +1102,7 @@ function Cobrar({
   deposito,
   onCerrar,
   onVendida,
+  clienteNombre,
 }: {
   cotizacion: CotizacionPos;
   lineas: { product_id: string; quantity: string }[];
@@ -1098,10 +1113,14 @@ function Cobrar({
   deposito: string;
   onCerrar: () => void;
   onVendida: (v: Venta) => void;
+  /** null = mostrador. Fiar exige nombre: sin cliente no hay a quién cobrarle. */
+  clienteNombre: string | null;
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [pagos, setPagos] = useState<PagoElegido[]>([]);
+  // El paso de confirmación del FIADO: la consecuencia dicha antes de emitir.
+  const [fiando, setFiando] = useState(false);
   // El id de VENTA del cliente: nace con la pantalla de cobro y es la llave
   // de idempotencia — reintentar el botón no emite dos facturas.
   const saleId = useRef(crypto.randomUUID());
@@ -1195,8 +1214,49 @@ function Cobrar({
     onError: (e) => toast.error("No se pudo cobrar", errorDePersona(e)),
   });
 
-  const listo =
-    pagos.length > 0 && pagos.every((p) => importeValido(p.amount.trim().replace(",", ".")));
+  const pagosValidos = pagos.every((p) => importeValido(p.amount.trim().replace(",", ".")));
+  const listo = pagos.length > 0 && pagosValidos;
+  // FIAR: solo con cliente identificado (el dominio lo respalda: una venta de
+  // mostrador con saldo se rechaza). Con pagos puestos, fía EL RESTO — el
+  // dominio ya deja el saldo pendiente cuando lo pagado no alcanza.
+  const puedeFiar = clienteNombre !== null && pagosValidos && lineas.length > 0;
+
+  if (fiando) {
+    return (
+      <Dialog open onOpenChange={(v) => !v && setFiando(false)}>
+        <DialogContent className="max-w-md">
+          <DialogTitle>Fiar esta venta</DialogTitle>
+          <div className="space-y-4 pt-1">
+            <p className="text-[0.95rem]">
+              Se registra la venta por{" "}
+              <span className="font-semibold tabular-nums">
+                {mostrarImporte({
+                  amount: cotizacion.functional_total,
+                  currency: cotizacion.functional_currency,
+                })}
+              </span>{" "}
+              y <span className="font-semibold">{clienteNombre}</span> queda debiendo{" "}
+              {pagos.length === 0 ? "el total" : "el resto (lo pagado se abona ahora)"}. Lo cobras
+              después desde Clientes o Mi dinero.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" onClick={() => setFiando(false)}>
+                Volver
+              </Button>
+              <Button
+                variant="primary"
+                autoFocus
+                disabled={vender.isPending}
+                onClick={() => vender.mutate()}
+              >
+                {vender.isPending ? "Registrando…" : "Fiar y registrar"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
@@ -1279,6 +1339,23 @@ function Cobrar({
           >
             {vender.isPending ? "Cobrando…" : "Confirmar venta"}
           </Button>
+
+          {/* FIAR: el botón secundario — la puerta que faltaba (el backend ya
+              sabía). Con consumidor final va deshabilitado y se dice por qué. */}
+          <Button
+            variant="secondary"
+            className="w-full"
+            disabled={!puedeFiar || vender.isPending}
+            title={clienteNombre === null ? "Para fiar, identifica al cliente" : undefined}
+            onClick={() => setFiando(true)}
+          >
+            {pagos.length === 0 ? "Fiar" : "Fiar el resto"}
+          </Button>
+          {clienteNombre === null && (
+            <p className="text-center text-[0.78rem] text-muted-foreground">
+              Para fiar, identifica al cliente.
+            </p>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -1372,11 +1449,21 @@ function PagoFila({
   );
 }
 
-function VentaLista({ venta, onNueva }: { venta: Venta; onNueva: () => void }): React.JSX.Element {
+function VentaLista({
+  venta,
+  deudor,
+  onNueva,
+}: {
+  venta: Venta;
+  deudor: string | null;
+  onNueva: () => void;
+}): React.JSX.Element {
   const { empresa } = useSesion();
   const toast = useToast();
   const esRecibo = venta.document.kind === "receipt";
   const numero = `${venta.document.series}-${String(venta.document.document_number ?? "").padStart(8, "0")}`;
+  // Con saldo, la venta quedó FIADA: el número lo dijo el servidor (funcional).
+  const fiada = compararImportes(venta.balance, "0") > 0;
 
   async function abrirPdf(): Promise<void> {
     // El PDF exige el Bearer: se baja con fetch y se abre como blob.
@@ -1401,12 +1488,28 @@ function VentaLista({ venta, onNueva }: { venta: Venta; onNueva: () => void }): 
     <Dialog open onOpenChange={(v) => !v && onNueva()}>
       <DialogContent className="max-w-sm text-center">
         <DialogTitle className="text-center">
-          {esRecibo ? "Venta registrada" : "¡Venta lista!"}
+          {fiada ? "Venta registrada" : esRecibo ? "Venta registrada" : "¡Venta lista!"}
         </DialogTitle>
         <div className="space-y-3 pt-2">
           <p className="text-[0.95rem] text-muted-foreground">
             {esRecibo ? "Recibo" : "Factura"} {numero}
           </p>
+          {fiada && (
+            <div className="rounded-lg bg-warning-soft p-4">
+              <p className="text-[0.85rem] text-warning-soft-foreground">
+                {deudor ?? "El cliente"} queda debiendo
+              </p>
+              <p className="text-3xl font-semibold text-warning-soft-foreground tabular-nums">
+                {mostrarImporte({
+                  amount: venta.balance,
+                  currency: venta.document.functional_currency,
+                })}
+              </p>
+              <p className="pt-1 text-[0.8rem] text-warning-soft-foreground">
+                Lo cobras después desde Clientes o Mi dinero.
+              </p>
+            </div>
+          )}
           {venta.change !== null && (
             <div className="rounded-lg bg-success-soft p-4">
               <p className="text-[0.85rem] text-success-soft-foreground">Vuelto</p>
