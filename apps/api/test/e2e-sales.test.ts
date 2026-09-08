@@ -1057,6 +1057,53 @@ describe("ventas de extremo a extremo", () => {
     expect(c["rate"]).toBe("45.00000000");
   });
 
+  // ── CIERRE RBAC DE LECTURA (2026-09-08) ───────────────────────────────────
+  // «Puede ver la empresa» dejó de abrir el plan de cuentas, los períodos, las
+  // compras y la numeración. La cara positiva la fijan las suites que ya leen
+  // esto con su permiso (accounting-hooks, purchases, fiscal-books); aquí va
+  // la NEGATIVA: el miembro sin permisos ve 403, no datos.
+
+  it("un miembro sin permisos de lectura NO ve contabilidad, compras ni numeración", async () => {
+    const contables = [
+      "/v1/accounts",
+      "/v1/fiscal-periods",
+      "/v1/company-account-settings",
+      "/v1/chart-templates",
+      "/v1/journal-template-presets",
+    ];
+    for (const path of contables) {
+      const r = await pedir("GET", path, MIRON);
+      expect(r.status, `${path} debía dar 403 al mirón`).toBe(403);
+    }
+
+    // Compras: convención «ap.read O el permiso mutante del objeto». El mirón
+    // no tiene ninguno.
+    const compras = [
+      "/v1/purchase-orders",
+      "/v1/supplier-invoices",
+      `/v1/purchases/matching?supplier_invoice_id=${crypto.randomUUID()}`,
+      "/v1/landed-costs/variances",
+    ];
+    for (const path of compras) {
+      const r = await pedir("GET", path, MIRON);
+      expect(r.status, `${path} debía dar 403 al mirón`).toBe(403);
+    }
+
+    // Numeración: fiscal.range.manage O sales.invoice.issue. El CAJERO de esta
+    // suite no tiene ninguno de los dos (solo cobra); el VENDEDOR sí — la caja
+    // real (rol cashier sembrado) lleva sales.invoice.issue y sigue viendo el
+    // aviso de agotamiento.
+    expect((await pedir("GET", "/v1/fiscal-number-ranges", CAJERO)).status).toBe(403);
+    expect((await pedir("GET", "/v1/fiscal-number-ranges/exhaustion", CAJERO)).status).toBe(403);
+    expect((await pedir("GET", "/v1/fiscal-number-ranges", VENDEDOR)).status).toBe(200);
+    expect((await pedir("GET", "/v1/fiscal-number-ranges/exhaustion", VENDEDOR)).status).toBe(200);
+
+    // Y lo que el mostrador SÍ necesita sigue abierto al que solo vende:
+    // documentos y productos son solo-alcance a propósito.
+    expect((await pedir("GET", "/v1/documents?per_page=1", MIRON)).status).toBe(200);
+    expect((await pedir("GET", "/v1/products?per_page=1", MIRON)).status).toBe(200);
+  });
+
   // ── CUENTAS ABIERTAS del POS (migración 44) ───────────────────────────────
 
   it("la cuenta abierta vive en la nube y MUERE en la transacción del cobro", async () => {

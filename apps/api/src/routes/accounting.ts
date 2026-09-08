@@ -93,20 +93,23 @@ async function exigeLectura(
 export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler): void {
   // ── Plan de cuentas ───────────────────────────────────────────────────────
 
+  // Los GET de este módulo exigen `accounting.read` TODOS (cierre RBAC del
+  // 2026-09-08): el plan de cuentas, los períodos y los papeles no son «ver la
+  // empresa» — un cajero no los lee. La divulgación progresiva del shell trata
+  // el 403 como «módulo no visible», nunca como error.
   app.get("/v1/accounts", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
     const soloHojas = c.req.query("leaves_only") === "true";
-    const filas = await withTransaction(
-      sql,
-      actor,
-      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLectura(tx, actor, companyId);
+      return tx<Record<string, unknown>[]>`
         select id, company_id, code, name, description, parent_id, kind, nature, is_leaf,
                is_active, currency_code, requires_analytical, level::int as level, path
           from public.accounts
          where company_id = ${companyId} ${soloHojas ? tx`and is_leaf and is_active` : tx``}
-         order by path`,
-    );
+         order by path`;
+    });
     return c.json(filas, 200);
   });
 
@@ -143,16 +146,17 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
   });
 
   app.get("/v1/chart-templates", async (c) => {
+    // Catálogo global, pero la puerta es la misma: leerlo es un gesto contable.
+    const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
-    const filas = await withTransaction(
-      sql,
-      actor,
-      ({ sql: tx }) => tx`
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLectura(tx, actor, companyId);
+      return tx`
         select t.code, t.name, t.description, t.framework, t.legal_source,
                (select count(*)::int from public.chart_template_accounts a
                  where a.template_code = t.code) as account_count
-          from public.chart_templates t where t.status = 'active' order by t.code`,
-    );
+          from public.chart_templates t where t.status = 'active' order by t.code`;
+    });
     return c.json(filas, 200);
   });
 
@@ -168,17 +172,17 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
   });
 
   app.get("/v1/journal-template-presets", async (c) => {
+    const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
-    const filas = await withTransaction(
-      sql,
-      actor,
-      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLectura(tx, actor, companyId);
+      return tx<Record<string, unknown>[]>`
         select p.code, p.name, p.description, p.legal_source,
                (select count(*)::int from public.journal_template_preset_entries e
                  where e.preset_code = p.code) as entry_count
           from public.journal_template_presets p
-         where p.status = 'active' order by p.code`,
-    );
+         where p.status = 'active' order by p.code`;
+    });
     return c.json(filas, 200);
   });
 
@@ -214,18 +218,17 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
   app.get("/v1/company-account-settings", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
-    const filas = await withTransaction(
-      sql,
-      actor,
-      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLectura(tx, actor, companyId);
+      return tx<Record<string, unknown>[]>`
         select p.code as purpose, p.name, p.description,
                s.account_id, a.code as account_code, a.name as account_name
           from public.account_purposes p
           left join public.company_account_settings s
             on s.purpose = p.code and s.company_id = ${companyId} and s.effective_to is null
           left join public.accounts a on a.id = s.account_id
-         order by p.code`,
-    );
+         order by p.code`;
+    });
     return c.json(filas, 200);
   });
 
@@ -441,10 +444,9 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
   app.get("/v1/fiscal-periods", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
-    const filas = await withTransaction(
-      sql,
-      actor,
-      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLectura(tx, actor, companyId);
+      return tx<Record<string, unknown>[]>`
         select p.id, p.year, p.month, p.status,
                to_char(p.closed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as closed_at,
                to_char(p.reopened_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as reopened_at,
@@ -455,8 +457,8 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
                  where q.company_id = p.company_id and q.status = 'pending')
                  as pending_queue_count
           from public.fiscal_periods p
-         where p.company_id = ${companyId} order by p.year desc, p.month desc`,
-    );
+         where p.company_id = ${companyId} order by p.year desc, p.month desc`;
+    });
     return c.json(filas, 200);
   });
 

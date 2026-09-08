@@ -19748,7 +19748,7 @@
     },
     "/v1/fiscal-number-ranges": {
       "get": {
-        "summary": "Rangos de número de control autorizados",
+        "summary": "Rangos de número de control autorizados (fiscal.range.manage o sales.invoice.issue)",
         "security": [
           {
             "bearerAuth": []
@@ -19914,7 +19914,7 @@
     },
     "/v1/fiscal-number-ranges/exhaustion": {
       "get": {
-        "summary": "Rangos por agotarse — la alerta llega antes de que la caja se pare",
+        "summary": "Rangos por agotarse (fiscal.range.manage o sales.invoice.issue): la alerta llega antes de que la caja se pare",
         "security": [
           {
             "bearerAuth": []
@@ -20755,7 +20755,7 @@
     },
     "/v1/purchase-orders": {
       "get": {
-        "summary": "Listar órdenes de compra con su estado DERIVADO de las recepciones",
+        "summary": "Listar órdenes de compra, estado DERIVADO de las recepciones (ap.read, purchase.order.manage o purchase.receive)",
         "security": [
           {
             "bearerAuth": []
@@ -20953,7 +20953,7 @@
     },
     "/v1/purchase-orders/{id}": {
       "get": {
-        "summary": "Detalle de una orden: líneas, avance por línea, recepciones y facturas",
+        "summary": "Detalle de una orden (ap.read, purchase.order.manage o purchase.receive)",
         "security": [
           {
             "bearerAuth": []
@@ -21189,7 +21189,7 @@
     },
     "/v1/goods-receipts/{id}": {
       "get": {
-        "summary": "Detalle de una recepción con sus líneas y los gastos ya aplicados",
+        "summary": "Detalle de una recepción con sus gastos aplicados (ap.read o purchase.receive)",
         "security": [
           {
             "bearerAuth": []
@@ -21299,7 +21299,7 @@
     },
     "/v1/supplier-invoices": {
       "get": {
-        "summary": "Listar facturas de proveedor con su saldo",
+        "summary": "Listar facturas de proveedor con su saldo (ap.read, purchase.invoice.register o purchase.payment.register)",
         "security": [
           {
             "bearerAuth": []
@@ -21507,7 +21507,7 @@
     },
     "/v1/purchases/matching": {
       "get": {
-        "summary": "Matching de tres vías: orden, recepción y factura, con la diferencia de precio",
+        "summary": "Matching de tres vías (ap.read o purchase.invoice.register): orden, recepción y factura",
         "security": [
           {
             "bearerAuth": []
@@ -21681,7 +21681,7 @@
     },
     "/v1/landed-costs/variances": {
       "get": {
-        "summary": "Variaciones de costo del período: lo que el landed cost tardío no capitalizó",
+        "summary": "Variaciones de costo del período (ap.read o purchase.landed_cost.apply)",
         "security": [
           {
             "bearerAuth": []
@@ -22567,7 +22567,7 @@
     },
     "/v1/accounts": {
       "get": {
-        "summary": "Plan de cuentas de la empresa, en orden de árbol",
+        "summary": "Plan de cuentas de la empresa, en orden de árbol (permiso accounting.read)",
         "description": "Nace VACÍO (ADR-0043): el plan de cuentas no se hard-codea. Se llena creando cuentas o importando una plantilla con un acto explícito.",
         "security": [
           {
@@ -22935,7 +22935,7 @@
     },
     "/v1/chart-templates": {
       "get": {
-        "summary": "Plantillas GLOBALES de plan de cuentas (VALIDAR-CONTABLE)",
+        "summary": "Plantillas GLOBALES de plan de cuentas (accounting.read; VALIDAR-CONTABLE)",
         "security": [
           {
             "bearerAuth": []
@@ -23143,7 +23143,7 @@
     },
     "/v1/company-account-settings": {
       "get": {
-        "summary": "Qué cuenta cumple cada PAPEL contable, y cuáles están sin asignar",
+        "summary": "Qué cuenta cumple cada PAPEL contable, y cuáles faltan (accounting.read)",
         "security": [
           {
             "bearerAuth": []
@@ -24061,7 +24061,7 @@
     },
     "/v1/fiscal-periods": {
       "get": {
-        "summary": "Períodos contables, con lo que impide cerrarlos",
+        "summary": "Períodos contables, con lo que impide cerrarlos (permiso accounting.read)",
         "security": [
           {
             "bearerAuth": []

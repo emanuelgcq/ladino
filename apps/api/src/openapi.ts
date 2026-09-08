@@ -1813,7 +1813,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/fiscal-number-ranges",
-    summary: "Rangos de número de control autorizados",
+    summary: "Rangos de número de control autorizados (fiscal.range.manage o sales.invoice.issue)",
     security: [{ bearerAuth: [] }],
     request: { headers: companyHeader },
     responses: { 200: okJson(z.array(rango), "Los rangos de la empresa."), ...erroresComunes },
@@ -1833,7 +1833,8 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/fiscal-number-ranges/exhaustion",
-    summary: "Rangos por agotarse — la alerta llega antes de que la caja se pare",
+    summary:
+      "Rangos por agotarse (fiscal.range.manage o sales.invoice.issue): la alerta llega antes de que la caja se pare",
     security: [{ bearerAuth: [] }],
     request: { headers: companyHeader },
     responses: {
@@ -2032,7 +2033,8 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/purchase-orders",
-    summary: "Listar órdenes de compra con su estado DERIVADO de las recepciones",
+    summary:
+      "Listar órdenes de compra, estado DERIVADO de las recepciones (ap.read, purchase.order.manage o purchase.receive)",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
@@ -2048,7 +2050,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/purchase-orders/{id}",
-    summary: "Detalle de una orden: líneas, avance por línea, recepciones y facturas",
+    summary: "Detalle de una orden (ap.read, purchase.order.manage o purchase.receive)",
     security: [{ bearerAuth: [] }],
     request: { params: idParam, headers: companyHeader },
     responses: {
@@ -2099,7 +2101,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/goods-receipts/{id}",
-    summary: "Detalle de una recepción con sus líneas y los gastos ya aplicados",
+    summary: "Detalle de una recepción con sus gastos aplicados (ap.read o purchase.receive)",
     security: [{ bearerAuth: [] }],
     request: { params: idParam, headers: companyHeader },
     responses: {
@@ -2117,7 +2119,8 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/supplier-invoices",
-    summary: "Listar facturas de proveedor con su saldo",
+    summary:
+      "Listar facturas de proveedor con su saldo (ap.read, purchase.invoice.register o purchase.payment.register)",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
@@ -2159,7 +2162,8 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/purchases/matching",
-    summary: "Matching de tres vías: orden, recepción y factura, con la diferencia de precio",
+    summary:
+      "Matching de tres vías (ap.read o purchase.invoice.register): orden, recepción y factura",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
@@ -2190,7 +2194,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/landed-costs/variances",
-    summary: "Variaciones de costo del período: lo que el landed cost tardío no capitalizó",
+    summary: "Variaciones de costo del período (ap.read o purchase.landed_cost.apply)",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
@@ -2369,7 +2373,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/accounts",
-    summary: "Plan de cuentas de la empresa, en orden de árbol",
+    summary: "Plan de cuentas de la empresa, en orden de árbol (permiso accounting.read)",
     description:
       "Nace VACÍO (ADR-0043): el plan de cuentas no se hard-codea. Se llena creando cuentas " +
       "o importando una plantilla con un acto explícito.",
@@ -2424,7 +2428,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/chart-templates",
-    summary: "Plantillas GLOBALES de plan de cuentas (VALIDAR-CONTABLE)",
+    summary: "Plantillas GLOBALES de plan de cuentas (accounting.read; VALIDAR-CONTABLE)",
     security: [{ bearerAuth: [] }],
     request: { headers: companyHeader },
     responses: {
@@ -2467,7 +2471,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/company-account-settings",
-    summary: "Qué cuenta cumple cada PAPEL contable, y cuáles están sin asignar",
+    summary: "Qué cuenta cumple cada PAPEL contable, y cuáles faltan (accounting.read)",
     security: [{ bearerAuth: [] }],
     request: { headers: companyHeader },
     responses: {
@@ -2619,7 +2623,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/fiscal-periods",
-    summary: "Períodos contables, con lo que impide cerrarlos",
+    summary: "Períodos contables, con lo que impide cerrarlos (permiso accounting.read)",
     security: [{ bearerAuth: [] }],
     request: { headers: companyHeader },
     responses: { 200: okJson(z.array(periodo), "Los períodos."), ...erroresComunes },

@@ -496,19 +496,46 @@ export function salesRoutes(
 
   // ── Numeración fiscal y tasas ─────────────────────────────────────────────
 
+  /**
+   * Leer los rangos exige quien los administra (`fiscal.range.manage`) O quien
+   * emite con ellos (`sales.invoice.issue`): la caja necesita el aviso de
+   * agotamiento ANTES de quedarse sin números (cierre RBAC del 2026-09-08).
+   */
+  async function exigeLecturaDeRangos(
+    tx: TransactionSql,
+    actor: { kind: string; userId?: string },
+    companyId: string,
+  ): Promise<void> {
+    if (actor.kind !== "user" || actor.userId === undefined) {
+      throw new DominioError({
+        code: "PERMISSION_REQUIRED",
+        message: "Consultar la numeración exige un usuario real.",
+      });
+    }
+    const [permiso] = await tx<{ ok: boolean }[]>`
+      select platform.ladino_user_has_permission(${actor.userId}, 'fiscal.range.manage', ${companyId})
+          or platform.ladino_user_has_permission(${actor.userId}, 'sales.invoice.issue', ${companyId})
+          as ok`;
+    if (!permiso?.ok) {
+      throw new DominioError({
+        code: "PERMISSION_REQUIRED",
+        message: "Consultar la numeración exige fiscal.range.manage o sales.invoice.issue.",
+      });
+    }
+  }
+
   app.get("/v1/fiscal-number-ranges", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
-    const filas = await withTransaction(
-      sql,
-      actor,
-      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLecturaDeRangos(tx, actor, companyId);
+      return tx<Record<string, unknown>[]>`
         select id, kind, series, range_from::int as range_from, range_to::int as range_to,
                next_available::int as next_available, status, printer_source,
                (range_to - next_available + 1)::int as remaining
           from public.fiscal_number_ranges
-         where company_id = ${companyId} order by kind, series, range_from`,
-    );
+         where company_id = ${companyId} order by kind, series, range_from`;
+    });
     return c.json(filas, 200);
   });
 
@@ -556,14 +583,13 @@ export function salesRoutes(
   app.get("/v1/fiscal-number-ranges/exhaustion", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
-    const filas = await withTransaction(
-      sql,
-      actor,
-      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLecturaDeRangos(tx, actor, companyId);
+      return tx<Record<string, unknown>[]>`
         select range_id, kind, series, remaining::int as remaining, total::int as total,
                pct_remaining::text as pct_remaining
-          from platform.range_exhaustion(${companyId})`,
-    );
+          from platform.range_exhaustion(${companyId})`;
+    });
     return c.json(filas, 200);
   });
 

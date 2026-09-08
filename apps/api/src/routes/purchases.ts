@@ -67,6 +67,38 @@ async function exigeApRead(
 }
 
 /**
+ * CONVENCIÓN de lectura de compras (cierre RBAC del 2026-09-08): el lado del
+ * dinero se abre con `ap.read`; el lado OPERATIVO se abre además con el
+ * permiso mutante del mismo objeto — quien puede recibir mercancía puede ver
+ * las órdenes contra las que recibe, quien registra la factura puede ver el
+ * matching. Así el encargado (sin ap.read) sigue operando y el cajero queda
+ * fuera. La misma convención vale para cualquier GET de compras futuro.
+ */
+async function exigeLecturaDeCompras(
+  tx: TransactionSql,
+  actor: { kind: string; userId?: string },
+  companyId: string,
+  ademas: readonly string[],
+): Promise<void> {
+  if (actor.kind !== "user" || actor.userId === undefined) {
+    throw new DominioError({
+      code: "PERMISSION_REQUIRED",
+      message: "Consultar compras exige un usuario real.",
+    });
+  }
+  const permisos = ["ap.read", ...ademas];
+  const [permiso] = await tx<{ ok: boolean }[]>`
+    select bool_or(platform.ladino_user_has_permission(${actor.userId}, p, ${companyId})) as ok
+      from unnest(${permisos}::text[]) as p`;
+  if (!permiso?.ok) {
+    throw new DominioError({
+      code: "PERMISSION_REQUIRED",
+      message: `Consultar esto exige ap.read o ${ademas.join(" / ")}.`,
+    });
+  }
+}
+
+/**
  * Rutas de compras. La capa es delgada: aquí no se calcula ni un prorrateo ni
  * una retención. Las lecturas preguntan al ESQUEMA —`purchase_matching`,
  * `supplier_invoice_balance`, `ap_aging`— y no suman en JavaScript.
@@ -117,7 +149,11 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const supplierId = c.req.query("supplier_id") ?? "";
     const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 20) || 20, 1), 100);
     const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
-    const filas = await withTransaction(sql, actor, ({ sql: tx }) => {
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLecturaDeCompras(tx, actor, companyId, [
+        "purchase.order.manage",
+        "purchase.receive",
+      ]);
       return tx<Record<string, unknown>[]>`
         select o.id, o.company_id, o.supplier_id, o.warehouse_id,
                o.order_number::int as order_number, o.status,
@@ -147,6 +183,10 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const { actor } = c.get("ladino.auth");
     const id = idValido(c.req.param("id"));
     const detalle = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLecturaDeCompras(tx, actor, companyId, [
+        "purchase.order.manage",
+        "purchase.receive",
+      ]);
       const [orden] = await tx<Record<string, unknown>[]>`
         select id, company_id, supplier_id, warehouse_id, order_number::int as order_number,
                status,
@@ -222,6 +262,7 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const { actor } = c.get("ladino.auth");
     const id = idValido(c.req.param("id"));
     const detalle = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLecturaDeCompras(tx, actor, companyId, ["purchase.receive"]);
       const [r] = await tx<Record<string, unknown>[]>`
         select id, company_id, supplier_id, purchase_order_id, warehouse_id,
                receipt_number::int as receipt_number, status,
@@ -256,7 +297,11 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const { actor } = c.get("ladino.auth");
     const status = c.req.query("status") ?? "";
     const supplierId = c.req.query("supplier_id") ?? "";
-    const filas = await withTransaction(sql, actor, ({ sql: tx }) => {
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLecturaDeCompras(tx, actor, companyId, [
+        "purchase.invoice.register",
+        "purchase.payment.register",
+      ]);
       return tx<Record<string, unknown>[]>`
         select i.id, i.company_id, i.supplier_id, i.purchase_order_id,
                i.supplier_document_number, i.supplier_control_number, i.supplier_document_ref,
@@ -294,6 +339,7 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const { actor } = c.get("ladino.auth");
     const invoiceId = idValido(c.req.query("supplier_invoice_id") ?? "");
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLecturaDeCompras(tx, actor, companyId, ["purchase.invoice.register"]);
       const [cfg] = await tx<{ tol: string }[]>`
         select coalesce(s.price_tolerance_pct, 5)::numeric(24,8)::text as tol
           from public.companies c
@@ -334,6 +380,7 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const desde = c.req.query("from") ?? null;
     const hasta = c.req.query("to") ?? null;
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLecturaDeCompras(tx, actor, companyId, ["purchase.landed_cost.apply"]);
       const [empresa] = await tx<{ moneda: string }[]>`
         select functional_currency_code as moneda from public.companies where id = ${companyId}`;
       const items = await tx<Record<string, unknown>[]>`

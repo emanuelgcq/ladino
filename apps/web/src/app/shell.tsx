@@ -20,6 +20,7 @@ import { Tooltip } from "../ui/tooltip.js";
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu.js";
 import { useSesion } from "./session.js";
 import { NAV_NEGOCIO, NAV_ADMIN, NAV_EMPEZAR, CRUMBS, rutaInicial, type NavItem } from "./nav.js";
+import { sondearModulosActivos, type ModulosActivos } from "./modulos-activos.js";
 import { CommandPalette } from "./palette.js";
 import { LogoLadino } from "../components/LogoLadino.js";
 import { esOscuroAhora, setTema, temaActual } from "../theme.js";
@@ -53,26 +54,16 @@ export function setMostrarTodos(v: boolean): void {
 
 /**
  * Divulgación progresiva con DATOS, no con un flag: un módulo avanzado aparece
- * si la empresa tiene filas o configuración en él.
+ * si la empresa tiene filas o configuración en él — y si el rol puede leerlas.
+ * La sonda vive en modulos-activos.ts (sin dependencias) y su test la ejercita
+ * como un cajero puro: todo 403, cero errores.
  */
-export function useModulosActivos(): { compras: boolean; contabilidad: boolean; libros: boolean } {
+export function useModulosActivos(): ModulosActivos {
   const { empresa, llamar } = useSesion();
   const q = useQuery({
     queryKey: ["modulos-activos", empresa.id],
     staleTime: 5 * 60_000,
-    queryFn: async () => {
-      const [proveedores, cuentas, generaciones] = await Promise.all([
-        llamar<{ total: number }>("/v1/suppliers?per_page=1").catch(() => ({ total: 0 })),
-        llamar<unknown[]>("/v1/accounts").catch(() => []),
-        llamar<{ runs: unknown[] }>("/v1/fiscal-books/runs").catch(() => ({ runs: [] })),
-      ]);
-      const contabilidad = cuentas.length > 0;
-      return {
-        compras: proveedores.total > 0,
-        contabilidad,
-        libros: contabilidad || generaciones.runs.length > 0,
-      };
-    },
+    queryFn: () => sondearModulosActivos(llamar),
   });
   return q.data ?? { compras: false, contabilidad: false, libros: false };
 }
