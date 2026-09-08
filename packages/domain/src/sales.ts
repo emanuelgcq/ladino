@@ -239,22 +239,73 @@ async function calcularLineas(
      where id = ${input.customerId} and company_id = ${input.companyId}`;
   if (!contraparte) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
 
+  // TODO EN LOTES (2026-09-08): este bucle hacía ~6 consultas POR LÍNEA y en
+  // producción cada consulta paga el viaje VPS↔base completo — una venta de
+  // varias líneas se comía el timeout. Ahora son CUATRO consultas fijas
+  // (productos, precios, alícuotas por categoría, costos) y el bucle trabaja
+  // sobre mapas en memoria. La semántica no cambia: mismos errores, mismos
+  // mensajes; solo el orden de detección entre líneas puede variar.
+  const productIds = [...new Set(input.lines.map((l) => l.product_id))];
+
+  const productosFilas = await sql<
+    { id: string; name: string; tax_category_code: string; kind: string; is_composed: boolean }[]
+  >`select id, name, tax_category_code, kind, is_composed from public.products
+     where id = any(${productIds}::uuid[]) and company_id = ${input.companyId}
+       and status = 'active'`;
+  const productos = new Map(productosFilas.map((p) => [p.id, p]));
+  if (productos.size !== productIds.length) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Un producto de la venta no existe en esta empresa o no está activo.",
+    });
+  }
+
+  const preciosFilas = await sql<{ pid: string; amount: string | null }[]>`
+    select u.pid, platform.price_at(${input.priceListId}, u.pid, ${input.fecha})::text as amount
+      from unnest(${productIds}::uuid[]) as u(pid)`;
+  const precios = new Map(preciosFilas.map((p) => [p.pid, p.amount]));
+
+  // La alícuota por CATEGORÍA (el contribuyente es uno solo): resolve_tax
+  // levanta excepción sin regla, y un error de Postgres condena la
+  // transacción — el savepoint sigue siendo obligatorio (lección de S0.5).
+  const alicuotas = new Map<string, { tax_rule_id: string; rate: string }>();
+  if (input.conImpuesto) {
+    const categorias = [...new Set(productosFilas.map((p) => p.tax_category_code))];
+    try {
+      const reglas = await sql.savepoint(
+        (sp) => sp<{ cat: string; tax_rule_id: string; rate: string }[]>`
+          select u.cat, t.tax_rule_id, t.rate::text as rate
+            from unnest(${categorias}::text[]) as u(cat),
+                 lateral platform.resolve_tax(${input.fecha}::date, ${JURISDICTION}, ${TAX_CODE},
+                                              ${contraparte.taxpayer_type_code}, u.cat) t`,
+      );
+      for (const r of reglas) alicuotas.set(r.cat, r);
+    } catch (e) {
+      const conocido = traducir(e);
+      if (conocido) return err(conocido);
+      throw e;
+    }
+  }
+
+  const costos = new Map<string, string>();
+  if (input.warehouseId !== null) {
+    const filasCosto = await sql<{ product_id: string; last_unit_cost: string }[]>`
+      select product_id, last_unit_cost::text as last_unit_cost
+        from public.stock_balances
+       where company_id = ${input.companyId} and warehouse_id = ${input.warehouseId}
+         and product_id = any(${productIds}::uuid[]) and lot_id is null`;
+    for (const f of filasCosto) costos.set(f.product_id, f.last_unit_cost);
+  }
+
   const salida: LineaCalculada[] = [];
   for (const l of input.lines) {
-    const [producto] = await sql<
-      { id: string; name: string; tax_category_code: string; kind: string; is_composed: boolean }[]
-    >`select id, name, tax_category_code, kind, is_composed from public.products
-       where id = ${l.product_id} and company_id = ${input.companyId} and status = 'active'`;
-    if (!producto) {
-      return err({
-        code: "VALIDATION_FAILED",
-        message: "Un producto de la venta no existe en esta empresa o no está activo.",
-      });
-    }
+    const producto = productos.get(l.product_id)!;
 
-    const [precio] = await sql<{ amount: string | null }[]>`
-      select platform.price_at(${input.priceListId}, ${l.product_id}, ${input.fecha})::text as amount`;
-    const listado = listedPriceOf(input.priceListId, precio?.amount ?? null, lista.currency_code);
+    const listado = listedPriceOf(
+      input.priceListId,
+      precios.get(l.product_id) ?? null,
+      lista.currency_code,
+    );
     if (!listado.ok) return err({ code: "VALIDATION_FAILED", message: listado.error.message });
 
     const cantidad = parseDecimal(l.quantity);
@@ -281,32 +332,20 @@ async function calcularLineas(
       } as SalesError);
     }
 
-    // La alícuota: del catálogo, o no hay línea (ADR-0038). Una cotización no
-    // paga impuesto pero SÍ lo muestra, así que también la resuelve.
+    // La alícuota: del catálogo, o no hay línea (ADR-0038) — ya resuelta por
+    // categoría en el lote de arriba.
     let taxRuleId: string | null = null;
     let taxRate = parseDecimal("0");
     if (input.conImpuesto) {
-      try {
-        // SAVEPOINT, y no es decorativo: `resolve_tax` LEVANTA una excepción
-        // cuando no hay regla o el catálogo es ambiguo, y un error de Postgres
-        // CONDENA la transacción. Sin savepoint, capturarlo aquí sería código
-        // muerto que parece funcionar —la transacción rechaza igual con el
-        // error crudo— y el 409 lo acabaría produciendo la tabla de SQLSTATE
-        // con un mensaje genérico. Es la lección de S0.5, otra vez.
-        const [regla] = await sql.savepoint(
-          (sp) => sp<{ tax_rule_id: string; rate: string }[]>`
-            select tax_rule_id, rate::text as rate
-              from platform.resolve_tax(${input.fecha}::date, ${JURISDICTION}, ${TAX_CODE},
-                                        ${contraparte.taxpayer_type_code},
-                                        ${producto.tax_category_code})`,
-        );
-        taxRuleId = regla!.tax_rule_id;
-        taxRate = parseDecimal(regla!.rate);
-      } catch (e) {
-        const conocido = traducir(e);
-        if (conocido) return err(conocido);
-        throw e;
+      const regla = alicuotas.get(producto.tax_category_code);
+      if (!regla) {
+        return err({
+          code: "TAX_RULE_MISSING",
+          message: "No hay regla tributaria vigente para un producto de la venta.",
+        });
       }
+      taxRuleId = regla.tax_rule_id;
+      taxRate = parseDecimal(regla.rate);
     }
     if (!taxRate.ok) return err({ code: "VALIDATION_FAILED", message: taxRate.error.message });
 
@@ -323,11 +362,7 @@ async function calcularLineas(
     // reinterpreta el margen de una venta de hace tres meses.
     let costSnapshot: string | null = null;
     if (input.warehouseId !== null && producto.kind === "good" && !producto.is_composed) {
-      const [saldo] = await sql<{ last_unit_cost: string }[]>`
-        select last_unit_cost::text from public.stock_balances
-         where company_id = ${input.companyId} and warehouse_id = ${input.warehouseId}
-           and product_id = ${l.product_id} and lot_id is null`;
-      costSnapshot = saldo?.last_unit_cost ?? null;
+      costSnapshot = costos.get(l.product_id) ?? null;
     }
 
     salida.push({
