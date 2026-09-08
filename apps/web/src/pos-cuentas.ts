@@ -30,6 +30,12 @@ export interface LineaCuenta {
   qty: number;
   /** El nombre para pintar al instante; si falta, lo dice la cotización. */
   nombre: string;
+  /**
+   * La existencia del producto AL AGREGARLO (solo bienes): el tope local de
+   * la caja — no se vende lo que no hay. Ayuda de pantalla: no viaja a la
+   * nube y el control de verdad sigue siendo el kardex del servidor.
+   */
+  existencia?: string | null;
 }
 
 export interface CuentaAbierta {

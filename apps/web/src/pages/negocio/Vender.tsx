@@ -330,23 +330,59 @@ export function Vender(): React.JSX.Element {
       toast.warning("Ese producto no tiene precio", "Pónselo en Productos antes de venderlo.");
       return;
     }
-    const sinExistencia = p.kind === "good" && compararImportes(p.stock_quantity ?? "0", "0") <= 0;
-    if (sinExistencia && ajustes.data?.block_sale_without_stock) {
+    // LA EXISTENCIA MANDA (orden del dueño, 2026-09-08): no se anota más de lo
+    // que hay. Solo bienes — un servicio no tiene existencia. El número lo
+    // dijo el servidor con el producto; el control de verdad sigue siendo el
+    // inventario del servidor al emitir.
+    const existencia = p.kind === "good" ? (p.stock_quantity ?? "0") : null;
+    if (existencia !== null && compararImportes(existencia, "0") <= 0) {
       toast.warning("Sin existencia", "Registra la entrada de mercancía antes de venderlo.");
       return;
     }
+    const ya = activa.lineas.find((l) => l.product_id === p.id);
+    if (
+      existencia !== null &&
+      ya !== undefined &&
+      compararImportes(String(ya.qty + 1), existencia) > 0
+    ) {
+      toast.warning(
+        `Solo quedan ${mostrarCantidad(existencia)}`,
+        "No se puede anotar más de lo que hay en el depósito.",
+      );
+      return;
+    }
     tocar(activa.id, (c) => {
-      const ya = c.lineas.find((l) => l.product_id === p.id);
+      const linea = c.lineas.find((l) => l.product_id === p.id);
       return {
         ...c,
-        lineas: ya
-          ? c.lineas.map((l) => (l.product_id === p.id ? { ...l, qty: l.qty + 1 } : l))
-          : [...c.lineas, { product_id: p.id, qty: 1, nombre: p.name }],
+        lineas: linea
+          ? c.lineas.map((l) => (l.product_id === p.id ? { ...l, qty: l.qty + 1, existencia } : l))
+          : [...c.lineas, { product_id: p.id, qty: 1, nombre: p.name, existencia }],
       };
     });
   }
 
   function cambiarQty(productId: string, delta: number): void {
+    // El «+» respeta el mismo tope que agregar: la existencia anotada con la
+    // línea (o la del producto si está a la vista en la cuadrícula).
+    if (delta > 0) {
+      const linea = activa.lineas.find((l) => l.product_id === productId);
+      const enGrid = productos.data?.items.find((p) => p.id === productId);
+      const tope =
+        linea?.existencia ?? (enGrid?.kind === "good" ? (enGrid.stock_quantity ?? null) : null);
+      if (
+        linea !== undefined &&
+        tope !== null &&
+        tope !== undefined &&
+        compararImportes(String(linea.qty + delta), tope) > 0
+      ) {
+        toast.warning(
+          `Solo quedan ${mostrarCantidad(tope)}`,
+          "No se puede anotar más de lo que hay en el depósito.",
+        );
+        return;
+      }
+    }
     tocar(activa.id, (c) => ({
       ...c,
       lineas: c.lineas
@@ -761,6 +797,17 @@ function TarjetaPos({
             })}
           </p>
         ) : null}
+        {/* La existencia, dicha en la tarjeta (orden del dueño): la cajera ve
+            cuántos quedan sin salir de la cuadrícula. Solo bienes. */}
+        {producto.kind === "good" && producto.stock_quantity != null && (
+          <p
+            className={`text-[0.78rem] tabular-nums ${
+              sinExistencia ? "text-warning-soft-foreground" : "text-faint-foreground"
+            }`}
+          >
+            {sinExistencia ? "Agotado" : `Quedan ${mostrarCantidad(producto.stock_quantity)}`}
+          </p>
+        )}
       </div>
     </button>
   );
