@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Camera,
   ChevronDown,
   ChevronRight,
   LayoutGrid,
   Package,
-  Plus,
   Rows3,
   Search,
 } from "lucide-react";
@@ -69,16 +68,11 @@ function useDebounced<T>(valor: T, ms: number): T {
 }
 
 export function ProductosNegocio(): React.JSX.Element {
-  const { empresa, llamar, puede } = useSesion();
-  // ADR-0048: agregar, importar y cambiar fotos exige product.manage — el
-  // cajero VE el catálogo (lectura de miembro) sin un solo botón de alta.
-  const puedeGestionar = puede("product.manage");
-  const qc = useQueryClient();
+  const { empresa, llamar } = useSesion();
   const [busqueda, setBusqueda] = useState("");
   const [vista, setVista] = useState<"cuadricula" | "tabla">(() =>
     localStorage.getItem(CLAVE_VISTA) === "tabla" ? "tabla" : "cuadricula",
   );
-  const [alta, setAlta] = useState(false);
   const [detalle, setDetalle] = useState<ProductoFila | null>(null);
   const q = useDebounced(busqueda.trim(), 250);
 
@@ -91,8 +85,6 @@ export function ProductosNegocio(): React.JSX.Element {
         `/v1/products?with_price=1&with_stock=1&per_page=100${q === "" ? "" : `&search=${encodeURIComponent(q)}`}`,
       ),
   });
-
-  const recargar = () => void qc.invalidateQueries({ queryKey: ["negocio-productos", empresa.id] });
 
   const items = productos.data?.items ?? [];
 
@@ -119,13 +111,9 @@ export function ProductosNegocio(): React.JSX.Element {
         >
           {vista === "cuadricula" ? <Rows3 /> : <LayoutGrid />}
         </Button>
-        {/* Importar es tarea ADMINISTRATIVA (regla de los dos mundos): el
-            botón vive en Administración → Productos, no aquí. */}
-        {puedeGestionar && (
-          <Button variant="primary" onClick={() => setAlta(true)}>
-            <Plus /> Agregar producto
-          </Button>
-        )}
+        {/* ARRIBA SE CONSULTA (regla de los dos mundos, 2026-09-08): agregar,
+            editar, importar, foto y código de barras viven en
+            Administración → Productos. Aquí, solo mirar. */}
       </div>
 
       {productos.isLoading ? (
@@ -138,16 +126,9 @@ export function ProductosNegocio(): React.JSX.Element {
           </p>
           <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
             {q === ""
-              ? "Agrega el primero con su foto y su precio. Para traer tu archivo completo: Administración → Productos → Importar."
-              : "Prueba con otra palabra, o agrégalo si de verdad falta."}
+              ? "Los productos se agregan e importan en Administración → Productos."
+              : "Prueba con otra palabra."}
           </p>
-          {q === "" && puedeGestionar && (
-            <div className="mt-4 flex justify-center gap-2">
-              <Button variant="primary" onClick={() => setAlta(true)}>
-                <Plus /> Agregar producto
-              </Button>
-            </div>
-          )}
         </Card>
       ) : vista === "cuadricula" ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
@@ -190,10 +171,7 @@ export function ProductosNegocio(): React.JSX.Element {
         </div>
       )}
 
-      {alta && <AltaSimple onCerrar={() => setAlta(false)} onCreado={recargar} />}
-      {detalle !== null && (
-        <DetalleProducto producto={detalle} onCerrar={() => setDetalle(null)} onCambio={recargar} />
-      )}
+      {detalle !== null && <DetalleProducto producto={detalle} onCerrar={() => setDetalle(null)} />}
     </div>
   );
 }
@@ -576,58 +554,18 @@ export function ImportarExcel({
   );
 }
 
+/**
+ * La ficha del producto ARRIBA es SOLO LECTURA (regla de los dos mundos,
+ * 2026-09-08): el cajero consulta; la foto, el código de barras y todo lo
+ * demás se gestionan en Administración → Productos.
+ */
 function DetalleProducto({
   producto,
   onCerrar,
-  onCambio,
 }: {
   producto: ProductoFila;
   onCerrar: () => void;
-  onCambio: () => void;
 }): React.JSX.Element {
-  const { empresa, llamar, puede } = useSesion();
-  const toast = useToast();
-  const fotoRef = useRef<HTMLInputElement>(null);
-  const [barras, setBarras] = useState(producto.barcode ?? "");
-
-  // La pistola termina aquí: cursor en el campo, escaneas (la pistola teclea
-  // el código y manda Enter) y queda guardado. El POS lo agrega al escanear.
-  const guardarBarras = useMutation({
-    mutationFn: () =>
-      llamar(`/v1/products/${producto.id}`, {
-        method: "PATCH",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          barcode: barras.trim() === "" ? null : barras.trim(),
-        }),
-      }),
-    onSuccess: () => {
-      toast.success(
-        barras.trim() === "" ? "Código de barras quitado" : "Código de barras guardado",
-        barras.trim() === "" ? undefined : "Escanéalo en Vender y se agrega solo.",
-      );
-      onCambio();
-      onCerrar();
-    },
-    onError: (e) => toast.error("No se pudo guardar el código", errorDePersona(e)),
-  });
-  const barrasCambio = barras.trim() !== (producto.barcode ?? "");
-
-  const cambiarFoto = useMutation({
-    mutationFn: async (f: File) => {
-      const form = new FormData();
-      form.append("file", f);
-      return llamar(`/v1/products/${producto.id}/image`, { method: "POST", body: form });
-    },
-    onSuccess: () => {
-      toast.success("Foto actualizada");
-      onCambio();
-      onCerrar();
-    },
-    onError: (e) => toast.error("No se pudo cambiar la foto", errorDePersona(e)),
-  });
-
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
       <DialogContent className="max-w-md">
@@ -650,65 +588,13 @@ function DetalleProducto({
             <span className="text-muted-foreground">Código</span>
             <span className="font-mono text-[0.85rem]">{producto.sku}</span>
           </div>
-          {!puede("product.manage") && producto.barcode !== null && (
+          {producto.barcode !== null && producto.barcode !== undefined && (
             <div className="flex items-center justify-between text-[0.95rem]">
               <span className="text-muted-foreground">Código de barras</span>
               <span className="font-mono text-[0.85rem]">{producto.barcode}</span>
             </div>
           )}
-          {puede("product.manage") && (
-            <div className="rounded-md border border-border bg-surface-muted/40 p-3">
-              <p className="text-[0.85rem] font-medium">Código de barras</p>
-              <p className="text-[0.8rem] text-muted-foreground">
-                Pon el cursor en el campo y pásale la pistola: se guarda solo.
-              </p>
-              <div className="mt-2 flex gap-2">
-                <Input
-                  aria-label="Código de barras"
-                  className="font-mono"
-                  placeholder="Escanéalo o escríbelo"
-                  value={barras}
-                  onChange={(e) => setBarras(e.target.value)}
-                  onKeyDown={(e) => {
-                    // El Enter que manda la pistola al final del código.
-                    if (e.key === "Enter" && barrasCambio && !guardarBarras.isPending) {
-                      e.preventDefault();
-                      guardarBarras.mutate();
-                    }
-                  }}
-                />
-                <Button
-                  variant="secondary"
-                  disabled={!barrasCambio || guardarBarras.isPending}
-                  onClick={() => guardarBarras.mutate()}
-                >
-                  Guardar
-                </Button>
-              </div>
-            </div>
-          )}
-          <input
-            ref={fotoRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            capture="environment"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) cambiarFoto.mutate(f);
-            }}
-          />
           <div className="flex gap-2">
-            {puede("product.manage") && (
-              <Button
-                variant="secondary"
-                className="flex-1"
-                disabled={cambiarFoto.isPending}
-                onClick={() => fotoRef.current?.click()}
-              >
-                <Camera /> {producto.image_url ? "Cambiar foto" : "Ponerle foto"}
-              </Button>
-            )}
             <Link to={`/inventario?producto=${producto.id}`} className="flex-1">
               <Button variant="ghost" className="w-full" onClick={onCerrar}>
                 Ver movimientos

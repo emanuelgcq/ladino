@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { PackagePlus, Pencil, Upload } from "lucide-react";
+import { Camera, PackagePlus, Pencil, Upload } from "lucide-react";
 import {
   ImportarArchivo,
   PLANTILLA_PRODUCTOS,
@@ -356,6 +356,25 @@ function DetalleProducto({
   const [clasif, setClasif] = useState(producto.tax_category_code);
   const [confirmandoClasif, setConfirmandoClasif] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const fotoRef = useRef<HTMLInputElement>(null);
+  const [subiendoFoto, setSubiendoFoto] = useState(false);
+
+  // Paridad de los dos mundos (2026-09-08): la foto también se gestiona AQUÍ.
+  async function cambiarFoto(f: File): Promise<void> {
+    setSubiendoFoto(true);
+    try {
+      const form = new FormData();
+      form.append("file", f);
+      await llamar(`/v1/products/${producto.id}/image`, { method: "POST", body: form });
+      toast.success("Foto actualizada");
+      onCerrar(true);
+    } catch (e) {
+      setError(e);
+      toast.error("No se pudo cambiar la foto");
+    } finally {
+      setSubiendoFoto(false);
+    }
+  }
 
   const clasificaciones = useQuery({
     queryKey: ["clasif-tributarias"],
@@ -469,6 +488,33 @@ function DetalleProducto({
                   </li>
                 ))}
               </ul>
+            )}
+            {puede("product.manage") && (
+              <div className="rounded-md border border-border bg-surface-muted/40 p-3">
+                <p className="text-[0.85rem] font-medium">Foto del producto</p>
+                <p className="text-[0.8rem] text-muted-foreground">
+                  La que se ve en la caja y en el catálogo. JPG, PNG o WebP.
+                </p>
+                <input
+                  ref={fotoRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void cambiarFoto(f);
+                  }}
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="mt-2"
+                  disabled={subiendoFoto}
+                  onClick={() => fotoRef.current?.click()}
+                >
+                  <Camera /> {subiendoFoto ? "Subiendo…" : "Cambiar la foto"}
+                </Button>
+              </div>
             )}
             {puede("product.tax_category.set") ? (
               <div className="rounded-md border border-border bg-surface-muted/40 p-3">
