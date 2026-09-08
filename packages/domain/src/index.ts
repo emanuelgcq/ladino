@@ -124,6 +124,7 @@ export {
 } from "./fiscal-books.js";
 export { onboardBusiness, type OnboardingError } from "./onboarding.js";
 export { listPosCarts, upsertPosCart, deletePosCart, type PosCartError } from "./pos-carts.js";
+export { createDirectCreditNote, createDebitNote } from "./sales.js";
 export {
   updateCompanyProfile,
   setCompanyTaxId,

@@ -23,6 +23,9 @@ import type {
   PosQuoteResponse,
   QuickSaleRequest,
   QuickSaleResponse,
+  CreateDirectCreditNoteRequest,
+  DirectCreditNoteResponse,
+  CreateDebitNoteRequest,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
@@ -1310,7 +1313,12 @@ export async function registerPayment(
 
   const [docActual] = await sql<DocumentResponse[]>`
     select ${sql.unsafe(DOC_COLUMNS)} from public.documents where id = ${input.document_id}`;
-  await auditar(sql, ctx.value.tenantId, docActual!, "ar.payment_applied", {
+  // ADR-0051: aplicar un saldo a favor NO es un cobro de efectivo — su evento
+  // es propio ('ar.credit_applied') y su plantilla baja el pasivo con el
+  // cliente en vez de debitar caja.
+  const eventoCobro =
+    input.instrument === "saldo_a_favor" ? "ar.credit_applied" : "ar.payment_applied";
+  await auditar(sql, ctx.value.tenantId, docActual!, eventoCobro, {
     payment_id: pago["id"] as string,
     amount: input.amount,
     currency: input.currency,
@@ -1336,7 +1344,7 @@ export async function registerPayment(
     tenantId: ctx.value.tenantId,
     companyId: input.company_id,
     sourceKind: "payment_received",
-    sourceEvent: "ar.payment_applied",
+    sourceEvent: eventoCobro,
     sourceId: pago["id"] as string,
     postingDate: fecha.slice(0, 10),
     postedBy: actor.userId,
@@ -1467,6 +1475,241 @@ export async function createReturn(
   });
 }
 
+/** El origen que una NOTA puede corregir: factura de la empresa, emitida o pagada. */
+async function origenParaNota(
+  sql: TransactionSql,
+  companyId: string,
+  sourceDocumentId: string,
+): Promise<
+  Result<{ customer_id: string; price_list_id: string | null; total_amount: string }, SalesError>
+> {
+  const [origen] = await sql<
+    {
+      customer_id: string;
+      price_list_id: string | null;
+      total_amount: string;
+      kind: string;
+      status: string;
+    }[]
+  >`
+    select customer_id, price_list_id, total_amount::text as total_amount, kind, status
+      from public.documents where id = ${sourceDocumentId} and company_id = ${companyId}`;
+  if (!origen) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (origen.kind !== "invoice" || !["issued", "paid"].includes(origen.status)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Una nota corrige una FACTURA emitida o pagada, nada más.",
+    });
+  }
+  return ok(origen);
+}
+
+/**
+ * NOTA DE CRÉDITO DIRECTA (ADR-0051): corrige la factura SIN devolución de
+ * mercancía — descuento o corrección de precio. Las líneas son un subconjunto
+ * de las del origen al precio DEL ORIGEN, y el kardex NO se toca (mercancía
+ * que vuelve = devolución, otro caso de uso). Genera saldo a favor, igual que
+ * la NC de devolución: una sola semántica de NC en todo el sistema.
+ *
+ * El tope es de DINERO, no de líneas: lo acreditado acumulado contra una
+ * factura (todas sus NC, directas o por devolución) no puede exceder su
+ * total. La referencia obligatoria al origen vive AQUÍ, en el dominio, como
+ * la política de RIF (ADR-0050): un CHECK retroactivo no puede distinguir la
+ * historia legítima.
+ */
+export async function createDirectCreditNote(
+  uow: UnitOfWork,
+  input: CreateDirectCreditNoteRequest,
+): Promise<Result<DirectCreditNoteResponse, SalesError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Emitir una nota exige un usuario real." });
+  }
+  const fecha = new Date().toISOString();
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "sales.return.manage", fecha);
+  if (!ctx.ok) return ctx;
+
+  const origen = await origenParaNota(sql, input.company_id, input.source_document_id);
+  if (!origen.ok) return origen;
+
+  // Las líneas del origen que se acreditan, al precio DEL ORIGEN.
+  const lineas: { product_id: string; quantity: string; unit_price_transaction: string }[] = [];
+  for (const l of input.lines) {
+    const [ol] = await sql<
+      { product_id: string; quantity: string; unit_price_transaction: string }[]
+    >`
+      select product_id, quantity::text as quantity,
+             unit_price_transaction::text as unit_price_transaction
+        from public.document_lines
+       where id = ${l.source_line_id} and document_id = ${input.source_document_id}`;
+    if (!ol) {
+      return err({ code: "VALIDATION_FAILED", message: "Una línea no es del documento origen." });
+    }
+    const pedida = parseDecimal(l.quantity);
+    const vendida = parseDecimal(ol.quantity);
+    if (!pedida.ok || !vendida.ok || pedida.value.greaterThan(vendida.value)) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "No se puede acreditar más cantidad de la facturada en esa línea.",
+      });
+    }
+    lineas.push({
+      product_id: ol.product_id,
+      quantity: l.quantity,
+      unit_price_transaction: ol.unit_price_transaction,
+    });
+  }
+
+  let nc: Result<DocumentResponse, SalesError>;
+  try {
+    nc = await sql.savepoint((sp) =>
+      createInvoiceLike({ ...uow, sql: sp }, ctx.value, {
+        companyId: input.company_id,
+        customerId: origen.value.customer_id,
+        priceListId: origen.value.price_list_id,
+        sourceDocumentId: input.source_document_id,
+        kind: "credit_note",
+        lineas,
+        fecha,
+        notes: input.reason,
+      }),
+    );
+  } catch (e) {
+    const conocido = traducir(e);
+    if (conocido) return err(conocido);
+    throw e;
+  }
+  if (!nc.ok) return nc;
+
+  // El tope de dinero: lo acreditado acumulado (esta NC incluida) no excede
+  // el total del origen. Se comprueba DESPUÉS de emitir y dentro de la misma
+  // transacción: si excede, el err revierte todo (RollbackPorError).
+  const [acreditado] = await sql<{ t: string }[]>`
+    select coalesce(sum(total_amount), 0)::text as t
+      from public.documents
+     where company_id = ${input.company_id}
+       and source_document_id = ${input.source_document_id}
+       and kind = 'credit_note' and status in ('issued', 'paid')`;
+  const suma = parseDecimal(acreditado!.t);
+  const topeOrigen = parseDecimal(origen.value.total_amount);
+  if (!suma.ok || !topeOrigen.ok || suma.value.greaterThan(topeOrigen.value)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Lo acreditado contra esa factura excedería su total. Revisa las notas anteriores.",
+    });
+  }
+
+  const [credito] = await sql<{ id: string }[]>`
+    insert into public.customer_credits
+      (tenant_id, company_id, customer_id, source_document_id, amount, currency)
+    values (${ctx.value.tenantId}, ${input.company_id}, ${origen.value.customer_id},
+            ${nc.value.id}, ${nc.value.total_amount}, ${ctx.value.functionalCurrency})
+    returning id`;
+
+  await auditar(sql, ctx.value.tenantId, nc.value, "fiscal.credit_note.issued", {
+    reason: input.reason,
+    customer_credit_id: credito!.id,
+    direct: true,
+  });
+
+  const contable = await generateJournalFromDocument(sql, {
+    tenantId: ctx.value.tenantId,
+    companyId: input.company_id,
+    sourceKind: "sales_credit_note",
+    sourceEvent: "fiscal.credit_note.issued",
+    sourceId: nc.value.id,
+    postingDate: fecha.slice(0, 10),
+    postedBy: actor.userId,
+    description: `Nota de crédito ${nc.value.series}-${nc.value.document_number ?? ""}`,
+    functionalCurrency: ctx.value.functionalCurrency,
+    amounts: {
+      subtotal: nc.value.subtotal_amount,
+      tax_amount: nc.value.tax_amount,
+      total: nc.value.total_amount,
+    },
+    backlink: { table: "documents", id: nc.value.id },
+  });
+  if (!contable.ok) {
+    return err({ code: "VALIDATION_FAILED", message: contable.error.message });
+  }
+
+  return ok({ document: nc.value, customer_credit_id: credito!.id });
+}
+
+/**
+ * NOTA DE DÉBITO (ADR-0051): el espejo de la factura — intereses de mora,
+ * fletes, diferencias de precio. Líneas con precio EXPLÍCITO en la moneda del
+ * origen; sin kardex; ES deuda (el aging y el saldo la ven desde la migración
+ * 45). Permiso `sales.invoice.issue`: emitir deuda nueva es facturar.
+ */
+export async function createDebitNote(
+  uow: UnitOfWork,
+  input: CreateDebitNoteRequest,
+): Promise<Result<DocumentResponse, SalesError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Emitir una nota exige un usuario real." });
+  }
+  const fecha = new Date().toISOString();
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "sales.invoice.issue", fecha);
+  if (!ctx.ok) return ctx;
+
+  const origen = await origenParaNota(sql, input.company_id, input.source_document_id);
+  if (!origen.ok) return origen;
+
+  let nd: Result<DocumentResponse, SalesError>;
+  try {
+    nd = await sql.savepoint((sp) =>
+      createInvoiceLike({ ...uow, sql: sp }, ctx.value, {
+        companyId: input.company_id,
+        customerId: origen.value.customer_id,
+        priceListId: origen.value.price_list_id,
+        sourceDocumentId: input.source_document_id,
+        kind: "debit_note",
+        lineas: input.lines.map((l) => ({
+          product_id: l.product_id,
+          quantity: l.quantity,
+          unit_price_transaction: l.unit_price,
+        })),
+        fecha,
+        notes: input.reason,
+      }),
+    );
+  } catch (e) {
+    const conocido = traducir(e);
+    if (conocido) return err(conocido);
+    throw e;
+  }
+  if (!nd.ok) return nd;
+
+  await auditar(sql, ctx.value.tenantId, nd.value, "fiscal.debit_note.issued", {
+    reason: input.reason,
+  });
+
+  const contable = await generateJournalFromDocument(sql, {
+    tenantId: ctx.value.tenantId,
+    companyId: input.company_id,
+    sourceKind: "sales_debit_note",
+    sourceEvent: "fiscal.debit_note.issued",
+    sourceId: nd.value.id,
+    postingDate: fecha.slice(0, 10),
+    postedBy: actor.userId,
+    description: `Nota de débito ${nd.value.series}-${nd.value.document_number ?? ""}`,
+    functionalCurrency: ctx.value.functionalCurrency,
+    amounts: {
+      subtotal: nd.value.subtotal_amount,
+      tax_amount: nd.value.tax_amount,
+      total: nd.value.total_amount,
+    },
+    backlink: { table: "documents", id: nd.value.id },
+  });
+  if (!contable.ok) {
+    return err({ code: "VALIDATION_FAILED", message: contable.error.message });
+  }
+
+  return ok(nd.value);
+}
+
 /**
  * Confirma la devolución: reingresa al COSTO ORIGINAL, emite la nota de crédito
  * y crea el saldo a favor. Los tres en la misma transacción — una devolución a
@@ -1553,8 +1796,10 @@ export async function confirmReturn(
         customerId: origen!.customer_id,
         priceListId: origen!.price_list_id,
         sourceDocumentId: dev.source_document_id,
+        kind: "credit_note",
         lineas,
         fecha,
+        notes: null,
       }),
     );
   } catch (e) {
@@ -1579,6 +1824,30 @@ export async function confirmReturn(
     return_id: returnId,
     customer_credit_id: credito!.id,
   });
+
+  // EL ASIENTO de la NC (cierre de R-20, ADR-0051): menos ingreso y menos IVA
+  // débito, contra el saldo a favor del cliente. Sin plantilla, encola — la
+  // devolución se confirma igual y el hueco queda a la vista en pendientes.
+  const contableNc = await generateJournalFromDocument(sql, {
+    tenantId: ctx.value.tenantId,
+    companyId,
+    sourceKind: "sales_credit_note",
+    sourceEvent: "fiscal.credit_note.issued",
+    sourceId: nc.value.id,
+    postingDate: fecha.slice(0, 10),
+    postedBy: actor.userId,
+    description: `Nota de crédito ${nc.value.series}-${nc.value.document_number ?? ""}`,
+    functionalCurrency: ctx.value.functionalCurrency,
+    amounts: {
+      subtotal: nc.value.subtotal_amount,
+      tax_amount: nc.value.tax_amount,
+      total: nc.value.total_amount,
+    },
+    backlink: { table: "documents", id: nc.value.id },
+  });
+  if (!contableNc.ok) {
+    return err({ code: "VALIDATION_FAILED", message: contableNc.error.message });
+  }
 
   return ok({
     id: returnId,
@@ -1607,19 +1876,28 @@ async function createInvoiceLike(
     customerId: string;
     priceListId: string | null;
     sourceDocumentId: string;
+    /** ADR-0051: el mismo camino emite la NC y la ND — cambia solo el kind. */
+    kind: "credit_note" | "debit_note";
     lineas: readonly { product_id: string; quantity: string; unit_price_transaction: string }[];
     fecha: string;
+    notes: string | null;
   },
 ): Promise<Result<DocumentResponse, SalesError>> {
   const { sql } = uow;
   if (ctx.regimeVersionId === "") {
     return err({
       code: "FISCAL_NUMBERING_INVALID",
-      message: "La empresa no tiene régimen fiscal vigente: no puede emitir la nota de crédito.",
+      message: "La empresa no tiene régimen fiscal vigente: no puede emitir la nota.",
     });
   }
-  // La NC hereda la MONEDA Y LA TASA del documento origen, no las de hoy. Si
-  // tomara la tasa de hoy, el crédito no cancelaría la deuda que dice cancelar:
+  if (!ctx.allowedKinds.includes(d.kind)) {
+    return err({
+      code: "REGIME_KIND_NOT_ALLOWED",
+      message: "El régimen fiscal vigente no permite emitir esta nota.",
+    });
+  }
+  // La NOTA hereda la MONEDA Y LA TASA del documento origen, no las de hoy. Si
+  // tomara la tasa de hoy, no corregiría la deuda que dice corregir:
   // quedaría un resto en bolívares que nadie debe y que nadie cobra.
   const [origen] = await sql<
     { transaction_currency: string; fx_rate: string; rate_source: string }[]
@@ -1642,8 +1920,9 @@ async function createInvoiceLike(
     if (!cantidad.ok || !precio.ok) {
       return err({ code: "VALIDATION_FAILED", message: "Importes no interpretables." });
     }
-    // La NC hereda el precio del documento origen; el impuesto se recalcula con
-    // la regla vigente a SU fecha, que es lo correcto: es un documento nuevo.
+    // La nota hereda el precio que le mandan (el del origen en la NC, el
+    // explícito en la ND); el impuesto se recalcula con la regla vigente a SU
+    // fecha, que es lo correcto: es un documento nuevo.
     const [producto] = await sql<{ name: string; tax_category_code: string }[]>`
       select name, tax_category_code from public.products where id = ${l.product_id}`;
     const [cliente] = await sql<{ taxpayer_type_code: string }[]>`
@@ -1686,7 +1965,7 @@ async function createInvoiceLike(
 
   const creado = await insertarDocumento(sql, ctx, {
     companyId: d.companyId,
-    kind: "credit_note",
+    kind: d.kind,
     series: "A",
     customerId: d.customerId,
     vendorId: null,
@@ -1697,16 +1976,16 @@ async function createInvoiceLike(
     fxRate: tasaOrigen.value,
     rateSource: origen.rate_source,
     transactionCurrency: origen.transaction_currency,
-    notes: null,
+    notes: d.notes,
   });
   if (!creado.ok) return creado;
 
   const [num] = await sql<{ n: string }[]>`
-    select platform.claim_document_number(${d.companyId}, 'credit_note', 'A')::text as n`;
+    select platform.claim_document_number(${d.companyId}, ${d.kind}, 'A')::text as n`;
   let control: string | null = null;
   if (ctx.numberingMode === "range") {
     const [c] = await sql<{ n: string }[]>`
-      select platform.claim_control_number(${d.companyId}, 'credit_note', 'A')::text as n`;
+      select platform.claim_control_number(${d.companyId}, ${d.kind}, 'A')::text as n`;
     control = c!.n;
   }
   const [emitida] = await sql<DocumentResponse[]>`

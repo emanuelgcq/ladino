@@ -11,6 +11,8 @@ import {
   PosQuoteRequest,
   QuickSaleRequest,
   UpsertPosCartRequest,
+  CreateDirectCreditNoteRequest,
+  CreateDebitNoteRequest,
   CreateReturnRequest,
   CreateFiscalRangeRequest,
   CreateExchangeRateRequest,
@@ -30,6 +32,8 @@ import {
   listPosCarts,
   upsertPosCart,
   deletePosCart,
+  createDirectCreditNote,
+  createDebitNote,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -414,6 +418,30 @@ export function salesRoutes(
     return c.json(r.value, 200);
   });
 
+  // ── Las NOTAS (ADR-0051): crédito directa y débito ────────────────────────
+
+  app.post("/v1/credit-notes", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = CreateDirectCreditNoteRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => createDirectCreditNote(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
+  app.post("/v1/debit-notes", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = CreateDebitNoteRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => createDebitNote(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
   // ── Cuentas por cobrar ────────────────────────────────────────────────────
 
   app.get("/v1/customers/:id/aging", async (c) => {
@@ -472,7 +500,8 @@ export function salesRoutes(
         select round(coalesce((select sum(platform.document_debt_today(${companyId}, d.id))
                            from public.documents d
                           where d.company_id = ${companyId} and d.customer_id = ${id}
-                            and d.kind in ('invoice', 'receipt') and d.status in ('issued', 'paid')), 0), 2)::text
+                            and d.kind in ('invoice', 'receipt', 'debit_note')
+                            and d.status in ('issued', 'paid')), 0), 2)::text
                  as pendiente,
                round(coalesce((select sum(cc.amount - cc.applied_amount)
                            from public.customer_credits cc

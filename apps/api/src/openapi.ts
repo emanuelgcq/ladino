@@ -78,6 +78,9 @@ import {
   UpsertPosCartRequest,
   PosCartResponse,
   ListPosCartsResponse,
+  CreateDirectCreditNoteRequest,
+  DirectCreditNoteResponse,
+  CreateDebitNoteRequest,
   ReturnResponse,
   AgingResponse,
   CustomerStatementResponse,
@@ -1791,6 +1794,55 @@ export function buildOpenApiDocument(): object {
     security: [{ bearerAuth: [] }],
     request: { params: idParam, headers: idemHeader },
     responses: { 200: okJson(devolucion, "Devolución confirmada."), ...erroresComunes },
+  });
+
+  // ── Las NOTAS (ADR-0051) ───────────────────────────────────────────────────
+  const ncDirecta = registry.register(
+    "CreateDirectCreditNoteRequest",
+    CreateDirectCreditNoteRequest,
+  );
+  const ncDirectaResp = registry.register("DirectCreditNoteResponse", DirectCreditNoteResponse);
+  const ndCrear = registry.register("CreateDebitNoteRequest", CreateDebitNoteRequest);
+
+  registry.registerPath({
+    method: "post",
+    path: "/v1/credit-notes",
+    summary: "Nota de crédito DIRECTA, sin devolución (permiso sales.return.manage)",
+    description:
+      "Corrige una factura emitida por descuento o error de precio, SIN mover mercancía " +
+      "(mercancía que vuelve = devolución). Líneas del origen a su precio original; motivo " +
+      "obligatorio con acta. Genera saldo a favor aplicable como forma de cobro. El total " +
+      "acreditado acumulado contra la factura no puede exceder su total.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: ncDirecta } } },
+    },
+    responses: {
+      201: okJson(ncDirectaResp, "La NC emitida y su saldo a favor."),
+      ...erroresComunes,
+      409: errorRef("Sin rango de credit_note, sin régimen, o numeración inválida."),
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/debit-notes",
+    summary: "Nota de débito: el espejo de la factura (permiso sales.invoice.issue)",
+    description:
+      "Intereses de mora, fletes o diferencias de precio contra una factura emitida. Líneas " +
+      "con precio EXPLÍCITO en la moneda del origen; motivo obligatorio con acta; sin kardex. " +
+      "ES deuda: entra al saldo del cliente y al aging (ADR-0051). Exige su propio rango de " +
+      "numeración con kind debit_note.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: ndCrear } } },
+    },
+    responses: {
+      201: okJson(documento, "La ND emitida."),
+      ...erroresComunes,
+      409: errorRef("Sin rango de debit_note, sin régimen, o numeración inválida."),
+    },
   });
   registry.registerPath({
     method: "get",

@@ -89,11 +89,14 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
       // base y en todos los cálculos; SOLO se redondea al servir (half-up de
       // `round()` de Postgres). La regla del último centavo en registerPayment
       // garantiza que pagar lo mostrado no deja residuo fantasma.
+      // La familia completa de la deuda (ADR-0051): factura, recibo fiado y
+      // nota de débito — el trío, nunca un filtro a medias.
       const [deben] = await tx<{ total: string }[]>`
         select round(coalesce(sum(saldo), 0), 2)::text as total
           from (select greatest(platform.document_debt_today(${companyId}, d.id), 0) as saldo
                   from public.documents d
-                 where d.company_id = ${companyId} and d.kind = 'invoice'
+                 where d.company_id = ${companyId}
+                   and d.kind in ('invoice', 'receipt', 'debit_note')
                    and d.status = 'issued') s`;
       const [debo] = await tx<{ total: string }[]>`
         select round(coalesce(sum(saldo), 0), 2)::text as total

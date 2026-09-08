@@ -1,3 +1,51 @@
+# Handoff — 2026-09-08 (15ª entrega)
+
+## Sprint post-auditoría + las NOTAS (ADR-0051) + semilla de producción
+
+**Los cinco trabajos del sprint** (cada uno con su verify y su commit):
+b5c026c cierre RBAC de lectura (accounting.read en los GET contables; compras
+con la convención «ap.read O el permiso mutante del objeto»; rangos con
+«fiscal.range.manage O sales.invoice.issue»; la sonda del shell trata 403 como
+módulo no visible, con test de cajero puro) · bb64412 Idempotency-Key en PUT
+/v1/company-settings · d6a0f28 botón FIAR en la caja (total o resto; solo con
+cliente identificado — el dominio rechaza mostrador con saldo y el err
+REVIERTE, sin factura fantasma) · cccb303 deuda servida a 2 decimales + regla
+del último centavo (< 0.005 de la moneda que decide ⇒ paid; el residuo de 8
+decimales queda en la base — VALIDAR-TRIBUTARIO, pariente de R-02) · 36d4a9c
+el aging con pantalla (Cuentas usa /aging canónico; Clientes muestra «desde
+hace N días» con color de bucket).
+
+**Las notas (ADR-0051, migración 45)**: `createDebitNote` y
+`createDirectCreditNote` por el MISMO camino de la NC de devolución
+(createInvoiceLike parametrizado); la ND es deuda (ar_aging y el trío de
+filtros servidos pasan a `('invoice','receipt','debit_note')` — el recibo
+fiado también envejece ya); la NC directa deja saldo a favor con tope de
+DINERO por factura; cierre de R-20: plantillas de NC, ND y de la APLICACIÓN
+del saldo a favor (evento propio `ar.credit_applied` — ya no debita caja un
+cobro sin efectivo), papel nuevo «Saldos a favor de clientes» (2.1.90),
+cobertura contable que VE credit_note/debit_note, y las NC históricas sin
+asiento ENCOLADAS por la migración con su contexto congelado. Pantalla:
+«Nota de crédito…» y «Nota de débito…» en el detalle de la factura, con
+motivo obligatorio. E2E completos; pgTAP 045; el gate 026 aprendió los tres
+eventos nuevos. Pendiente conocido: las empresas que ya importaron el preset
+deben REIMPORTARLO para ganar las plantillas nuevas (el import es idempotente
+y suma lo que falta — igual que con los recibos en la migración 37).
+
+**Semilla de producción para mendozajose2445 («ferreteria»)** — orden del
+dueño: TODO por el motor real (la API viva), cero documentos por SQL. Un
+usuario semilla temporal (patrón ADR-0049: owner plano + warehouse_ops con
+binding) que al final quedó sin membresía y baneado. Quedaron: RIF y
+domicilio, régimen formatos_libres, IVA 16 % aceptado, rangos (invoice y
+credit_note), 3 cuentas de dinero, 10 productos con existencias + 1 servicio,
+lista «detal USD» como predeterminada, 3 clientes, 5 facturas (2 pagadas en
+USD, 1 fiada, 1 con abono parcial, 1 anulada), cotización, pedido confirmado,
+devolución con NC, compra OC→recepción→factura con retención de IVA (75 %),
+flete con retención de ISLR, gasto — y los CUATRO libros con filas
+exportables. La clasificación tributaria propia de la empresa se puso por SQL
+(no tiene endpoint — hueco ya declarado de fiscal-setup). Cosmético conocido:
+un gasto «Alquiler» duplicado (posted ×2, no se borra historia) y un servicio
+de flete repetido en el catálogo.
+
 # Handoff — 2026-09-08 (14ª entrega)
 
 ## El POS lleva varias cuentas a la vez, y ninguna se pierde con el apagón

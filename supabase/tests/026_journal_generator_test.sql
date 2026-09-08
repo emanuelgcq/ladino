@@ -122,7 +122,11 @@ select is(
                                'treasury.expense.registered',
                                'treasury.cash_register.closed',
                                -- Modo recibos (migración 37):
-                               'sales.receipt.issued')),
+                               'sales.receipt.issued',
+                               -- Notas y saldo a favor (migración 45, ADR-0051):
+                               'fiscal.credit_note.issued',
+                               'fiscal.debit_note.issued',
+                               'ar.credit_applied')),
   0::bigint,
   'los eventos del preset son los del OUTBOX, con su nombre real: no se inventa un vocabulario paralelo');
 

@@ -130,6 +130,44 @@ export const RegisterPaymentRequest = z
   .strict();
 export type RegisterPaymentRequest = z.infer<typeof RegisterPaymentRequest>;
 
+/**
+ * NOTA DE CRÉDITO DIRECTA (ADR-0051): corrige una factura SIN devolución de
+ * mercancía — descuento o corrección de precio. Las líneas son un subconjunto
+ * de las del origen, al precio DEL ORIGEN; motivo obligatorio (acta). Genera
+ * saldo a favor, igual que la NC de devolución: una sola semántica de NC.
+ */
+export const CreateDirectCreditNoteRequest = z
+  .object({
+    company_id: uuid,
+    source_document_id: uuid,
+    reason: z.string().trim().min(3).max(500),
+    lines: z
+      .array(z.object({ source_line_id: uuid, quantity }).strict())
+      .min(1)
+      .max(500),
+  })
+  .strict();
+export type CreateDirectCreditNoteRequest = z.infer<typeof CreateDirectCreditNoteRequest>;
+
+/**
+ * NOTA DE DÉBITO (ADR-0051): el espejo de la factura — intereses de mora,
+ * fletes, diferencias de precio. Referida obligatoriamente a su factura,
+ * líneas con precio EXPLÍCITO en la moneda del origen, motivo obligatorio.
+ * ES deuda: entra al saldo y al aging del cliente.
+ */
+export const CreateDebitNoteRequest = z
+  .object({
+    company_id: uuid,
+    source_document_id: uuid,
+    reason: z.string().trim().min(3).max(500),
+    lines: z
+      .array(z.object({ product_id: uuid, quantity, unit_price: amount }).strict())
+      .min(1)
+      .max(200),
+  })
+  .strict();
+export type CreateDebitNoteRequest = z.infer<typeof CreateDebitNoteRequest>;
+
 export const CreateReturnRequest = z
   .object({
     company_id: uuid,
@@ -198,6 +236,12 @@ export const DocumentResponse = z
   })
   .strict();
 export type DocumentResponse = z.infer<typeof DocumentResponse>;
+
+/** La NC directa responde con su documento y el saldo a favor que nació. */
+export const DirectCreditNoteResponse = z
+  .object({ document: DocumentResponse, customer_credit_id: uuid })
+  .strict();
+export type DirectCreditNoteResponse = z.infer<typeof DirectCreditNoteResponse>;
 
 export const PaymentResponse = z
   .object({

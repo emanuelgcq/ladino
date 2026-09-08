@@ -139,12 +139,13 @@ export function Cuentas(): React.JSX.Element {
   );
 }
 
+// Las claves REALES de platform.ar_aging (las anteriores eran de un contrato
+// imaginado y la tarjeta enseñaba la clave cruda).
 const ETIQUETA_BUCKET: Record<string, string> = {
-  current: "Al día",
-  "1_30": "1–30 días",
-  "31_60": "31–60",
-  "61_90": "61–90",
-  over_90: "+90 días",
+  "0-30": "0–30 días",
+  "31-60": "31–60",
+  "61-90": "61–90",
+  "90+": "+90 días",
 };
 
 function EstadoDeCuenta({
@@ -161,7 +162,7 @@ function EstadoDeCuenta({
     // SOLO altura de barra; la cifra visible es el string del servidor.
     v: Number(b.amount),
     etiqueta: mostrarImporte({ amount: b.amount, currency: data.currency }),
-    tardio: b.bucket === "61_90" || b.bucket === "over_90",
+    tardio: b.bucket === "61-90" || b.bucket === "90+",
   }));
 
   return (

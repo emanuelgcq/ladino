@@ -1314,6 +1314,159 @@ describe("ventas de extremo a extremo", () => {
     expect(clienteAjeno.status).toBe(422);
   });
 
+  // ── LAS NOTAS (ADR-0051): débito de punta a punta y crédito directa ───────
+
+  it("la NOTA DE DÉBITO: deuda nueva con su numeración, su aging, su libro y su asiento", async () => {
+    // Su PROPIO rango: una ND no se numera con los controles de las facturas.
+    await pedir("POST", "/v1/fiscal-number-ranges", VENDEDOR, {
+      company_id: COMPANY,
+      kind: "debit_note",
+      series: "A",
+      range_from: "1",
+      range_to: "100",
+      printer_source: "Imprenta E2E, rango de notas de débito",
+    });
+
+    const base = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
+      company_id: COMPANY,
+      customer_id: CLIENTE,
+      warehouse_id: W1,
+      series: "C",
+      lines: [{ product_id: PROD, quantity: "1" }],
+    });
+    expect(base.status).toBe(201);
+    const factura = ((await base.json()) as { document: { id: string } }).document;
+
+    const agingAntes = (await (
+      await pedir("GET", `/v1/customers/${CLIENTE}/aging`, VENDEDOR)
+    ).json()) as { total: string };
+
+    const r = await pedir("POST", "/v1/debit-notes", VENDEDOR, {
+      company_id: COMPANY,
+      source_document_id: factura.id,
+      reason: "Flete de entrega no incluido en la factura",
+      lines: [{ product_id: PROD, quantity: "1", unit_price: "10.00000000" }],
+    });
+    expect(r.status).toBe(201);
+    const nd = (await r.json()) as {
+      id: string;
+      kind: string;
+      control_number: number | null;
+      total_amount: string;
+      source_document_id: string;
+    };
+    expect(nd.kind).toBe("debit_note");
+    expect(nd.control_number).not.toBeNull();
+    expect(nd.source_document_id).toBe(factura.id);
+    // 10 USD + 16% = 11.60 USD → funcional a tasa 45 = 522 Bs.
+    expect(nd.total_amount).toBe("522.00000000");
+
+    // ES deuda: el aging del cliente crece exactamente en la ND.
+    const agingDespues = (await (
+      await pedir("GET", `/v1/customers/${CLIENTE}/aging`, VENDEDOR)
+    ).json()) as { total: string };
+    expect(Number(agingDespues.total)).toBeCloseTo(Number(agingAntes.total) + 522, 2);
+
+    // Entra al libro de ventas del día.
+    const [enLibro] = await sql<{ n: string }[]>`
+      select count(*)::text as n
+        from platform.sales_book(${COMPANY}, ${HOY}::date, ${HOY}::date)
+       where document_id = ${nd.id}`;
+    expect(enLibro!.n).toBe("1");
+
+    // Y su hecho contable existe: asiento o cola, jamás el limbo (R-20).
+    const [hueco] = await sql<{ n: string }[]>`
+      select count(*)::text as n
+        from platform.accounting_coverage_gaps(${COMPANY})
+       where source_kind in ('sales_debit_note', 'sales_credit_note')`;
+    expect(hueco!.n).toBe("0");
+
+    // Contra una cotización NO hay nota: solo facturas emitidas o pagadas.
+    const quote = await pedir("POST", "/v1/quotes", VENDEDOR, {
+      company_id: COMPANY,
+      customer_id: CLIENTE,
+      lines: [{ product_id: PROD, quantity: "1" }],
+    });
+    const q = (await quote.json()) as { id: string };
+    const mal = await pedir("POST", "/v1/debit-notes", VENDEDOR, {
+      company_id: COMPANY,
+      source_document_id: q.id,
+      reason: "no debería poder",
+      lines: [{ product_id: PROD, quantity: "1", unit_price: "1.00000000" }],
+    });
+    expect(mal.status).toBe(422);
+  });
+
+  it("la NC DIRECTA: saldo a favor sin tocar el kardex, tope de dinero, y el crédito aplicado con su evento propio", async () => {
+    const base = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
+      company_id: COMPANY,
+      customer_id: CLIENTE,
+      warehouse_id: W1,
+      series: "C",
+      lines: [{ product_id: PROD, quantity: "2" }],
+    });
+    expect(base.status).toBe(201);
+    const factura = ((await base.json()) as { document: { id: string } }).document;
+    const det = (await (await pedir("GET", `/v1/documents/${factura.id}`, VENDEDOR)).json()) as {
+      lines: { id: string }[];
+    };
+
+    const [stockAntes] = await sql<{ q: string }[]>`
+      select quantity::text as q from public.stock_balances
+       where company_id = ${COMPANY} and warehouse_id = ${W1} and product_id = ${PROD}`;
+
+    const r = await pedir("POST", "/v1/credit-notes", VENDEDOR, {
+      company_id: COMPANY,
+      source_document_id: factura.id,
+      reason: "Descuento acordado tras la venta — corrección de precio",
+      lines: [{ source_line_id: det.lines[0]!.id, quantity: "1" }],
+    });
+    expect(r.status).toBe(201);
+    const nc = (await r.json()) as {
+      document: { id: string; kind: string; total_amount: string };
+      customer_credit_id: string;
+    };
+    expect(nc.document.kind).toBe("credit_note");
+    // 1 unidad al precio DEL ORIGEN: 100 + 16% = 116 USD → 5220 Bs.
+    expect(nc.document.total_amount).toBe("5220.00000000");
+
+    // SIN kardex: la NC directa no devuelve mercancía.
+    const [stockDespues] = await sql<{ q: string }[]>`
+      select quantity::text as q from public.stock_balances
+       where company_id = ${COMPANY} and warehouse_id = ${W1} and product_id = ${PROD}`;
+    expect(stockDespues!.q).toBe(stockAntes!.q);
+
+    // El TOPE de dinero: acreditar las 2 unidades ahora excedería el total.
+    const exceso = await pedir("POST", "/v1/credit-notes", VENDEDOR, {
+      company_id: COMPANY,
+      source_document_id: factura.id,
+      reason: "no debería poder: excede lo facturado",
+      lines: [{ source_line_id: det.lines[0]!.id, quantity: "2" }],
+    });
+    expect(exceso.status).toBe(422);
+
+    // Aplicar el saldo a favor COBRA la factura con su evento propio
+    // (ar.credit_applied): no entró efectivo y el asiento no debita caja.
+    const cobro = await pedir("POST", "/v1/payments", VENDEDOR, {
+      company_id: COMPANY,
+      document_id: factura.id,
+      currency: "VES",
+      amount: "5220.00000000",
+      instrument: "saldo_a_favor",
+      customer_credit_id: nc.customer_credit_id,
+    });
+    expect(cobro.status).toBe(201);
+    const c = (await cobro.json()) as { balance: string };
+    expect(c.balance).toBe("5220.00000000"); // quedó la otra unidad
+
+    // El hecho contable del crédito aplicado viaja con SU evento: esta empresa
+    // no importó plantillas, así que cae en cola — con ar.credit_applied.
+    const [evento] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.journal_generation_queue
+       where company_id = ${COMPANY} and source_event = 'ar.credit_applied'`;
+    expect(Number(evento!.n)).toBeGreaterThan(0);
+  });
+
   // ── LA DEUDA MOSTRADA VIAJA A 2 DECIMALES (2026-09-08) ────────────────────
   // ÚLTIMO caso del fichero A PROPÓSITO: planta una tasa fea para HOY y los
   // tests anteriores asumen la de 45. Demuestra el par completo: el servidor

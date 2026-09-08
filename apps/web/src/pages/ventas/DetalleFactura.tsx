@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, BookOpenCheck, HandCoins, Undo2 } from "lucide-react";
+import { Ban, BookOpenCheck, FileMinus2, FilePlus2, HandCoins, Undo2 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { API_URL, supabase } from "../../lib.js";
 import { useModulosActivos } from "../../app/shell.js";
@@ -21,6 +21,7 @@ import { SimpleSelect } from "../../ui/select.js";
 import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
+import { EntityPicker, type EntityOption } from "../../components/forms.js";
 import { KIND_LABEL, MensajeError, numeroDe } from "./comunes.js";
 import { RegistrarPago } from "./RegistrarPago.js";
 
@@ -100,6 +101,8 @@ export function DetalleFactura(): React.JSX.Element {
   const [motivo, setMotivo] = useState("");
   const [pagando, setPagando] = useState(false);
   const [devolviendo, setDevolviendo] = useState(false);
+  const [notaCredito, setNotaCredito] = useState(false);
+  const [notaDebito, setNotaDebito] = useState(false);
   const [confirmandoPedido, setConfirmandoPedido] = useState(false);
   const [almacenPedido, setAlmacenPedido] = useState<string | null>(null);
   const depositosPedido = useQuery({
@@ -134,7 +137,13 @@ export function DetalleFactura(): React.JSX.Element {
     enabled: detalle.data !== undefined && activos.contabilidad,
     queryFn: async () => {
       const kind =
-        detalle.data?.document.kind === "invoice" ? "sales_invoice" : "sales_credit_note";
+        detalle.data?.document.kind === "invoice"
+          ? "sales_invoice"
+          : detalle.data?.document.kind === "receipt"
+            ? "sales_receipt"
+            : detalle.data?.document.kind === "debit_note"
+              ? "sales_debit_note"
+              : "sales_credit_note";
       const [entradas, cola] = await Promise.all([
         llamar<{ items: { id: string; entry_number: number | null; source_id: string }[] }>(
           `/v1/journal-entries?source_kind=${kind}&per_page=100`,
@@ -234,6 +243,16 @@ export function DetalleFactura(): React.JSX.Element {
             {pagable && puede("sales.return.manage") && (
               <Button variant="secondary" onClick={() => setDevolviendo(true)}>
                 <Undo2 /> Devolución
+              </Button>
+            )}
+            {pagable && puede("sales.return.manage") && (
+              <Button variant="ghost" onClick={() => setNotaCredito(true)}>
+                <FileMinus2 /> Nota de crédito…
+              </Button>
+            )}
+            {pagable && puede("sales.invoice.issue") && (
+              <Button variant="ghost" onClick={() => setNotaDebito(true)}>
+                <FilePlus2 /> Nota de débito…
               </Button>
             )}
             {doc.kind === "order" && doc.status === "draft" && puede("sales.order.manage") && (
@@ -534,6 +553,30 @@ export function DetalleFactura(): React.JSX.Element {
         />
       )}
 
+      {notaCredito && (
+        <NotaCreditoDirecta
+          documento={doc}
+          lineas={lines}
+          onClose={(hecho) => {
+            setNotaCredito(false);
+            if (hecho) {
+              void qc.invalidateQueries({ queryKey: ["documento", empresa.id, id] });
+            }
+          }}
+        />
+      )}
+      {notaDebito && (
+        <NotaDebito
+          documento={doc}
+          onClose={(hecho) => {
+            setNotaDebito(false);
+            if (hecho) {
+              void qc.invalidateQueries({ queryKey: ["documento", empresa.id, id] });
+            }
+          }}
+        />
+      )}
+
       {pagando && (
         <RegistrarPago
           documento={doc}
@@ -694,6 +737,254 @@ function Devolucion({
           </Button>
           <Button variant="primary" disabled={!listo || ocupado} onClick={() => void devolver()}>
             {ocupado ? "Devolviendo…" : "Confirmar la devolución"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * NOTA DE CRÉDITO DIRECTA (ADR-0051): corrige la factura SIN devolución de
+ * mercancía — descuento o corrección de precio. Líneas del origen a su precio
+ * original, motivo obligatorio, y el saldo a favor queda aplicable como cobro.
+ */
+function NotaCreditoDirecta({
+  documento,
+  lineas,
+  onClose,
+}: {
+  documento: Documento;
+  lineas: Linea[];
+  onClose: (hecho: boolean) => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [cantidades, setCantidades] = useState<Record<string, string>>({});
+  const [motivo, setMotivo] = useState("");
+  const [error, setError] = useState<unknown>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  const elegidas = lineas
+    .map((l) => ({ linea: l, cantidad: (cantidades[l.id] ?? "").trim().replace(",", ".") }))
+    .filter((x) => x.cantidad !== "" && Number(x.cantidad) > 0);
+  const listo = elegidas.length > 0 && motivo.trim().length >= 3;
+
+  async function emitir(): Promise<void> {
+    setError(null);
+    setOcupado(true);
+    try {
+      await llamar("/v1/credit-notes", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          source_document_id: documento.id,
+          reason: motivo.trim(),
+          lines: elegidas.map((x) => ({ source_line_id: x.linea.id, quantity: x.cantidad })),
+        }),
+      });
+      toast.success(
+        "Nota de crédito emitida",
+        "El saldo a favor quedó disponible para aplicarse a cualquier factura del cliente.",
+      );
+      onClose(true);
+    } catch (e) {
+      setError(e);
+      toast.error("No se pudo emitir la nota de crédito");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose(false)}>
+      <DialogContent className="max-w-lg">
+        <DialogTitle>Nota de crédito de {numeroDe(documento)}</DialogTitle>
+        <DialogDescription>
+          Para descuentos o correcciones de precio <strong>sin mercancía que vuelve</strong> — si el
+          cliente devuelve producto, usa Devolución. Las líneas van al precio del origen y el total
+          queda como saldo a favor.
+        </DialogDescription>
+        <div className="space-y-3 pt-2">
+          <div className="divide-y divide-border rounded-md border border-border">
+            {lineas.map((l) => (
+              <div key={l.id} className="flex items-center gap-2 px-3 py-2 text-[0.9rem]">
+                <span className="min-w-0 flex-1 truncate">{l.description}</span>
+                <span className="text-[0.8rem] text-muted-foreground tabular-nums">
+                  facturados {mostrarCantidad(l.quantity)}
+                </span>
+                <Input
+                  aria-label={`Cantidad a acreditar de ${l.description}`}
+                  inputMode="decimal"
+                  placeholder="0"
+                  className="w-20 text-right font-mono"
+                  value={cantidades[l.id] ?? ""}
+                  onChange={(e) => setCantidades({ ...cantidades, [l.id]: e.target.value })}
+                />
+              </div>
+            ))}
+          </div>
+          <Textarea
+            aria-label="Motivo de la nota de crédito"
+            rows={2}
+            placeholder="Motivo (obligatorio): qué se corrige y por qué"
+            value={motivo}
+            onChange={(e) => setMotivo(e.target.value)}
+          />
+          {error !== null && <MensajeError error={error} />}
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => onClose(false)}>
+            Cancelar
+          </Button>
+          <Button variant="primary" disabled={!listo || ocupado} onClick={() => void emitir()}>
+            {ocupado ? "Emitiendo…" : "Emitir la nota de crédito"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * NOTA DE DÉBITO (ADR-0051): el espejo de la factura — intereses de mora,
+ * fletes, diferencias de precio. Producto + cantidad + precio EXPLÍCITO en la
+ * moneda del origen; motivo obligatorio; sin kardex. ES deuda del cliente.
+ */
+function NotaDebito({
+  documento,
+  onClose,
+}: {
+  documento: Documento;
+  onClose: (hecho: boolean) => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [filas, setFilas] = useState<
+    { producto: EntityOption | null; cantidad: string; precio: string }[]
+  >([{ producto: null, cantidad: "1", precio: "" }]);
+  const [motivo, setMotivo] = useState("");
+  const [error, setError] = useState<unknown>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  const buscarProducto = async (q: string): Promise<EntityOption[]> => {
+    const r = await llamar<{ items: { id: string; name: string; sku: string }[] }>(
+      `/v1/products?search=${encodeURIComponent(q)}&per_page=8`,
+    );
+    return r.items.map((p) => ({ id: p.id, label: p.name, detalle: p.sku }));
+  };
+
+  const completas = filas.filter(
+    (f) =>
+      f.producto !== null &&
+      Number(f.cantidad.trim().replace(",", ".")) > 0 &&
+      Number(f.precio.trim().replace(",", ".")) > 0,
+  );
+  const listo = completas.length > 0 && motivo.trim().length >= 3;
+
+  async function emitir(): Promise<void> {
+    setError(null);
+    setOcupado(true);
+    try {
+      await llamar("/v1/debit-notes", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          source_document_id: documento.id,
+          reason: motivo.trim(),
+          lines: completas.map((f) => ({
+            product_id: f.producto!.id,
+            quantity: f.cantidad.trim().replace(",", "."),
+            unit_price: f.precio.trim().replace(",", "."),
+          })),
+        }),
+      });
+      toast.success(
+        "Nota de débito emitida",
+        "El cliente debe también la nota — ya aparece en su cuenta.",
+      );
+      onClose(true);
+    } catch (e) {
+      setError(e);
+      toast.error("No se pudo emitir la nota de débito");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose(false)}>
+      <DialogContent className="max-w-lg">
+        <DialogTitle>Nota de débito de {numeroDe(documento)}</DialogTitle>
+        <DialogDescription>
+          Cobra lo que la factura no incluyó: intereses de mora, fletes, diferencias de precio. El
+          precio va en la moneda de la factura ({documento.transaction_currency}); el impuesto lo
+          resuelve el servidor a la fecha de hoy. Exige su propio rango de numeración.
+        </DialogDescription>
+        <div className="space-y-3 pt-2">
+          {filas.map((f, i) => (
+            <div key={i} className="flex items-end gap-2">
+              <div className="min-w-0 flex-1">
+                <EntityPicker
+                  placeholder="Producto o servicio…"
+                  value={f.producto}
+                  onChange={(v) =>
+                    setFilas((prev) => prev.map((x, j) => (j === i ? { ...x, producto: v } : x)))
+                  }
+                  buscar={buscarProducto}
+                />
+              </div>
+              <Input
+                aria-label="Cantidad"
+                inputMode="decimal"
+                className="w-16 text-right font-mono"
+                value={f.cantidad}
+                onChange={(e) =>
+                  setFilas((prev) =>
+                    prev.map((x, j) => (j === i ? { ...x, cantidad: e.target.value } : x)),
+                  )
+                }
+              />
+              <Input
+                aria-label={`Precio unitario en ${documento.transaction_currency}`}
+                inputMode="decimal"
+                placeholder="Precio"
+                className="w-24 text-right font-mono"
+                value={f.precio}
+                onChange={(e) =>
+                  setFilas((prev) =>
+                    prev.map((x, j) => (j === i ? { ...x, precio: e.target.value } : x)),
+                  )
+                }
+              />
+            </div>
+          ))}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              setFilas((prev) => [...prev, { producto: null, cantidad: "1", precio: "" }])
+            }
+          >
+            Otra línea
+          </Button>
+          <Textarea
+            aria-label="Motivo de la nota de débito"
+            rows={2}
+            placeholder="Motivo (obligatorio): qué se cobra y por qué"
+            value={motivo}
+            onChange={(e) => setMotivo(e.target.value)}
+          />
+          {error !== null && <MensajeError error={error} />}
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => onClose(false)}>
+            Cancelar
+          </Button>
+          <Button variant="primary" disabled={!listo || ocupado} onClick={() => void emitir()}>
+            {ocupado ? "Emitiendo…" : "Emitir la nota de débito"}
           </Button>
         </div>
       </DialogContent>

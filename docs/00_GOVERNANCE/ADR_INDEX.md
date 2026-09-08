@@ -56,6 +56,7 @@ Usa la skill `adr` de Claude Code.
 | [0048](adr/ADR-0048-roles-con-nombre-y-navegacion-por-permiso.md) | Cinco roles de oficio sembrados; el menú y los botones se forman por permiso | Aceptado | SÍ |
 | [0049](adr/ADR-0049-el-primer-dia-real-onboarding-y-miembros.md) | Onboarding autoservicio en un acto; miembros por correo; dueño plano + rol de almacén | Aceptado | SÍ |
 | [0050](adr/ADR-0050-politica-de-rif-en-tres-niveles.md) | El RIF en tres niveles (libre sin documentos, bloqueado con ellos, corrección con acta); perfil y logo del negocio | Aceptado | SÍ |
+| [0051](adr/ADR-0051-notas-de-debito-y-credito-directas.md) | ND y NC directa por el motor común; la ND es deuda (aging gana `debit_note` y `receipt`); asientos de NC/ND y del saldo a favor aplicado (cierra R-20) | Aceptado | SÍ |
 
 ## Decisiones aún abiertas
 
