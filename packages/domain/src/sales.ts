@@ -1295,7 +1295,15 @@ export async function registerPayment(
         )[0]?.saldo;
   const saldo = parseDecimal(saldoQueDecide ?? "0");
   let estado = doc.status;
-  if (saldo.ok && (saldo.value.isZero() || saldo.value.isNegative())) {
+  // LA REGLA DEL ÚLTIMO CENTAVO (2026-09-08, provisional — VALIDAR-TRIBUTARIO):
+  // la deuda se ENSEÑA redondeada a 2 decimales, así que quien paga lo que la
+  // pantalla pide pagó todo lo que se le pidió. Un residuo menor a MEDIO
+  // CENTAVO (< 0.005) de la moneda que decide es impagable con dinero real y
+  // no mantiene viva una factura. El residuo NO se borra de los libros: sigue
+  // en el saldo de 8 decimales (que en pantalla redondea a 0.00) — castigar o
+  // asignar ese residuo es política tributaria pendiente (R-02,
+  // ResidualAllocation); esta regla decide SOLO el estado del documento.
+  if (saldo.ok && saldo.value.lessThan("0.005")) {
     await sql`update public.documents set status = 'paid' where id = ${input.document_id}`;
     estado = "paid";
   }

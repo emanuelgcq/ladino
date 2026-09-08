@@ -1313,4 +1313,100 @@ describe("ventas de extremo a extremo", () => {
     });
     expect(clienteAjeno.status).toBe(422);
   });
+
+  // ── LA DEUDA MOSTRADA VIAJA A 2 DECIMALES (2026-09-08) ────────────────────
+  // ÚLTIMO caso del fichero A PROPÓSITO: planta una tasa fea para HOY y los
+  // tests anteriores asumen la de 45. Demuestra el par completo: el servidor
+  // redondea AL SERVIR (los 8 decimales siguen en la base), y pagar exactamente
+  // lo mostrado NO deja residuo fantasma — la regla del último centavo
+  // (< 0.005 de la moneda que decide) cierra el documento.
+
+  it("la deuda se sirve a 2 decimales y pagar lo mostrado cierra la factura", async () => {
+    // Tasa fea de HOY: 116 USD → 4190.320896 Bs. La pantalla dirá 4190.32.
+    const tasa = await pedir("POST", "/v1/exchange-rates", VENDEDOR, {
+      from_currency: "USD",
+      to_currency: "VES",
+      rate: "36.12345600",
+      source: "Prueba redondeo e2e",
+      rate_date: HOY,
+    });
+    expect(tasa.status).toBe(201);
+
+    // Cliente FRESCO: su deuda es exactamente esta factura, nada heredado.
+    const alta = await pedir("POST", "/v1/customers", VENDEDOR, {
+      company_id: COMPANY,
+      tax_id: `V${String(Date.now()).slice(-8)}`,
+      legal_name: "Cliente redondeo",
+      person_type_code: "natural",
+      taxpayer_type_code: "consumidor_final",
+    });
+    expect(alta.status).toBe(201);
+    const deudorId = ((await alta.json()) as { id: string }).id;
+
+    const fiada = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
+      company_id: COMPANY,
+      customer_id: deudorId,
+      warehouse_id: W1,
+      series: "C",
+      lines: [{ product_id: PROD, quantity: "1" }],
+    });
+    expect(fiada.status).toBe(201);
+    const doc = ((await fiada.json()) as { document: { id: string } }).document;
+
+    // El listado con deuda y el estado de cuenta la ENSEÑAN a 2 decimales.
+    const lista = await pedir(
+      "GET",
+      `/v1/customers?with_debt=1&search=${encodeURIComponent("Cliente redondeo")}`,
+      VENDEDOR,
+    );
+    const fila = ((await lista.json()) as { items: { id: string; debt: string }[] }).items.find(
+      (x) => x.id === deudorId,
+    );
+    expect(fila?.debt).toBe("4190.32");
+
+    const estado = (await (
+      await pedir("GET", `/v1/customers/${deudorId}/statement`, VENDEDOR)
+    ).json()) as {
+      totals: { pending: string } | undefined;
+      pending?: string;
+      documents: { id: string; balance: string }[];
+    };
+    const filaDoc = estado.documents.find((d) => d.id === doc.id);
+    expect(filaDoc?.balance).toBe("4190.32");
+
+    // Se paga EXACTAMENTE lo que la pantalla pidió…
+    const cobro = await pedir("POST", "/v1/payments", VENDEDOR, {
+      company_id: COMPANY,
+      document_id: doc.id,
+      currency: "VES",
+      amount: "4190.32000000",
+      instrument: "efectivo_bs",
+    });
+    expect(cobro.status).toBe(201);
+    const c = (await cobro.json()) as { document_status: string; balance: string };
+    // …y la factura queda PAGADA: el residuo (< 0.005 USD) es impagable y no
+    // la mantiene viva. El saldo funcional de 8 decimales sigue en la base…
+    expect(c.document_status).toBe("paid");
+    // …pero lo SERVIDO redondea a cero: sin deuda fantasma en ninguna pantalla.
+    const despues = (await (
+      await pedir("GET", `/v1/customers/${deudorId}/statement`, VENDEDOR)
+    ).json()) as { documents: { id: string; balance: string }[] };
+    expect(despues.documents.find((d) => d.id === doc.id)?.balance).toBe("0.00");
+
+    const listaDespues = await pedir(
+      "GET",
+      `/v1/customers?with_debt=1&search=${encodeURIComponent("Cliente redondeo")}`,
+      VENDEDOR,
+    );
+    const filaDespues = (
+      (await listaDespues.json()) as { items: { id: string; debt: string }[] }
+    ).items.find((x) => x.id === deudorId);
+    expect(filaDespues?.debt).toBe("0.00");
+
+    // Y el resumen del dueño también sirve 2 decimales, siempre.
+    const resumen = (await (await pedir("GET", "/v1/negocio/resumen", VENDEDOR)).json()) as {
+      lo_que_me_deben: string;
+    };
+    expect(resumen.lo_que_me_deben).toMatch(/^\d+\.\d{2}$/);
+  });
 });

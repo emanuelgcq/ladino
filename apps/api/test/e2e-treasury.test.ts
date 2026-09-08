@@ -371,9 +371,10 @@ describe("tesorería de extremo a extremo", () => {
     const porMoneda = new Map(res.mi_dinero.map((m) => [m.currency, m.balance]));
     expect(porMoneda.get("VES")).toBe("0.00000000");
     expect(porMoneda.get("USD")).toBe("-10.00000000");
-    // Sin ventas ni compras en esta empresa: deudas en cero, no en null.
-    expect(res.lo_que_me_deben).toBe("0");
-    expect(res.lo_que_debo).toBe("0");
+    // Sin ventas ni compras en esta empresa: deudas en cero, no en null — y a
+    // DOS decimales desde 2026-09-08: la deuda mostrada es presentación.
+    expect(res.lo_que_me_deben).toBe("0.00");
+    expect(res.lo_que_debo).toBe("0.00");
     expect(res.tasa_del_dia).not.toBeNull();
     expect(res.tasa_del_dia!.rate).toBe("40.00000000");
 

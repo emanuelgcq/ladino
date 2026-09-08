@@ -84,14 +84,19 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
 
       // Lo que me deben / lo que debo: saldos que calcula el ESQUEMA, sumados
       // en SQL. Solo los positivos: un sobrepago no «resta deuda de otros».
+      // REDONDEO DE PRESENTACIÓN (2026-09-08): la deuda viaja a 2 decimales —
+      // es lo que una persona puede pagar. La precisión de 8 sigue viva en la
+      // base y en todos los cálculos; SOLO se redondea al servir (half-up de
+      // `round()` de Postgres). La regla del último centavo en registerPayment
+      // garantiza que pagar lo mostrado no deja residuo fantasma.
       const [deben] = await tx<{ total: string }[]>`
-        select coalesce(sum(saldo), 0)::text as total
+        select round(coalesce(sum(saldo), 0), 2)::text as total
           from (select greatest(platform.document_debt_today(${companyId}, d.id), 0) as saldo
                   from public.documents d
                  where d.company_id = ${companyId} and d.kind = 'invoice'
                    and d.status = 'issued') s`;
       const [debo] = await tx<{ total: string }[]>`
-        select coalesce(sum(saldo), 0)::text as total
+        select round(coalesce(sum(saldo), 0), 2)::text as total
           from (select greatest(platform.supplier_invoice_balance(${companyId}, i.id), 0) as saldo
                   from public.supplier_invoices i
                  where i.company_id = ${companyId} and i.status = 'posted') s`;

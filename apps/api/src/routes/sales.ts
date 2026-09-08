@@ -425,11 +425,14 @@ export function salesRoutes(
       await exigeArRead(tx, actor, companyId);
       const [ref] = await tx<{ d: string }[]>`
         select coalesce(${referencia}::date, current_date)::text as d`;
+      // La deuda mostrada viaja a 2 decimales (2026-09-08): presentación, no
+      // recálculo — la base sigue a 8.
       const buckets = await tx<Record<string, unknown>[]>`
-        select customer_id, bucket, document_count::int as document_count, amount::text as amount
+        select customer_id, bucket, document_count::int as document_count,
+               round(amount, 2)::text as amount
           from platform.ar_aging(${companyId}, ${id}, ${ref!.d}::date)`;
       const [total] = await tx<{ t: string }[]>`
-        select coalesce(sum(amount), 0)::text as t
+        select round(coalesce(sum(amount), 0), 2)::text as t
           from platform.ar_aging(${companyId}, ${id}, ${ref!.d}::date)`;
       return { reference_date: ref!.d, buckets, total: total?.t ?? "0" };
     });
@@ -445,13 +448,16 @@ export function salesRoutes(
       const [empresa] = await tx<{ moneda: string }[]>`
         select functional_currency_code as moneda from public.companies where id = ${companyId}`;
       if (!empresa) return null;
+      // El estado de cuenta ENSEÑA dinero: pagado y saldo viajan a 2 decimales
+      // (2026-09-08) — la persona paga lo que ve, y la regla del último
+      // centavo (registerPayment) cierra el documento sin residuo fantasma.
       const documentos = await tx<Record<string, unknown>[]>`
         select d.id, d.kind, d.series, d.document_number::int as document_number,
                to_char(d.issued_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as issued_at,
                d.status, d.total_amount::text as total_amount,
-               coalesce((select sum(p.functional_amount) from public.payments p
-                          where p.document_id = d.id), 0)::text as paid_amount,
-               platform.document_debt_today(${companyId}, d.id)::text as balance,
+               round(coalesce((select sum(p.functional_amount) from public.payments p
+                          where p.document_id = d.id), 0), 2)::text as paid_amount,
+               round(platform.document_debt_today(${companyId}, d.id), 2)::text as balance,
                greatest(0, (current_date - d.issued_at::date))::int as days_outstanding
           from public.documents d
          where d.company_id = ${companyId} and d.customer_id = ${id}
@@ -463,21 +469,22 @@ export function salesRoutes(
           from public.customer_credits
          where company_id = ${companyId} and customer_id = ${id} order by created_at, id`;
       const [totales] = await tx<{ pendiente: string; credito: string }[]>`
-        select coalesce((select sum(platform.document_debt_today(${companyId}, d.id))
+        select round(coalesce((select sum(platform.document_debt_today(${companyId}, d.id))
                            from public.documents d
                           where d.company_id = ${companyId} and d.customer_id = ${id}
-                            and d.kind in ('invoice', 'receipt') and d.status in ('issued', 'paid')), 0)::text
+                            and d.kind in ('invoice', 'receipt') and d.status in ('issued', 'paid')), 0), 2)::text
                  as pendiente,
-               coalesce((select sum(cc.amount - cc.applied_amount)
+               round(coalesce((select sum(cc.amount - cc.applied_amount)
                            from public.customer_credits cc
                           where cc.company_id = ${companyId} and cc.customer_id = ${id}
-                            and cc.status = 'available'), 0)::text as credito`;
+                            and cc.status = 'available'), 0), 2)::text as credito`;
       const buckets = await tx<Record<string, unknown>[]>`
-        select customer_id, bucket, document_count::int as document_count, amount::text as amount
+        select customer_id, bucket, document_count::int as document_count,
+               round(amount, 2)::text as amount
           from platform.ar_aging(${companyId}, ${id}, current_date)`;
       const [ref] = await tx<{ d: string }[]>`select current_date::text as d`;
       const [totalAging] = await tx<{ t: string }[]>`
-        select coalesce(sum(amount), 0)::text as t
+        select round(coalesce(sum(amount), 0), 2)::text as t
           from platform.ar_aging(${companyId}, ${id}, current_date)`;
       return {
         customer_id: id,

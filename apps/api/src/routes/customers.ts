@@ -68,10 +68,13 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
       // ADR-0047: la deuda se enseña VALORADA HOY — la del lunes, preguntada
       // el viernes, vale viernes. document_debt_today ancla en la moneda del
       // documento y convierte con la tasa del día.
+      // Redondeada a 2 decimales AL SERVIR (2026-09-08): lo que se enseña es
+      // lo que se puede pagar; los 8 decimales siguen en la base.
       const deudaJoin = conDeuda
         ? tx`left join lateral (
-              select coalesce(sum(greatest(platform.document_debt_today(cu.company_id, d.id), 0)), 0)
-                     ::text as debt
+              select round(
+                       coalesce(sum(greatest(platform.document_debt_today(cu.company_id, d.id), 0)), 0),
+                       2)::text as debt
                 from public.documents d
                where d.company_id = cu.company_id and d.customer_id = cu.id
                  and d.kind in ('invoice', 'receipt') and d.status = 'issued'
