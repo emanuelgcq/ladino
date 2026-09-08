@@ -14,6 +14,7 @@ import {
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
+import { leerMatriz } from "../csv.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -151,6 +152,139 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const r = await withTransaction(sql, actor, (uow) => createCustomer(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
+  });
+
+  /**
+   * IMPORTACIÓN MASIVA de clientes (.csv o .xlsx — orden del dueño,
+   * 2026-09-08), el mismo contrato humano que la de productos: la fila mala
+   * se explica con su número, las buenas entran, y nadie repite el archivo
+   * por una celda. El tipo de persona se infiere del documento como en la
+   * caja: J/G = empresa (ordinario), V/E o vacío = persona (consumidor
+   * final), P = extranjero. Cada fila va en SU transacción (por eso el
+   * endpoint no lleva Idempotency-Key, como el de productos: reintentar
+   * duplicaría solo lo que el unique de tax_id no ataja — documentado).
+   */
+  app.post("/v1/customers/import", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const cuerpo = await c.req.parseBody();
+    const archivo = cuerpo["file"];
+    if (!(archivo instanceof File)) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Manda el archivo (.csv o .xlsx) en el campo `file` (multipart/form-data).",
+      });
+    }
+    const matriz = await leerMatriz(archivo);
+    if (matriz.length < 2) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "El archivo no tiene filas de clientes: la primera fila son los títulos.",
+      });
+    }
+    if (matriz.length > 501) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Máximo 500 clientes por archivo. Divide el archivo y sube las partes.",
+      });
+    }
+
+    const normalizar = (s: string): string =>
+      s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+    const columnas = new Map<string, number>();
+    matriz[0]!.forEach((celda, i) => columnas.set(normalizar(celda), i));
+    const col = (...nombres: string[]): number | undefined => {
+      for (const nom of nombres) {
+        const idx = columnas.get(nom);
+        if (idx !== undefined) return idx;
+      }
+      return undefined;
+    };
+    const colNombre = col("nombre", "razon social", "nombre o razon social", "cliente");
+    const colDoc = col("rif", "cedula", "documento", "rif o cedula", "cedula o rif");
+    if (colNombre === undefined) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "El archivo necesita al menos la columna «Nombre o razón social» en la fila 1.",
+      });
+    }
+    const colTel = col("telefono", "celular");
+    const colCorreo = col("correo", "email");
+    const colDireccion = col("direccion", "direccion fiscal", "domicilio");
+
+    interface FilaResultado {
+      row: number;
+      status: "creado" | "error";
+      message?: string;
+      customer_id?: string;
+      name?: string;
+    }
+    const resultados: FilaResultado[] = [];
+
+    for (let i = 1; i < matriz.length; i++) {
+      const fila = matriz[i]!;
+      const n = i + 1;
+      const texto = (columna: number | undefined): string =>
+        columna === undefined ? "" : (fila[columna] ?? "").trim();
+
+      const nombre = texto(colNombre);
+      const docCrudo = texto(colDoc)
+        .toUpperCase()
+        .replace(/[^0-9A-Z]/g, "");
+      if (nombre === "" && docCrudo === "") continue; // fila vacía
+      if (nombre === "") {
+        resultados.push({ row: n, status: "error", message: "Falta el nombre del cliente." });
+        continue;
+      }
+
+      // El tipo, inferido del documento — la misma regla de la caja.
+      const letra = docCrudo.charAt(0);
+      const tipo =
+        letra === "J" || letra === "G"
+          ? { persona: letra === "J" ? "juridica" : "gobierno", contribuyente: "ordinario" }
+          : letra === "P"
+            ? { persona: "extranjera", contribuyente: "no_domiciliado" }
+            : { persona: "natural", contribuyente: "consumidor_final" };
+
+      const telefono = texto(colTel);
+      const correo = texto(colCorreo);
+      const direccion = texto(colDireccion);
+
+      // La fila pasa por el MISMO contrato que el alta manual: un correo roto
+      // o un nombre kilométrico se explican con su fila, no revientan nada.
+      const candidato = CreateCustomerRequest.safeParse({
+        company_id: companyId,
+        legal_name: nombre,
+        person_type_code: tipo.persona,
+        taxpayer_type_code: tipo.contribuyente,
+        ...(docCrudo === "" ? {} : { tax_id: docCrudo }),
+        ...(telefono === "" ? {} : { phone: telefono }),
+        ...(correo === "" ? {} : { email: correo }),
+        ...(direccion === "" ? {} : { fiscal_address: direccion }),
+      });
+      if (!candidato.success) {
+        const issue = candidato.error.issues[0];
+        resultados.push({
+          row: n,
+          status: "error",
+          name: nombre,
+          message: `${String(issue?.path[0] ?? "una celda")}: ${issue?.message ?? "no se entiende"}`,
+        });
+        continue;
+      }
+      const r = await withTransaction(sql, actor, (uow) => createCustomer(uow, candidato.data));
+      if (r.ok) {
+        resultados.push({ row: n, status: "creado", customer_id: r.value.id, name: nombre });
+      } else {
+        resultados.push({ row: n, status: "error", name: nombre, message: r.error.message });
+      }
+    }
+
+    const created = resultados.filter((r) => r.status === "creado").length;
+    return c.json(
+      { total: resultados.length, created, failed: resultados.length - created, rows: resultados },
+      201,
+    );
   });
 
   app.patch("/v1/customers/:id", idempotencia, async (c) => {

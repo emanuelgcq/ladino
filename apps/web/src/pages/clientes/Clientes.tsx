@@ -2,7 +2,12 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Banknote, Lock, LockOpen, MessageCircle, Pencil, UserPlus } from "lucide-react";
+import { Banknote, Lock, LockOpen, MessageCircle, Pencil, Upload, UserPlus } from "lucide-react";
+import {
+  ImportarArchivo,
+  PLANTILLA_CLIENTES,
+  NOTA_FORMATO_CLIENTES,
+} from "../../components/importar.js";
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
@@ -76,6 +81,7 @@ export function Clientes(): React.JSX.Element {
   const [busqueda, setBusqueda] = useState("");
   const [pagina, setPagina] = useState(1);
   const [creando, setCreando] = useState(false);
+  const [importando, setImportando] = useState(false);
   const [detalle, setDetalle] = useState<Customer | null>(null);
   const qc = useQueryClient();
 
@@ -170,11 +176,28 @@ export function Clientes(): React.JSX.Element {
         title="Clientes"
         description="El maestro de contrapartes de venta: RIF, clasificación fiscal y bloqueo de cobranzas."
         actions={
-          <Button variant="primary" onClick={() => setCreando(true)}>
-            <UserPlus /> Nuevo cliente
-          </Button>
+          <>
+            <Button variant="secondary" onClick={() => setImportando(true)}>
+              <Upload /> Importar
+            </Button>
+            <Button variant="primary" onClick={() => setCreando(true)}>
+              <UserPlus /> Nuevo cliente
+            </Button>
+          </>
         }
       />
+
+      {importando && (
+        <ImportarArchivo
+          titulo="Importar clientes"
+          descripcion="Descarga la plantilla, llénala y súbela. Las filas buenas entran; las malas se explican con su número."
+          notaFormato={NOTA_FORMATO_CLIENTES}
+          endpoint="/v1/customers/import"
+          plantilla={PLANTILLA_CLIENTES}
+          onCerrar={() => setImportando(false)}
+          onListo={recargar}
+        />
+      )}
       <DataTable
         columns={columnas}
         data={clientes.data?.items}

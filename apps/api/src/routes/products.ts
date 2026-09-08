@@ -15,6 +15,7 @@ import {
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { CTX } from "../middleware/context.js";
+import { leerMatriz } from "../csv.js";
 import { subirObjeto, firmarUrls } from "../storage.js";
 import type { StorageConfig } from "../config.js";
 
@@ -321,31 +322,23 @@ export function productsRoutes(
     if (!(archivo instanceof File)) {
       throw new DominioError({
         code: "VALIDATION_FAILED",
-        message: "Manda el Excel en el campo `file` (multipart/form-data).",
+        message: "Manda el archivo (.csv o .xlsx) en el campo `file` (multipart/form-data).",
       });
     }
 
-    const { Workbook } = await import("exceljs");
-    const libro = new Workbook();
-    try {
-      await libro.xlsx.load(await archivo.arrayBuffer());
-    } catch {
-      throw new DominioError({
-        code: "VALIDATION_FAILED",
-        message: "Ese archivo no se pudo leer como Excel (.xlsx). Guárdalo de nuevo y reintenta.",
-      });
-    }
-    const hoja = libro.worksheets[0];
-    if (!hoja || hoja.rowCount < 2) {
+    // CSV o Excel, el MISMO camino (2026-09-08): todo se aplana a una matriz
+    // de celdas-texto y el resto del handler no sabe de dónde vino.
+    const matriz = await leerMatriz(archivo);
+    if (matriz.length < 2) {
       throw new DominioError({
         code: "VALIDATION_FAILED",
         message: "El archivo no tiene filas de productos: la primera fila son los títulos.",
       });
     }
-    if (hoja.rowCount > 501) {
+    if (matriz.length > 501) {
       throw new DominioError({
         code: "VALIDATION_FAILED",
-        message: "Máximo 500 productos por archivo. Divide el Excel y sube las partes.",
+        message: "Máximo 500 productos por archivo. Divide el archivo y sube las partes.",
       });
     }
 
@@ -354,8 +347,8 @@ export function productsRoutes(
     const normalizar = (s: string): string =>
       s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
     const columnas = new Map<string, number>();
-    hoja.getRow(1).eachCell((celda, n) => {
-      columnas.set(normalizar(String(celda.text ?? "")), n);
+    matriz[0]!.forEach((celda, i) => {
+      columnas.set(normalizar(celda), i);
     });
     const col = (...nombres: string[]): number | undefined => {
       for (const n of nombres) {
@@ -400,10 +393,11 @@ export function productsRoutes(
     }
     const resultados: FilaResultado[] = [];
 
-    for (let n = 2; n <= hoja.rowCount; n++) {
-      const fila = hoja.getRow(n);
+    for (let i = 1; i < matriz.length; i++) {
+      const fila = matriz[i]!;
+      const n = i + 1; // número de fila HUMANO (1 = títulos), como en el Excel
       const texto = (columna: number | undefined): string =>
-        columna === undefined ? "" : String(fila.getCell(columna).text ?? "").trim();
+        columna === undefined ? "" : (fila[columna] ?? "").trim();
 
       const nombre = texto(colNombre);
       const precioCrudo = texto(colPrecio);

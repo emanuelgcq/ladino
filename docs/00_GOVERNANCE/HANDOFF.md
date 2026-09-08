@@ -1,3 +1,45 @@
+# Handoff — 2026-09-08 (16ª entrega)
+
+## La lentitud tiene nombre, el POS respeta la existencia, y los CSV
+
+**La lentitud de producción, medida**: el VPS está en Boston y la base en
+us-west-2 (~75 ms por consulta); cada request paga N viajes secuenciales.
+Números reales contra la API viva: GET /v1/companies ≈ 1 s, cotización de UNA
+línea ≈ 3 s, y cobrar (cientos de consultas) excede los 30 s del timeout.
+La base está sana (cero locks, cero consultas lentas). Dos frentes:
+1. **Código (esta entrega)**: `calcularLineas` pasó de ~6 consultas POR LÍNEA
+   a CUATRO fijas (productos, precios, alícuotas por categoría con su
+   savepoint, costos) — cotización/pedido/factura/venta rápida comparten ese
+   camino. Misma semántica y mensajes.
+2. **Infraestructura (decisión del dueño, LA de fondo)**: acercar VPS y base.
+   Opciones: (a) mover el VPS a un datacenter del oeste de EE. UU. (redeploy
+   con el runbook, ~30 min + DNS), o (b) migrar el proyecto Supabase a
+   us-east (proyecto nuevo + dump/restore + auth). Mientras: subir
+   `REQUEST_TIMEOUT_MS=90000` en api.env del VPS evita perder ventas largas.
+   El «cargando permisos/empresas» es la misma latencia en la carga de
+   sesión, no un bug propio.
+
+**El POS respeta la existencia** (orden del dueño): la tarjeta del producto
+dice «Quedan N» (o «Agotado», en ámbar) además de los dos precios, y ni
+agregar ni el «+» dejan pasar del tope — con el aviso «Solo quedan N». Solo
+bienes; el control de verdad sigue siendo el kardex al emitir. La línea de la
+cuenta guarda la existencia vista al agregar (ayuda local, no viaja a la
+nube).
+
+**Importación con plantilla CSV** (orden del dueño): componente común
+(`components/importar.tsx`) con «Descargar la plantilla CSV» (títulos + filas
+de ejemplo, separador «;», BOM para acentos) y la letra chica del formato.
+El servidor acepta ahora **.csv o .xlsx por el MISMO camino** (`csv.ts`:
+matriz de celdas-texto; separador «;» o «,» autodetectado; comillas RFC 4180;
+coma decimal venezolana «2,50» y «1.234,56»; filas vacías conservadas para
+que «Fila N» coincida con el archivo). Productos: igual que antes, más CSV.
+**Clientes: endpoint NUEVO POST /v1/customers/import** — basta «Nombre o
+razón social»; el tipo se infiere del documento (V/E = persona, J/G =
+empresa, P = extranjero); cada fila en su transacción y validada por el
+contrato del alta manual. Botón «Importar» en Clientes de ambos mundos.
+E2E de los dos caminos (punto y coma, comillas con separador adentro, coma
+decimal, fila vacía ignorada sin correr la numeración, fila mala explicada).
+
 # Handoff — 2026-09-08 (15ª entrega)
 
 ## Sprint post-auditoría + las NOTAS (ADR-0051) + semilla de producción

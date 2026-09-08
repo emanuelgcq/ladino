@@ -264,4 +264,46 @@ describe("clientes de extremo a extremo", () => {
     });
     expect(patch.status).toBe(422);
   });
+
+  it("la importación CSV de clientes: el tipo se infiere del documento y la fila mala se explica (2026-09-08)", async () => {
+    const marca = Date.now().toString(36);
+    const csv =
+      "RIF o cédula;Nombre o razón social;Teléfono;Correo;Dirección\r\n" +
+      `V1699${marca.slice(0, 4)}88;Pedro Import ${marca};0414-1234567;;\r\n` +
+      `J-3145${marca.slice(0, 4)}-0;"Construcciones Import, C.A. ${marca}";0241-8543210;pagos@paez.com.ve;"Zona Sur, galpón 4"\r\n` +
+      `;;;;\r\n` +
+      `V123;;;correo-roto;\r\n`;
+    const form = new FormData();
+    form.append("file", new File(["﻿" + csv], "clientes.csv", { type: "text/csv" }));
+    const r = await app.request("/v1/customers/import", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${await tokenDe(GESTOR)}`, "X-Company-Id": COMPANY },
+      body: form,
+    });
+    expect(r.status).toBe(201);
+    const res = (await r.json()) as {
+      total: number;
+      created: number;
+      failed: number;
+      rows: { row: number; status: string; message?: string; customer_id?: string }[];
+    };
+    // La fila vacía se ignora; la sin nombre se explica; las dos buenas entran.
+    expect(res.created).toBe(2);
+    expect(res.failed).toBe(1);
+    const porFila = new Map(res.rows.map((f) => [f.row, f]));
+    expect(porFila.get(5)!.message).toContain("nombre");
+
+    // El tipo salió del documento: V → natural, J → jurídica ordinario.
+    const persona = await pedir("GET", `/v1/customers/${porFila.get(2)!.customer_id}`, GESTOR);
+    expect(((await persona.json()) as { person_type_code: string }).person_type_code).toBe(
+      "natural",
+    );
+    const empresa = (await (
+      await pedir("GET", `/v1/customers/${porFila.get(3)!.customer_id}`, GESTOR)
+    ).json()) as { person_type_code: string; taxpayer_type_code: string; legal_name: string };
+    expect(empresa.person_type_code).toBe("juridica");
+    expect(empresa.taxpayer_type_code).toBe("ordinario");
+    // La coma DENTRO de comillas no partió la razón social.
+    expect(empresa.legal_name).toBe(`Construcciones Import, C.A. ${marca}`);
+  });
 });

@@ -451,6 +451,36 @@ describe("productos de extremo a extremo", () => {
     },
   );
 
+  it("la importación también come CSV: punto y coma, coma decimal y comillas (2026-09-08)", async () => {
+    const csv =
+      "﻿Nombre;Precio;Moneda;Existencia;Costo;Moneda costo\r\n" +
+      `Clavos CSV ${RUN};2,50;USD;100;1.234,56;VES\r\n` +
+      `"Tirro; el ancho ${RUN}";1.75;USD;;\r\n` +
+      `Cinta CSV ${RUN};regalado;USD;;\r\n`;
+    const token = await tokenDe(GESTOR);
+    const form = new FormData();
+    form.append("file", new File([csv], "productos.csv", { type: "text/csv" }));
+    const r = await app.request("/v1/products/import", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "X-Company-Id": COMPANY },
+      body: form,
+    });
+    expect(r.status).toBe(201);
+    const res = (await r.json()) as {
+      created: number;
+      failed: number;
+      rows: { row: number; status: string; message?: string; name?: string }[];
+    };
+    // Fila 2: coma decimal y millares venezolanos («1.234,56») entendidos.
+    // Fila 3: el «;» DENTRO de comillas no parte la celda.
+    // Fila 4: el precio ilegible se explica con su fila.
+    expect(res.created).toBe(2);
+    expect(res.failed).toBe(1);
+    const porFila = new Map(res.rows.map((f) => [f.row, f]));
+    expect(porFila.get(3)!.name).toBe(`Tirro; el ancho ${RUN}`);
+    expect(porFila.get(4)!.message).toContain("precio");
+  });
+
   it("la foto: subir genera original + miniaturas y la cuadrícula recibe la URL FIRMADA", async () => {
     const token = await tokenDe(GESTOR);
     const alta = await pedir("POST", "/v1/products/simple", {

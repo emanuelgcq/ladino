@@ -584,13 +584,14 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "post",
     path: "/v1/products/import",
-    summary: "Importar productos desde Excel, con errores POR FILA en voz de persona",
+    summary: "Importar productos desde .csv o .xlsx, con errores POR FILA en voz de persona",
     description:
-      "Multipart con `file` (.xlsx, hasta 500 filas). Bastan las columnas «Nombre» y «Precio»; " +
-      "«Moneda», «Código», «Código de barras», «Categoría», «Existencia», «Costo», «Moneda " +
-      "costo» y «Es servicio» son opcionales. Cada fila es SU transacción: las buenas entran, " +
-      "las malas se explican con su número de fila. Los importes se leen del TEXTO de la celda " +
-      "(coma decimal venezolana incluida), nunca del float de Excel.",
+      "Multipart con `file` (.csv o .xlsx, hasta 500 filas). CSV con separador «;» o «,» — se " +
+      "detecta solo. Bastan las columnas «Nombre» y «Precio»; «Moneda», «Código», «Código de " +
+      "barras», «Categoría», «Existencia», «Costo», «Moneda costo» y «Es servicio» son " +
+      "opcionales. Cada fila es SU transacción: las buenas entran, las malas se explican con su " +
+      "número de fila. Los importes se leen del TEXTO de la celda (coma decimal venezolana " +
+      "incluida — «2,50» y «1.234,56» valen), nunca del float de Excel.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
@@ -604,6 +605,53 @@ export function buildOpenApiDocument(): object {
     },
     responses: {
       201: okJson(importProductos, "El resultado fila por fila."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/customers/import",
+    summary: "Importar clientes desde .csv o .xlsx (permiso customer.manage)",
+    description:
+      "Multipart con `file` (.csv o .xlsx, hasta 500 filas; separador «;» o «,» — se detecta " +
+      "solo). Basta la columna «Nombre o razón social»; «RIF o cédula», «Teléfono», «Correo» y " +
+      "«Dirección» son opcionales. El tipo de persona se infiere del documento como en la caja: " +
+      "J/G = empresa, V/E o vacío = persona, P = extranjero. Cada fila es su transacción y la " +
+      "mala se explica con su número.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: {
+        content: {
+          "multipart/form-data": {
+            schema: z.object({ file: z.string().openapi({ format: "binary" }) }),
+          },
+        },
+      },
+    },
+    responses: {
+      201: okJson(
+        z
+          .object({
+            total: z.number().int(),
+            created: z.number().int(),
+            failed: z.number().int(),
+            rows: z.array(
+              z
+                .object({
+                  row: z.number().int(),
+                  status: z.enum(["creado", "error"]),
+                  message: z.string().optional(),
+                  customer_id: z.string().uuid().optional(),
+                  name: z.string().optional(),
+                })
+                .strict(),
+            ),
+          })
+          .strict()
+          .openapi("ImportCustomersResponse"),
+        "El resultado fila por fila.",
+      ),
       ...erroresComunes,
     },
   });

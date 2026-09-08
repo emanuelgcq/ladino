@@ -29,6 +29,11 @@ import { Input } from "../../ui/input.js";
 import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
+import {
+  ImportarArchivo,
+  PLANTILLA_PRODUCTOS,
+  NOTA_FORMATO_PRODUCTOS,
+} from "../../components/importar.js";
 
 /**
  * PRODUCTOS (Fase C, PARTE 7): lo que vendo, con foto. Cuadrícula visual por
@@ -555,6 +560,11 @@ export function AltaSimple({
   );
 }
 
+/**
+ * La importación de productos, sobre el componente COMÚN (2026-09-08): .csv
+ * o .xlsx, con plantilla descargable y el formato dicho en letra chica. El
+ * nombre se conserva porque Empezar también lo usa.
+ */
 export function ImportarExcel({
   onCerrar,
   onListo,
@@ -562,94 +572,16 @@ export function ImportarExcel({
   onCerrar: () => void;
   onListo: () => void;
 }): React.JSX.Element {
-  const { llamar } = useSesion();
-  const toast = useToast();
-  const [archivo, setArchivo] = useState<File | null>(null);
-  const [resultado, setResultado] = useState<{
-    total: number;
-    created: number;
-    failed: number;
-    rows: { row: number; status: string; message?: string; name?: string }[];
-  } | null>(null);
-
-  const subir = useMutation({
-    mutationFn: async () => {
-      const form = new FormData();
-      form.append("file", archivo!);
-      return llamar<NonNullable<typeof resultado>>("/v1/products/import", {
-        method: "POST",
-        body: form,
-      });
-    },
-    onSuccess: (r) => {
-      setResultado(r);
-      if (r.created > 0) onListo();
-    },
-    onError: (e) => toast.error("No se pudo leer el archivo", errorDePersona(e)),
-  });
-
   return (
-    <Dialog open onOpenChange={(v) => !v && onCerrar()}>
-      <DialogContent className="max-w-lg">
-        <DialogTitle>Importar productos desde Excel</DialogTitle>
-        <DialogDescription>
-          Basta con dos columnas en la primera fila: «Nombre» y «Precio». También entiende «Moneda»,
-          «Código», «Código de barras», «Categoría», «Existencia» y «Costo».
-        </DialogDescription>
-        {resultado === null ? (
-          <>
-            <div className="pt-2">
-              <input
-                type="file"
-                accept=".xlsx"
-                aria-label="Archivo de Excel"
-                onChange={(e) => setArchivo(e.target.files?.[0] ?? null)}
-                className="w-full text-[0.9rem] file:mr-3 file:rounded-md file:border-0 file:bg-surface-muted file:px-3 file:py-1.5 file:text-[0.85rem]"
-              />
-            </div>
-            <DialogFooter>
-              <Button variant="ghost" onClick={onCerrar}>
-                Cancelar
-              </Button>
-              <Button
-                variant="primary"
-                disabled={archivo === null || subir.isPending}
-                onClick={() => subir.mutate()}
-              >
-                {subir.isPending ? "Leyendo…" : "Importar"}
-              </Button>
-            </DialogFooter>
-          </>
-        ) : (
-          <>
-            <p className="pt-2 text-[0.95rem]">
-              Entraron <strong>{resultado.created}</strong> de {resultado.total}.
-              {resultado.failed > 0 && " Estas filas necesitan un ajuste:"}
-            </p>
-            {resultado.failed > 0 && (
-              <ul className="max-h-56 space-y-1 overflow-y-auto text-[0.88rem]">
-                {resultado.rows
-                  .filter((r) => r.status === "error")
-                  .map((r) => (
-                    <li
-                      key={r.row}
-                      className="rounded-sm bg-warning-soft px-2 py-1.5 text-warning-soft-foreground"
-                    >
-                      <strong>Fila {r.row}</strong>
-                      {r.name ? ` (${r.name})` : ""}: {r.message}
-                    </li>
-                  ))}
-              </ul>
-            )}
-            <DialogFooter>
-              <Button variant="primary" onClick={onCerrar}>
-                Listo
-              </Button>
-            </DialogFooter>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
+    <ImportarArchivo
+      titulo="Importar productos"
+      descripcion="Descarga la plantilla, llénala en Excel o en cualquier editor, y súbela. Las filas buenas entran; las malas se explican con su número."
+      notaFormato={NOTA_FORMATO_PRODUCTOS}
+      endpoint="/v1/products/import"
+      plantilla={PLANTILLA_PRODUCTOS}
+      onCerrar={onCerrar}
+      onListo={onListo}
+    />
   );
 }
 
