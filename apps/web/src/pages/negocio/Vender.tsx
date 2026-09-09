@@ -99,6 +99,8 @@ interface Venta {
   document_status: string;
   /** Lo que quedó debiendo, en moneda funcional. "0.00000000" = pagada. */
   balance: string;
+  /** El IGTF que cobró esta venta, si alguno de los pagos lo causó. */
+  igtf: { functional_amount: string; currency: string } | null;
 }
 
 function useDebounced<T>(valor: T, ms: number, salto?: unknown): T {
@@ -1448,6 +1450,22 @@ function PagoFila({
 
   const cambio = vuelto.data ? compararImportes(vuelto.data.change, "0") : null;
 
+  /**
+   * El «+ IGTF 3 %» EN VIVO, misma familia que el vuelto y por la misma razón:
+   * lo calcula el SERVIDOR con las mismas condiciones que aplicará el cobro.
+   * Un aviso calculado aquí acabaría difiriendo del cargo real el día que
+   * cambie la regla o la configuración de la empresa.
+   */
+  const igtf = useQuery({
+    queryKey: ["pos-igtf", empresa.id, debounced, pago.currency, pago.instrument],
+    enabled: importeValido(debounced) && debounced === limpio,
+    staleTime: 30_000,
+    queryFn: () =>
+      llamar<{ applies: boolean; amount: string | null }>(
+        `/v1/pos/igtf?amount=${debounced}&currency=${pago.currency}&instrument=${pago.instrument}`,
+      ),
+  });
+
   return (
     <div className="space-y-1 rounded-md border border-border p-2.5">
       <div className="flex items-center justify-between">
@@ -1490,6 +1508,12 @@ function PagoFila({
             amount: vuelto.data!.change.replace("-", ""),
             currency: vuelto.data!.change_currency,
           })}
+        </p>
+      )}
+      {igtf.data?.applies === true && igtf.data.amount !== null && (
+        <p className="text-[0.88rem] text-warning-soft-foreground tabular-nums">
+          + IGTF 3 %: {mostrarImporte({ amount: igtf.data.amount, currency: pago.currency })}
+          <span className="ml-1 text-faint-foreground">— se cobra además del total</span>
         </p>
       )}
     </div>
@@ -1556,6 +1580,16 @@ function VentaLista({
                 Lo cobras después desde Clientes o Mi dinero.
               </p>
             </div>
+          )}
+          {venta.igtf !== null && (
+            <p className="text-[0.88rem] text-muted-foreground tabular-nums">
+              Se cobró además{" "}
+              {mostrarImporte({
+                amount: venta.igtf.functional_amount,
+                currency: venta.igtf.currency,
+              })}{" "}
+              de IGTF por el pago en divisas.
+            </p>
           )}
           {venta.change !== null && (
             <div className="rounded-lg bg-success-soft p-4">

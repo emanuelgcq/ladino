@@ -396,6 +396,72 @@ export function salesRoutes(
     return c.json(cuerpo, 200);
   });
 
+  /**
+   * El «+ IGTF 3 % = X» en vivo, antes de confirmar (familia del vuelto):
+   * puro cálculo del servidor con las MISMAS condiciones que aplicará el
+   * cobro — empresa activa, instrumento que causa, pago en divisa. Un aviso
+   * calculado en el navegador acabaría difiriendo del cargo real.
+   */
+  app.get("/v1/pos/igtf", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const amount = c.req.query("amount") ?? "";
+    const currency = c.req.query("currency") ?? "";
+    const instrument = c.req.query("instrument") ?? "";
+    const AMOUNT_RE = /^\d{1,16}(\.\d{1,8})?$/;
+    const CUR_RE = /^[A-Z]{3}$/;
+    const INSTR_RE = /^[a-z_]{1,30}$/;
+    if (!AMOUNT_RE.test(amount) || !CUR_RE.test(currency) || !INSTR_RE.test(instrument)) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "El aviso de IGTF exige amount, currency e instrument válidos.",
+      });
+    }
+    const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      const [permiso] = await tx<{ ok: boolean }[]>`
+        select platform.ladino_user_has_permission(${actor.kind === "user" ? actor.userId : null},
+               'sales.payment.register', ${companyId}) as ok`;
+      if (!permiso?.ok) {
+        throw new DominioError({
+          code: "PERMISSION_REQUIRED",
+          message: "El aviso de IGTF exige el permiso sales.payment.register.",
+        });
+      }
+      // Las mismas condiciones que registerPayment, en una consulta: activa,
+      // en divisa, instrumento que causa, regla vigente.
+      const [gate] = await tx<
+        { enabled: boolean; causes: boolean; rate: string | null; moneda: string }[]
+      >`select (c.igtf_enabled_at is not null and c.igtf_enabled_at <= now()) as enabled,
+               coalesce(i.causes, false) as causes,
+               r.rate::text as rate,
+               c.functional_currency_code as moneda
+          from public.companies c
+          left join public.igtf_company_instruments i
+            on i.company_id = c.id and i.instrument = ${instrument}
+          left join lateral (
+            select rate from public.igtf_rules
+             where effective_from <= current_date
+             order by effective_from desc limit 1
+          ) r on true
+         where c.id = ${companyId}`;
+      const aplica =
+        gate?.enabled === true && gate.causes && gate.rate !== null && currency !== gate.moneda;
+      if (!aplica) {
+        return { applies: false, rate: null, base: amount, currency, amount: null };
+      }
+      const [calc] = await tx<{ monto: string }[]>`
+        select round(${amount}::numeric * ${gate.rate}::numeric, 8)::text as monto`;
+      return {
+        applies: true,
+        rate: gate.rate,
+        base: amount,
+        currency,
+        amount: calc!.monto,
+      };
+    });
+    return c.json(cuerpo, 200);
+  });
+
   // ── Devoluciones ──────────────────────────────────────────────────────────
 
   app.post("/v1/returns", idempotencia, async (c) => {

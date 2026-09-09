@@ -143,6 +143,13 @@ import {
   ListIvaPeriodResultsResponse,
   LoadFiscalDeadlinesRequest,
   ListFiscalDeadlinesResponse,
+  EnableIgtfRequest,
+  SetIgtfInstrumentRequest,
+  IgtfInstrumentResponse,
+  IgtfStatusResponse,
+  SetCompanyTaxpayerTypeRequest,
+  ListIgtfPerceptionsResponse,
+  PosIgtfPreviewResponse,
   CreateProductSimpleRequest,
   ProductSimpleResponse,
   ImportProductsResponse,
@@ -3027,6 +3034,113 @@ export function buildOpenApiDocument(): object {
     security: [{ bearerAuth: [] }],
     request: { headers: companyHeader, query: periodoOpcionalQuery },
     responses: { 200: okJson(calendario, "Los vencimientos."), ...erroresComunes },
+  });
+
+  // ── IGTF (migración 46) ────────────────────────────────────────────────────
+  const activarIgtf = registry.register("EnableIgtfRequest", EnableIgtfRequest);
+  const instrumentoIgtfReq = registry.register(
+    "SetIgtfInstrumentRequest",
+    SetIgtfInstrumentRequest,
+  );
+  const instrumentoIgtf = registry.register("IgtfInstrumentResponse", IgtfInstrumentResponse);
+  const estadoIgtf = registry.register("IgtfStatusResponse", IgtfStatusResponse);
+  const clasificacionFiscal = registry.register(
+    "SetCompanyTaxpayerTypeRequest",
+    SetCompanyTaxpayerTypeRequest,
+  );
+  const percepcionesIgtf = registry.register(
+    "ListIgtfPerceptionsResponse",
+    ListIgtfPerceptionsResponse,
+  );
+  const avisoIgtf = registry.register("PosIgtfPreviewResponse", PosIgtfPreviewResponse);
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/igtf/status",
+    summary: "Estado de la percepción de IGTF (permiso sales.payment.register)",
+    description:
+      "Si la empresa la activó, la regla nacional vigente y qué instrumento causa. La caja lo " +
+      "lee para avisar; configurarlo es otro permiso.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(estadoIgtf, "El estado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/igtf/enable",
+    summary: "Activar la percepción de IGTF con acta (permiso company.settings.manage)",
+    description:
+      "Solo una empresa clasificada `especial` (PA SNAT/2022/000013: SPE como agentes de " +
+      "percepción). Siembra el catálogo de instrumentos con un default conservador — las " +
+      "divisas obvias causan; `otro` NO (puede ser un pago en bolívares con otro nombre). " +
+      "Desde la activación, cada pago en divisa cuyo instrumento causa percibe el 3 % en el " +
+      "servidor, dentro del cobro.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: activarIgtf } } },
+    },
+    responses: { 201: okJson(estadoIgtf, "Activada, con su catálogo."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/igtf/instruments",
+    summary: "Editar qué instrumento causa IGTF (permiso company.settings.manage)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: instrumentoIgtfReq } } },
+    },
+    responses: { 200: okJson(instrumentoIgtf, "El instrumento, como quedó."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/igtf/perceptions",
+    summary: "Las percepciones del período, con el total a enterar (permiso fiscal_book.read)",
+    description:
+      "Una fila por pago que causó. `total_functional` suma SOLO lo percibido: lo pendiente de " +
+      "reintegro (facturas anuladas después de percibir) se lista aparte y no se entera como " +
+      "si se debiera.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ from: z.string().optional(), to: z.string().optional() }),
+    },
+    responses: { 200: okJson(percepcionesIgtf, "Las percepciones."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/companies/taxpayer-type",
+    summary: "Clasificación fiscal de la empresa (permiso company.settings.manage)",
+    description:
+      "Con auditoría del valor anterior. Si deja de ser `especial` con el IGTF activo, la " +
+      "percepción se apaga en el mismo acto: un no-SPE no es agente de percepción.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: clasificacionFiscal } } },
+    },
+    responses: {
+      200: okJson(
+        z.object({ taxpayer_type_code: z.string(), igtf_disabled: z.boolean() }).strict(),
+        "La clasificación, como quedó.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/pos/igtf",
+    summary: "El «+ IGTF 3 % = X» en vivo, antes de confirmar (permiso sales.payment.register)",
+    description:
+      "Familia del vuelto: puro cálculo del servidor con las MISMAS condiciones que aplicará " +
+      "el cobro. `applies: false` = este pago no causaría.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ amount: z.string(), currency: z.string(), instrument: z.string() }),
+    },
+    responses: { 200: okJson(avisoIgtf, "El aviso."), ...erroresComunes },
   });
 
   // ── Tesorería (Fase C, migraciones 29–31) ──────────────────────────────────

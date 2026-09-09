@@ -129,6 +129,13 @@ export {
   IVA_PERIOD_GENERATOR_VERSION,
   type DeclarationsError,
 } from "./declarations.js";
+export {
+  enableIgtf,
+  setIgtfInstrument,
+  setCompanyTaxpayerType,
+  readIgtfStatus,
+  type IgtfError,
+} from "./igtf.js";
 export { onboardBusiness, type OnboardingError } from "./onboarding.js";
 export { listPosCarts, upsertPosCart, deletePosCart, type PosCartError } from "./pos-carts.js";
 export { createDirectCreditNote, createDebitNote } from "./sales.js";

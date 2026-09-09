@@ -845,3 +845,94 @@ export interface FiscalBookRun {
   created_by: string | null;
   created_at: string;
 }
+
+// ── Declaraciones de IVA e IGTF (migración 46) ──────────────────────────────
+
+export interface SupportedRetention {
+  id: string;
+  customer_id: string;
+  document_id: string;
+  receipt_number: string;
+  retained_on: string;
+  base: string;
+  rate: string;
+  amount: string;
+  functional_currency: string;
+  status: "registered" | "annulled";
+  annul_reason: string | null;
+  created_at: string;
+}
+export interface IvaPeriodDetalle {
+  alicuota: string;
+  base: string;
+  impuesto: string;
+}
+export interface IvaPeriodResult {
+  id: string;
+  period_from: string;
+  period_to: string;
+  /** PUEDE ser negativo: un período con más notas de crédito que ventas. */
+  debitos: string;
+  creditos: string;
+  creditos_deducibles: string;
+  prorrata_pct: string | null;
+  retenciones_soportadas: string;
+  excedente_anterior: string;
+  cuota_a_pagar: string;
+  excedente_siguiente: string;
+  detalle: IvaPeriodDetalle[];
+  /** La moneda de todas las cifras de arriba. */
+  functional_currency: string;
+  generator_version: string;
+  dataset_hash: string;
+  created_by: string | null;
+  created_at: string;
+}
+export type FiscalObligation = "iva" | "igtf" | "ret_iva" | "islr";
+export interface FiscalDeadline {
+  id: string;
+  obligation: FiscalObligation;
+  period_from: string;
+  period_to: string;
+  due_date: string;
+  legal_source: string;
+}
+export interface IgtfInstrumentRow {
+  instrument: string;
+  causes: boolean;
+}
+export interface IgtfStatus {
+  enabled: boolean;
+  enabled_at: string | null;
+  rate: string | null;
+  legal_source: string | null;
+  instruments: IgtfInstrumentRow[];
+}
+export interface IgtfPerception {
+  id: string;
+  payment_id: string;
+  document_id: string;
+  base_amount: string;
+  currency: string;
+  rate: string;
+  amount: string;
+  functional_amount: string;
+  fx_rate: string;
+  rate_source: string;
+  status: "percibido" | "pendiente_reintegro";
+  status_reason: string | null;
+  occurred_at: string;
+}
+export interface IgtfPerceptions {
+  items: IgtfPerception[];
+  /** Σ de lo PERCIBIDO (sin lo pendiente de reintegro). */
+  total_functional: string;
+  functional_currency: string;
+}
+export interface IgtfPreview {
+  applies: boolean;
+  rate: string | null;
+  base: string;
+  currency: string;
+  amount: string | null;
+}

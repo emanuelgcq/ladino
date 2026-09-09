@@ -129,6 +129,12 @@ export const IvaPeriodResultResponse = z
     cuota_a_pagar: z.string(),
     excedente_siguiente: z.string(),
     detalle: z.array(IvaPeriodDetalleAlicuota),
+    /**
+     * La moneda de TODAS las cifras de arriba. No se persiste en la fila —es
+     * la funcional de la empresa— pero viaja en el contrato: un importe sin
+     * su moneda está incompleto, y la pantalla no debe adivinarla.
+     */
+    functional_currency: z.string(),
     generator_version: z.string(),
     dataset_hash: z.string().regex(/^[0-9a-f]{64}$/),
     created_by: uuid.nullable(),

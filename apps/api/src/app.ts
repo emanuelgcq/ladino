@@ -19,6 +19,7 @@ import { accountingRoutes } from "./routes/accounting.js";
 import { purchasesRoutes } from "./routes/purchases.js";
 import { fiscalBooksRoutes } from "./routes/fiscal-books.js";
 import { fiscalDeclarationsRoutes } from "./routes/fiscal-declarations.js";
+import { igtfRoutes } from "./routes/igtf.js";
 import { treasuryRoutes } from "./routes/treasury.js";
 import { documentsPdfRoutes } from "./routes/documents-pdf.js";
 import { negocioRoutes } from "./routes/negocio.js";
@@ -176,6 +177,7 @@ export function buildApp(cfg: AppConfig): Hono {
   purchasesRoutes(app, cfg.sql, idempotencia);
   fiscalBooksRoutes(app, cfg.sql, idempotencia);
   fiscalDeclarationsRoutes(app, cfg.sql, idempotencia);
+  igtfRoutes(app, cfg.sql, idempotencia);
   inventoryExtensionsRoutes(app, cfg.sql, idempotencia);
   treasuryRoutes(app, cfg.sql, idempotencia, cfg.storage);
   documentsPdfRoutes(app, cfg.sql, cfg.storage);

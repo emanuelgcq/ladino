@@ -1,3 +1,53 @@
+# Handoff — 2026-09-09 (17ª entrega)
+
+## Declaraciones de IVA + IGTF: Ladino ya sabe cuánto se debe declarar
+
+**Migración 46** (`83f4921`, aplicada al remoto): retenciones soportadas,
+resultado del período insert-only con arrastre, IGTF (regla nacional sembrada
+con su gaceta, catálogo por empresa, percepciones), calendario cargable,
+adaptador TXT, y la contabilidad de los dos hechos nuevos.
+
+**Retenciones que NOS practican** (`3e49142`): el comprobante del cliente-agente
+se transcribe y, en el mismo acto, abona su factura con el instrumento nuevo
+`retencion_iva` — sin cuenta de efectivo, por el camino real de `registerPayment`,
+con evento `ar.retention_applied` y su asiento (Dr IVA retenido por cobrar / Cr
+CxC). Se aplica **entero y una sola vez**: no es un monedero.
+
+**El período de IVA, encadenado**: `platform.recompute_iva_period` calcula desde
+los SNAPSHOTS (nada se reinterpreta con reglas de hoy) y el dominio camina la
+cadena — el excedente anterior sale de la última generación del período contiguo.
+**Saltarse un eslabón responde 422**, y los períodos sin actividad se generan en
+cero para mantener la cadena viva. Cada generación es una fila insert-only con
+SHA-256 sobre las cifras exactas: regenerar no edita, crea otra y manda la última.
+
+**IGTF, percepción POR PAGO**: activación solo para sujeto pasivo especial y con
+acta (queda en auditoría con la providencia); catálogo de instrumentos sembrado
+conservador; el 3 % se calcula en el SERVIDOR dentro del cobro. En un pago
+**mixto Bs + Zelle solo percibe la porción en divisa** — hay E2E que lo afirma.
+**Anular después de percibir** manda la percepción a `pendiente_reintegro` con
+motivo: nunca se resta sola, y el total a enterar deja de contarla. Dejar de ser
+`especial` apaga la percepción en el mismo acto.
+
+**TXT de retenciones practicadas**: implementado sobre el riel de
+`exportFiscalBook` (run + hash + auditoría). Sigue `is_official = false`: tres
+campos son derivados y uno supone monto exento cero — **VALIDAR-SENIAT contra una
+carga real** antes de usarlo en serio (P-7).
+
+**H-6 cerrado**: `PUT /v1/companies/taxpayer-type` existe (la semilla de
+producción tuvo que ponerlo por SQL).
+
+**Pantallas**: «Declarar IVA» (planilla demostrativa — **NO OFICIAL**, sin
+números de casilla a propósito, con sus generaciones y huellas), «IGTF»
+(activación, catálogo con el aviso de `otro` y de las exenciones vacías, y el
+total de la quincena), recordatorios de vencimientos en Inicio (5 días de
+anticipación, y **ninguna fecha de fábrica**), y el «+ IGTF 3 %» en vivo al
+cobrar, calculado por el servidor como el vuelto.
+
+**`docs/02_COMPLIANCE/PENDIENTES_ASESOR.md`** (nuevo): los 13 puntos que el
+asesor tiene que confirmar, ordenados por coste de resolverlos tarde. El más
+caro es **P-3**: el arrastre se guarda combinado y el portal probablemente los
+pide separados — partir esa columna después, con historia, es una migración fea.
+
 # Handoff — 2026-09-08 (16ª entrega)
 
 ## La lentitud tiene nombre, el POS respeta la existencia, y los CSV

@@ -1042,6 +1042,24 @@ export async function annulInvoice(
          where company_id = ${input.company_id} and source_id = ${documentId}
            and status = 'pending'`;
     }
+
+    // EL BORDE DE LA ANULACIÓN (migración 46, H-7): lo percibido de IGTF
+    // nunca se resta solo — el dinero del cliente ya entró y devolvérselo es
+    // un acto aparte. Se marca `pendiente_reintegro` con el motivo, y el
+    // flujo de reintegro es decisión del asesor (PENDIENTES_ASESOR.md).
+    const reintegros = await sql<{ id: string }[]>`
+      update public.igtf_perceptions
+         set status = 'pendiente_reintegro',
+             status_reason = ${`Anulación de la factura: ${input.reason}`}
+       where company_id = ${input.company_id} and document_id = ${documentId}
+         and status = 'percibido'
+      returning id`;
+    if (reintegros.length > 0) {
+      await auditar(sql, ctx.value.tenantId, anulada!, "igtf.perception_pending_refund", {
+        reason: input.reason,
+        perception_ids: reintegros.map((r) => r.id),
+      });
+    }
     return ok(anulada!);
   } catch (e) {
     const conocido = traducir(e);
@@ -1465,11 +1483,94 @@ export async function registerPayment(
     return err({ code: "VALIDATION_FAILED", message: contable.error.message });
   }
 
+  /**
+   * LA PERCEPCIÓN DE IGTF (migración 46): 3 % sobre ESTE pago si la empresa
+   * la activó (SPE con acta), el pago es en divisa y su instrumento causa.
+   * POR PAGO a propósito (H-7): en un cobro mixto Bs + Zelle, solo la porción
+   * en divisa causa — cada pago decide por separado. Las exenciones concretas
+   * del decreto están VACÍAS en el catálogo y sin regla de exención SE
+   * PERCIBE (H-8, conservador); cuando el asesor las cargue, se consultarán
+   * aquí. La percepción es UNA por pago (unique) y nunca se resta sola: la
+   * anulación la manda a `pendiente_reintegro`, no la borra.
+   */
+  let percepcion: Record<string, unknown> | null = null;
+  if (
+    input.currency !== ctx.value.functionalCurrency &&
+    input.instrument !== "saldo_a_favor" &&
+    input.instrument !== "retencion_iva"
+  ) {
+    const [gate] = await sql<
+      { enabled: boolean; causes: boolean; rate: string | null; source: string | null }[]
+    >`select (c.igtf_enabled_at is not null and c.igtf_enabled_at <= ${fecha}::timestamptz)
+             as enabled,
+             coalesce(i.causes, false) as causes,
+             r.rate::text as rate, r.legal_source as source
+        from public.companies c
+        left join public.igtf_company_instruments i
+          on i.company_id = c.id and i.instrument = ${input.instrument}
+        left join lateral (
+          select rate, legal_source from public.igtf_rules
+           where effective_from <= ${fecha}::date
+           order by effective_from desc limit 1
+        ) r on true
+       where c.id = ${input.company_id}`;
+    if (gate?.enabled === true && gate.causes && gate.rate !== null) {
+      const tasaIgtf = parseDecimal(gate.rate);
+      if (!tasaIgtf.ok) {
+        return err({ code: "VALIDATION_FAILED", message: "Tasa de IGTF no interpretable." });
+      }
+      const monto = importe.value.amount.times(tasaIgtf.value).toDecimalPlaces(8, 4);
+      const funcional = monto.times(tasaCobroDec.value).toDecimalPlaces(8, 4);
+      const [fila] = await sql<Record<string, unknown>[]>`
+        insert into public.igtf_perceptions
+          (tenant_id, company_id, payment_id, document_id, base_amount, currency, rate,
+           amount, functional_amount, fx_rate, rate_source, occurred_at)
+        values (${ctx.value.tenantId}, ${input.company_id}, ${pago["id"] as string},
+                ${input.document_id}, ${input.amount}, ${input.currency}, ${gate.rate},
+                ${monto.toFixed(8)}, ${funcional.toFixed(8)}, ${tasaCobro}, ${fuenteCobro},
+                ${fecha})
+        returning id, base_amount::text as base_amount, currency, rate::text as rate,
+                  amount::text as amount, functional_amount::text as functional_amount`;
+      percepcion = fila!;
+      await auditar(sql, ctx.value.tenantId, docActual!, "igtf.perception_recorded", {
+        perception_id: percepcion["id"] as string,
+        payment_id: pago["id"] as string,
+        base_amount: input.amount,
+        currency: input.currency,
+        rate: gate.rate,
+        amount: monto.toFixed(8),
+        functional_amount: funcional.toFixed(8),
+        legal_source: gate.source,
+      });
+      // Su asiento propio: Dr caja (lo percibido ENTRA, además del cobro) /
+      // Cr «IGTF percibido por enterar» — un pasivo con el fisco, no ingreso.
+      const asientoIgtf = await generateJournalFromDocument(sql, {
+        tenantId: ctx.value.tenantId,
+        companyId: input.company_id,
+        sourceKind: "igtf_perception",
+        sourceEvent: "igtf.perception_recorded",
+        sourceId: percepcion["id"] as string,
+        postingDate: fecha.slice(0, 10),
+        postedBy: actor.userId,
+        description: `IGTF percibido en el cobro de ${docActual!.series}-${docActual!.document_number ?? ""}`,
+        functionalCurrency: ctx.value.functionalCurrency,
+        amounts: { functional_amount: funcional.toFixed(8) },
+        // Sin backlink: `igtf_perceptions` no lleva `journal_entry_id` y el
+        // vínculo va por `journal_entries.source_id` = id de la percepción,
+        // que es el eje de la idempotencia del generador.
+      });
+      if (!asientoIgtf.ok) {
+        return err({ code: "VALIDATION_FAILED", message: asientoIgtf.error.message });
+      }
+    }
+  }
+
   return ok({
     payment: pago as never,
     exchange_difference: diferencial as never,
     balance: saldoDespues?.saldo ?? "0",
     document_status: estado as never,
+    igtf: percepcion as never,
   });
 }
 
@@ -2391,11 +2492,25 @@ export async function quickSale(
        where company_id = ${input.company_id} and id = ${input.cart_id}`;
   }
 
+  // El IGTF total de la venta, en funcional: la suma de lo que causó cada
+  // pago (el cálculo vive en registerPayment; aquí solo se agrega).
+  let igtfTotal: Decimal | null = null;
+  for (const c of cobros) {
+    if (c.igtf === null) continue;
+    const f = parseDecimal(c.igtf.functional_amount);
+    if (!f.ok) return err({ code: "VALIDATION_FAILED", message: "IGTF no interpretable." });
+    igtfTotal = igtfTotal === null ? f.value : igtfTotal.plus(f.value);
+  }
+
   return ok({
     document: documento,
     payments: cobros,
     change: vuelto,
     balance,
     document_status: estado,
+    igtf:
+      igtfTotal === null
+        ? null
+        : { functional_amount: igtfTotal.toFixed(8), currency: documento.functional_currency },
   });
 }

@@ -282,7 +282,10 @@ export async function generateIvaPeriod(
               excedente_anterior::text as excedente_anterior,
               cuota_a_pagar::text as cuota_a_pagar,
               excedente_siguiente::text as excedente_siguiente,
-              detalle, generator_version, dataset_hash, created_by,
+              detalle,
+              (select c.functional_currency_code from public.companies c
+                where c.id = ${input.company_id}) as functional_currency,
+              generator_version, dataset_hash, created_by,
               to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
                 as created_at`;
 

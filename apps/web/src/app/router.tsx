@@ -10,6 +10,8 @@ import { Inventario } from "../pages/inventario/Inventario.js";
 import { Compras } from "../pages/compras/Compras.js";
 import { Contabilidad } from "../pages/contabilidad/Contabilidad.js";
 import { Libros } from "../pages/libros/Libros.js";
+import { Declaraciones } from "../pages/libros/Declaraciones.js";
+import { Igtf } from "../pages/libros/Igtf.js";
 import { Reportes } from "../pages/reportes/Reportes.js";
 import { Dashboard } from "../pages/Dashboard.js";
 import { Ventas } from "../pages/ventas/Ventas.js";
@@ -80,6 +82,8 @@ export const router = createBrowserRouter([
       { path: "admin/compras", element: <Compras /> },
       { path: "admin/contabilidad", element: <Contabilidad /> },
       { path: "admin/libros", element: <Libros /> },
+      { path: "admin/declaraciones", element: <Declaraciones /> },
+      { path: "admin/igtf", element: <Igtf /> },
       { path: "admin/reportes", element: <Reportes /> },
       { path: "admin/configuracion", element: <Configuracion /> },
       { path: "admin/facturacion-fiscal", element: <ChecklistFiscal /> },

@@ -16,6 +16,16 @@ import { fechaRelativa } from "./comunes.js";
  * cifras llegan de /v1/negocio/resumen: esta pantalla viste, no suma.
  */
 
+/** Con cuánta anticipación avisar de un vencimiento fiscal (orden del dueño). */
+const DIAS_DE_AVISO = 5;
+
+const ETIQUETA_OBLIGACION: Record<string, string> = {
+  iva: "La declaración de IVA",
+  igtf: "El IGTF percibido",
+  ret_iva: "Las retenciones de IVA",
+  islr: "El ISLR",
+};
+
 interface Resumen {
   functional_currency: string;
   vendido_hoy: string;
@@ -46,10 +56,39 @@ export function Inicio(): React.JSX.Element {
     queryKey: ["negocio-resumen", empresa.id],
     queryFn: () => llamar<Resumen>("/v1/negocio/resumen"),
   });
+  /**
+   * Los vencimientos fiscales CARGADOS (migración 46). Ladino no inventa
+   * fechas: si no hay ninguna cargada, no hay aviso — mejor callar que avisar
+   * de un vencimiento que nadie confirmó. Falla en silencio a propósito: quien
+   * vende no tiene por qué poder leer el calendario fiscal.
+   */
+  const vencimientos = useQuery({
+    queryKey: ["vencimientos-inicio", empresa.id],
+    staleTime: 300_000,
+    retry: false,
+    queryFn: () =>
+      llamar<{ items: { id: string; obligation: string; due_date: string }[] }>(
+        "/v1/fiscal-declarations/deadlines",
+      ).catch(() => ({ items: [] })),
+  });
   const r = resumen.data ?? null;
   const moneda = r?.functional_currency ?? "VES";
 
   const recordatorios: { texto: string; a: string }[] = [];
+  // Los que vencen dentro de la ventana de anticipación (5 días por defecto,
+  // orden del dueño) y los ya vencidos sin declarar.
+  const HOY = new Date().toISOString().slice(0, 10);
+  const LIMITE = new Date(Date.now() + DIAS_DE_AVISO * 86_400_000).toISOString().slice(0, 10);
+  for (const v of vencimientos.data?.items ?? []) {
+    if (v.due_date > LIMITE) continue;
+    recordatorios.push({
+      texto:
+        v.due_date < HOY
+          ? `${ETIQUETA_OBLIGACION[v.obligation] ?? v.obligation} venció el ${v.due_date}.`
+          : `${ETIQUETA_OBLIGACION[v.obligation] ?? v.obligation} vence el ${v.due_date}.`,
+      a: v.obligation === "igtf" ? "/admin/igtf" : "/admin/declaraciones",
+    });
+  }
   if (r !== null) {
     if (r.tasa_del_dia === null || !r.tasa_del_dia.es_de_hoy) {
       recordatorios.push({

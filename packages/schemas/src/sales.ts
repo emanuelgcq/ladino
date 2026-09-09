@@ -301,6 +301,24 @@ export const ListDocumentsResponse = z
   .strict();
 export type ListDocumentsResponse = z.infer<typeof ListDocumentsResponse>;
 
+/**
+ * La percepción de IGTF que causó UN pago (migración 46): 3 % sobre ESE pago
+ * en divisa, calculado en el SERVIDOR. En un pago mixto solo la porción en
+ * divisa causa. null = este pago no causó (empresa sin activar, instrumento
+ * que no causa, o moneda funcional).
+ */
+export const IgtfOnPayment = z
+  .object({
+    id: uuid,
+    base_amount: z.string(),
+    currency: z.string(),
+    rate: z.string(),
+    amount: z.string(),
+    functional_amount: z.string(),
+  })
+  .strict();
+export type IgtfOnPayment = z.infer<typeof IgtfOnPayment>;
+
 export const RegisterPaymentResponse = z
   .object({
     payment: PaymentResponse,
@@ -308,6 +326,8 @@ export const RegisterPaymentResponse = z
     exchange_difference: ExchangeGainLossResponse.nullable(),
     balance: z.string(),
     document_status: DocumentStatus,
+    /** null cuando el pago no causó IGTF. */
+    igtf: IgtfOnPayment.nullable(),
   })
   .strict();
 export type RegisterPaymentResponse = z.infer<typeof RegisterPaymentResponse>;
@@ -458,6 +478,11 @@ export const QuickSaleResponse = z
     change: z.object({ amount: z.string(), currency: z.string() }).strict().nullable(),
     balance: z.string(),
     document_status: DocumentStatus,
+    /**
+     * El IGTF total de la venta, en moneda funcional: la suma de lo que causó
+     * cada pago (el desglose por pago viaja en `payments`). null = nada causó.
+     */
+    igtf: z.object({ functional_amount: z.string(), currency: z.string() }).strict().nullable(),
   })
   .strict();
 export type QuickSaleResponse = z.infer<typeof QuickSaleResponse>;

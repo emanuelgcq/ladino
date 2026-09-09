@@ -92,6 +92,7 @@ export {
   DocumentDetailResponse,
   ListDocumentsResponse,
   RegisterPaymentResponse,
+  IgtfOnPayment,
   PosQuoteRequest,
   PosQuoteLine,
   PosQuoteResponse,
@@ -235,3 +236,14 @@ export {
   FiscalDeadlineResponse,
   ListFiscalDeadlinesResponse,
 } from "./declarations.js";
+export {
+  IgtfInstrument,
+  EnableIgtfRequest,
+  SetIgtfInstrumentRequest,
+  IgtfInstrumentResponse,
+  IgtfStatusResponse,
+  SetCompanyTaxpayerTypeRequest,
+  IgtfPerceptionResponse,
+  ListIgtfPerceptionsResponse,
+  PosIgtfPreviewResponse,
+} from "./igtf.js";
