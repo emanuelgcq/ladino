@@ -108,9 +108,9 @@ export function fiscalBooksRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
       await exigeLectura(tx, actor, companyId);
       return tx<Record<string, unknown>[]>`
         select code, book_kind, name, description, is_official, legal_source, status,
-               -- Hoy solo uno tiene implementación, y NO es oficial. La lista
-               -- vive en el dominio; aquí se refleja para la pantalla.
-               (code = 'csv_columnas_legales') as implemented
+               -- Los que tienen implementación HOY, y NINGUNO es oficial. La
+               -- lista vive en el dominio; aquí se refleja para la pantalla.
+               (code in ('csv_columnas_legales', 'txt_retenciones_iva')) as implemented
           from public.book_format_adapters
          where status = 'active'
          order by is_official desc, code`;

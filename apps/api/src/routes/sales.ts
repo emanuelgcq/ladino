@@ -158,7 +158,7 @@ export function salesRoutes(
                to_char(paid_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as paid_at,
                currency, amount::text as amount, fx_rate::text as fx_rate, rate_source,
                functional_amount::text as functional_amount, instrument, reference,
-               customer_credit_id
+               customer_credit_id, supported_retention_id
           from public.payments where document_id = ${id} order by paid_at, id`;
       const diferencias = await tx<Record<string, unknown>[]>`
         select id, document_id, payment_id, amount_transaction::text as amount_transaction,

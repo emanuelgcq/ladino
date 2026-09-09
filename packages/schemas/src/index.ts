@@ -221,3 +221,17 @@ export {
   ExportFiscalBookResponse,
   ListFiscalBookRunsResponse,
 } from "./fiscal-books.js";
+export {
+  RegisterSupportedRetentionRequest,
+  SupportedRetentionResponse,
+  RegisterSupportedRetentionResponse,
+  ListSupportedRetentionsResponse,
+  GenerateIvaPeriodRequest,
+  IvaPeriodDetalleAlicuota,
+  IvaPeriodResultResponse,
+  ListIvaPeriodResultsResponse,
+  FiscalObligation,
+  LoadFiscalDeadlinesRequest,
+  FiscalDeadlineResponse,
+  ListFiscalDeadlinesResponse,
+} from "./declarations.js";

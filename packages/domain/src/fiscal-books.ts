@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@ladino/core";
+import { parseDecimal } from "@ladino/money";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
 import type { ExportFiscalBookRequest, BookKind } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
@@ -44,7 +45,7 @@ export const BOOK_GENERATOR_VERSION = "fiscal-books/1.0.0";
  * Es el mismo principio de ADR-0038 y ADR-0039 aplicado al formato: la ausencia
  * se declara, no se rellena con lo más parecido.
  */
-const ADAPTADORES_IMPLEMENTADOS = new Set<string>(["csv_columnas_legales"]);
+const ADAPTADORES_IMPLEMENTADOS = new Set<string>(["csv_columnas_legales", "txt_retenciones_iva"]);
 
 /**
  * La proyección de cada libro, con TODO importe casteado a `text`.
@@ -205,6 +206,82 @@ function aCsv(rows: Record<string, unknown>[], cabeceras: string[]): string {
   return lineas.join("\r\n");
 }
 
+/**
+ * Serializa el TXT de retenciones de IVA PRACTICADAS para la carga del agente
+ * (adaptador `txt_retenciones_iva`, migración 46 — is_official = FALSE).
+ *
+ * El layout sigue la guía pública del archivo TXT del SENIAT: una línea por
+ * retención, campos separados por TABULADOR, sin cabecera. VALIDAR-SENIAT:
+ * no está validado contra una carga real del portal, y lo dice el catálogo.
+ *
+ * TRES campos son DERIVADOS, no leídos, y uno es un supuesto declarado:
+ *   · IVA de la factura = retenido ÷ porción (el libro guarda la porción
+ *     retenida, 0.75 o 1.00, no el IVA entero);
+ *   · alícuota = IVA ÷ base × 100, a 2 decimales;
+ *   · monto total = base + IVA — SUPONE monto exento cero, porque el libro
+ *     no separa la porción exenta de la factura del proveedor. Está en
+ *     PENDIENTES_ASESOR.md; hasta validarlo, el campo «exento» va en 0.
+ * Si la aritmética no es interpretable (porción cero, base cero), la línea
+ * sale con los derivados VACÍOS en vez de con un número inventado.
+ */
+export function aTxtRetencionesIva(
+  rows: Record<string, unknown>[],
+  rifAgente: string,
+  periodoDesde: string,
+): string {
+  // Período YYYYMM, del parámetro del run: el período ES la quincena o el mes
+  // que el agente declara, no la fecha de cada comprobante.
+  const periodo = periodoDesde.slice(0, 7).replace("-", "");
+  const texto = (v: unknown): string =>
+    typeof v === "string" || typeof v === "number" ? String(v) : "";
+  const ddmmyyyy = (iso: string): string => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+  };
+  const lineas: string[] = [];
+  for (const r of rows) {
+    const base = parseDecimal(texto(r["base_amount"]) || "0");
+    const porcion = parseDecimal(texto(r["rate"]) || "0");
+    const retenido = parseDecimal(texto(r["retained_amount"]) || "0");
+    let alicuota = "";
+    let montoTotal = "";
+    if (base.ok && porcion.ok && retenido.ok && !porcion.value.isZero() && !base.value.isZero()) {
+      const iva = retenido.value.dividedBy(porcion.value).toDecimalPlaces(2, 4);
+      alicuota = iva.dividedBy(base.value).times(100).toDecimalPlaces(2, 4).toFixed(2);
+      montoTotal = base.value.plus(iva).toDecimalPlaces(2, 4).toFixed(2);
+    }
+    // El nº de comprobante con la máscara de PA 102: período + correlativo a
+    // 8 dígitos. Solo si el comprobante ya está emitido; si no, vacío.
+    const numero = texto(r["receipt_number"]);
+    const comprobante =
+      numero === ""
+        ? ""
+        : `${(texto(r["fiscal_period"]) || periodo).replace("-", "")}${numero.padStart(8, "0")}`;
+    lineas.push(
+      [
+        rifAgente,
+        periodo,
+        ddmmyyyy(texto(r["invoice_date"])),
+        texto(r["supplier_document_number"]),
+        "C",
+        "01",
+        texto(r["supplier_tax_id"]),
+        texto(r["supplier_document_number"]),
+        texto(r["supplier_control_number"]),
+        montoTotal,
+        base.ok ? base.value.toDecimalPlaces(2, 4).toFixed(2) : "",
+        retenido.ok ? retenido.value.toDecimalPlaces(2, 4).toFixed(2) : "",
+        "0",
+        comprobante,
+        "0.00",
+        alicuota,
+        "0",
+      ].join("\t"),
+    );
+  }
+  return lineas.join("\r\n");
+}
+
 /** Las cabeceras salen de la proyección, así que no pueden desincronizarse. */
 function cabecerasDe(kind: BookKind): string[] {
   return PROYECCION[kind].cols
@@ -338,6 +415,27 @@ export async function exportFiscalBook(
     values (${scope.value.tenantId}, ${input.company_id}, 'fiscal_book_run',
             ${run!["id"] as string}, 'fiscal.book.exported', 1,
             ${sql.json({ id: run!["id"] as string, ...parametros, dataset_hash: hash })})`;
+
+  // La serialización, según el adaptador pedido. La rama vive DESPUÉS del run:
+  // lo que se firma es el dataset, y el fichero es una vista de él.
+  if (input.format_code === "txt_retenciones_iva") {
+    const [empresa] = await sql<{ tax_id: string | null }[]>`
+      select tax_id from public.companies where id = ${input.company_id}`;
+    if (empresa?.tax_id == null || empresa.tax_id.trim() === "") {
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          "El TXT de retenciones lleva el RIF del agente en cada línea y la empresa no tiene RIF cargado.",
+      });
+    }
+    return ok({
+      run: run!,
+      book: libro,
+      content: aTxtRetencionesIva(libro.rows, empresa.tax_id, input.period_from),
+      content_type: "text/plain; charset=utf-8",
+      filename: `retenciones-iva-${input.period_from}_${input.period_to}.txt`,
+    });
+  }
 
   const cabeceras = cabecerasDe(input.book_kind);
   return ok({

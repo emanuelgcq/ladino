@@ -135,6 +135,14 @@ import {
   ExportFiscalBookRequest,
   ExportFiscalBookResponse,
   ListFiscalBookRunsResponse,
+  RegisterSupportedRetentionRequest,
+  RegisterSupportedRetentionResponse,
+  ListSupportedRetentionsResponse,
+  GenerateIvaPeriodRequest,
+  IvaPeriodResultResponse,
+  ListIvaPeriodResultsResponse,
+  LoadFiscalDeadlinesRequest,
+  ListFiscalDeadlinesResponse,
   CreateProductSimpleRequest,
   ProductSimpleResponse,
   ImportProductsResponse,
@@ -2914,6 +2922,111 @@ export function buildOpenApiDocument(): object {
       query: periodoQuery,
     },
     responses: { 200: okJson(libro, "El libro del período."), ...erroresComunes },
+  });
+
+  // ── Declaraciones de IVA (migración 46) ────────────────────────────────────
+  const retencionSoportada = registry.register(
+    "RegisterSupportedRetentionRequest",
+    RegisterSupportedRetentionRequest,
+  );
+  const retencionSoportadaHecha = registry.register(
+    "RegisterSupportedRetentionResponse",
+    RegisterSupportedRetentionResponse,
+  );
+  const retencionesSoportadas = registry.register(
+    "ListSupportedRetentionsResponse",
+    ListSupportedRetentionsResponse,
+  );
+  const generarPeriodoIva = registry.register("GenerateIvaPeriodRequest", GenerateIvaPeriodRequest);
+  const periodoIva = registry.register("IvaPeriodResultResponse", IvaPeriodResultResponse);
+  const periodosIva = registry.register(
+    "ListIvaPeriodResultsResponse",
+    ListIvaPeriodResultsResponse,
+  );
+  const cargarCalendario = registry.register(
+    "LoadFiscalDeadlinesRequest",
+    LoadFiscalDeadlinesRequest,
+  );
+  const calendario = registry.register("ListFiscalDeadlinesResponse", ListFiscalDeadlinesResponse);
+  const periodoOpcionalQuery = z.object({ from: z.string().optional(), to: z.string().optional() });
+
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal-declarations/supported-retentions",
+    summary:
+      "Registrar una retención soportada y abonar la factura (permiso sales.payment.register)",
+    description:
+      "El comprobante que el cliente-agente nos entregó, TRANSCRITO, y en el mismo acto el abono " +
+      "de la factura afectada con el instrumento `retencion_iva` — sin cuenta de efectivo, con " +
+      "evento `ar.retention_applied` y su asiento (Dr IVA retenido por cobrar / Cr cuentas por " +
+      "cobrar). El abono es EXACTAMENTE el monto retenido: un comprobante no es un monedero.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: retencionSoportada } } },
+    },
+    responses: {
+      201: okJson(retencionSoportadaHecha, "El comprobante y su abono."),
+      409: errorRef("El comprobante ya está registrado (mismo agente, mismo número)."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-declarations/supported-retentions",
+    summary: "Las retenciones soportadas del período (permiso fiscal_book.read)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, query: periodoOpcionalQuery },
+    responses: { 200: okJson(retencionesSoportadas, "Los comprobantes."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal-declarations/iva-periods",
+    summary: "Generar el resultado de un período de IVA (permiso fiscal_book.export)",
+    description:
+      "Calcula débitos, créditos (con prorrata global v1 si hubo ventas sin impuesto), " +
+      "retenciones soportadas y el arrastre, y lo persiste como fila insert-only con hash " +
+      "(la sustitutiva es OTRA generación). El excedente anterior viene ENCADENADO de la última " +
+      "generación del período contiguo: si hay historia previa sin generar responde 422 pidiendo " +
+      "generarla primero — los períodos sin actividad también se generan, en cero. NADA de esto " +
+      "es una declaración oficial: es la planilla demostrativa con la que se llena el portal.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: generarPeriodoIva } } },
+    },
+    responses: { 201: okJson(periodoIva, "El resultado del período."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-declarations/iva-periods",
+    summary: "Las generaciones de períodos de IVA (permiso fiscal_book.read)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, query: periodoOpcionalQuery },
+    responses: { 200: okJson(periodosIva, "Las generaciones."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/fiscal-declarations/deadlines",
+    summary: "Cargar el calendario de vencimientos (permiso company.settings.manage)",
+    description:
+      "Las fechas por dígito de RIF de la providencia vigente NO están en el repositorio y no se " +
+      "inventan: las carga quien las leyó, con la cita. Reemplazo por (obligación, período): " +
+      "cargar dos veces la misma quincena corrige, no duplica.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: cargarCalendario } } },
+    },
+    responses: { 200: okJson(calendario, "El calendario cargado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-declarations/deadlines",
+    summary: "Los vencimientos cargados (permiso fiscal_book.read)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, query: periodoOpcionalQuery },
+    responses: { 200: okJson(calendario, "Los vencimientos."), ...erroresComunes },
   });
 
   // ── Tesorería (Fase C, migraciones 29–31) ──────────────────────────────────

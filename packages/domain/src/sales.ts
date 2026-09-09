@@ -1170,16 +1170,79 @@ export async function registerPayment(
        where id = ${input.customer_credit_id}`;
   }
 
-  // La cuenta a la que ENTRA el efectivo (migración 29): la explícita si el
-  // llamante la eligió, si no la forma de pago configurada → «Sin asignar».
-  // Un saldo a favor no mueve efectivo y va sin cuenta, que es lo que el
-  // CHECK de la tabla exige.
-  let cuentaId: string | null;
-  if (input.account_id !== undefined) {
-    if (input.instrument === "saldo_a_favor") {
+  // El abono por RETENCIÓN SOPORTADA (migración 46): el comprobante que el
+  // cliente-agente nos entregó abona la factura afectada sin mover efectivo.
+  // Se aplica ENTERO y UNA sola vez: un comprobante no es un monedero.
+  if (input.instrument === "retencion_iva") {
+    if (input.supported_retention_id === undefined) {
       return err({
         code: "VALIDATION_FAILED",
-        message: "Aplicar un saldo a favor no mete dinero en ninguna cuenta: quita la cuenta.",
+        message: "Abonar una retención de IVA exige indicar el comprobante.",
+      });
+    }
+    const [comprobante] = await sql<
+      { document_id: string; amount: string; functional_currency: string; status: string }[]
+    >`select document_id, amount::text as amount, functional_currency, status
+        from public.supported_retention_receipts
+       where id = ${input.supported_retention_id} and company_id = ${input.company_id}
+         for update`;
+    if (!comprobante) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    if (comprobante.status !== "registered") {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "El comprobante de retención está anulado y no abona nada.",
+      });
+    }
+    if (comprobante.document_id !== input.document_id) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "El comprobante de retención afecta a OTRA factura: se abona la suya.",
+      });
+    }
+    if (comprobante.functional_currency !== input.currency) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `La retención vive en ${comprobante.functional_currency} y el abono se registró en ${input.currency}.`,
+      });
+    }
+    const retenido = parseDecimal(comprobante.amount);
+    const pedido = parseDecimal(input.amount);
+    if (!retenido.ok || !pedido.ok) {
+      return err({ code: "VALIDATION_FAILED", message: "Importes no interpretables." });
+    }
+    if (!retenido.value.equals(pedido.value)) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `El comprobante retiene ${retenido.value.toFixed()} y se intentó abonar ${pedido.value.toFixed()}: una retención se aplica entera.`,
+      });
+    }
+    const [usado] = await sql<{ id: string }[]>`
+      select id from public.payments
+       where company_id = ${input.company_id}
+         and supported_retention_id = ${input.supported_retention_id} limit 1`;
+    if (usado) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "Ese comprobante de retención ya abonó su factura: no se aplica dos veces.",
+      });
+    }
+  } else if (input.supported_retention_id !== undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "El comprobante de retención solo acompaña al instrumento retencion_iva.",
+    });
+  }
+
+  // La cuenta a la que ENTRA el efectivo (migración 29): la explícita si el
+  // llamante la eligió, si no la forma de pago configurada → «Sin asignar».
+  // Un saldo a favor o una retención no mueven efectivo y van sin cuenta,
+  // que es lo que el CHECK de la tabla exige.
+  let cuentaId: string | null;
+  if (input.account_id !== undefined) {
+    if (input.instrument === "saldo_a_favor" || input.instrument === "retencion_iva") {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "Aplicar un abono sin efectivo no mete dinero en ninguna cuenta: quita la cuenta.",
       });
     }
     const [cuenta] = await sql<{ currency: string; name: string; is_active: boolean }[]>`
@@ -1216,16 +1279,17 @@ export async function registerPayment(
         insert into public.payments
           (tenant_id, company_id, document_id, paid_at, currency, amount, fx_rate, rate_source,
            rate_timestamp, functional_amount, instrument, reference, customer_credit_id,
-           account_id)
+           supported_retention_id, account_id)
         values (${ctx.value.tenantId}, ${input.company_id}, ${input.document_id}, ${fecha},
                 ${input.currency}, ${input.amount}, ${tasaCobro}, ${fuenteCobro}, now(),
                 ${funcionalRedondeado.value.toAmountString()}, ${input.instrument},
-                ${input.reference ?? null}, ${input.customer_credit_id ?? null}, ${cuentaId})
+                ${input.reference ?? null}, ${input.customer_credit_id ?? null},
+                ${input.supported_retention_id ?? null}, ${cuentaId})
         returning id, document_id,
                   to_char(paid_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as paid_at,
                   currency, amount::text as amount, fx_rate::text as fx_rate, rate_source,
                   functional_amount::text as functional_amount, instrument, reference,
-                  customer_credit_id`;
+                  customer_credit_id, supported_retention_id`;
       return p!;
     });
   } catch (e) {
@@ -1350,9 +1414,14 @@ export async function registerPayment(
     select ${sql.unsafe(DOC_COLUMNS)} from public.documents where id = ${input.document_id}`;
   // ADR-0051: aplicar un saldo a favor NO es un cobro de efectivo — su evento
   // es propio ('ar.credit_applied') y su plantilla baja el pasivo con el
-  // cliente en vez de debitar caja.
+  // cliente en vez de debitar caja. La retención soportada igual: su asiento
+  // debita el IVA retenido por cobrar, no una caja (migración 46).
   const eventoCobro =
-    input.instrument === "saldo_a_favor" ? "ar.credit_applied" : "ar.payment_applied";
+    input.instrument === "saldo_a_favor"
+      ? "ar.credit_applied"
+      : input.instrument === "retencion_iva"
+        ? "ar.retention_applied"
+        : "ar.payment_applied";
   await auditar(sql, ctx.value.tenantId, docActual!, eventoCobro, {
     payment_id: pago["id"] as string,
     amount: input.amount,

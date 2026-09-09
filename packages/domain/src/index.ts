@@ -122,6 +122,13 @@ export {
   type ExportacionHecha,
   type FiscalBookError,
 } from "./fiscal-books.js";
+export {
+  registerSupportedRetention,
+  generateIvaPeriod,
+  loadFiscalDeadlines,
+  IVA_PERIOD_GENERATOR_VERSION,
+  type DeclarationsError,
+} from "./declarations.js";
 export { onboardBusiness, type OnboardingError } from "./onboarding.js";
 export { listPosCarts, upsertPosCart, deletePosCart, type PosCartError } from "./pos-carts.js";
 export { createDirectCreditNote, createDebitNote } from "./sales.js";

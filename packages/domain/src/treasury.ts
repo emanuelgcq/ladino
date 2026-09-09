@@ -58,7 +58,7 @@ function traducir(e: unknown): TreasuryError | null {
  *   3. la cuenta de sistema «Sin asignar (<moneda>)», creada al vuelo: el
  *      dinero queda visible y el contador lo redistribuye después.
  */
-const SIN_EFECTIVO = new Set(["saldo_a_favor", "nota_credito"]);
+const SIN_EFECTIVO = new Set(["saldo_a_favor", "nota_credito", "retencion_iva"]);
 
 export async function resolverCuentaEfectivo(
   sql: TransactionSql,

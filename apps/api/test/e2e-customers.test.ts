@@ -266,11 +266,14 @@ describe("clientes de extremo a extremo", () => {
   });
 
   it("la importación CSV de clientes: el tipo se infiere del documento y la fila mala se explica (2026-09-08)", async () => {
+    // La marca ENTERA en el RIF: esta company es FIJA entre ejecuciones, y un
+    // prefijo corto de Date.now() repite en horas — dos `verify` el mismo día
+    // chocaban con «ya existe» (2026-09-09).
     const marca = Date.now().toString(36);
     const csv =
       "RIF o cédula;Nombre o razón social;Teléfono;Correo;Dirección\r\n" +
-      `V1699${marca.slice(0, 4)}88;Pedro Import ${marca};0414-1234567;;\r\n` +
-      `J-3145${marca.slice(0, 4)}-0;"Construcciones Import, C.A. ${marca}";0241-8543210;pagos@paez.com.ve;"Zona Sur, galpón 4"\r\n` +
+      `V${marca}88;Pedro Import ${marca};0414-1234567;;\r\n` +
+      `J-${marca}-0;"Construcciones Import, C.A. ${marca}";0241-8543210;pagos@paez.com.ve;"Zona Sur, galpón 4"\r\n` +
       `;;;;\r\n` +
       `V123;;;correo-roto;\r\n`;
     const form = new FormData();

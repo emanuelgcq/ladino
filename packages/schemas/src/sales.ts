@@ -44,6 +44,9 @@ export const PaymentInstrument = z.enum([
   // proveedor no se le paga así (PurchaseInstrument no lo tiene). Migración 42.
   "cashea",
   "saldo_a_favor",
+  // Retención de IVA que un cliente-agente nos practicó (migración 46): abona
+  // la factura afectada SIN mover efectivo, contra su comprobante transcrito.
+  "retencion_iva",
   "otro",
 ]);
 
@@ -119,6 +122,8 @@ export const RegisterPaymentRequest = z
     paid_at: z.string().datetime({ offset: true }).optional(),
     /** Obligatorio cuando el instrumento es `saldo_a_favor`. */
     customer_credit_id: uuid.optional(),
+    /** Obligatorio cuando el instrumento es `retencion_iva`: el comprobante. */
+    supported_retention_id: uuid.optional(),
     /**
      * A qué cuenta ENTRA el dinero (migración 29). Opcional: sin ella el
      * servidor resuelve por la forma de pago configurada para el instrumento,
@@ -256,6 +261,7 @@ export const PaymentResponse = z
     instrument: PaymentInstrument,
     reference: z.string().nullable(),
     customer_credit_id: uuid.nullable(),
+    supported_retention_id: uuid.nullable(),
   })
   .strict();
 export type PaymentResponse = z.infer<typeof PaymentResponse>;
@@ -368,7 +374,9 @@ export type PosQuoteResponse = z.infer<typeof PosQuoteResponse>;
  */
 export const QuickSalePaymentInput = z
   .object({
-    instrument: PaymentInstrument.exclude(["saldo_a_favor"]),
+    // Ni saldo a favor ni retención: los abonos sin efectivo exigen su propio
+    // recurso (crédito / comprobante) y no caben en el mostrador rápido.
+    instrument: PaymentInstrument.exclude(["saldo_a_favor", "retencion_iva"]),
     amount,
     currency: z.string().regex(/^[A-Z]{3}$/),
     reference: z.string().trim().min(1).max(100).optional(),

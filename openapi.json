@@ -3839,6 +3839,7 @@
                     "tarjeta",
                     "cashea",
                     "saldo_a_favor",
+                    "retencion_iva",
                     "otro"
                   ]
                 },
@@ -3847,6 +3848,11 @@
                   "nullable": true
                 },
                 "customer_credit_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "supported_retention_id": {
                   "type": "string",
                   "nullable": true,
                   "format": "uuid"
@@ -3863,7 +3869,8 @@
                 "functional_amount",
                 "instrument",
                 "reference",
-                "customer_credit_id"
+                "customer_credit_id",
+                "supported_retention_id"
               ],
               "additionalProperties": false
             }
@@ -4390,6 +4397,7 @@
               "tarjeta",
               "cashea",
               "saldo_a_favor",
+              "retencion_iva",
               "otro"
             ]
           },
@@ -4403,6 +4411,10 @@
             "format": "date-time"
           },
           "customer_credit_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "supported_retention_id": {
             "type": "string",
             "format": "uuid"
           },
@@ -4466,6 +4478,7 @@
                   "tarjeta",
                   "cashea",
                   "saldo_a_favor",
+                  "retencion_iva",
                   "otro"
                 ]
               },
@@ -4474,6 +4487,11 @@
                 "nullable": true
               },
               "customer_credit_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "supported_retention_id": {
                 "type": "string",
                 "nullable": true,
                 "format": "uuid"
@@ -4490,7 +4508,8 @@
               "functional_amount",
               "instrument",
               "reference",
-              "customer_credit_id"
+              "customer_credit_id",
+              "supported_retention_id"
             ],
             "additionalProperties": false
           },
@@ -6081,6 +6100,7 @@
                         "tarjeta",
                         "cashea",
                         "saldo_a_favor",
+                        "retencion_iva",
                         "otro"
                       ]
                     },
@@ -6089,6 +6109,11 @@
                       "nullable": true
                     },
                     "customer_credit_id": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uuid"
+                    },
+                    "supported_retention_id": {
                       "type": "string",
                       "nullable": true,
                       "format": "uuid"
@@ -6105,7 +6130,8 @@
                     "functional_amount",
                     "instrument",
                     "reference",
-                    "customer_credit_id"
+                    "customer_credit_id",
+                    "supported_retention_id"
                   ],
                   "additionalProperties": false
                 },
@@ -11320,6 +11346,714 @@
         },
         "required": [
           "runs"
+        ],
+        "additionalProperties": false
+      },
+      "RegisterSupportedRetentionRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "receipt_number": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "retained_on": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "base": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "rate": {
+            "type": "string",
+            "pattern": "^(0(\\.\\d{1,8})?|1(\\.0{1,8})?)$"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          }
+        },
+        "required": [
+          "company_id",
+          "customer_id",
+          "document_id",
+          "receipt_number",
+          "retained_on",
+          "base",
+          "rate",
+          "amount"
+        ],
+        "additionalProperties": false
+      },
+      "RegisterSupportedRetentionResponse": {
+        "type": "object",
+        "properties": {
+          "retention": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "customer_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "document_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "receipt_number": {
+                "type": "string"
+              },
+              "retained_on": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "base": {
+                "type": "string"
+              },
+              "rate": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "string"
+              },
+              "functional_currency": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "registered",
+                  "annulled"
+                ]
+              },
+              "annul_reason": {
+                "type": "string",
+                "nullable": true
+              },
+              "created_at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "customer_id",
+              "document_id",
+              "receipt_number",
+              "retained_on",
+              "base",
+              "rate",
+              "amount",
+              "functional_currency",
+              "status",
+              "annul_reason",
+              "created_at"
+            ],
+            "additionalProperties": false
+          },
+          "payment": {
+            "type": "object",
+            "properties": {
+              "payment": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "document_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "paid_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "string"
+                  },
+                  "fx_rate": {
+                    "type": "string"
+                  },
+                  "rate_source": {
+                    "type": "string"
+                  },
+                  "functional_amount": {
+                    "type": "string"
+                  },
+                  "instrument": {
+                    "type": "string",
+                    "enum": [
+                      "efectivo_bs",
+                      "efectivo_usd",
+                      "zelle",
+                      "usdt",
+                      "transferencia",
+                      "punto_venta",
+                      "pago_movil",
+                      "tarjeta",
+                      "cashea",
+                      "saldo_a_favor",
+                      "retencion_iva",
+                      "otro"
+                    ]
+                  },
+                  "reference": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "customer_credit_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "uuid"
+                  },
+                  "supported_retention_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "id",
+                  "document_id",
+                  "paid_at",
+                  "currency",
+                  "amount",
+                  "fx_rate",
+                  "rate_source",
+                  "functional_amount",
+                  "instrument",
+                  "reference",
+                  "customer_credit_id",
+                  "supported_retention_id"
+                ],
+                "additionalProperties": false
+              },
+              "exchange_difference": {
+                "type": "object",
+                "nullable": true,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "document_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "payment_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "amount_transaction": {
+                    "type": "string"
+                  },
+                  "transaction_currency": {
+                    "type": "string"
+                  },
+                  "functional_at_issue": {
+                    "type": "string"
+                  },
+                  "functional_at_payment": {
+                    "type": "string"
+                  },
+                  "difference": {
+                    "type": "string"
+                  },
+                  "fx_rate_issue": {
+                    "type": "string"
+                  },
+                  "fx_rate_payment": {
+                    "type": "string"
+                  },
+                  "occurred_on": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "document_id",
+                  "payment_id",
+                  "amount_transaction",
+                  "transaction_currency",
+                  "functional_at_issue",
+                  "functional_at_payment",
+                  "difference",
+                  "fx_rate_issue",
+                  "fx_rate_payment",
+                  "occurred_on"
+                ],
+                "additionalProperties": false
+              },
+              "balance": {
+                "type": "string"
+              },
+              "document_status": {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "confirmed",
+                  "issued",
+                  "paid",
+                  "annulled",
+                  "cancelled"
+                ]
+              }
+            },
+            "required": [
+              "payment",
+              "exchange_difference",
+              "balance",
+              "document_status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "retention",
+          "payment"
+        ],
+        "additionalProperties": false
+      },
+      "ListSupportedRetentionsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "customer_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "document_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "receipt_number": {
+                  "type": "string"
+                },
+                "retained_on": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "base": {
+                  "type": "string"
+                },
+                "rate": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "string"
+                },
+                "functional_currency": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "registered",
+                    "annulled"
+                  ]
+                },
+                "annul_reason": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "created_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "customer_id",
+                "document_id",
+                "receipt_number",
+                "retained_on",
+                "base",
+                "rate",
+                "amount",
+                "functional_currency",
+                "status",
+                "annul_reason",
+                "created_at"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "GenerateIvaPeriodRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "period_from": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "period_to": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          }
+        },
+        "required": [
+          "company_id",
+          "period_from",
+          "period_to"
+        ],
+        "additionalProperties": false
+      },
+      "IvaPeriodResultResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "period_from": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "period_to": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "debitos": {
+            "type": "string",
+            "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "creditos": {
+            "type": "string"
+          },
+          "creditos_deducibles": {
+            "type": "string"
+          },
+          "prorrata_pct": {
+            "type": "string",
+            "nullable": true
+          },
+          "retenciones_soportadas": {
+            "type": "string"
+          },
+          "excedente_anterior": {
+            "type": "string"
+          },
+          "cuota_a_pagar": {
+            "type": "string"
+          },
+          "excedente_siguiente": {
+            "type": "string"
+          },
+          "detalle": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "alicuota": {
+                  "type": "string"
+                },
+                "base": {
+                  "type": "string"
+                },
+                "impuesto": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "alicuota",
+                "base",
+                "impuesto"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "generator_version": {
+            "type": "string"
+          },
+          "dataset_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "period_from",
+          "period_to",
+          "debitos",
+          "creditos",
+          "creditos_deducibles",
+          "prorrata_pct",
+          "retenciones_soportadas",
+          "excedente_anterior",
+          "cuota_a_pagar",
+          "excedente_siguiente",
+          "detalle",
+          "generator_version",
+          "dataset_hash",
+          "created_by",
+          "created_at"
+        ],
+        "additionalProperties": false
+      },
+      "ListIvaPeriodResultsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "period_from": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "period_to": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "debitos": {
+                  "type": "string",
+                  "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "creditos": {
+                  "type": "string"
+                },
+                "creditos_deducibles": {
+                  "type": "string"
+                },
+                "prorrata_pct": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "retenciones_soportadas": {
+                  "type": "string"
+                },
+                "excedente_anterior": {
+                  "type": "string"
+                },
+                "cuota_a_pagar": {
+                  "type": "string"
+                },
+                "excedente_siguiente": {
+                  "type": "string"
+                },
+                "detalle": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "alicuota": {
+                        "type": "string"
+                      },
+                      "base": {
+                        "type": "string"
+                      },
+                      "impuesto": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "alicuota",
+                      "base",
+                      "impuesto"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "generator_version": {
+                  "type": "string"
+                },
+                "dataset_hash": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "created_by": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "created_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "period_from",
+                "period_to",
+                "debitos",
+                "creditos",
+                "creditos_deducibles",
+                "prorrata_pct",
+                "retenciones_soportadas",
+                "excedente_anterior",
+                "cuota_a_pagar",
+                "excedente_siguiente",
+                "detalle",
+                "generator_version",
+                "dataset_hash",
+                "created_by",
+                "created_at"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "LoadFiscalDeadlinesRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deadlines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "obligation": {
+                  "type": "string",
+                  "enum": [
+                    "iva",
+                    "igtf",
+                    "ret_iva",
+                    "islr"
+                  ]
+                },
+                "period_from": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "period_to": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "due_date": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "legal_source": {
+                  "type": "string",
+                  "minLength": 10,
+                  "maxLength": 500
+                }
+              },
+              "required": [
+                "obligation",
+                "period_from",
+                "period_to",
+                "due_date",
+                "legal_source"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "maxItems": 200
+          }
+        },
+        "required": [
+          "company_id",
+          "deadlines"
+        ],
+        "additionalProperties": false
+      },
+      "ListFiscalDeadlinesResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "obligation": {
+                  "type": "string",
+                  "enum": [
+                    "iva",
+                    "igtf",
+                    "ret_iva",
+                    "islr"
+                  ]
+                },
+                "period_from": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "period_to": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "due_date": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "legal_source": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "obligation",
+                "period_from",
+                "period_to",
+                "due_date",
+                "legal_source"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "items"
         ],
         "additionalProperties": false
       },
@@ -25797,6 +26531,553 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FiscalBookResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-declarations/supported-retentions": {
+      "post": {
+        "summary": "Registrar una retención soportada y abonar la factura (permiso sales.payment.register)",
+        "description": "El comprobante que el cliente-agente nos entregó, TRANSCRITO, y en el mismo acto el abono de la factura afectada con el instrumento `retencion_iva` — sin cuenta de efectivo, con evento `ar.retention_applied` y su asiento (Dr IVA retenido por cobrar / Cr cuentas por cobrar). El abono es EXACTAMENTE el monto retenido: un comprobante no es un monedero.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterSupportedRetentionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El comprobante y su abono.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterSupportedRetentionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "El comprobante ya está registrado (mismo agente, mismo número).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Las retenciones soportadas del período (permiso fiscal_book.read)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Los comprobantes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSupportedRetentionsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-declarations/iva-periods": {
+      "post": {
+        "summary": "Generar el resultado de un período de IVA (permiso fiscal_book.export)",
+        "description": "Calcula débitos, créditos (con prorrata global v1 si hubo ventas sin impuesto), retenciones soportadas y el arrastre, y lo persiste como fila insert-only con hash (la sustitutiva es OTRA generación). El excedente anterior viene ENCADENADO de la última generación del período contiguo: si hay historia previa sin generar responde 422 pidiendo generarla primero — los períodos sin actividad también se generan, en cero. NADA de esto es una declaración oficial: es la planilla demostrativa con la que se llena el portal.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateIvaPeriodRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El resultado del período.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IvaPeriodResultResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Las generaciones de períodos de IVA (permiso fiscal_book.read)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Las generaciones.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListIvaPeriodResultsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-declarations/deadlines": {
+      "put": {
+        "summary": "Cargar el calendario de vencimientos (permiso company.settings.manage)",
+        "description": "Las fechas por dígito de RIF de la providencia vigente NO están en el repositorio y no se inventan: las carga quien las leyó, con la cita. Reemplazo por (obligación, período): cargar dos veces la misma quincena corrige, no duplica.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoadFiscalDeadlinesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "El calendario cargado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListFiscalDeadlinesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Los vencimientos cargados (permiso fiscal_book.read)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Los vencimientos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListFiscalDeadlinesResponse"
                 }
               }
             }
