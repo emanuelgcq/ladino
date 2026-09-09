@@ -57,6 +57,7 @@ Usa la skill `adr` de Claude Code.
 | [0049](adr/ADR-0049-el-primer-dia-real-onboarding-y-miembros.md) | Onboarding autoservicio en un acto; miembros por correo; dueño plano + rol de almacén | Aceptado | SÍ |
 | [0050](adr/ADR-0050-politica-de-rif-en-tres-niveles.md) | El RIF en tres niveles (libre sin documentos, bloqueado con ellos, corrección con acta); perfil y logo del negocio | Aceptado | SÍ |
 | [0051](adr/ADR-0051-notas-de-debito-y-credito-directas.md) | ND y NC directa por el motor común; la ND es deuda (aging gana `debit_note` y `receipt`); asientos de NC/ND y del saldo a favor aplicado (cierra R-20) | Aceptado | SÍ |
+| [0052](adr/ADR-0052-declaraciones-de-iva-y-percepcion-de-igtf.md) | Planilla demostrativa NO OFICIAL sin casillas; retención soportada como instrumento de pago; período insert-only con arrastre encadenado; IGTF por PAGO con conservadurismo asimétrico; calendario sin fechas de fábrica | Aceptado | SÍ |
 
 ## Decisiones aún abiertas
 
