@@ -126,7 +126,10 @@ select is(
                                -- Notas y saldo a favor (migración 45, ADR-0051):
                                'fiscal.credit_note.issued',
                                'fiscal.debit_note.issued',
-                               'ar.credit_applied')),
+                               'ar.credit_applied',
+                               -- Declaraciones e IGTF (migración 46):
+                               'ar.retention_applied',
+                               'igtf.perception_recorded')),
   0::bigint,
   'los eventos del preset son los del OUTBOX, con su nombre real: no se inventa un vocabulario paralelo');
 
