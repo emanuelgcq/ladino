@@ -15,7 +15,7 @@
 -- =============================================================================
 
 begin;
-select plan(18);
+select plan(19);
 
 -- ── 1. Anclas de la familia ─────────────────────────────────────────────────
 select is(
@@ -147,6 +147,32 @@ select is(
   (select detalle -> 0 ->> 'alicuota' from platform.recompute_iva_period(
      'aaaa0046-0000-4000-8000-0000000000a1', date '2026-02-01', date '2026-02-28', 0)),
   '0.16000000', 'el desglose por alícuota sale del snapshot de las líneas');
+
+/**
+ * EL INVARIANTE QUE CRUZA LOS DOS MÓDULOS (CLAUDE.md §«Los tests que cruzan
+ * módulos por un invariante estructural»).
+ *
+ * El débito fiscal que va a la DECLARACIÓN y el IVA del LIBRO DE VENTAS del
+ * mismo período tienen que ser LA MISMA CIFRA. Son dos caminos distintos —
+ * `recompute_iva_period` agrega las LÍNEAS por alícuota; `sales_book` agrega
+ * por DOCUMENTO desde su propia proyección— y ninguno de los dos observa al
+ * otro. Si divergen, la declaración presentada contradice al libro que la
+ * respalda, y eso es exactamente lo que una fiscalización compara.
+ *
+ * Las dos mitades del signo importan: el libro trae la nota de crédito con su
+ * importe, y la declaración se lo RESTA al débito. La igualdad solo se
+ * sostiene si los dos caminos entienden igual el signo de la NC.
+ */
+select is(
+  (select debitos::text from platform.recompute_iva_period(
+     'aaaa0046-0000-4000-8000-0000000000a1', date '2026-02-01', date '2026-02-28', 0)),
+  (select coalesce(sum(
+            case when b.kind = 'credit_note' then -b.iva_debito else b.iva_debito end
+          ), 0)::text
+     from platform.sales_book('aaaa0046-0000-4000-8000-0000000000a1',
+                              date '2026-02-01', date '2026-02-28') b
+    where b.status in ('issued', 'paid')),
+  'el débito de la declaración es EL MISMO IVA del libro de ventas del período');
 
 -- ── 5. IGTF ─────────────────────────────────────────────────────────────────
 select is(
