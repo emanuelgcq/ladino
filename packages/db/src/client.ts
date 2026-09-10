@@ -15,7 +15,15 @@ import type { Sql } from "postgres";
  * no encuentra nada. Comprobado en los dos sentidos: con esta arista presente,
  * añadir un `import postgres` en otro paquete pone la regla en rojo.
  */
-export function createClient(connectionString: string): Sql {
+export function createClient(
+  connectionString: string,
+  /**
+   * Observador de sentencias, SOLO para instrumentación (medir round-trips).
+   * En producción no se pasa y el driver queda exactamente como estaba: sin
+   * este parámetro, `debug` no se define y postgres.js no hace trabajo extra.
+   */
+  onQuery?: (consulta: string) => void,
+): Sql {
   return postgres(connectionString, {
     // Obligatorio con pooling en modo transacción. Ver el comentario de
     // `createClient` en `./transaction.ts`.
@@ -26,5 +34,13 @@ export function createClient(connectionString: string): Sql {
     // `number` sería una vía de entrada de coma flotante en importes, que es
     // la regla 7 de CLAUDE.md.
     types: {},
+
+    ...(onQuery === undefined
+      ? {}
+      : {
+          debug: (_conn: number, consulta: string) => {
+            onQuery(consulta);
+          },
+        }),
   });
 }

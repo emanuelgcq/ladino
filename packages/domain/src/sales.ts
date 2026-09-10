@@ -557,6 +557,22 @@ async function insertarDocumento(
             ${sucursal?.address ?? null})
     returning ${sql.unsafe(DOC_COLUMNS)}`;
 
+  /**
+   * LAS LÍNEAS, EN UNA SOLA SENTENCIA (2026-09-10).
+   *
+   * Antes se insertaban de una en una, y **cada insert es una espera de red
+   * completa** — el driver serializa dentro de la transacción, así que un
+   * carrito de diez renglones eran diez viajes. Ahora van todas juntas.
+   *
+   * Los importes viajan como TEXTO dentro del JSON y `jsonb_to_recordset` los
+   * convierte a `numeric` en el servidor: nunca pasan por un `double`, que es
+   * la regla 7. Cada valor es exactamente el mismo string que producía el
+   * bucle — aquí no se recalcula nada.
+   *
+   * La preparación (las conversiones a funcional) sigue ANTES del insert y en
+   * el mismo orden, así que una línea imposible se rechaza igual que antes.
+   */
+  const filas: Record<string, string | number | null>[] = [];
   let n = 0;
   for (const l of d.lineas) {
     const f = funcionales[n]!;
@@ -564,37 +580,70 @@ async function insertarDocumento(
     const precioFunc = aFuncional(l.calc.unitPrice, d.fxRate, ctx.functionalCurrency);
     if (!precioFunc.ok) return precioFunc;
     n += 1;
-    await sql`
-      insert into public.document_lines
-        (tenant_id, company_id, document_id, line_number, product_id, description, quantity,
-         unit_price_transaction, unit_price_functional, price_list_applied_id,
-         tax_rule_id, tax_rate_snapshot, tax_amount,
-         line_subtotal_transaction, line_subtotal_functional,
-         line_total_transaction, line_total_functional,
-         amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
-         functional_currency, rate_source, rate_timestamp, rounding_policy_id, cost_snapshot,
-         tax_category_snapshot, tax_treatment, operation_type)
-      values (${ctx.tenantId}, ${d.companyId}, ${doc!.id}, ${n}, ${l.productId}, ${l.description},
-              ${l.calc.quantity.toFixed()},
-              ${l.calc.unitPrice.toAmountString()}, ${precioFunc.value.toAmountString()},
-              ${l.priceListId === "" ? null : l.priceListId},
-              ${l.taxRuleId}, ${l.calc.taxRate.toFixed()},
-              ${l.calc.taxAmount.toAmountString()},
-              ${l.calc.subtotal.toAmountString()}, ${f.sub.value.toAmountString()},
-              ${l.calc.total.toAmountString()}, ${f.tot.value.toAmountString()},
-              ${l.calc.total.toAmountString()}, ${d.transactionCurrency},
-              ${d.fxRate.toFixed()}, ${f.tot.value.toAmountString()},
-              ${ctx.functionalCurrency}, ${d.rateSource}, now(), ${DOC_POLICY.id},
-              ${l.costSnapshot},
-              -- El tratamiento se deriva con la función de la base y NO aquí
-              -- (una segunda definición en TypeScript es cómo dos libros
-              -- clasifican distinto la misma línea) — salvo el RECIBO
-              -- (migración 37): su línea no lleva regla y el snapshot lo DICE
-              -- con 'no_fiscal', en vez de fingir una clasificación de libro.
-              ${l.taxCategory},
-              ${d.kind === "receipt" ? sql`'no_fiscal'` : sql`platform.tax_treatment_of(${l.taxCategory})`},
-              ${l.operationType})`;
+    filas.push({
+      line_number: n,
+      product_id: l.productId,
+      description: l.description,
+      quantity: l.calc.quantity.toFixed(),
+      unit_price_transaction: l.calc.unitPrice.toAmountString(),
+      unit_price_functional: precioFunc.value.toAmountString(),
+      price_list_applied_id: l.priceListId === "" ? null : l.priceListId,
+      tax_rule_id: l.taxRuleId,
+      tax_rate_snapshot: l.calc.taxRate.toFixed(),
+      tax_amount: l.calc.taxAmount.toAmountString(),
+      line_subtotal_transaction: l.calc.subtotal.toAmountString(),
+      line_subtotal_functional: f.sub.value.toAmountString(),
+      line_total_transaction: l.calc.total.toAmountString(),
+      line_total_functional: f.tot.value.toAmountString(),
+      amount_transaction_currency: l.calc.total.toAmountString(),
+      functional_amount: f.tot.value.toAmountString(),
+      cost_snapshot: l.costSnapshot,
+      tax_category_snapshot: l.taxCategory,
+      operation_type: l.operationType,
+    });
   }
+
+  await sql`
+    insert into public.document_lines
+      (tenant_id, company_id, document_id, line_number, product_id, description, quantity,
+       unit_price_transaction, unit_price_functional, price_list_applied_id,
+       tax_rule_id, tax_rate_snapshot, tax_amount,
+       line_subtotal_transaction, line_subtotal_functional,
+       line_total_transaction, line_total_functional,
+       amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
+       functional_currency, rate_source, rate_timestamp, rounding_policy_id, cost_snapshot,
+       tax_category_snapshot, tax_treatment, operation_type)
+    select ${ctx.tenantId}, ${d.companyId}, ${doc!.id}, x.line_number, x.product_id,
+           x.description, x.quantity,
+           x.unit_price_transaction, x.unit_price_functional, x.price_list_applied_id,
+           x.tax_rule_id, x.tax_rate_snapshot, x.tax_amount,
+           x.line_subtotal_transaction, x.line_subtotal_functional,
+           x.line_total_transaction, x.line_total_functional,
+           x.amount_transaction_currency, ${d.transactionCurrency}, ${d.fxRate.toFixed()},
+           x.functional_amount,
+           ${ctx.functionalCurrency}, ${d.rateSource}, now(), ${DOC_POLICY.id}, x.cost_snapshot,
+           -- El tratamiento se deriva con la función de la base y NO aquí
+           -- (una segunda definición en TypeScript es cómo dos libros
+           -- clasifican distinto la misma línea) — salvo el RECIBO
+           -- (migración 37): su línea no lleva regla y el snapshot lo DICE
+           -- con 'no_fiscal', en vez de fingir una clasificación de libro.
+           x.tax_category_snapshot,
+           ${
+             d.kind === "receipt"
+               ? sql`'no_fiscal'`
+               : sql`platform.tax_treatment_of(x.tax_category_snapshot)`
+           },
+           x.operation_type
+      from jsonb_to_recordset(${sql.json(filas)}::jsonb) as x(
+        line_number integer, product_id uuid, description text, quantity numeric,
+        unit_price_transaction numeric, unit_price_functional numeric,
+        price_list_applied_id uuid, tax_rule_id uuid, tax_rate_snapshot numeric,
+        tax_amount numeric, line_subtotal_transaction numeric,
+        line_subtotal_functional numeric, line_total_transaction numeric,
+        line_total_functional numeric, amount_transaction_currency numeric,
+        functional_amount numeric, cost_snapshot numeric,
+        tax_category_snapshot text, operation_type text)
+     order by x.line_number`;
   return ok(doc!);
 }
 
