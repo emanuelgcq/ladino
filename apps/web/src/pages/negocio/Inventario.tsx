@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowRight, PackageCheck, PackageX, TriangleAlert } from "lucide-react";
@@ -57,6 +57,15 @@ export function InventarioNegocio(): React.JSX.Element {
       return cargados < ultima.total ? todas.length + 1 : undefined;
     },
   });
+  // `useInfiniteQuery` sola trae UNA página; sin esto los contadores decían
+  // «100 con existencia» de un catálogo de 300 —el número equivocado que el
+  // comentario de arriba quería evitar—. Se piden las que falten, y mientras
+  // falte alguna los contadores no se enseñan a medias: enseñan «…».
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = productos;
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const catalogoCompleto = !productos.isLoading && !hasNextPage;
   const todosLosProductos = productos.data?.pages.flatMap((p) => p.items) ?? [];
   const bajoMinimo = useQuery({
     queryKey: ["inv-bajos", empresa.id],
@@ -77,7 +86,7 @@ export function InventarioNegocio(): React.JSX.Element {
         <Contador
           icono={PackageCheck}
           titulo="Con existencia"
-          valor={productos.isLoading ? "…" : String(conExistencia)}
+          valor={catalogoCompleto ? String(conExistencia) : "…"}
         />
         <Contador
           icono={TriangleAlert}
@@ -88,8 +97,8 @@ export function InventarioNegocio(): React.JSX.Element {
         <Contador
           icono={PackageX}
           titulo="Sin existencia"
-          valor={productos.isLoading ? "…" : String(sinExistencia)}
-          alerta={sinExistencia > 0}
+          valor={catalogoCompleto ? String(sinExistencia) : "…"}
+          alerta={catalogoCompleto && sinExistencia > 0}
         />
       </div>
 

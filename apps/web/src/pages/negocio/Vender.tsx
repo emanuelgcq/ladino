@@ -442,10 +442,17 @@ export function Vender(): React.JSX.Element {
           </a>
         </div>
       )}
-      <div className="flex min-h-[calc(100vh-8rem)] gap-4">
+      {/*
+        Altura FIJA, no mínima: con `min-h` la cuadrícula crecía con el catálogo
+        —300 productos daban una página de 3.870 px— y el carrito se estiraba con
+        ella, así que «Cobrar» quedaba en el fondo del documento y había que
+        bajar toda la lista para cobrar. La caja ocupa la pantalla y cada columna
+        se desplaza por dentro.
+      */}
+      <div className="flex h-[calc(100vh-8rem)] gap-4">
         {/* ── La cuadrícula ──────────────────────────────────────────────── */}
-        <div className="min-w-0 flex-1 space-y-3">
-          <div className="relative">
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          <div className="relative shrink-0">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint-foreground" />
             <Input
               ref={buscarRef}
@@ -469,10 +476,12 @@ export function Vender(): React.JSX.Element {
               {q === "" ? "No hay productos activos para vender." : "Nada con ese nombre o código."}
             </p>
           ) : (
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-4">
-              {items.map((p) => (
-                <TarjetaPos key={p.id} producto={p} onAgregar={() => agregar(p)} />
-              ))}
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-4">
+                {items.map((p) => (
+                  <TarjetaPos key={p.id} producto={p} onAgregar={() => agregar(p)} />
+                ))}
+              </div>
             </div>
           )}
         </div>

@@ -1,6 +1,6 @@
 import { Link } from "react-router";
 import { ClipboardCheck } from "lucide-react";
-import { LlamadaApiError } from "../../lib.js";
+import { errorDePersona, LlamadaApiError } from "../../lib.js";
 
 /**
  * Los 409 de puesta a punto NO son averías: son pasos pendientes de la
@@ -16,7 +16,11 @@ export const CODIGOS_PUESTA_A_PUNTO: Record<string, string> = {
   RETENTION_RULE_MISSING: "Falta la norma de retención cargada (módulo de compras).",
 };
 
-export function MensajeError({ error }: { error: unknown }): React.JSX.Element {
+export function MensajeError({ error }: { error: unknown }): React.JSX.Element | null {
+  // Sin error no hay mensaje. Quien lo pinta sin condición —Declarar IVA e
+  // IGTF— mostraba un «null» rojo debajo de las pestañas nada más entrar,
+  // porque `String(null)` es un texto perfectamente válido.
+  if (error == null) return null;
   if (error instanceof LlamadaApiError) {
     const guia = CODIGOS_PUESTA_A_PUNTO[error.body.code];
     return (
@@ -37,9 +41,11 @@ export function MensajeError({ error }: { error: unknown }): React.JSX.Element {
       </div>
     );
   }
+  // `String(e)` de un objeto cualquiera pinta «[object Object]»; el helper da
+  // una frase que una persona puede leer y actuar.
   return (
     <p role="alert" className="text-[0.88rem] text-destructive-soft-foreground">
-      {String(error)}
+      {error instanceof Error ? error.message : errorDePersona(error)}
     </p>
   );
 }

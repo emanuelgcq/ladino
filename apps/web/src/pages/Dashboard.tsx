@@ -11,6 +11,7 @@ import { DataTable } from "../components/DataTable.js";
 import { DualMoney } from "../components/DualMoney.js";
 import { FiscalStatusBadge } from "../components/FiscalStatusBadge.js";
 import { compararImportes, esCero } from "../components/decimal-compare.js";
+import { useNombresDeCliente } from "../components/nombres-cliente.js";
 import { Button } from "../ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card.js";
 import { mostrarImporte } from "../money.js";
@@ -38,6 +39,9 @@ interface DocumentoFila {
   fx_rate: string;
   rate_source: string;
 }
+
+/** El documento con el nombre del cliente ya resuelto contra el maestro. */
+type FilaConCliente = DocumentoFila & { cliente: string };
 
 interface EstadoResultados {
   currency: string;
@@ -115,17 +119,7 @@ export function Dashboard(): React.JSX.Element {
     queryFn: () => llamar<{ items: DocumentoFila[] }>(`/v1/documents?per_page=8`),
   });
 
-  const clientes = useQuery({
-    queryKey: ["clientes-mapa", empresa.id],
-    staleTime: 60_000,
-    queryFn: () =>
-      llamar<{ items: { id: string; legal_name: string }[] }>(`/v1/customers?per_page=100`),
-  });
-  const nombreCliente = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of clientes.data?.items ?? []) m.set(c.id, c.legal_name);
-    return m;
-  }, [clientes.data]);
+  const nombreCliente = useNombresDeCliente();
 
   // Delta ventas: dirección por comparación de strings decimales (sin float),
   // y la etiqueta enseña el valor del mes anterior TAL CUAL — no un porcentaje
@@ -142,7 +136,22 @@ export function Dashboard(): React.JSX.Element {
     };
   }, [resultados.data]);
 
-  const columnas = useMemo<ColumnDef<DocumentoFila, unknown>[]>(
+  /**
+   * El nombre se resuelve en la FILA, no en el accessor: TanStack cachea el
+   * valor de la celda por fila y solo lo rehace si cambia la identidad de
+   * `data`, así que un maestro de clientes que llega tarde nunca alcanzaba a
+   * la columna y se quedaba el «—» de la primera pasada.
+   */
+  const filas = useMemo(
+    () =>
+      (ultimos.data?.items ?? []).map((d) => ({
+        ...d,
+        cliente: nombreCliente.get(d.customer_id) ?? "—",
+      })),
+    [ultimos.data, nombreCliente],
+  );
+
+  const columnas = useMemo<ColumnDef<FilaConCliente, unknown>[]>(
     () => [
       {
         id: "fecha",
@@ -156,11 +165,7 @@ export function Dashboard(): React.JSX.Element {
           d.document_number === null ? "—" : `${d.series}-${String(d.document_number)}`,
         cell: (c) => <span className="font-mono text-[0.84rem]">{c.getValue<string>()}</span>,
       },
-      {
-        id: "cliente",
-        header: "Cliente",
-        accessorFn: (d) => nombreCliente.get(d.customer_id) ?? "—",
-      },
+      { id: "cliente", header: "Cliente", accessorKey: "cliente" },
       {
         id: "estado",
         header: "Estado",
@@ -340,7 +345,7 @@ export function Dashboard(): React.JSX.Element {
           <CardContent className="px-0 pb-0">
             <DataTable
               columns={columnas}
-              data={ultimos.data?.items}
+              data={ultimos.data === undefined ? undefined : filas}
               error={ultimos.error instanceof Error ? ultimos.error.message : null}
               onRetry={() => void ultimos.refetch()}
               density="compact"

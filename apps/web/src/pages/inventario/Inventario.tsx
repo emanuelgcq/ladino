@@ -92,13 +92,22 @@ export function Inventario(): React.JSX.Element {
     queryFn: () => llamar<Warehouse[]>("/v1/warehouses"),
   });
 
+  // El endpoint pagina desde siempre (`page`, `per_page`, `total`) y esta
+  // pantalla no le pasaba nada: enseñaba las 50 primeras filas del almacén como
+  // si fueran todas, sin decirlo y sin manera de ver el resto.
+  const POR_PAGINA = 50;
+  const [pagina, setPagina] = useState(1);
   const stock = useQuery({
-    queryKey: ["stock", empresa.id, busqueda, almacen],
+    queryKey: ["stock", empresa.id, busqueda, almacen, pagina],
     queryFn: () => {
       const p = new URLSearchParams();
       if (busqueda.trim() !== "") p.set("search", busqueda.trim());
       if (almacen !== "") p.set("warehouse_id", almacen);
-      return llamar<{ items: StockBalance[] }>(`/v1/inventory/stock?${p.toString()}`);
+      p.set("page", String(pagina));
+      p.set("per_page", String(POR_PAGINA));
+      return llamar<{ items: StockBalance[]; total: number }>(
+        `/v1/inventory/stock?${p.toString()}`,
+      );
     },
   });
 
@@ -203,13 +212,30 @@ export function Inventario(): React.JSX.Element {
             onRowClick={setKardexDe}
             density="compact"
             exportCsv={{ filename: `existencias-${empresa.tax_id}.csv` }}
-            search={{ value: busqueda, onChange: setBusqueda, placeholder: "SKU o nombre…" }}
+            pagination={{
+              total: stock.data?.total ?? 0,
+              page: pagina,
+              perPage: POR_PAGINA,
+              onPageChange: setPagina,
+            }}
+            search={{
+              value: busqueda,
+              // Filtrar y quedarse en la página 7 no enseña nada: se vuelve a la 1.
+              onChange: (v) => {
+                setBusqueda(v);
+                setPagina(1);
+              },
+              placeholder: "SKU o nombre…",
+            }}
             toolbar={
               <div className="w-52">
                 <SimpleSelect
                   ariaLabel="Almacén"
                   value={almacen === "" ? "todos" : almacen}
-                  onValueChange={(v) => setAlmacen(v === "todos" ? "" : v)}
+                  onValueChange={(v) => {
+                    setAlmacen(v === "todos" ? "" : v);
+                    setPagina(1);
+                  }}
                   options={[
                     { value: "todos", label: "Todos los almacenes" },
                     ...(almacenes.data ?? []).map((w) => ({

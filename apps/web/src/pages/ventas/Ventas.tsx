@@ -9,6 +9,7 @@ import { DataTable } from "../../components/DataTable.js";
 import { DualMoney } from "../../components/DualMoney.js";
 import { FiscalStatusBadge } from "../../components/FiscalStatusBadge.js";
 import { DateRangePicker, EntityPicker, type EntityOption } from "../../components/forms.js";
+import { useNombresDeCliente } from "../../components/nombres-cliente.js";
 import { Button } from "../../ui/button.js";
 import { SimpleSelect } from "../../ui/select.js";
 import { KIND_LABEL, numeroDe } from "./comunes.js";
@@ -36,6 +37,9 @@ interface DocumentoFila {
   tax_amount: string;
   total_amount: string;
 }
+
+/** El documento con el nombre del cliente ya resuelto contra el maestro. */
+type FilaConCliente = DocumentoFila & { cliente: string };
 
 const PER_PAGE = 25;
 
@@ -65,19 +69,29 @@ export function Ventas(): React.JSX.Element {
     queryFn: () => llamar<{ items: DocumentoFila[]; total: number }>(`/v1/documents?${consulta}`),
   });
 
-  const clientes = useQuery({
-    queryKey: ["clientes-mapa", empresa.id],
-    staleTime: 60_000,
-    queryFn: () =>
-      llamar<{ items: { id: string; legal_name: string }[] }>(`/v1/customers?per_page=100`),
-  });
-  const nombreCliente = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const c of clientes.data?.items ?? []) m.set(c.id, c.legal_name);
-    return m;
-  }, [clientes.data]);
+  const nombreCliente = useNombresDeCliente();
 
-  const columnas = useMemo<ColumnDef<DocumentoFila, unknown>[]>(
+  /**
+   * El nombre se resuelve AQUÍ, no en el `accessorFn` de la columna.
+   *
+   * TanStack Table cachea el valor de cada celda en la fila (`_valuesCache`) y
+   * el modelo de filas solo se rehace cuando cambia la IDENTIDAD de `data`.
+   * Con el nombre dentro del accessor, si el maestro de clientes llegaba
+   * después que los documentos —lo normal contra un servidor lento— la columna
+   * se quedaba con el «—» de la primera pasada para siempre. Recomponer las
+   * filas cuando cambia el mapa invalida esa caché, y de paso ordenar por
+   * «Cliente» ordena por NOMBRE y no por un uuid que nadie ve.
+   */
+  const filas = useMemo(
+    () =>
+      (documentos.data?.items ?? []).map((d) => ({
+        ...d,
+        cliente: nombreCliente.get(d.customer_id) ?? "—",
+      })),
+    [documentos.data, nombreCliente],
+  );
+
+  const columnas = useMemo<ColumnDef<FilaConCliente, unknown>[]>(
     () => [
       { id: "fecha", header: "Fecha", accessorFn: (d) => d.issued_at?.slice(0, 10) ?? "—" },
       {
@@ -92,11 +106,7 @@ export function Ventas(): React.JSX.Element {
         accessorFn: (d) => KIND_LABEL[d.kind] ?? d.kind,
         enableSorting: false,
       },
-      {
-        id: "cliente",
-        header: "Cliente",
-        accessorFn: (d) => nombreCliente.get(d.customer_id) ?? "—",
-      },
+      { id: "cliente", header: "Cliente", accessorKey: "cliente" },
       {
         id: "estado",
         header: "Estado",
@@ -133,7 +143,7 @@ export function Ventas(): React.JSX.Element {
         },
       },
     ],
-    [nombreCliente],
+    [],
   );
 
   return (
@@ -149,7 +159,7 @@ export function Ventas(): React.JSX.Element {
       />
       <DataTable
         columns={columnas}
-        data={documentos.data?.items}
+        data={documentos.data === undefined ? undefined : filas}
         error={documentos.error instanceof Error ? documentos.error.message : null}
         onRetry={() => void documentos.refetch()}
         onRowClick={(d) => void navigate(`/admin/ventas/${d.id}`)}

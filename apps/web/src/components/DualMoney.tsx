@@ -67,10 +67,28 @@ export function DualMoney({
   const principal = mostrarImporte({ amount, currency });
   const secundario = secondary != null ? mostrarImporte(secondary) : null;
 
+  // La tarjeta del panel recorta lo que se sale (necesita `overflow-hidden`
+  // por el sparkline), así que una cifra larga perdía dígitos por la derecha:
+  // «Bs. 4.358.760,0(». En bolívares los importes son largos por naturaleza —
+  // se encoge la tipografía, que es lo presentacional, nunca la cifra.
+  const tamanoKpi =
+    principal.length <= 12
+      ? "text-[1.55rem]"
+      : principal.length <= 15
+        ? "text-[1.35rem]"
+        : principal.length <= 19
+          ? "text-[1.15rem]"
+          : "text-[1rem]";
+
   const cuerpo =
     variant === "kpi" ? (
       <span className={cn("block", className)}>
-        <span className="block font-mono text-[1.55rem] font-semibold leading-tight tracking-tight tabular-nums">
+        <span
+          className={cn(
+            "block font-mono font-semibold leading-tight tracking-tight tabular-nums",
+            tamanoKpi,
+          )}
+        >
           {principal}
         </span>
         {secundario !== null && (

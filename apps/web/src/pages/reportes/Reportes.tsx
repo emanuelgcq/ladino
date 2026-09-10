@@ -112,6 +112,13 @@ export function Reportes(): React.JSX.Element {
                     <DualMoney variant="inline" amount={d.neto} currency={d.currency} />
                   </div>
                 </div>
+                {/* Sin barras, el pie describía un gráfico que no estaba: la
+                    tarjeta quedaba con un hueco y una explicación de nada. */}
+                {barras.length === 0 && (
+                  <p className="py-8 text-center text-[0.88rem] text-muted-foreground">
+                    Ningún mes del período tiene diferencial que graficar.
+                  </p>
+                )}
                 {barras.length > 0 && (
                   <div className="h-40">
                     <ResponsiveContainer width="100%" height="100%">
@@ -135,9 +142,9 @@ export function Reportes(): React.JSX.Element {
                   </div>
                 )}
                 <CardDescription className="mt-2">
-                  Cada barra es el neto del mes (esmeralda ganancia, ámbar pérdida), tal como lo
-                  suma `exchange_gain_loss` en el servidor. El detalle por documento vive en cada
-                  factura.
+                  {barras.length > 0
+                    ? "Cada barra es el neto del mes (esmeralda ganancia, ámbar pérdida), tal como lo suma `exchange_gain_loss` en el servidor. El detalle por documento vive en cada factura."
+                    : "El diferencial lo suma `exchange_gain_loss` en el servidor: aparece cuando un cobro se valora a una tasa distinta de la de emisión. El detalle por documento vive en cada factura."}
                 </CardDescription>
               </>
             )}

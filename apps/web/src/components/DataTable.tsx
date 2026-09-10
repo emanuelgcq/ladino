@@ -92,6 +92,18 @@ export function DataTable<T>({
     enabled: virtualized,
   });
 
+  // Qué filas se pintan y cuánto hueco dejan arriba y abajo. Sin virtualizar,
+  // todas y sin hueco: la misma tabla, con o sin virtualización.
+  const items = virtualizer.getVirtualItems();
+  const filasPintadas = virtualized
+    ? items.map((vi) => rows[vi.index]).filter((r): r is Row<T> => r !== undefined)
+    : rows;
+  const relleno = {
+    arriba: virtualized ? (items[0]?.start ?? 0) : 0,
+    abajo: virtualized ? virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0) : 0,
+  };
+  const columnasVisibles = table.getVisibleLeafColumns().length;
+
   function exportar(): void {
     if (exportCsv === undefined) return;
     const visibles = table.getVisibleLeafColumns();
@@ -199,39 +211,29 @@ export function DataTable<T>({
                 </tr>
               ))}
             </thead>
-            {virtualized ? (
-              <tbody
-                style={{ height: virtualizer.getTotalSize(), position: "relative" }}
-                className="block"
-              >
-                {virtualizer.getVirtualItems().map((vi) => {
-                  const row = rows[vi.index];
-                  if (row === undefined) return null;
-                  return (
-                    <FilaTabla
-                      key={row.id}
-                      row={row}
-                      onRowClick={onRowClick}
-                      density={density}
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        transform: `translateY(${vi.start}px)`,
-                        width: "100%",
-                        display: "table",
-                        tableLayout: "fixed",
-                      }}
-                    />
-                  );
-                })}
-              </tbody>
-            ) : (
-              <tbody>
-                {rows.map((row) => (
-                  <FilaTabla key={row.id} row={row} onRowClick={onRowClick} density={density} />
-                ))}
-              </tbody>
-            )}
+            <tbody>
+              {/*
+                Virtualizar con filas absolutas obligaba a que cada `tr` fuese su
+                propia `display: table`, y entonces sus columnas se calculaban
+                aparte de las del `thead`: las celdas colapsaban a 4 px y el texto
+                se pintaba encima de sí mismo (libro de ventas, 2026-09-10). Con
+                dos filas de relleno la tabla sigue siendo UNA tabla y el navegador
+                alinea cabecera y cuerpo como siempre.
+              */}
+              {virtualized && relleno.arriba > 0 && (
+                <tr aria-hidden="true">
+                  <td colSpan={columnasVisibles} style={{ height: relleno.arriba, padding: 0 }} />
+                </tr>
+              )}
+              {filasPintadas.map((row) => (
+                <FilaTabla key={row.id} row={row} onRowClick={onRowClick} density={density} />
+              ))}
+              {virtualized && relleno.abajo > 0 && (
+                <tr aria-hidden="true">
+                  <td colSpan={columnasVisibles} style={{ height: relleno.abajo, padding: 0 }} />
+                </tr>
+              )}
+            </tbody>
           </table>
         </div>
       )}
@@ -272,17 +274,14 @@ function FilaTabla<T>({
   row,
   onRowClick,
   density,
-  style,
 }: {
   row: Row<T>;
   onRowClick?: ((row: T) => void) | undefined;
   density: "normal" | "compact";
-  style?: React.CSSProperties;
 }): React.JSX.Element {
   const clicable = onRowClick !== undefined;
   return (
     <tr
-      style={style}
       className={cn(
         "border-b border-border transition-colors last:border-0 hover:bg-surface-muted/60",
         clicable && "cursor-pointer",

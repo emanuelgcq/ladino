@@ -104,7 +104,21 @@ export function ChecklistFiscal(): React.JSX.Element {
       />
       <AlertaRangos />
 
+      {/*
+        En ORDEN: antes iban los comprobables primero y los manuales al final, y
+        la lista se leía «Paso 2, Paso 4, Paso 5, Paso 1, Paso 3». Un número que
+        no sigue al anterior no numera nada.
+      */}
       <div className="space-y-4">
+        <Paso
+          numero={1}
+          titulo="Alícuota de IVA con fuente legal"
+          estado="manual"
+          codigo409="TAX_RULE_MISSING"
+          resumen="La API aún no expone la lectura de tax_rules: el estado no puede comprobarse aquí. La regla se carga hoy por operación, con su fuente citada (ADR-0038: sin regla no se emite — el sistema no adivina alícuotas)."
+          sello="VALIDAR-SENIAT: la alícuota y su vigencia deben venir de la norma, citada en legal_source."
+        />
+
         <Paso
           numero={2}
           titulo="Tasa de cambio BCV"
@@ -118,6 +132,15 @@ export function ChecklistFiscal(): React.JSX.Element {
         >
           <CargarTasa />
         </Paso>
+
+        <Paso
+          numero={3}
+          titulo="Régimen fiscal de la empresa"
+          estado="manual"
+          codigo409="FISCAL_NUMBERING_INVALID"
+          resumen="El régimen (formatos libres, máquina fiscal…) decide cómo se numera. Hoy se asigna por operación (company_fiscal_regimes, ADR-0029); no hay endpoint para leerlo ni asignarlo desde aquí."
+          sello="VALIDAR-SENIAT: qué régimen corresponde a la empresa lo confirma su contador."
+        />
 
         <Paso
           numero={4}
@@ -160,24 +183,6 @@ export function ChecklistFiscal(): React.JSX.Element {
         >
           <Contingencia rangos={contingencias.data?.items ?? []} />
         </Paso>
-
-        <Paso
-          numero={1}
-          titulo="Alícuota de IVA con fuente legal"
-          estado="manual"
-          codigo409="TAX_RULE_MISSING"
-          resumen="La API aún no expone la lectura de tax_rules: el estado no puede comprobarse aquí. La regla se carga hoy por operación, con su fuente citada (ADR-0038: sin regla no se emite — el sistema no adivina alícuotas)."
-          sello="VALIDAR-SENIAT: la alícuota y su vigencia deben venir de la norma, citada en legal_source."
-        />
-
-        <Paso
-          numero={3}
-          titulo="Régimen fiscal de la empresa"
-          estado="manual"
-          codigo409="FISCAL_NUMBERING_INVALID"
-          resumen="El régimen (formatos libres, máquina fiscal…) decide cómo se numera. Hoy se asigna por operación (company_fiscal_regimes, ADR-0029); no hay endpoint para leerlo ni asignarlo desde aquí."
-          sello="VALIDAR-SENIAT: qué régimen corresponde a la empresa lo confirma su contador."
-        />
 
         <VerificacionReal />
       </div>
