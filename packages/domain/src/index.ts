@@ -90,6 +90,11 @@ export {
   type AccountingError,
 } from "./accounting.js";
 export {
+  reprocessPendingJournals,
+  type BackfillResultado,
+  type BackfillError,
+} from "./journal-backfill.js";
+export {
   generateJournalFromDocument,
   type GenerationOutcome,
   type JournalGenerationError,

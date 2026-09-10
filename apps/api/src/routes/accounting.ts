@@ -25,6 +25,7 @@ import {
   closeFiscalPeriod,
   reopenFiscalPeriod,
   executeYearEndClose,
+  reprocessPendingJournals,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -498,6 +499,27 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
   });
 
   // ── La cola de pendientes (ADR-0042) ──────────────────────────────────────
+
+  /**
+   * REPROCESAR lo pendiente (2026-09-10). La cola decía «configúrala e importa
+   * este pendiente» y no había con qué: los hechos se acumulaban sin vía de
+   * vuelta. Este es el camino — genera los asientos que faltan con los
+   * importes que la cola guardó CUANDO OCURRIERON, y deja pendiente lo que
+   * siga sin plantilla vigente a su fecha.
+   */
+  app.post("/v1/accounting/pending/process", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const cuerpo = (await c.req.json().catch(() => ({}))) as { limit?: number };
+    const r = await withTransaction(sql, actor, (uow) =>
+      reprocessPendingJournals(uow, {
+        company_id: companyId,
+        ...(typeof cuerpo.limit === "number" ? { limit: cuerpo.limit } : {}),
+      }),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
 
   app.get("/v1/accounting/pending", async (c) => {
     const { companyId } = requireCompany(c);

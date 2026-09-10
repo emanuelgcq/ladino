@@ -262,6 +262,59 @@ describe("el gancho contable — R-20", () => {
     expect(sinCuenta.map((x) => x.purpose)).toEqual([]);
   });
 
+  /**
+   * LA MITAD QUE FALTABA (2026-09-10). La cola decía «configúrala e importa
+   * este pendiente» y NO HABÍA con qué: ni endpoint ni caso de uso. Se
+   * descubrió cargando un negocio real — 1418 hechos encolados y la
+   * contabilidad vacía, sin botón que la recuperara. Es el caso NORMAL: se
+   * factura desde el día uno y la contabilidad se configura después.
+   */
+  it("reprocesar la cola contabiliza LO YA ENCOLADO, con los importes de entonces", async () => {
+    // Lo que quedó pendiente del primer test, antes de configurar nada.
+    const antes = await sql<{ id: string; source_id: string }[]>`
+      select id, source_id from public.journal_generation_queue
+       where company_id = ${COMPANY} and status = 'pending'`;
+    expect(antes.length).toBeGreaterThan(0);
+
+    const r = await pedir("POST", "/v1/accounting/pending/process", { limit: 100 });
+    expect(r.status).toBe(200);
+    const res = (await r.json()) as {
+      revisados: number;
+      contabilizados: number;
+      pendientes: number;
+    };
+    expect(res.revisados).toBe(antes.length);
+    expect(res.contabilizados).toBe(antes.length);
+    expect(res.pendientes).toBe(0);
+
+    // La factura que estaba huérfana YA tiene su asiento, POSTEADO y cuadrado.
+    const [doc] = await sql<{ journal_entry_id: string | null }[]>`
+      select journal_entry_id from public.documents where id = ${antes[0]!.source_id}`;
+    expect(doc?.journal_entry_id).not.toBeNull();
+    const [asiento] = await sql<{ status: string; d: string; c: string }[]>`
+      select e.status, sum(l.functional_debit)::text as d, sum(l.functional_credit)::text as c
+        from public.journal_entries e join public.journal_lines l on l.entry_id = e.id
+       where e.id = ${doc!.journal_entry_id!} group by e.status`;
+    expect(asiento?.status).toBe("posted");
+    expect(asiento?.d).toBe(asiento?.c);
+
+    // Y la cola quedó limpia: el invariante sigue en cero por la otra mitad
+    // —ahora hay asiento— y no por seguir pendiente.
+    const [quedan] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.journal_generation_queue
+       where company_id = ${COMPANY} and status = 'pending'`;
+    expect(quedan?.n).toBe(0);
+    expect(await huecos()).toHaveLength(0);
+  });
+
+  it("reprocesar de nuevo no duplica: sin pendientes, no hay nada que hacer", async () => {
+    const r = await pedir("POST", "/v1/accounting/pending/process", {});
+    expect(r.status).toBe(200);
+    const res = (await r.json()) as { revisados: number; contabilizados: number };
+    expect(res.revisados).toBe(0);
+    expect(res.contabilizados).toBe(0);
+  });
+
   it("con plantilla, la venta genera su asiento POSTEADO en la misma transacción", async () => {
     const r = await pedir("POST", "/v1/invoices", {
       company_id: COMPANY,
