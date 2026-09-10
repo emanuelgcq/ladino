@@ -241,6 +241,32 @@ export async function generateJournalFromDocument(
   const lineas: (EntryLine & { description: string | null })[] = [];
   const papelesSinCuenta = new Set<string>();
 
+  /**
+   * LAS CUENTAS DE TODOS LOS PAPELES, DE UNA VEZ (2026-09-10).
+   *
+   * Antes se consultaba la cuenta DENTRO del bucle: una espera de red por
+   * línea de plantilla, y una venta cobrada genera tres asientos. El
+   * `distinct on (purpose) … order by purpose, effective_from desc` da
+   * exactamente la misma fila que daba el `order by effective_from desc
+   * limit 1` de cada consulta suelta, con el mismo criterio de vigencia
+   * —mismo día de Caracas— y sobre los mismos papeles.
+   *
+   * Precargar de más es inofensivo: `papelesSinCuenta` se sigue llenando
+   * SOLO dentro del bucle y SOLO para las líneas que de verdad aplican, así
+   * que el motivo del encolado no cambia ni gana papeles que no tocaban.
+   */
+  const papeles = [...new Set(lineasPlantilla.map((l) => l.account_purpose))];
+  const cuentasFilas = await sql<{ purpose: string; id: string }[]>`
+    select distinct on (purpose) purpose, account_id as id
+      from public.company_account_settings
+     where company_id = ${input.companyId} and purpose = any(${papeles}::text[])
+       -- El mismo día DE CARACAS que la vigencia de la plantilla (arriba).
+       and (effective_from at time zone 'America/Caracas')::date <= ${input.postingDate}::date
+       and (effective_to is null
+            or (effective_to at time zone 'America/Caracas')::date > ${input.postingDate}::date)
+     order by purpose, effective_from desc`;
+  const cuentaDe = new Map(cuentasFilas.map((c) => [c.purpose, c.id]));
+
   for (const l of lineasPlantilla) {
     const bruto = (input.amounts as Record<string, string | undefined>)[l.amount_source];
     if (bruto === undefined) {
@@ -264,15 +290,8 @@ export async function generateJournalFromDocument(
     const absoluto = importe.value.isNegative() ? importe.value.negated() : importe.value;
     if (absoluto.isZero()) continue;
 
-    const [cuenta] = await sql<{ id: string }[]>`
-      select account_id as id from public.company_account_settings
-       where company_id = ${input.companyId} and purpose = ${l.account_purpose}
-         -- El mismo día DE CARACAS que la vigencia de la plantilla (arriba).
-         and (effective_from at time zone 'America/Caracas')::date <= ${input.postingDate}::date
-         and (effective_to is null
-              or (effective_to at time zone 'America/Caracas')::date > ${input.postingDate}::date)
-       order by effective_from desc limit 1`;
-    if (!cuenta) {
+    const cuentaId = cuentaDe.get(l.account_purpose);
+    if (cuentaId === undefined) {
       papelesSinCuenta.add(l.account_purpose);
       continue;
     }
@@ -282,7 +301,7 @@ export async function generateJournalFromDocument(
     const cero = Money.of("0", input.functionalCurrency);
     if (!cero.ok) return err({ code: "VALIDATION_FAILED", message: cero.error.message });
     lineas.push({
-      accountId: cuenta.id,
+      accountId: cuentaId,
       debit: l.side === "debit" ? money.value : cero.value,
       credit: l.side === "credit" ? money.value : cero.value,
       description: l.description,
@@ -332,22 +351,42 @@ export async function generateJournalFromDocument(
             ${RULES_VERSION})
     returning id`;
 
-  let n = 0;
-  for (const l of lineas) {
-    n += 1;
+  /**
+   * LAS LÍNEAS DEL ASIENTO, EN UNA SOLA SENTENCIA (2026-09-10). Antes una por
+   * línea, y el driver serializa dentro de la transacción: tres líneas eran
+   * tres esperas de red. Los importes viajan como TEXTO y `jsonb_to_recordset`
+   * los pasa a `numeric` en el servidor — no tocan un `double` (regla 7), y
+   * cada valor es el mismo string que producía el bucle.
+   *
+   * El `order by line_number` preserva el orden exacto, que es el que la
+   * partida doble y los tests leen.
+   */
+  const filasAsiento = lineas.map((l, i) => {
     const importe = l.debit.amount.isZero() ? l.credit : l.debit;
-    await sql`
-      insert into public.journal_lines
-        (tenant_id, company_id, entry_id, line_number, account_id, debit_amount, credit_amount,
-         amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
-         functional_currency, rate_source, rate_timestamp, functional_debit, functional_credit,
-         description)
-      values (${input.tenantId}, ${input.companyId}, ${asiento!.id}, ${n}, ${l.accountId},
-              ${l.debit.toAmountString()}, ${l.credit.toAmountString()},
-              ${importe.toAmountString()}, ${input.functionalCurrency}, 1,
-              ${importe.toAmountString()}, ${input.functionalCurrency}, 'identidad', now(),
-              ${l.debit.toAmountString()}, ${l.credit.toAmountString()}, ${l.description})`;
-  }
+    return {
+      line_number: i + 1,
+      account_id: l.accountId,
+      debit_amount: l.debit.toAmountString(),
+      credit_amount: l.credit.toAmountString(),
+      importe: importe.toAmountString(),
+      description: l.description,
+    };
+  });
+  await sql`
+    insert into public.journal_lines
+      (tenant_id, company_id, entry_id, line_number, account_id, debit_amount, credit_amount,
+       amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
+       functional_currency, rate_source, rate_timestamp, functional_debit, functional_credit,
+       description)
+    select ${input.tenantId}, ${input.companyId}, ${asiento!.id}, x.line_number, x.account_id,
+           x.debit_amount, x.credit_amount,
+           x.importe, ${input.functionalCurrency}, 1,
+           x.importe, ${input.functionalCurrency}, 'identidad', now(),
+           x.debit_amount, x.credit_amount, x.description
+      from jsonb_to_recordset(${sql.json(filasAsiento)}::jsonb) as x(
+        line_number integer, account_id uuid, debit_amount numeric, credit_amount numeric,
+        importe numeric, description text)
+     order by x.line_number`;
 
   const [num] = await sql<{ n: string }[]>`
     select platform.claim_entry_number(${input.companyId},
