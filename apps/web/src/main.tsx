@@ -21,7 +21,17 @@ initTema();
  * navegar, no martillea la API.
  */
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      retry: 1,
+      // Volver a la pestaña NO recarga el mundo. Con la API donde está, releer
+      // cada consulta montada cada vez que uno alterna ventanas se siente como
+      // que la aplicación se reinicia sola — y la información sigue llegando
+      // igual: al navegar, al montar y tras cada mutación que invalida.
+      refetchOnWindowFocus: false,
+    },
+  },
 });
 
 createRoot(document.getElementById("root")!).render(

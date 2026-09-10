@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Building2, LogOut } from "lucide-react";
 import { api, supabase, LlamadaApiError, type Company } from "../lib.js";
@@ -85,14 +93,38 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     }
   }, []);
 
+  /**
+   * EL TOKEN SE RENUEVA SOLO, Y ESO NO ES UN CAMBIO DE USUARIO.
+   *
+   * supabase-js corre `_recoverAndRefresh()` en cada vuelta a la pestaña y un
+   * ticker mientras la pestaña tiene el foco: cuando el token entra en su
+   * margen de expiración emite `TOKEN_REFRESHED` con un objeto de sesión NUEVO,
+   * y lo mismo llega por BroadcastChannel si hay otra pestaña de Ladino
+   * abierta. Con los efectos colgando de la IDENTIDAD de ese objeto, cada
+   * renovación volvía a pedir las empresas y —peor— ponía los permisos a
+   * `null`, que es la condición de «Cargando permisos…» A PANTALLA COMPLETA.
+   * De ahí el «cambio de pestaña y me refresca la página».
+   *
+   * Los efectos cuelgan ahora del USUARIO y de la EMPRESA. El token vive en una
+   * ref para que las llamadas usen siempre el último sin re-disparar nada.
+   */
+  const sesionRef = useRef<Session | null>(null);
   useEffect(() => {
-    if (!session) {
+    sesionRef.current = session;
+  }, [session]);
+
+  const userId = session?.user.id ?? null;
+  const empresaId = empresa?.id ?? null;
+
+  useEffect(() => {
+    const s = sesionRef.current;
+    if (s === null) {
       setCompanies(null);
       setEmpresaState(null);
       return;
     }
-    void recargar(session);
-  }, [session, recargar]);
+    void recargar(s);
+  }, [userId, recargar]);
 
   const setEmpresa = useCallback(
     (c: Company) => {
@@ -107,13 +139,14 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   // llamada falla, el conjunto queda VACÍO — fallo cerrado: no se enseña lo
   // que no se pudo confirmar (el servidor rechazaría igual).
   useEffect(() => {
-    if (!session || !empresa) {
+    const s = sesionRef.current;
+    if (s === null || empresaId === null) {
       setPermisos(null);
       return;
     }
     let vigente = true;
     setPermisos(null);
-    void api<{ permissions: string[] }>(session, "/v1/me/permissions", { companyId: empresa.id })
+    void api<{ permissions: string[] }>(s, "/v1/me/permissions", { companyId: empresaId })
       .then((r) => {
         if (vigente) setPermisos(new Set(r.permissions));
       })
@@ -123,7 +156,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     return () => {
       vigente = false;
     };
-  }, [session, empresa]);
+  }, [userId, empresaId]);
 
   const puede = useCallback(
     (permiso: string | readonly string[]): boolean => {
