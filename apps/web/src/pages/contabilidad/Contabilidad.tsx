@@ -1166,6 +1166,39 @@ function Cierre(): React.JSX.Element {
   });
   const recargar = () => void qc.invalidateQueries({ queryKey: ["cierre", empresa.id] });
 
+  /**
+   * Contabilizar lo que quedó en la cola (2026-09-10). Hasta ahora la pantalla
+   * enseñaba los pendientes y no ofrecía nada que hacer con ellos: el mensaje
+   * pedía configurar «e importar», y no había con qué importarlos.
+   */
+  const [reprocesando, setReprocesando] = useState(false);
+  async function reprocesar(): Promise<void> {
+    setError(null);
+    setReprocesando(true);
+    try {
+      const r = await llamar<{
+        contabilizados: number;
+        pendientes: number;
+        primer_motivo: string | null;
+      }>("/v1/accounting/pending/process", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ limit: 200 }),
+      });
+      toast.success(
+        `${r.contabilizados} contabilizados`,
+        r.pendientes === 0
+          ? "No queda nada pendiente."
+          : `Quedan ${r.pendientes}: ${r.primer_motivo ?? "revisa la configuración."}`,
+      );
+      recargar();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setReprocesando(false);
+    }
+  }
+
   async function cerrar(id: string): Promise<void> {
     setError(null);
     try {
@@ -1304,9 +1337,29 @@ function Cierre(): React.JSX.Element {
       {d !== undefined && d.pendientes.items.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Pendientes de contabilizar</CardTitle>
+            <CardTitle>
+              Pendientes de contabilizar
+              {d.pendientes.total > 0 && (
+                <span className="ml-2 font-normal text-muted-foreground">
+                  ({d.pendientes.total})
+                </span>
+              )}
+            </CardTitle>
+            <CardDescription>
+              Hechos que ocurrieron cuando aún no había plantilla o cuenta configurada para ellos.
+              No se perdió nada: se contabilizan con los importes de entonces en cuanto la
+              configuración exista.
+            </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={() => void reprocesar()} disabled={reprocesando}>
+                {reprocesando ? "Contabilizando…" : "Contabilizar los pendientes"}
+              </Button>
+              <span className="text-[0.84rem] text-faint-foreground">
+                Se hacen de 200 en 200, en el orden en que ocurrieron.
+              </span>
+            </div>
             <ul className="space-y-1 text-[0.85rem] text-muted-foreground">
               {d.pendientes.items.map((i) => (
                 <li key={i.id}>
