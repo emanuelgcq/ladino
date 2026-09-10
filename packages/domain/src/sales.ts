@@ -29,7 +29,7 @@ import type {
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
-import { issueStock, receiveStock } from "./inventory.js";
+import { issueStockBatch, receiveStock } from "./inventory.js";
 import { resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 import { reverseJournalEntry } from "./accounting.js";
@@ -161,6 +161,12 @@ interface LineaCalculada {
    * deja sin clasificar y el libro lo dice.
    */
   readonly operationType: string | null;
+  /**
+   * Si esta línea descuenta existencia: un BIEN que no sea compuesto. Sale del
+   * producto que este mismo lote ya trajo, así que la emisión no vuelve a
+   * preguntarlo línea por línea (2026-09-10). Mismo criterio de siempre.
+   */
+  readonly esInventariable: boolean;
 }
 
 /**
@@ -375,6 +381,7 @@ async function calcularLineas(
       costSnapshot,
       taxCategory: producto.tax_category_code,
       operationType: contraparte.taxpayer_type_code === "no_domiciliado" ? null : "interna",
+      esInventariable: producto.kind === "good" && !producto.is_composed,
     });
   }
   return ok({
@@ -979,15 +986,18 @@ async function emitirVenta(
     // El kardex, DESPUÉS de emitir y en la misma transacción: si el stock no
     // alcanza, la factura entera no ocurrió. Cada salida lleva el documento como
     // origen, así que el kardex y la factura se pueden cruzar.
-    for (const l of calculadas.value.lineas) {
-      const [p] = await sql<{ kind: string; is_composed: boolean }[]>`
-        select kind, is_composed from public.products where id = ${l.productId}`;
-      if (p?.kind !== "good" || p.is_composed) continue;
-      const mov = await issueStock(uow, {
+    // Qué líneas descuentan existencia. `calcularLineas` ya trajo el producto
+    // en su lote, así que aquí no se vuelve a preguntar por cada una: es el
+    // mismo criterio de antes (bien, no compuesto) leído del dato que ya está.
+    const conKardex = calculadas.value.lineas.filter((l) => l.esInventariable);
+    if (conKardex.length > 0) {
+      const mov = await issueStockBatch(uow, {
         company_id: input.company_id,
         warehouse_id: input.warehouse_id,
-        product_id: l.productId,
-        quantity: l.calc.quantity.toFixed(),
+        lines: conKardex.map((l) => ({
+          product_id: l.productId,
+          quantity: l.calc.quantity.toFixed(),
+        })),
         sourceDocumentId: doc.value.id,
       });
       if (!mov.ok) {
@@ -2228,6 +2238,9 @@ async function createInvoiceLike(
       costSnapshot: null,
       taxCategory: producto!.tax_category_code,
       operationType: cliente!.taxpayer_type_code === "no_domiciliado" ? null : "interna",
+      // Una NOTA no mueve mercancia (ADR-0051: la NC directa corrige precio,
+      // no devuelve): este camino nunca genera kardex, ni antes ni ahora.
+      esInventariable: false,
     });
   }
 

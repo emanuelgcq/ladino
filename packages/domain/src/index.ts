@@ -27,6 +27,7 @@ export { createPriceList, setPrice, type PricingError } from "./pricing.js";
 export {
   receiveStock,
   issueStock,
+  issueStockBatch,
   adjustStock,
   transferStock,
   type InventoryError,

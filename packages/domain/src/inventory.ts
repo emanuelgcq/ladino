@@ -233,6 +233,68 @@ async function insertar(sql: TransactionSql, m: Insercion): Promise<InventoryMov
   return fila!;
 }
 
+/** El payload del acta de un movimiento. Uno solo, para que la fila suelta y
+ *  el lote no puedan divergir en lo que cuentan. */
+function payloadDe(
+  fila: InventoryMoveResponse,
+  extra: Record<string, JSONValue> = {},
+): Record<string, JSONValue> {
+  return {
+    warehouse_id: fila.warehouse_id,
+    product_id: fila.product_id,
+    lot_id: fila.lot_id,
+    quantity: fila.quantity,
+    functional_amount: fila.functional_amount,
+    functional_currency: fila.functional_currency,
+    unit_cost: fila.unit_cost,
+    quantity_after: fila.quantity_after,
+    rounding_policy_id: fila.rounding_policy_id,
+    ...extra,
+  };
+}
+
+/**
+ * Las actas y los eventos de VARIOS movimientos, en una sentencia (2026-09-10).
+ * Mismas filas y mismos payloads que uno a uno —los construye `payloadDe`, que
+ * es el mismo de la versión suelta—, en el mismo orden, y con el acta antes
+ * del evento como siempre.
+ */
+async function auditarYPublicarLote(
+  sql: TransactionSql,
+  filas: InventoryMoveResponse[],
+  tenantId: string,
+  evento: string,
+): Promise<void> {
+  if (filas.length === 0) return;
+  const actas = filas.map((f, i) => ({
+    orden: i + 1,
+    move_id: f.id,
+    company_id: f.company_id,
+    payload: payloadDe(f, { reference: f.reference }),
+  }));
+  await sql`
+    with datos as (
+      select x.orden, x.move_id, x.company_id, x.payload
+        from jsonb_to_recordset(${sql.json(actas)}::jsonb) as x(
+          orden integer, move_id uuid, company_id uuid, payload jsonb)
+    ), acta as (
+      insert into public.audit_events
+        (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+         actor_type, occurred_at, rules_version, payload)
+      select ${tenantId}, d.company_id, 'inventory_move', d.move_id, ${evento},
+             'user', now(), ${RULES_VERSION}, d.payload
+        from datos d order by d.orden
+      returning 1
+    )
+    insert into public.outbox
+      (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
+    select ${tenantId}, d.company_id, 'inventory_move', d.move_id, ${evento}, 1,
+           jsonb_build_object('move_id', d.move_id) || d.payload
+      from datos d
+     where exists (select 1 from acta)
+     order by d.orden`;
+}
+
 async function auditarYPublicar(
   sql: TransactionSql,
   fila: InventoryMoveResponse,
@@ -444,6 +506,204 @@ export async function receiveStock(
  * (consumeRecipe hoy; la factura de venta mañana).
  */
 export type IssueStockInput = IssueStockRequest & { readonly sourceDocumentId?: string };
+
+/**
+ * SALIDA DE VARIAS LÍNEAS EN UN SOLO VIAJE (2026-09-10).
+ *
+ * `issueStock` repetía por línea la autorización, el `set_config`, el bloqueo,
+ * el insert y su acta+evento: siete esperas de red por renglón, y el driver
+ * las serializa dentro de la transacción. Una venta de cuatro líneas gastaba
+ * ahí ~28 de sus ~140 sentencias.
+ *
+ * LO QUE NO CAMBIA, y es lo único que importa:
+ *
+ *   · **el costeo es idéntico al del bucle**. `issue()` devuelve la posición
+ *     RESULTANTE y aquí se encadena en memoria, así que la segunda línea del
+ *     mismo producto ve la posición que dejó la primera — exactamente como
+ *     cuando cada línea releía el saldo de la base;
+ *   · **el oráculo sigue vigilando**. `apply_inventory_move` es un trigger
+ *     `before insert … for each row` que verifica cada fila contra el saldo
+ *     del momento y actualiza la posición en el mismo disparo. En un insert
+ *     múltiple cada fila ve lo que dejó la anterior, y si este cálculo se
+ *     desviara un céntimo, LAD41 lo rechaza en vez de escribirlo;
+ *   · **el bloqueo se toma en orden determinista** (por producto y lote), que
+ *     es MÁS seguro que el bucle actual: hoy se bloquea en el orden del
+ *     carrito, y dos cajas con los mismos productos en distinto orden pueden
+ *     abrazarse. Aquí no.
+ *
+ * Devuelve los movimientos en el MISMO orden de las líneas recibidas.
+ */
+export interface IssueStockLine {
+  readonly product_id: string;
+  readonly quantity: string;
+  readonly lot_id?: string | null;
+}
+export interface IssueStockBatchInput {
+  readonly company_id: string;
+  readonly warehouse_id: string;
+  readonly lines: readonly IssueStockLine[];
+  /**
+   * NO hay `reference` en el lote, y no es un olvido: `inventory_moves` la
+   * lleva UNICA por empresa, asi que N movimientos no pueden compartirla — lo
+   * destapo el primer test que lo intento. El vinculo del lote con su origen
+   * es `sourceDocumentId`, que si admite varios movimientos.
+   */
+  readonly note?: string | null;
+  readonly occurred_at?: string | undefined;
+  readonly sourceDocumentId?: string | undefined;
+}
+
+export async function issueStockBatch(
+  uow: UnitOfWork,
+  input: IssueStockBatchInput,
+): Promise<Result<InventoryMoveResponse[], InventoryError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "Mover existencias exige un usuario real.",
+    });
+  }
+  if (input.lines.length === 0) return ok([]);
+
+  // UNA autorización para todas las líneas: mismo actor, misma empresa, mismo
+  // almacén y el mismo permiso que pedía cada una por separado.
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "inventory.move", [
+    input.warehouse_id,
+  ]);
+  if (!ctx.ok) return ctx;
+
+  const cantidades: Decimal[] = [];
+  for (const l of input.lines) {
+    const q = cantidad(l.quantity);
+    if (!q.ok) return q;
+    cantidades.push(q.value);
+  }
+
+  const occurredAt = input.occurred_at ?? null;
+  const momentoTasa = ahora(input.occurred_at);
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+
+  // TODAS las posiciones, bloqueadas de una vez y EN ORDEN DETERMINISTA.
+  const claves = [...new Set(input.lines.map((l) => `${l.product_id}|${l.lot_id ?? ""}`))].sort();
+  const productos = claves.map((c) => c.split("|")[0]!);
+  const lotes = claves.map((c) => (c.split("|")[1] === "" ? null : c.split("|")[1]!));
+  const filasPos = await sql<
+    {
+      product_id: string;
+      lot_id: string | null;
+      quantity: string;
+      value: string;
+      currency_code: string;
+      last_unit_cost: string;
+    }[]
+  >`select u.product_id, u.lot_id, p.quantity::text as quantity, p.value::text as value,
+           p.currency_code, p.last_unit_cost::text as last_unit_cost
+      from unnest(${productos}::uuid[], ${lotes}::uuid[])
+             with ordinality as u(product_id, lot_id, orden),
+           lateral platform.lock_stock_position(${input.company_id}, ${input.warehouse_id},
+                                                u.product_id, u.lot_id) p
+     order by u.orden`;
+  if (filasPos.length !== claves.length) {
+    return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  }
+
+  const posiciones = new Map<string, StockPosition>();
+  for (const f of filasPos) {
+    const pos = positionOf({
+      quantity: f.quantity,
+      value: f.value,
+      lastUnitCost: f.last_unit_cost,
+      currency: f.currency_code,
+    });
+    if (!pos.ok) return err({ code: "VALIDATION_FAILED", message: pos.error.message });
+    posiciones.set(`${f.product_id}|${f.lot_id ?? ""}`, pos.value);
+  }
+
+  // EL COSTEO, encadenado en memoria línea a línea: la posición que deja una
+  // salida es la que ve la siguiente. Es lo que hacía el bucle releyendo la
+  // base, sin releerla.
+  const preparadas: {
+    linea: IssueStockLine;
+    costed: ReturnType<typeof costIssue> extends Result<infer C, infer _E> ? C : never;
+    fact: MonetaryFact;
+  }[] = [];
+  for (let i = 0; i < input.lines.length; i += 1) {
+    const l = input.lines[i]!;
+    const clave = `${l.product_id}|${l.lot_id ?? ""}`;
+    const posicion = posiciones.get(clave)!;
+    const costed = costIssue(posicion, cantidades[i]!, {
+      allowNegative: ctx.value.allowNegative,
+    });
+    if (!costed.ok) {
+      return err(
+        costed.error.code === "NEGATIVE_STOCK"
+          ? { code: "NEGATIVE_STOCK", message: costed.error.message }
+          : { code: "VALIDATION_FAILED", message: costed.error.message },
+      );
+    }
+    posiciones.set(clave, costed.value.position);
+    const hecho = hechoMonetario(
+      costed.value.move.value.negate().toAmountString(),
+      ctx.value.functionalCurrency,
+      ctx.value.functionalCurrency,
+      undefined,
+      momentoTasa,
+    );
+    if (!hecho.ok) return hecho;
+    preparadas.push({ linea: l, costed: costed.value, fact: hecho.value.fact });
+  }
+
+  // Un INSERT para todos los movimientos, en el orden de las líneas: el
+  // trigger se dispara por fila y en ese orden, igual que el bucle.
+  const filas = preparadas.map((p, i) => ({
+    orden: i + 1,
+    product_id: p.linea.product_id,
+    lot_id: p.linea.lot_id ?? null,
+    quantity: p.costed.move.quantity.toFixed(),
+    amount_transaction_currency: `-${p.fact.amountTransactionCurrency}`,
+    fx_rate: p.fact.fxRate,
+    functional_amount: p.costed.move.value.toAmountString(),
+    unit_cost: p.costed.move.unitCostAfter.toAmountString(),
+    quantity_after: p.costed.move.quantityAfter.toFixed(),
+    value_after: p.costed.move.valueAfter.toAmountString(),
+  }));
+  const primera = preparadas[0]!;
+  let movimientos: InventoryMoveResponse[];
+  try {
+    movimientos = await sql.savepoint(
+      (sp) => sp<InventoryMoveResponse[]>`
+        insert into public.inventory_moves
+          (id, tenant_id, company_id, warehouse_id, product_id, lot_id, kind, quantity,
+           amount_transaction_currency, transaction_currency, fx_rate,
+           functional_amount, functional_currency, rate_source, rate_timestamp,
+           rounding_policy_id, unit_cost, quantity_after, value_after,
+           occurred_at, reference, reason, note, transfer_id, counterpart_move_id,
+           source_document_id)
+        select platform.uuidv7(), ${ctx.value.tenantId}, ${input.company_id},
+               ${input.warehouse_id}, x.product_id, x.lot_id, 'salida', x.quantity,
+               x.amount_transaction_currency, ${primera.fact.transactionCurrency}, x.fx_rate,
+               x.functional_amount, ${primera.fact.functionalCurrency},
+               ${primera.fact.rateSource}, ${primera.fact.rateTimestamp},
+               ${primera.fact.roundingPolicyId}, x.unit_cost, x.quantity_after, x.value_after,
+               coalesce(${occurredAt}::timestamptz, now()), null,
+               null, ${input.note ?? null}, null, null, ${input.sourceDocumentId ?? null}
+          from jsonb_to_recordset(${sql.json(filas)}::jsonb) as x(
+            orden integer, product_id uuid, lot_id uuid, quantity numeric,
+            amount_transaction_currency numeric, fx_rate numeric, functional_amount numeric,
+            unit_cost numeric, quantity_after numeric, value_after numeric)
+         order by x.orden
+        returning ${sp.unsafe(MOVE_COLUMNS)}`,
+    );
+  } catch (e) {
+    const conocido = traducir(e);
+    if (conocido) return err(conocido);
+    throw e;
+  }
+
+  await auditarYPublicarLote(sql, movimientos, ctx.value.tenantId, "stock.shipped");
+  return ok(movimientos);
+}
 export type ReceiveStockInput = ReceiveStockRequest & { readonly sourceDocumentId?: string };
 export type AdjustStockInput = AdjustStockRequest & { readonly sourceDocumentId?: string };
 
