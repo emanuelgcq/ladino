@@ -82,7 +82,12 @@ export const RegisterSupportedRetentionResponse = z
 export type RegisterSupportedRetentionResponse = z.infer<typeof RegisterSupportedRetentionResponse>;
 
 export const ListSupportedRetentionsResponse = z
-  .object({ items: z.array(SupportedRetentionResponse) })
+  .object({
+    items: z.array(SupportedRetentionResponse),
+    /** Cuantos hay EN TOTAL, no cuantos vinieron: la pantalla tiene que poder
+     *  decir si falta algo por ver. */
+    total: z.number().int().nonnegative(),
+  })
   .strict();
 export type ListSupportedRetentionsResponse = z.infer<typeof ListSupportedRetentionsResponse>;
 
@@ -144,7 +149,10 @@ export const IvaPeriodResultResponse = z
 export type IvaPeriodResultResponse = z.infer<typeof IvaPeriodResultResponse>;
 
 export const ListIvaPeriodResultsResponse = z
-  .object({ items: z.array(IvaPeriodResultResponse) })
+  .object({
+    items: z.array(IvaPeriodResultResponse),
+    total: z.number().int().nonnegative(),
+  })
   .strict();
 export type ListIvaPeriodResultsResponse = z.infer<typeof ListIvaPeriodResultsResponse>;
 
@@ -191,6 +199,9 @@ export const FiscalDeadlineResponse = z
 export type FiscalDeadlineResponse = z.infer<typeof FiscalDeadlineResponse>;
 
 export const ListFiscalDeadlinesResponse = z
-  .object({ items: z.array(FiscalDeadlineResponse) })
+  .object({
+    items: z.array(FiscalDeadlineResponse),
+    total: z.number().int().nonnegative(),
+  })
   .strict();
 export type ListFiscalDeadlinesResponse = z.infer<typeof ListFiscalDeadlinesResponse>;

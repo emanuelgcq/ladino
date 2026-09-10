@@ -154,7 +154,9 @@ describe("productos de extremo a extremo", () => {
     expect(primera.status).toBe(201);
     const creado = (await primera.json()) as { id: string; status: string };
     productoId = creado.id;
-    expect(creado.status).toBe("draft");
+    // Nace VENDIBLE (2026-09-10): el alta ya no deja un borrador inservible
+    // sin decirlo. Quien quiera el borrador manda `status: "draft"`.
+    expect(creado.status).toBe("active");
 
     const replay = await pedir("POST", "/v1/products", { token, key, body });
     expect(replay.status).toBe(201);

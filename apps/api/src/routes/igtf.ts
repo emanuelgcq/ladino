@@ -110,21 +110,27 @@ export function igtfRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler)
       }
       periodo = [desde, hasta];
     }
+    // PAGINADO (2026-09-10): antes `limit 500` y sin `total` — una quincena
+    // con más percepciones perdía filas sin decirlo, y el total a enterar
+    // parecía completo. El total en dinero se calcula aparte, sobre TODAS.
+    const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 50) || 50, 1), 200);
+    const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     const { actor } = c.get("ladino.auth");
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigePermiso(tx, actor, companyId, "fiscal_book.read");
-      const items = await tx<Record<string, unknown>[]>`
+      const filas = await tx<Record<string, unknown>[]>`
         select id, payment_id, document_id, base_amount::text as base_amount, currency,
                rate::text as rate, amount::text as amount,
                functional_amount::text as functional_amount, fx_rate::text as fx_rate,
                rate_source, status, status_reason,
                to_char(occurred_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
-                 as occurred_at
+                 as occurred_at,
+               count(*) over ()::int as total
           from public.igtf_perceptions
          where company_id = ${companyId}
            ${periodo === null ? tx`` : tx`and occurred_at >= ${periodo[0]}::date and occurred_at < (${periodo[1]}::date + 1)`}
          order by occurred_at desc
-         limit 500`;
+         limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
       // El total de la quincena que se entera: SOLO lo percibido — lo
       // pendiente de reintegro se lista, pero no se suma como si se debiera.
       const [total] = await tx<{ total: string; moneda: string }[]>`
@@ -136,7 +142,8 @@ export function igtfRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler)
          where p.company_id = ${companyId}
            ${periodo === null ? tx`` : tx`and p.occurred_at >= ${periodo[0]}::date and p.occurred_at < (${periodo[1]}::date + 1)`}`;
       return {
-        items,
+        items: filas.map(({ total: _t, ...r }) => r),
+        total: filas.length > 0 ? (filas[0]!["total"] as number) : 0,
         total_functional: total?.total ?? "0",
         functional_currency: total?.moneda ?? "",
       };

@@ -502,6 +502,10 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
   app.get("/v1/accounting/pending", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
+    // Paginado (2026-09-10): el `total` ya era honesto, pero con mas de 200
+    // pendientes no habia forma de llegar a los siguientes.
+    const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 50) || 50, 1), 200);
+    const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigeLectura(tx, actor, companyId);
       const items = await tx<Record<string, unknown>[]>`
@@ -509,7 +513,8 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
                to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at
           from public.journal_generation_queue
          where company_id = ${companyId} and status = 'pending'
-         order by created_at limit 200`;
+         order by created_at
+         limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
       const [total] = await tx<{ n: number }[]>`
         select count(*)::int as n from public.journal_generation_queue
          where company_id = ${companyId} and status = 'pending'`;

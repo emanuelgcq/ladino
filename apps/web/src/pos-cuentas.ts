@@ -88,20 +88,50 @@ export function escribirCuentasLocales(companyId: string, cuentas: CuentaAbierta
   }
 }
 
-// ── La capa de nube: inmediata con coalescencia, por cuenta ──────────────────
+// ── La capa de nube: DIFERIDA, con coalescencia por cuenta ───────────────────
+//
+// Antes subía en CADA toque. Con la base a un segundo de distancia, eso
+// convertía escribir un carrito de diez renglones en diez viajes de red, y la
+// caja pasaba más tiempo hablando con la nube que vendiendo (2026-09-10).
+//
+// Ahora la nube recibe el carrito cuando se queda QUIETO (`ESPERA_NUBE`), o
+// de golpe en los momentos que importan — cambiar de cuenta, cobrar, cerrar
+// la pantalla — vía `vaciar()`. Lo que NO cambia es el seguro de verdad: el
+// disco de la caja se escribe en cada toque, es síncrono y no cuesta red.
+// La nube nunca fue la capa antiapagón; es la que deja ver el carrito desde
+// otra caja.
+
+/** Cuánto se espera a que el carrito se quede quieto antes de subirlo. */
+const ESPERA_NUBE = 4000;
 
 export interface SincronizadorNube {
   guardar: (cuenta: CuentaNube) => void;
   borrar: (id: string) => void;
+  /** Sube YA lo pendiente: al cambiar de cuenta, al cobrar, al salir. */
+  vaciar: () => void;
 }
 
 export function crearSincronizador(
   subir: (cuenta: CuentaNube) => Promise<void>,
   bajar: (id: string) => Promise<void>,
+  esperaMs: number = ESPERA_NUBE,
 ): SincronizadorNube {
   const enVuelo = new Set<string>();
   const sucias = new Map<string, CuentaNube>();
   const porBorrar = new Set<string>();
+  const temporizadores = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function programar(id: string): void {
+    const previo = temporizadores.get(id);
+    if (previo !== undefined) clearTimeout(previo);
+    temporizadores.set(
+      id,
+      setTimeout(() => {
+        temporizadores.delete(id);
+        void volar(id);
+      }, esperaMs),
+    );
+  }
 
   async function volar(id: string): Promise<void> {
     if (enVuelo.has(id)) return; // ya hay uno en el aire: el estado quedó anotado
@@ -136,12 +166,23 @@ export function crearSincronizador(
   return {
     guardar(cuenta: CuentaNube): void {
       sucias.set(cuenta.id, cuenta);
-      void volar(cuenta.id);
+      programar(cuenta.id);
     },
+    /** Borrar NO espera: una cuenta que muere se retira de la nube ya. */
     borrar(id: string): void {
+      const previo = temporizadores.get(id);
+      if (previo !== undefined) clearTimeout(previo);
+      temporizadores.delete(id);
       porBorrar.add(id);
       sucias.delete(id);
       void volar(id);
+    },
+    vaciar(): void {
+      for (const [id, t] of temporizadores) {
+        clearTimeout(t);
+        temporizadores.delete(id);
+        void volar(id);
+      }
     },
   };
 }

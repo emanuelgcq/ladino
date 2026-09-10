@@ -195,6 +195,8 @@ export function treasuryRoutes(
     const { actor } = c.get("ladino.auth");
     const desde = c.req.query("from") ?? null;
     const hasta = c.req.query("to") ?? null;
+    const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 50) || 50, 1), 200);
+    const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigePermiso(tx, actor, companyId, "expense.read", "Ver los gastos");
       const filas = await tx<Record<string, unknown>[]>`
@@ -209,7 +211,7 @@ export function treasuryRoutes(
            and (${desde}::date is null or paid_at::date >= ${desde}::date)
            and (${hasta}::date is null or paid_at::date <= ${hasta}::date)
          order by paid_at desc
-         limit 200`;
+         limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
       const [total] = await tx<{ n: number }[]>`
         select count(*)::int as n from public.expenses
          where company_id = ${companyId}
@@ -235,6 +237,8 @@ export function treasuryRoutes(
   app.get("/v1/cash-closings", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
+    const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 50) || 50, 1), 200);
+    const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigePermiso(tx, actor, companyId, "treasury.read", "Ver los cierres");
       const filas = await tx<Record<string, unknown>[]>`
@@ -247,7 +251,7 @@ export function treasuryRoutes(
           from public.cash_closings cc
          where cc.company_id = ${companyId}
          order by cc.closed_at desc
-         limit 200`;
+         limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
       const [total] = await tx<{ n: number }[]>`
         select count(*)::int as n from public.cash_closings where company_id = ${companyId}`;
       return { items: filas, total: total?.n ?? 0 };

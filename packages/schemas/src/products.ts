@@ -23,6 +23,15 @@ export const CreateProductRequest = z
     tax_category_code: z.string().regex(CODE_RE),
     category_id: uuid.optional(),
     barcode: z.string().trim().min(1).max(64).optional(),
+    /**
+     * Con qué estado nace. Por omisión **`active`**: un producto que nace en
+     * borrador no se puede vender, y un alta que devuelve «creado» dejando
+     * algo inservible es una trampa (2026-09-10).
+     *
+     * `draft` sigue existiendo y es el único estado donde `kind` todavía se
+     * puede corregir (LAD33): quien quiera esa red la pide explícitamente.
+     */
+    status: z.enum(["draft", "active"]).optional(),
   })
   .strict();
 export type CreateProductRequest = z.infer<typeof CreateProductRequest>;

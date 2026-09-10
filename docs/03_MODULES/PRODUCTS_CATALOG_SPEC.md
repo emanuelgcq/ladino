@@ -28,6 +28,12 @@ Modelar bienes/servicios con atributos operativos, inventario y tributación.
 ## Estados / transiciones
 draft → active → inactive.
 
+El alta crea en **`active`** salvo que se pida `draft` explícitamente
+(2026-09-10). Un producto que nace en borrador no se puede vender ni aparece
+en el mostrador, y un alta que responde «creado» dejando algo inservible —sin
+decirlo— es una trampa. `draft` sigue siendo el único estado donde `kind`
+todavía se puede corregir (LAD33), así que quien necesita esa red la pide.
+
 ## Permisos
 - inventario administra SKU.
 - ventas puede consultar.

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowRight, PackageCheck, PackageX, TriangleAlert } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { mostrarCantidad } from "../../money.js";
@@ -40,19 +40,30 @@ export function InventarioNegocio(): React.JSX.Element {
     productoFiltro !== null ? "movimientos" : "existencias",
   );
 
-  const productos = useQuery({
+  /**
+   * Se acumulan TODAS las páginas (2026-09-10): esta pantalla resume la
+   * existencia del negocio entero, y un resumen calculado sobre los primeros
+   * 100 productos de 300 no es un resumen — es un número equivocado.
+   */
+  const productos = useInfiniteQuery({
     queryKey: ["inv-productos", empresa.id],
-    queryFn: () =>
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) =>
       llamar<{ items: ProductoFila[]; total: number }>(
-        "/v1/products?with_stock=1&only_active=1&per_page=100",
+        `/v1/products?with_stock=1&only_active=1&per_page=100&page=${pageParam}`,
       ),
+    getNextPageParam: (ultima, todas) => {
+      const cargados = todas.reduce((n, p) => n + p.items.length, 0);
+      return cargados < ultima.total ? todas.length + 1 : undefined;
+    },
   });
+  const todosLosProductos = productos.data?.pages.flatMap((p) => p.items) ?? [];
   const bajoMinimo = useQuery({
     queryKey: ["inv-bajos", empresa.id],
     queryFn: () => llamar<{ items: unknown[] }>("/v1/inventory/low-stock"),
   });
 
-  const fisicos = (productos.data?.items ?? []).filter((p) => p.kind === "good");
+  const fisicos = todosLosProductos.filter((p) => p.kind === "good");
   const conExistencia = fisicos.filter(
     (p) => compararImportes(p.stock_quantity ?? "0", "0") > 0,
   ).length;
@@ -121,7 +132,7 @@ export function InventarioNegocio(): React.JSX.Element {
       {pestana === "existencias" ? (
         <Existencias productos={fisicos} cargando={productos.isLoading} />
       ) : (
-        <Movimientos productoFiltro={productoFiltro} productos={productos.data?.items ?? []} />
+        <Movimientos productoFiltro={productoFiltro} productos={todosLosProductos} />
       )}
     </div>
   );

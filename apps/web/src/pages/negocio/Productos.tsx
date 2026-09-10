@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Camera,
   ChevronDown,
@@ -56,6 +56,7 @@ interface ProductoFila {
   stock_quantity?: string | null;
 }
 
+const POR_PAGINA = 100;
 const CLAVE_VISTA = "ladino.productos.vista";
 
 function useDebounced<T>(valor: T, ms: number): T {
@@ -78,15 +79,28 @@ export function ProductosNegocio(): React.JSX.Element {
 
   useEffect(() => localStorage.setItem(CLAVE_VISTA, vista), [vista]);
 
-  const productos = useQuery({
+  /**
+   * PAGINADO DE VERDAD (2026-09-10). Antes pedía 100 y punto: con un catálogo
+   * de 300 el mostrador veía 100 y **los otros 200 no existían**, sin aviso
+   * ninguno — el `total` llegaba del servidor y se tiraba. Ahora se acumulan
+   * páginas y la pantalla dice cuántos hay de cuántos.
+   */
+  const productos = useInfiniteQuery({
     queryKey: ["negocio-productos", empresa.id, q],
-    queryFn: () =>
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) =>
       llamar<{ items: ProductoFila[]; total: number }>(
-        `/v1/products?with_price=1&with_stock=1&per_page=100${q === "" ? "" : `&search=${encodeURIComponent(q)}`}`,
+        `/v1/products?with_price=1&with_stock=1&per_page=${POR_PAGINA}&page=${pageParam}` +
+          (q === "" ? "" : `&search=${encodeURIComponent(q)}`),
       ),
+    getNextPageParam: (ultima, todas) => {
+      const cargados = todas.reduce((n, p) => n + p.items.length, 0);
+      return cargados < ultima.total ? todas.length + 1 : undefined;
+    },
   });
 
-  const items = productos.data?.items ?? [];
+  const items = productos.data?.pages.flatMap((p) => p.items) ?? [];
+  const total = productos.data?.pages[0]?.total ?? 0;
 
   return (
     <div className="space-y-4">
@@ -168,6 +182,23 @@ export function ProductosNegocio(): React.JSX.Element {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+          <span className="text-[0.86rem] text-muted-foreground">
+            Mostrando {items.length} de {total}
+          </span>
+          {productos.hasNextPage && (
+            <Button
+              variant="secondary"
+              onClick={() => void productos.fetchNextPage()}
+              disabled={productos.isFetchingNextPage}
+            >
+              {productos.isFetchingNextPage ? "Cargando…" : "Mostrar más"}
+            </Button>
+          )}
         </div>
       )}
 
@@ -418,9 +449,16 @@ export function AltaSimple({
                   />
                 )}
               </FormField>
-              <FormField label="Precio de venta (USD)" required>
+              {/* El precio NO es un campo del producto: se guarda como un
+                  renglón de la lista «detal». Decirlo aquí evita la duda de
+                  «¿y este precio compite con el de mis listas?» (2026-09-10). */}
+              <FormField label="Precio de venta al detal (USD)" required>
                 {(p) => <MoneyInput {...p} value={precio} onChange={setPrecio} currency="USD" />}
               </FormField>
+              <p className="text-[0.8rem] text-faint-foreground">
+                Se guarda en tu lista «detal». Si manejas otras listas, sus precios se ponen desde
+                Listas de precios.
+              </p>
               <EquivalenteBs amount={precio} currency={moneda} />
             </div>
           </div>

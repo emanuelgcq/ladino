@@ -121,10 +121,12 @@ export async function createProduct(
     fila = await sql.savepoint(async (sp) => {
       const [creada] = await sp<ProductRow[]>`
         insert into public.products
-          (tenant_id, company_id, sku, name, kind, unit_code, tax_category_code, category_id, barcode)
+          (tenant_id, company_id, sku, name, kind, unit_code, tax_category_code, category_id,
+           barcode, status)
         values (${scope.value.tenantId}, ${input.company_id}, ${input.sku}, ${input.name},
                 ${input.kind}, ${input.unit_code}, ${input.tax_category_code},
-                ${input.category_id ?? null}, ${input.barcode ?? null})
+                ${input.category_id ?? null}, ${input.barcode ?? null},
+                ${input.status ?? "active"})
         returning ${sp.unsafe(PRODUCT_COLUMNS)},
                   to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
       return creada!;
@@ -434,6 +436,10 @@ export async function createProductSimple(
       kind: esServicio ? "service" : "good",
       unit_code: input.unit_code ?? "unidad",
       tax_category_code: clasificacion,
+      // Nace vendible: el alta simple es el mostrador, no un borrador de
+      // catálogo. Desde 2026-09-10 lo dice el propio alta, así que ya no hace
+      // falta una segunda escritura para activarlo.
+      status: "active",
       ...(categoryId === undefined ? {} : { category_id: categoryId }),
       ...(input.barcode === undefined ? {} : { barcode: input.barcode }),
     });
@@ -450,14 +456,6 @@ export async function createProductSimple(
       message: "No se encontró un código libre para el producto. Intenta con uno manual.",
     });
   }
-
-  // Nace vendible: el alta simple es el mostrador, no un borrador de catálogo.
-  const activado = await updateProduct(uow, producto.id, {
-    company_id: input.company_id,
-    status: "active",
-  });
-  if (!activado.ok) return activado;
-  producto = activado.value;
 
   // El precio de detal en SU moneda; la lista se crea si no existe.
   const precio = await ponerPrecioEnLista(

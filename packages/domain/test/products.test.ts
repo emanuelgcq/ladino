@@ -88,7 +88,11 @@ describe("createProduct", () => {
     const r = await como(GESTOR, (uow) => createProduct(uow, { ...base, sku: `CAFE-${RUN}` }));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.value.status).toBe("draft");
+    // Nace VENDIBLE (2026-09-10). Antes nacía en `draft` y el alta devolvía
+    // «creado» dejando algo que no se podía vender ni aparecía en el
+    // mostrador — una trampa silenciosa. El borrador sigue existiendo, pero
+    // se pide (ver el caso de abajo).
+    expect(r.value.status).toBe("active");
     const [audit] = await sql<{ n: number }[]>`
       select count(*)::int as n from public.audit_events
        where aggregate_id = ${r.value.id} and event_type = 'product.created'`;
@@ -97,6 +101,15 @@ describe("createProduct", () => {
        where aggregate_id = ${r.value.id} and event_type = 'product.created'`;
     expect(audit?.n).toBe(1);
     expect(outbox?.n).toBe(1);
+  });
+
+  it("quien quiere un BORRADOR lo pide, y entonces sí nace en draft", async () => {
+    const r = await como(GESTOR, (uow) =>
+      createProduct(uow, { ...base, sku: `CAFE-BORR-${RUN}`, status: "draft" }),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.status).toBe("draft");
   });
 
   it("REEJECUCIÓN DIRECTA del cuerpo: muere en el único del esquema, con EL MENSAJE del caso de uso", async () => {

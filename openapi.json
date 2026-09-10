@@ -815,6 +815,13 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 64
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active"
+            ]
           }
         },
         "required": [
@@ -11826,10 +11833,15 @@
               ],
               "additionalProperties": false
             }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
-          "items"
+          "items",
+          "total"
         ],
         "additionalProperties": false
       },
@@ -12069,10 +12081,15 @@
               ],
               "additionalProperties": false
             }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
-          "items"
+          "items",
+          "total"
         ],
         "additionalProperties": false
       },
@@ -12181,10 +12198,15 @@
               ],
               "additionalProperties": false
             }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "required": [
-          "items"
+          "items",
+          "total"
         ],
         "additionalProperties": false
       },
@@ -12425,6 +12447,10 @@
               "additionalProperties": false
             }
           },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
           "total_functional": {
             "type": "string"
           },
@@ -12434,6 +12460,7 @@
         },
         "required": [
           "items",
+          "total",
           "total_functional",
           "functional_currency"
         ],

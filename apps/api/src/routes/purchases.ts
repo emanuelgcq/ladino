@@ -297,6 +297,12 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const { actor } = c.get("ladino.auth");
     const status = c.req.query("status") ?? "";
     const supplierId = c.req.query("supplier_id") ?? "";
+    // PAGINADO (2026-09-10). Antes: `limit 100` a secas — con más de cien
+    // facturas de proveedor, las siguientes no existían para la pantalla y
+    // nada lo decía. El `total` ya se calculaba; solo faltaba poder pedir
+    // la página siguiente.
+    const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 20) || 20, 1), 100);
+    const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigeLecturaDeCompras(tx, actor, companyId, [
         "purchase.invoice.register",
@@ -316,7 +322,8 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
          where i.company_id = ${companyId}
            ${status === "" ? tx`` : tx`and i.status = ${status}`}
            ${supplierId === "" ? tx`` : tx`and i.supplier_id = ${idValido(supplierId)}`}
-         order by i.invoice_date desc, i.id limit 100`;
+         order by i.invoice_date desc, i.id
+         limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
     });
     const total = filas.length > 0 ? (filas[0]!["total"] as number) : 0;
     return c.json({ items: filas.map(({ total: _t, ...r }) => r), total }, 200);

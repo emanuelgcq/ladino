@@ -95,6 +95,8 @@ export type IgtfPerceptionResponse = z.infer<typeof IgtfPerceptionResponse>;
 export const ListIgtfPerceptionsResponse = z
   .object({
     items: z.array(IgtfPerceptionResponse),
+    /** Cuantas hay EN TOTAL (paginado): distinto de las que vinieron. */
+    total: z.number().int().nonnegative(),
     /** Σ de lo PERCIBIDO (sin lo pendiente de reintegro), en funcional. */
     total_functional: z.string(),
     functional_currency: z.string(),

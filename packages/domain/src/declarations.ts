@@ -323,7 +323,7 @@ export async function generateIvaPeriod(
 export async function loadFiscalDeadlines(
   uow: UnitOfWork,
   input: LoadFiscalDeadlinesRequest,
-): Promise<Result<{ items: FiscalDeadlineResponse[] }, DeclarationsError>> {
+): Promise<Result<{ items: FiscalDeadlineResponse[]; total: number }, DeclarationsError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
     return err({
@@ -361,5 +361,7 @@ export async function loadFiscalDeadlines(
                 due_date::text as due_date, legal_source`;
     items.push(fila!);
   }
-  return ok({ items });
+  // `total` es lo que se acaba de cargar: aquí no hay paginación que valga,
+  // pero el contrato de la lista es uno solo y esta respuesta lo cumple.
+  return ok({ items, total: items.length });
 }

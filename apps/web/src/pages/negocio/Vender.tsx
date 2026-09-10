@@ -51,9 +51,11 @@ import { formatearDocumento } from "./comunes.js";
  * VARIAS CUENTAS A LA VEZ (orden del dueño, 2026-09-08): la cajera lleva
  * fichas — «Cuenta 1», «Vecina Carmen» — y cada una se guarda sola: en el
  * disco de la caja EN CADA TOQUE (síncrono: la capa antiapagón) y en la nube
- * al instante, coalescido (pos-cuentas.ts). Una cuenta solo se cierra al
- * COBRARSE — el servidor borra su fila en la transacción de la venta — o
- * descartándola a propósito con confirmación.
+ * CUANDO EL CARRITO SE QUEDA QUIETO (orden del dueño, 2026-09-10: subir en
+ * cada toque convertía un carrito de diez renglones en diez viajes de red).
+ * La nube también recibe de golpe al cambiar de ficha, al cobrar y al salir.
+ * Una cuenta solo se cierra al COBRARSE — el servidor borra su fila en la
+ * transacción de la venta — o descartándola a propósito con confirmación.
  *
  * Teclado, sin ratón: cédula → Enter → (si es nuevo: nombre → Tab → teléfono
  * → Enter) → buscar producto → Enter agrega → F2 abre Cobrar → Enter cobra.
@@ -135,8 +137,8 @@ export function Vender(): React.JSX.Element {
 
   // ── Las CUENTAS ABIERTAS: varias a la vez, cada una con su cliente ────────
   // Nacen del disco de la caja (síncrono: lo que el apagón no se llevó) y se
-  // completan con la nube al montar. Cada toque escribe el disco EN EL ACTO
-  // y dispara la nube coalescida — ver pos-cuentas.ts.
+  // completan con la nube al montar. Cada toque escribe el disco EN EL ACTO;
+  // la nube espera a que el carrito se quede quieto — ver pos-cuentas.ts.
   const [cuentas, setCuentas] = useState<CuentaAbierta[]>(() => {
     const locales = leerCuentasLocales(empresa.id);
     return locales.length > 0 ? locales : [cuentaNueva([])];
@@ -162,6 +164,11 @@ export function Vender(): React.JSX.Element {
       ),
     [llamar, empresa.id],
   );
+
+  // Al salir de Vender, lo pendiente sube: nadie se lleva un carrito a medias
+  // por cerrar la pestaña. (El disco local ya lo tenía; esto es para que la
+  // OTRA caja lo vea.)
+  useEffect(() => () => sincronizador.vaciar(), [sincronizador]);
 
   /** TODA mutación de cuentas pasa por aquí: estado + disco síncrono + nube. */
   function tocar(id: string, cambio: (c: CuentaAbierta) => CuentaAbierta): void {
@@ -495,7 +502,12 @@ export function Vender(): React.JSX.Element {
                     className={`max-w-40 truncate py-1.5 pl-2.5 text-[0.82rem] font-medium ${
                       esActiva ? "text-accent-soft-foreground" : "text-muted-foreground"
                     } ${cuentas.length > 1 ? "pr-0.5" : "pr-2.5"}`}
-                    onClick={() => setActivaId(c.id)}
+                    onClick={() => {
+                      // Cambiar de ficha SUBE la anterior: si la cajera se
+                      // va a otra cuenta, la que deja ya esta terminada.
+                      sincronizador.vaciar();
+                      setActivaId(c.id);
+                    }}
                   >
                     {c.cliente?.legal_name ?? c.etiqueta}
                     {c.lineas.length > 0 && (

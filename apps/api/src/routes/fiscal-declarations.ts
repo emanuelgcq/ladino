@@ -11,6 +11,28 @@ import { requireCompany } from "./products.js";
 
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * Página pedida, acotada. Estos listados llevaban un `limit` fijo y ningún
+ * `total`: al pasar del tope, las filas siguientes desaparecían **en
+ * silencio** — el mismo pecado que el módulo condena en los libros
+ * («un libro que reparte en silencio lo que no sabe clasificar produce una
+ * declaración falsa sin avisar a nadie»). Corregido el 2026-09-10.
+ */
+function paginaDe(c: { req: { query: (k: string) => string | undefined } }): [number, number] {
+  const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 50) || 50, 1), 200);
+  const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
+  return [porPagina, pagina];
+}
+
+/** `items` + el `total` REAL, para que la pantalla sepa si falta algo. */
+function cuerpoPaginado(filas: Record<string, unknown>[]): {
+  items: Record<string, unknown>[];
+  total: number;
+} {
+  const total = filas.length > 0 ? (filas[0]!["total"] as number) : 0;
+  return { items: filas.map(({ total: _t, ...r }) => r), total };
+}
+
 /** Período explícito u omitido ENTERO: medio período no reproduce nada. */
 function periodoOpcional(c: {
   req: { query: (k: string) => string | undefined };
@@ -91,6 +113,7 @@ export function fiscalDeclarationsRoutes(
     const { companyId } = requireCompany(c);
     const periodo = periodoOpcional(c);
     const { actor } = c.get("ladino.auth");
+    const [porPagina, pagina] = paginaDe(c);
     const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigeLectura(tx, actor, companyId);
       return tx<Record<string, unknown>[]>`
@@ -98,14 +121,15 @@ export function fiscalDeclarationsRoutes(
                base::text as base, rate::text as rate, amount::text as amount,
                functional_currency, status, annul_reason,
                to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
-                 as created_at
+                 as created_at,
+               count(*) over ()::int as total
           from public.supported_retention_receipts
          where company_id = ${companyId}
            ${periodo === null ? tx`` : tx`and retained_on between ${periodo[0]}::date and ${periodo[1]}::date`}
          order by retained_on desc, created_at desc
-         limit 500`;
+         limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
     });
-    return c.json({ items: filas }, 200);
+    return c.json(cuerpoPaginado(filas), 200);
   });
 
   app.post("/v1/fiscal-declarations/iva-periods", idempotencia, async (c) => {
@@ -128,6 +152,7 @@ export function fiscalDeclarationsRoutes(
     const { companyId } = requireCompany(c);
     const periodo = periodoOpcional(c);
     const { actor } = c.get("ladino.auth");
+    const [porPagina, pagina] = paginaDe(c);
     const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigeLectura(tx, actor, companyId);
       return tx<Record<string, unknown>[]>`
@@ -144,14 +169,15 @@ export function fiscalDeclarationsRoutes(
                  where c.id = ${companyId}) as functional_currency,
                generator_version, dataset_hash, created_by,
                to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
-                 as created_at
+                 as created_at,
+               count(*) over ()::int as total
           from public.iva_period_results
          where company_id = ${companyId}
            ${periodo === null ? tx`` : tx`and period_from >= ${periodo[0]}::date and period_to <= ${periodo[1]}::date`}
          order by period_from desc, created_at desc
-         limit 200`;
+         limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
     });
-    return c.json({ items: filas }, 200);
+    return c.json(cuerpoPaginado(filas), 200);
   });
 
   app.put("/v1/fiscal-declarations/deadlines", idempotencia, async (c) => {
@@ -174,17 +200,19 @@ export function fiscalDeclarationsRoutes(
     const { companyId } = requireCompany(c);
     const periodo = periodoOpcional(c);
     const { actor } = c.get("ladino.auth");
+    const [porPagina, pagina] = paginaDe(c);
     const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigeLectura(tx, actor, companyId);
       return tx<Record<string, unknown>[]>`
         select id, obligation, period_from::text as period_from, period_to::text as period_to,
-               due_date::text as due_date, legal_source
+               due_date::text as due_date, legal_source,
+               count(*) over ()::int as total
           from public.company_fiscal_deadlines
          where company_id = ${companyId}
            ${periodo === null ? tx`` : tx`and due_date between ${periodo[0]}::date and ${periodo[1]}::date`}
          order by due_date
-         limit 500`;
+         limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
     });
-    return c.json({ items: filas }, 200);
+    return c.json(cuerpoPaginado(filas), 200);
   });
 }
