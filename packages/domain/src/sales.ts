@@ -667,17 +667,31 @@ async function auditar(
     regime_version_id: doc.regime_version_id,
     ...extra,
   };
+  /**
+   * ACTA Y EVENTO EN UNA SOLA SENTENCIA (2026-09-10).
+   *
+   * Siempre van juntos y siempre en este orden: primero el acta, después el
+   * evento. Un CTE los escribe de una vez — misma transacción, mismas filas,
+   * mismos payloads, mismo orden — y ahorra una espera de red cada vez, que en
+   * una venta cobrada son cuatro (emisión, cobro, y sus dos del IGTF).
+   *
+   * `data` va primero en el CTE porque el orden de escritura importa para
+   * quien lea la traza: el acta es el hecho, el evento es su notificación.
+   */
   await sql`
-    insert into public.audit_events
-      (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
-       actor_type, occurred_at, rules_version, payload)
-    values (${tenantId}, ${doc.company_id}, 'document', ${doc.id}, ${evento},
-            'user', now(), ${RULES_VERSION}, ${sql.json(payload)})`;
-  await sql`
+    with acta as (
+      insert into public.audit_events
+        (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+         actor_type, occurred_at, rules_version, payload)
+      values (${tenantId}, ${doc.company_id}, 'document', ${doc.id}, ${evento},
+              'user', now(), ${RULES_VERSION}, ${sql.json(payload)})
+      returning 1
+    )
     insert into public.outbox
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
-    values (${tenantId}, ${doc.company_id}, 'document', ${doc.id}, ${evento}, 1,
-            ${sql.json({ document_id: doc.id, ...payload })})`;
+    select ${tenantId}, ${doc.company_id}, 'document', ${doc.id}, ${evento}, 1,
+           ${sql.json({ document_id: doc.id, ...payload })}
+      from acta`;
 }
 
 function ahora(fecha: string | undefined): string {
