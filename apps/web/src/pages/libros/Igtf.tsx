@@ -93,6 +93,7 @@ function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.E
   const [acta, setActa] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [enviando, setEnviando] = useState(false);
+  const [clasificando, setClasificando] = useState(false);
 
   async function activar(): Promise<void> {
     setError(null);
@@ -109,6 +110,35 @@ function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.E
       setError(e);
     } finally {
       setEnviando(false);
+    }
+  }
+
+  /**
+   * La CLASIFICACIÓN de la empresa (2026-09-10). Activar el IGTF exige ser
+   * sujeto pasivo especial, y hasta ahora, si no lo eras, el botón fallaba con
+   * un mensaje y NO había pantalla en toda la aplicación donde corregirlo: el
+   * endpoint existía sin puerta. La puerta va aquí, que es donde se topa uno
+   * con el requisito.
+   */
+  async function marcarEspecial(): Promise<void> {
+    setError(null);
+    setClasificando(true);
+    try {
+      await llamar("/v1/companies/taxpayer-type", {
+        method: "PUT",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ company_id: empresa.id, taxpayer_type_code: "especial" }),
+      });
+      toast.success(
+        "Empresa clasificada como sujeto pasivo especial",
+        "Queda en la auditoría con su valor anterior. Ya puedes activar la percepción.",
+      );
+      await qc.invalidateQueries({ queryKey: ["igtf-status", empresa.id] });
+      await qc.invalidateQueries({ queryKey: ["empresas"] });
+    } catch (e) {
+      setError(e);
+    } finally {
+      setClasificando(false);
     }
   }
 
@@ -129,6 +159,20 @@ function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.E
             {estado.legal_source}
           </p>
         )}
+        <div className="rounded-md border border-border bg-surface-muted px-3 py-2">
+          <p className="text-[0.88rem]">
+            ¿El SENIAT designó a esta empresa <strong>sujeto pasivo especial</strong> y aún no está
+            marcada así en Ladino?
+          </p>
+          <Button
+            variant="secondary"
+            className="mt-2"
+            onClick={() => void marcarEspecial()}
+            disabled={clasificando}
+          >
+            {clasificando ? "Guardando…" : "Marcarla como sujeto pasivo especial"}
+          </Button>
+        </div>
         <FormField label="Por qué esta empresa percibe (queda en la auditoría)">
           {(a) => (
             <Textarea
