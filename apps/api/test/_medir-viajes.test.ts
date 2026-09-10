@@ -83,6 +83,7 @@ async function pedir(metodo: string, path: string, body?: unknown): Promise<Resp
  * total de sentencias y no vería el pipelining — es lo que no hay que medir.
  */
 const emisiones: number[] = [];
+const textos: string[] = [];
 function tandas(desde: number): { sentencias: number; esperas: number } {
   const t = emisiones.slice(desde);
   let esperas = 0;
@@ -96,7 +97,10 @@ function tandas(desde: number): { sentencias: number; esperas: number } {
 
 beforeAll(async () => {
   sql = createClient(URL_LOCAL);
-  sqlApi = createClient(URL_API, () => emisiones.push(performance.now()));
+  sqlApi = createClient(URL_API, (q) => {
+    emisiones.push(performance.now());
+    textos.push(q);
+  });
   app = buildApp({ sql: sqlApi, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
   await sql`insert into auth.users (id) values (${CAJERO}) on conflict (id) do nothing`;
 
@@ -239,6 +243,14 @@ describe("MEDICION de round-trips", () => {
       `\n=== venta de 4 lineas + 1 pago en divisa: ${m.sentencias} sentencias, ` +
         `${m.esperas} ESPERAS DE RED (lo que paga latencia) ===\n`,
     );
+    const conteo = new Map<string, number>();
+    for (const q of textos.slice(antes)) {
+      const k = q.replace(/s+/g, " ").trim().slice(0, 52);
+      conteo.set(k, (conteo.get(k) ?? 0) + 1);
+    }
+    const top = [...conteo.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+    // eslint-disable-next-line no-console
+    for (const [q, n] of top) console.log(`  ${String(n).padStart(3)}x ${q}`);
     expect(m.esperas).toBeGreaterThan(0);
   });
 });
