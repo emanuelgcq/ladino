@@ -1,3 +1,118 @@
+# Handoff — 2026-09-11 (18ª entrega) — cambio de PC
+
+> **Si eres Claude en una máquina nueva, lee en este orden:**
+> 1. `docs/00_GOVERNANCE/claude-memory/README.md` y la memoria que enlaza
+>    (no viaja con `git clone`; esa carpeta es la copia).
+> 2. Esta entrega.
+> 3. `docs/00_GOVERNANCE/sesiones/2026-09-10-produccion-cobro-auditoria-igtf.md`
+>    — la conversación completa, curada y sin secretos.
+>
+> `CLAUDE.md` §9 dice «Sprint 0 — nada construido»: **está desactualizado**,
+> Ladino está en producción desde 2026-09-07.
+
+## Estado
+
+Ladino **en producción** (web `app.ladinosystem.com`, API
+`api.ladinosystem.com`). En esta sesión se cerró: datos de volumen para la
+empresa «Ladino», optimización del cobro (140 → 94 viajes por venta), la
+auditoría visual del frontend (once defectos), el refresco al cambiar de
+pestaña del navegador, y ADR-0053 (la percepción de IGTF a la moneda).
+**Nada de esto está desplegado en el VPS**, que va por detrás del repositorio.
+
+## Hecho en esta sesión
+
+| Commit | Qué |
+|---|---|
+| `7800281` | Paginación que escondía filas, productos que nacían en borrador, caja que guardaba en cada consulta |
+| `fc808cc`, `11af83e` | Reprocesar la cola de asientos pendientes (ADR-0042) + botón «Contabilizar los pendientes» |
+| `688be35`, `88dc06f`, `3a3f501` | Cobro: líneas en una sentencia, acta+outbox en una CTE, papeles resueltos una vez |
+| `a32811c`, `00ede7e` | Kardex del carrito en un lote (Fase 2) + medidor de sentencias |
+| `abac189` | Marcar la empresa como sujeto pasivo especial desde IGTF |
+| `0088828` | Auditoría visual: once defectos de visualización |
+| `f56d239` | Renovar el token ya no manda la app a «Cargando permisos…» |
+| `b4ca221` | ADR-0053 + migración 47: la percepción de IGTF se redondea a la moneda |
+
+## En vuelo (incompleto)
+
+- **Migración 47 NO aplicada en producción.** El remoto tiene hasta la 46.
+  Es segura de aplicar en cualquier momento ANTES de la API nueva (su default
+  de transición mantiene cobrando a la API vieja).
+- **Quitar el default de `igtf_perceptions.rounding_policy_id`**: migración
+  nueva, pero SOLO después de que la API con ADR-0053 esté viva en el VPS. Si se
+  quita antes, la API vieja deja de poder percibir.
+- `/v1/documents` no trae el nombre del cliente: la web baja el maestro entero
+  para pintar 25 filas (`components/nombres-cliente.ts`, marcado PENDIENTE).
+  Aguanta con 151 clientes, no con 5.000. Es cambio de contrato → aprobación.
+
+## Decisiones tomadas
+
+- IGTF a la escala ISO-4217 de su moneda, modo `HALF_UP` con nombre propio
+  (`MODO_IGTF`), política persistida en cada fila. **ADR-0053 creado.** Las 166
+  percepciones históricas no se tocan: quedan etiquetadas con la regla que de
+  verdad se les aplicó (8, HALF_UP).
+- La cola de 1.527 asientos: el dueño eligió **«todavía no»** (2026-09-10).
+- Volver a la pestaña ya no relee todas las consultas
+  (`refetchOnWindowFocus: false`): se relee al navegar, al montar y tras cada
+  mutación.
+- Palanca 1 (pipelining) descartada por medición: postgres.js serializa dentro
+  de una transacción.
+
+## Decisiones pendientes del usuario
+
+1. **Desplegar** (con tu «go»), en este orden:
+   1. aplicar la migración 47 al remoto — el patrón de siempre: el SQL de
+      `supabase/migrations/20260910190000_igtf_rounding_policy.sql` por la
+      Management API (`/database/query`) con el token como variable de entorno
+      de esa orden, y registrar la versión en
+      `supabase_migrations.schema_migrations`;
+   2. `REQUEST_TIMEOUT_MS=90000` en el env de la API (lo pegas tú en nano);
+   3. en el VPS: `cd /opt/apps/ladino && git pull && docker compose up -d --build api web`;
+   4. comprobar un cobro en divisa: `rounding_policy_id` debe salir
+      `igtf:perception:2:HALF_UP` y el importe con dos decimales.
+2. **Reprocesar la cola** (754 facturas, 673 cobros, 99 percepciones): botón
+   «Contabilizar los pendientes» en Administración → Contabilidad. Es lo que
+   hace que «Utilidad estimada» deje de ser igual a «Ventas del mes». Escribe
+   ~1.527 asientos posteados reales; después, `accounting_coverage_gaps()` debe
+   dar cero.
+3. **La cuenta semilla `seed-0dd23796@ladinosystem.com`** tiene rol Dueño en
+   la empresa «Ladino» de producción y su contraseña solo existe en la máquina
+   vieja. ¿Desactivarla, resetearle la contraseña o dejarla?
+4. **Siete endpoints sin pantalla**: `GET`/`PUT /v1/me/profile`,
+   `GET`/`POST /v1/product-templates`, `GET /v1/inventory/stock-by-template`,
+   `GET /v1/inventory/suggest-lot`, `GET /v1/branches`. ¿Se construyen?
+5. **Rotar el token `sbp_`** de gestión de Supabase (circuló en el chat).
+6. Siguiente palanca de latencia: **5 pares begin/commit por venta** (16 % de
+   las sentencias), o co-ubicar VPS y base (hoy Boston ↔ us-west-2, ~75 ms por
+   viaje).
+7. Actualizar `CLAUDE.md` §9 al estado real.
+
+## Bloqueantes
+
+- **VALIDAR-SENIAT — modo de redondeo de la percepción** (`MODO_IGTF =
+  "HALF_UP"`, `packages/domain/src/sales.ts`). La escala no está en duda.
+- **VALIDAR-TRIBUTARIO — 13 de 1.210 documentos** tienen totales con más de dos
+  decimales (`sales:document:8:HALF_UP`): la misma pregunta que el IGTF, a
+  escala de documento. Va al asesor junto con `PENDIENTES_ASESOR.md` (P-3 sigue
+  siendo el más caro de resolver tarde).
+
+## Siguiente paso concreto
+
+Con el «go» del dueño: aplicar la migración 47 a Supabase Cloud y reconstruir
+`api` y `web` en el VPS con `REQUEST_TIMEOUT_MS=90000`; después cobrar un pago
+en USD y comprobar que la percepción sale a dos decimales con
+`rounding_policy_id = igtf:perception:2:HALF_UP`.
+
+## Estado del repo
+
+- Rama `main`, último commit de código `b4ca221`; esta entrega va en el commit
+  siguiente.
+- Migraciones: **47 en el repo**, **46 aplicadas en producción**.
+- `pnpm verify` **verde**: `VERIFY EXIT=0`, pgTAP 44 ficheros / 1.057 tests,
+  vitest domain 49 · api 277 · web 20 · worker 19.
+- **Con una migración nueva, `pnpm db:reset` ANTES del verify**: los E2E del
+  paso 5 corren contra la base local vieja y la migración solo se aplica en el
+  paso 10 (visto con la 47: cuatro E2E en 500).
+
 # Handoff — 2026-09-09 (17ª entrega)
 
 ## Declaraciones de IVA + IGTF: Ladino ya sabe cuánto se debe declarar
