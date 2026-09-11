@@ -34,6 +34,7 @@ import {
   deletePosCart,
   createDirectCreditNote,
   createDebitNote,
+  avisoIgtf,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -446,18 +447,18 @@ export function salesRoutes(
          where c.id = ${companyId}`;
       const aplica =
         gate?.enabled === true && gate.causes && gate.rate !== null && currency !== gate.moneda;
-      if (!aplica) {
+      if (!aplica || gate.rate === null) {
         return { applies: false, rate: null, base: amount, currency, amount: null };
       }
-      const [calc] = await tx<{ monto: string }[]>`
-        select round(${amount}::numeric * ${gate.rate}::numeric, 8)::text as monto`;
-      return {
-        applies: true,
-        rate: gate.rate,
-        base: amount,
-        currency,
-        amount: calc!.monto,
-      };
+      // El MISMO redondeo que escribe el cobro (ADR-0053). Antes se calculaba
+      // aquí con un `round(..., 8)` en SQL: dos sitios que redondean por su
+      // cuenta es la manera segura de que la caja enseñe un número y el cobro
+      // escriba otro.
+      const calc = avisoIgtf(amount, gate.rate, currency);
+      if (!calc.ok) {
+        throw new DominioError({ code: "VALIDATION_FAILED", message: calc.error.message });
+      }
+      return { applies: true, rate: gate.rate, base: amount, currency, amount: calc.value };
     });
     return c.json(cuerpo, 200);
   });

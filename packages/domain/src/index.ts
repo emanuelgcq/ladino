@@ -56,6 +56,8 @@ export {
   confirmReturn,
   quotePos,
   quickSale,
+  percibirIgtf,
+  avisoIgtf,
   type SalesError,
 } from "./sales.js";
 export {

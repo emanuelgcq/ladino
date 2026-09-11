@@ -1,6 +1,16 @@
 import { err, ok, type Result } from "@ladino/core";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
-import { Money, parseDecimal, type Decimal, type RoundingPolicy } from "@ladino/money";
+import {
+  currencyDefinition,
+  Money,
+  parseCurrency,
+  parseDecimal,
+  roundForTax,
+  type CurrencyCode,
+  type Decimal,
+  type RoundingMode,
+  type RoundingPolicy,
+} from "@ladino/money";
 import { listedPriceOf, resolvePrice } from "@ladino/pricing";
 import {
   calculateLine,
@@ -64,6 +74,86 @@ export type SalesError =
 
 /** Política de redondeo del documento. Se persiste con cada línea (ADR-0024). */
 const DOC_POLICY: RoundingPolicy = { id: "sales:document:8:HALF_UP", scale: 8, mode: "HALF_UP" };
+
+/**
+ * Modo de redondeo de la percepción de IGTF (ADR-0053).
+ *
+ * Tiene nombre propio —como `ISO_PRESENTATION_MODE` en `packages/money`— para
+ * que el día que el contador confirme el modo el cambio sea UNA línea que se
+ * encuentra con `grep`, y porque viaja dentro del `rounding_policy_id` de cada
+ * fila: ninguna percepción queda redondeada por un criterio que no se pueda
+ * leer después.
+ *
+ * VALIDAR-SENIAT: `HALF_UP` es el mismo modo que usa el resto del cobro
+ * (`sales:document:8:HALF_UP`); que sea el que corresponde a la percepción lo
+ * confirma el contador.
+ */
+const MODO_IGTF: RoundingMode = "HALF_UP";
+
+/**
+ * La percepción, redondeada a lo que esa moneda sabe cobrar (ADR-0053).
+ *
+ * La escala NO se elige aquí: son las minor units ISO-4217 de la moneda, que
+ * son metadato de la moneda y no interpretación fiscal
+ * (MONEY_AND_ROUNDING_SPEC §6.1). Antes se redondeaba a ocho decimales y salía
+ * a cobrar USD 1,0635 — un importe que nadie puede pagar.
+ *
+ * Vive en el dominio y NO en la ruta a propósito: el aviso que la caja enseña
+ * antes de cobrar (`/v1/pos/igtf`) usa esta misma función. Dos redondeos
+ * separados es la manera segura de que la pantalla diga un número y el cobro
+ * escriba otro.
+ */
+export function percibirIgtf(
+  base: Decimal,
+  factor: Decimal,
+  moneda: string,
+): Result<{ monto: Decimal; policy: RoundingPolicy }, { code: "MONEY_ERROR"; message: string }> {
+  const regla = politicaIgtfDe(moneda);
+  if (regla === null) {
+    return err({ code: "MONEY_ERROR", message: `Moneda no registrada: ${moneda}.` });
+  }
+  const redondeado = roundForTax(
+    { amount: base.times(factor), currency: regla.code },
+    regla.policy,
+  );
+  if (!redondeado.ok) {
+    return err({ code: "MONEY_ERROR", message: redondeado.error.message });
+  }
+  return ok({ monto: redondeado.value.value.amount, policy: regla.policy });
+}
+
+/**
+ * El aviso de caja (`/v1/pos/igtf`): la MISMA regla, con los importes como
+ * viajan por la API. Devuelve el string canónico de 8 decimales.
+ */
+export function avisoIgtf(
+  base: string,
+  tasa: string,
+  moneda: string,
+): Result<string, { code: "MONEY_ERROR"; message: string }> {
+  const b = parseDecimal(base);
+  const t = parseDecimal(tasa);
+  if (!b.ok || !t.ok) {
+    return err({ code: "MONEY_ERROR", message: "Importe o tasa de IGTF no interpretables." });
+  }
+  const r = percibirIgtf(b.value, t.value, moneda);
+  return r.ok ? ok(r.value.monto.toFixed(8)) : r;
+}
+
+/** La política de la percepción EN esa moneda: la escala la manda ISO-4217. */
+function politicaIgtfDe(moneda: string): { code: CurrencyCode; policy: RoundingPolicy } | null {
+  const code = parseCurrency(moneda);
+  if (!code.ok) return null;
+  const escala = currencyDefinition(code.value).minorUnits;
+  return {
+    code: code.value,
+    policy: {
+      id: `igtf:perception:${String(escala)}:${MODO_IGTF}`,
+      scale: escala,
+      mode: MODO_IGTF,
+    },
+  };
+}
 const JURISDICTION = "VE";
 const TAX_CODE = "iva";
 
@@ -1592,16 +1682,27 @@ export async function registerPayment(
       if (!tasaIgtf.ok) {
         return err({ code: "VALIDATION_FAILED", message: "Tasa de IGTF no interpretable." });
       }
-      const monto = importe.value.amount.times(tasaIgtf.value).toDecimalPlaces(8, 4);
-      const funcional = monto.times(tasaCobroDec.value).toDecimalPlaces(8, 4);
+      // ADR-0053: se redondea a lo que la moneda sabe cobrar. El funcional se
+      // calcula desde el importe YA redondeado —lo que entra en caja es lo que
+      // se le cobró al cliente, no el exacto que nadie pagó.
+      const percibido = percibirIgtf(importe.value.amount, tasaIgtf.value, input.currency);
+      if (!percibido.ok) {
+        return err({ code: "VALIDATION_FAILED", message: percibido.error.message });
+      }
+      const monto = percibido.value.monto;
+      const enLibros = percibirIgtf(monto, tasaCobroDec.value, ctx.value.functionalCurrency);
+      if (!enLibros.ok) {
+        return err({ code: "VALIDATION_FAILED", message: enLibros.error.message });
+      }
+      const funcional = enLibros.value.monto;
       const [fila] = await sql<Record<string, unknown>[]>`
         insert into public.igtf_perceptions
           (tenant_id, company_id, payment_id, document_id, base_amount, currency, rate,
-           amount, functional_amount, fx_rate, rate_source, occurred_at)
+           amount, functional_amount, fx_rate, rate_source, rounding_policy_id, occurred_at)
         values (${ctx.value.tenantId}, ${input.company_id}, ${pago["id"] as string},
                 ${input.document_id}, ${input.amount}, ${input.currency}, ${gate.rate},
                 ${monto.toFixed(8)}, ${funcional.toFixed(8)}, ${tasaCobro}, ${fuenteCobro},
-                ${fecha})
+                ${enLibros.value.policy.id}, ${fecha})
         returning id, base_amount::text as base_amount, currency, rate::text as rate,
                   amount::text as amount, functional_amount::text as functional_amount`;
       percepcion = fila!;
@@ -1613,6 +1714,7 @@ export async function registerPayment(
         rate: gate.rate,
         amount: monto.toFixed(8),
         functional_amount: funcional.toFixed(8),
+        rounding_policy_id: enLibros.value.policy.id,
         legal_source: gate.source,
       });
       // Su asiento propio: Dr caja (lo percibido ENTRA, además del cobro) /

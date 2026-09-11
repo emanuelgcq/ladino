@@ -104,14 +104,20 @@ interface CobroHecho {
  * Lo que DEBE valer la percepción de un pago, calculado en Postgres con
  * `numeric` — la regla 7 no tiene excepción para los tests: un `Number` aquí
  * probaría la aritmética de coma flotante, no la del sistema.
+ *
+ * A dos decimales desde ADR-0053, que son las minor units de USD y de VES, y
+ * el funcional desde el importe YA redondeado. El `round()` de Postgres es
+ * half-away-from-zero, que sobre importes positivos es el HALF_UP de la
+ * política: el oráculo no reusa la función que prueba.
  */
 async function percepcionEsperada(
   montoDivisa: string,
   tasa: string,
 ): Promise<{ enDivisa: string; funcional: string }> {
   const [r] = await sql<{ divisa: string; funcional: string }[]>`
-    with igtf as (select round(${montoDivisa}::numeric * 0.03, 8) as monto)
-    select monto::text as divisa, round(monto * ${tasa}::numeric, 8)::text as funcional
+    with igtf as (select round(${montoDivisa}::numeric * 0.03, 2) as monto)
+    select round(monto, 8)::text as divisa,
+           round(round(monto * ${tasa}::numeric, 2), 8)::text as funcional
       from igtf`;
   return { enDivisa: r!.divisa, funcional: r!.funcional };
 }
@@ -382,6 +388,57 @@ describe("IGTF — la percepción es POR PAGO", () => {
     expect(cuerpo.items[0]!.status).toBe("percibido");
     expect(cuerpo.total_functional).toBe(cuerpo.items[0]!.functional_amount);
     expect(cuerpo.functional_currency).toBe("VES");
+  });
+});
+
+describe("IGTF — ADR-0053: se percibe lo que la moneda sabe cobrar", () => {
+  it("un 3 % que no cae en un céntimo se redondea, y el aviso dice lo MISMO que el cobro", async () => {
+    // 35,45 × 3 % = 1,0635 — antes se cobraba así, cuatro decimales de un
+    // dólar que nadie puede pagar. 1,06 es lo que la moneda sabe cobrar.
+    const r = await pedir("GET", "/v1/pos/igtf?amount=35.45&currency=USD&instrument=zelle");
+    expect(r.status).toBe(200);
+    const aviso = (await r.json()) as { amount: string };
+    expect(aviso.amount).toBe("1.06000000");
+
+    const doc = await facturar("2");
+    const pago = await pedir("POST", "/v1/payments", {
+      company_id: COMPANY,
+      document_id: doc["id"],
+      currency: "USD",
+      amount: "35.45",
+      instrument: "zelle",
+    });
+    expect(pago.status).toBe(201);
+    const cobro = (await pago.json()) as CobroHecho;
+    // LA MISMA cifra que enseñó la caja: una sola regla en el dominio.
+    expect(cobro.igtf!.amount).toBe(aviso.amount);
+    const esperado = await percepcionEsperada("35.45", cobro.payment.fx_rate);
+    expect(cobro.igtf!.amount).toBe(esperado.enDivisa);
+    expect(cobro.igtf!.functional_amount).toBe(esperado.funcional);
+
+    // Y la fila dice con qué regla se calculó (la spec no admite un
+    // functional_amount sin su rounding_policy_id).
+    const [fila] = await sql<{ rounding_policy_id: string }[]>`
+      select rounding_policy_id from public.igtf_perceptions where id = ${cobro.igtf!.id}`;
+    expect(fila!.rounding_policy_id).toBe("igtf:perception:2:HALF_UP");
+
+    // El asiento, cuadrado por el funcional REDONDEADO: lo que entró en caja.
+    const [asiento] = await sql<{ debe: string; haber: string }[]>`
+      select sum(l.debit_amount)::text as debe, sum(l.credit_amount)::text as haber
+        from public.journal_entries e
+        join public.journal_lines l on l.entry_id = e.id
+       where e.company_id = ${COMPANY} and e.source_kind = 'igtf_perception'
+         and e.source_id = ${cobro.igtf!.id}`;
+    expect(asiento!.debe).toBe(esperado.funcional);
+    expect(asiento!.haber).toBe(esperado.funcional);
+  });
+
+  it("en el empate exacto manda HALF_UP (el modo con nombre, VALIDAR-SENIAT)", async () => {
+    // 1,50 × 3 % = 0,045: HALF_UP da 0,05; HALF_EVEN daría 0,04. Si alguien
+    // cambia el modo sin cambiar la política, este caso lo ve.
+    const r = await pedir("GET", "/v1/pos/igtf?amount=1.50&currency=USD&instrument=zelle");
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { amount: string }).amount).toBe("0.05000000");
   });
 });
 
