@@ -21,6 +21,24 @@ export type CustomerError =
   | { code: "DUPLICATE"; message: string }
   | { code: "VALIDATION_FAILED"; message: string };
 
+/**
+ * Qué tipo de contraparte declara cada prefijo del RIF (ADR-0033). J = persona
+ * jurídica, G = ente público, ambos contribuyentes ordinarios; P = extranjera
+ * no domiciliada; V/E (cédula) o sin documento = persona natural, consumidor
+ * final. VALIDAR-SENIAT: el prefijo no dice si un V es contribuyente ordinario
+ * (puede serlo); quien lo sepa lo corrige en la ficha.
+ */
+export function clasificacionPorPrefijo(taxId: string | null): {
+  persona: string;
+  contribuyente: string;
+} {
+  const prefijo = (taxId ?? "").trim().charAt(0).toUpperCase();
+  if (prefijo === "J") return { persona: "juridica", contribuyente: "ordinario" };
+  if (prefijo === "G") return { persona: "gobierno", contribuyente: "ordinario" };
+  if (prefijo === "P") return { persona: "extranjera", contribuyente: "no_domiciliado" };
+  return { persona: "natural", contribuyente: "consumidor_final" };
+}
+
 const COLUMNS = `id, tenant_id, company_id, tax_id, legal_name, trade_name, person_type_code,
   taxpayer_type_code, fiscal_address, email, phone, status, default_price_list_id,
   to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
@@ -73,8 +91,13 @@ export async function createCustomer(
   if (scope.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
   }
+  // La clasificación que la web no manda se infiere del prefijo del RIF: es
+  // regla tributaria y vive aquí, no en los componentes (CLAUDE.md §2).
+  const inferido = clasificacionPorPrefijo(input.tax_id ?? null);
+  const personTypeCode = input.person_type_code ?? inferido.persona;
+  const taxpayerTypeCode = input.taxpayer_type_code ?? inferido.contribuyente;
   // D-2, dicho con palabras antes de que lo diga el CHECK: sin RIF, solo persona natural.
-  if ((input.tax_id ?? null) === null && input.person_type_code !== "natural") {
+  if ((input.tax_id ?? null) === null && personTypeCode !== "natural") {
     return err({
       code: "VALIDATION_FAILED",
       message: "Solo una persona natural puede registrarse sin RIF.",
@@ -84,7 +107,7 @@ export async function createCustomer(
   // (ADR-0033; el snapshot de la migración 33 lo congela en el documento).
   // Para persona natural o extranjera es opcional.
   if (
-    (input.person_type_code === "juridica" || input.person_type_code === "gobierno") &&
+    (personTypeCode === "juridica" || personTypeCode === "gobierno") &&
     (input.fiscal_address ?? "").trim() === ""
   ) {
     return err({
@@ -95,9 +118,9 @@ export async function createCustomer(
   }
   const [cats] = await sql<{ persona: boolean; fiscal: boolean }[]>`
     select exists (select 1 from public.person_types
-                    where code = ${input.person_type_code} and status = 'active') as persona,
+                    where code = ${personTypeCode} and status = 'active') as persona,
            exists (select 1 from public.taxpayer_types
-                    where code = ${input.taxpayer_type_code} and status = 'active') as fiscal`;
+                    where code = ${taxpayerTypeCode} and status = 'active') as fiscal`;
   if (!cats?.persona || !cats.fiscal) {
     return err({
       code: "VALIDATION_FAILED",
@@ -115,8 +138,8 @@ export async function createCustomer(
           (tenant_id, company_id, tax_id, legal_name, trade_name, person_type_code,
            taxpayer_type_code, fiscal_address, email, phone, status, default_price_list_id)
         values (${scope.value.tenantId}, ${input.company_id}, ${input.tax_id ?? null},
-                ${input.legal_name}, ${input.trade_name ?? null}, ${input.person_type_code},
-                ${input.taxpayer_type_code}, ${input.fiscal_address ?? null},
+                ${input.legal_name}, ${input.trade_name ?? null}, ${personTypeCode},
+                ${taxpayerTypeCode}, ${input.fiscal_address ?? null},
                 ${input.email ?? null}, ${input.phone ?? null}, ${input.status ?? "active"},
                 ${input.default_price_list_id ?? null})
         returning ${sp.unsafe(COLUMNS)}`;

@@ -3,11 +3,13 @@ import { Link, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDownToLine, RefreshCw, Store, TrendingUp, TriangleAlert, Wallet } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { errorDePersona } from "../../lib.js";
 import { mostrarImporte, mostrarCantidad } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
 import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
 import { fechaRelativa } from "./comunes.js";
+import { hoyLocal, diaLocalMas } from "../../fechas.js";
 
 /**
  * INICIO (Fase C, PARTE 12): cómo va el negocio, de un vistazo. El número
@@ -48,9 +50,12 @@ interface Resumen {
 }
 
 export function Inicio(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const navigate = useNavigate();
   const [ventana, setVentana] = useState<"hoy" | "mes">("hoy");
+  // La deuda vive en la administración: el enlace solo para quien puede
+  // entrar ahí (el mismo gate que en Mi dinero).
+  const puedeVerDeuda = puede(["customer.tax_id.manage", "accounting.read"]);
 
   const resumen = useQuery({
     queryKey: ["negocio-resumen", empresa.id],
@@ -77,8 +82,8 @@ export function Inicio(): React.JSX.Element {
   const recordatorios: { texto: string; a: string }[] = [];
   // Los que vencen dentro de la ventana de anticipación (5 días por defecto,
   // orden del dueño) y los ya vencidos sin declarar.
-  const HOY = new Date().toISOString().slice(0, 10);
-  const LIMITE = new Date(Date.now() + DIAS_DE_AVISO * 86_400_000).toISOString().slice(0, 10);
+  const HOY = hoyLocal();
+  const LIMITE = diaLocalMas(DIAS_DE_AVISO);
   for (const v of vencimientos.data?.items ?? []) {
     if (v.due_date > LIMITE) continue;
     recordatorios.push({
@@ -102,13 +107,39 @@ export function Inicio(): React.JSX.Element {
         a: "/inventario",
       });
     }
-    if (!esCero(r.lo_que_me_deben)) {
+    if (!esCero(r.lo_que_me_deben) && puedeVerDeuda) {
       recordatorios.push({
         texto: `Te deben ${mostrarImporte({ amount: r.lo_que_me_deben, currency: moneda })}. Un mensaje a tiempo cobra la mitad.`,
         // La deuda vive en la administración (decisión del dueño, 2026-09-05).
         a: "/admin/clientes",
       });
     }
+  }
+
+  // El resumen no cargó: se dice y se reintenta, en vez de un «…» eterno
+  // (auditoría 2026-09-11).
+  if (resumen.isError) {
+    return (
+      <div className="mx-auto max-w-4xl space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold">Inicio</h1>
+          <Button variant="primary" size="lg" onClick={() => void navigate("/vender")}>
+            <Store /> Vender
+          </Button>
+        </div>
+        <Card role="alert">
+          <CardContent className="py-8 text-center">
+            <p className="font-medium">No se pudo cargar cómo va el negocio</p>
+            <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
+              {errorDePersona(resumen.error)}
+            </p>
+            <Button variant="secondary" className="mt-4" onClick={() => void resumen.refetch()}>
+              <RefreshCw /> Reintentar
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -123,7 +154,11 @@ export function Inicio(): React.JSX.Element {
       {/* El número grande: lo vendido, con su ventana. */}
       <Card>
         <CardContent className="py-6 text-center">
-          <div className="mb-2 inline-flex rounded-full border border-border p-0.5">
+          <div
+            className="mb-2 inline-flex rounded-full border border-border p-0.5"
+            role="group"
+            aria-label="Período"
+          >
             {(
               [
                 ["hoy", "Hoy"],
@@ -132,6 +167,8 @@ export function Inicio(): React.JSX.Element {
             ).map(([clave, etiqueta]) => (
               <button
                 key={clave}
+                type="button"
+                aria-pressed={ventana === clave}
                 onClick={() => setVentana(clave)}
                 className={`rounded-full px-3 py-1 text-[0.85rem] ${
                   ventana === clave
@@ -191,12 +228,18 @@ export function Inicio(): React.JSX.Element {
             <p className="mt-1 text-xl font-semibold tabular-nums">
               {r !== null ? mostrarImporte({ amount: r.lo_que_me_deben, currency: moneda }) : "…"}
             </p>
-            <Link
-              to="/admin/clientes"
-              className="text-[0.8rem] text-accent-soft-foreground hover:underline"
-            >
-              Ver quién
-            </Link>
+            {puedeVerDeuda ? (
+              <Link
+                to="/admin/clientes"
+                className="text-[0.8rem] text-accent-soft-foreground hover:underline"
+              >
+                Ver quién
+              </Link>
+            ) : (
+              <p className="text-[0.8rem] text-muted-foreground">
+                El detalle lo ve quien administra.
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card>

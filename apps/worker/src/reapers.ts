@@ -106,7 +106,10 @@ export async function reaperIdempotencia(
                body: { code: "IDEMPOTENCY_ORPHANED", message: "liberada por el reaper" },
              })}
        where status = 'in_progress'
-         and created_at < now() - make_interval(mins => ${minutos})
+         -- claimed_at, no created_at: una llave rehabilitada nace «vieja» por
+         -- created_at y el reaper la mataba con el caso de uso aún corriendo
+         -- (auditoría 2026-09-11, A-25; migración 49).
+         and claimed_at < now() - make_interval(mins => ${minutos})
       returning id`;
     return { liberadas: liberadas.length };
   });

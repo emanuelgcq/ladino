@@ -31,6 +31,7 @@ import { SimpleSelect } from "../../ui/select.js";
 import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
+import { fechaLocal } from "../../fechas.js";
 
 /**
  * MI DINERO (Fase C, PARTE 11): «¿dónde está mi plata?» en una pantalla.
@@ -73,6 +74,31 @@ interface Cierre {
 }
 
 const ICONO_CUENTA = { cash: Banknote, bank: Landmark, wallet: Smartphone } as const;
+
+/** Un bloque que no pudo cargar: el motivo y el reintento, nunca un «…» eterno. */
+function ErrorDeBloque({
+  titulo,
+  error,
+  onReintentar,
+}: {
+  titulo: string;
+  error: unknown;
+  onReintentar: () => void;
+}): React.JSX.Element {
+  return (
+    <Card role="alert">
+      <CardContent className="py-6 text-center">
+        <p className="font-medium">{titulo}</p>
+        <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
+          {errorDePersona(error)}
+        </p>
+        <Button variant="secondary" className="mt-3" onClick={onReintentar}>
+          Reintentar
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
 
 const TIPOS_CUENTA = [
   { value: "cash", label: "Caja (efectivo)" },
@@ -131,6 +157,9 @@ export function Dinero(): React.JSX.Element {
 
   const lista = cuentas.data?.accounts ?? [];
   const funcional = resumen.data?.functional_currency ?? "VES";
+  // La deuda vive en la administración: el enlace solo para quien puede
+  // entrar ahí; a los demás se les dice, sin puerta que no abre.
+  const puedeVerDeuda = puede(["customer.tax_id.manage", "accounting.read"]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
@@ -138,7 +167,15 @@ export function Dinero(): React.JSX.Element {
 
       <TarjetaTasa resumen={resumen.data ?? null} onCambio={recargar} />
 
-      {puedeDinero && (
+      {puedeDinero && resumen.isError && (
+        <ErrorDeBloque
+          titulo="No se pudo cargar el resumen"
+          error={resumen.error}
+          onReintentar={() => void resumen.refetch()}
+        />
+      )}
+
+      {puedeDinero && !resumen.isError && (
         <div className="grid gap-4 sm:grid-cols-2">
           <Card>
             <CardContent className="py-4">
@@ -151,12 +188,18 @@ export function Dinero(): React.JSX.Element {
                   ? mostrarImporte({ amount: resumen.data.lo_que_me_deben, currency: funcional })
                   : "…"}
               </p>
-              <Link
-                to="/clientes"
-                className="text-[0.85rem] text-accent-soft-foreground hover:underline"
-              >
-                Ver quién me debe
-              </Link>
+              {puedeVerDeuda ? (
+                <Link
+                  to="/admin/clientes"
+                  className="text-[0.85rem] text-accent-soft-foreground hover:underline"
+                >
+                  Ver quién me debe
+                </Link>
+              ) : (
+                <p className="text-[0.85rem] text-muted-foreground">
+                  El detalle lo ve quien administra el negocio.
+                </p>
+              )}
             </CardContent>
           </Card>
           <Card>
@@ -190,6 +233,12 @@ export function Dinero(): React.JSX.Element {
         </div>
         {cuentas.isLoading ? (
           <p className="text-muted-foreground">Cargando…</p>
+        ) : cuentas.isError ? (
+          <ErrorDeBloque
+            titulo="No se pudieron cargar las cuentas"
+            error={cuentas.error}
+            onReintentar={() => void cuentas.refetch()}
+          />
         ) : lista.length === 0 ? (
           <Card>
             <CardContent className="py-8 text-center">
@@ -214,15 +263,29 @@ export function Dinero(): React.JSX.Element {
         <section className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-[1.05rem] font-semibold">Formas de pago</h2>
-            <CrearFormaDePago
-              cuentas={lista}
-              onCreada={() => void qc.invalidateQueries({ queryKey: ["formas-pago", empresa.id] })}
-            />
+            {/* Crear una forma exige `treasury.account.manage` (createPaymentMethod
+                en packages/domain): el botón solo para quien lo tiene. */}
+            {puede("treasury.account.manage") && (
+              <CrearFormaDePago
+                cuentas={lista}
+                onCreada={() =>
+                  void qc.invalidateQueries({ queryKey: ["formas-pago", empresa.id] })
+                }
+              />
+            )}
           </div>
           <p className="text-[0.85rem] text-muted-foreground">
             Cada forma apunta a una cuenta: cuando cobras con ella, la plata entra ahí sola.
           </p>
-          {(formas.data?.methods ?? []).length === 0 ? (
+          {formas.isLoading ? (
+            <p className="text-muted-foreground">Cargando…</p>
+          ) : formas.isError ? (
+            <ErrorDeBloque
+              titulo="No se pudieron cargar las formas de pago"
+              error={formas.error}
+              onReintentar={() => void formas.refetch()}
+            />
+          ) : (formas.data?.methods ?? []).length === 0 ? (
             <p className="text-[0.9rem] text-faint-foreground">
               Sin formas configuradas, los cobros van a «Sin asignar» y luego hay que repartirlos.
             </p>
@@ -246,13 +309,20 @@ export function Dinero(): React.JSX.Element {
         </section>
       )}
 
+      {puedeDinero && cierres.isError && (
+        <ErrorDeBloque
+          titulo="No se pudieron cargar los cierres de caja"
+          error={cierres.error}
+          onReintentar={() => void cierres.refetch()}
+        />
+      )}
       {(cierres.data?.items ?? []).length > 0 && (
         <section className="space-y-2">
           <h2 className="text-[1.05rem] font-semibold">Últimos cierres de caja</h2>
           <div className="divide-y divide-border rounded-md border border-border bg-surface">
             {(cierres.data?.items ?? []).slice(0, 5).map((c) => (
               <div key={c.id} className="flex items-center gap-3 px-3 py-2 text-[0.9rem]">
-                <span className="text-muted-foreground">{c.closing_date}</span>
+                <span className="text-muted-foreground">{fechaLocal(c.closing_date)}</span>
                 <span className="flex-1 truncate">
                   {lista.find((x) => x.id === c.account_id)?.name ?? "Cuenta"}
                 </span>
@@ -469,6 +539,9 @@ function TarjetaCuenta({
       </CardContent>
       {editando && (
         <EditarCuenta
+          // El diálogo copia nombre y estado al montarse: si la cuenta cambia
+          // debajo (refetch), la clave lo remonta con los datos nuevos.
+          key={`${cuenta.id}:${cuenta.name}:${String(cuenta.is_active)}`}
           cuenta={cuenta}
           onCerrar={(hecho) => {
             setEditando(false);
@@ -874,30 +947,7 @@ function FormaDePagoChip({
   cuentaNombre: string;
   onCambio: () => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
-  const toast = useToast();
   const [editando, setEditando] = useState(false);
-  const [nombre, setNombre] = useState(forma.name);
-  const [activa, setActiva] = useState(forma.is_active);
-
-  const guardar = useMutation({
-    mutationFn: () =>
-      llamar("/v1/payment-methods/" + forma.id, {
-        method: "PATCH",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          name: nombre.trim(),
-          is_active: activa,
-        }),
-      }),
-    onSuccess: () => {
-      toast.success("Forma de pago actualizada");
-      setEditando(false);
-      onCambio();
-    },
-    onError: (e) => toast.error("No se pudo actualizar", errorDePersona(e)),
-  });
 
   return (
     <>
@@ -915,39 +965,83 @@ function FormaDePagoChip({
         {!forma.is_active && <span className="text-faint-foreground">(apagada)</span>}
       </button>
       {editando && (
-        <Dialog open onOpenChange={(v) => !v && setEditando(false)}>
-          <DialogContent className="max-w-sm">
-            <DialogTitle>Editar {forma.name}</DialogTitle>
-            <div className="space-y-3 pt-2">
-              <FormField label="Nombre" required>
-                {(a) => (
-                  <Input
-                    {...a}
-                    value={nombre}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNombre(e.target.value)}
-                  />
-                )}
-              </FormField>
-              <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
-                <span className="text-[0.9rem]">Activa en el punto de venta</span>
-                <Switch checked={activa} onCheckedChange={setActiva} aria-label="Forma activa" />
-              </label>
-            </div>
-            <DialogFooter>
-              <Button variant="ghost" onClick={() => setEditando(false)}>
-                Cancelar
-              </Button>
-              <Button
-                variant="primary"
-                disabled={nombre.trim() === "" || guardar.isPending}
-                onClick={() => guardar.mutate()}
-              >
-                Guardar
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <EditarFormaDePago
+          // El formulario copia el prop al montarse: la clave lo remonta si
+          // la forma cambia debajo (auditoría 2026-09-11).
+          key={`${forma.id}:${forma.name}:${String(forma.is_active)}`}
+          forma={forma}
+          onCerrar={(hecho) => {
+            setEditando(false);
+            if (hecho) onCambio();
+          }}
+        />
       )}
     </>
+  );
+}
+
+function EditarFormaDePago({
+  forma,
+  onCerrar,
+}: {
+  forma: FormaDePago;
+  onCerrar: (hecho: boolean) => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [nombre, setNombre] = useState(forma.name);
+  const [activa, setActiva] = useState(forma.is_active);
+
+  const guardar = useMutation({
+    mutationFn: () =>
+      llamar("/v1/payment-methods/" + forma.id, {
+        method: "PATCH",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          name: nombre.trim(),
+          is_active: activa,
+        }),
+      }),
+    onSuccess: () => {
+      toast.success("Forma de pago actualizada");
+      onCerrar(true);
+    },
+    onError: (e) => toast.error("No se pudo actualizar", errorDePersona(e)),
+  });
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
+      <DialogContent className="max-w-sm">
+        <DialogTitle>Editar {forma.name}</DialogTitle>
+        <div className="space-y-3 pt-2">
+          <FormField label="Nombre" required>
+            {(a) => (
+              <Input
+                {...a}
+                value={nombre}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNombre(e.target.value)}
+              />
+            )}
+          </FormField>
+          <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+            <span className="text-[0.9rem]">Activa en el punto de venta</span>
+            <Switch checked={activa} onCheckedChange={setActiva} aria-label="Forma activa" />
+          </label>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onCerrar(false)}>
+            Cancelar
+          </Button>
+          <Button
+            variant="primary"
+            disabled={nombre.trim() === "" || guardar.isPending}
+            onClick={() => guardar.mutate()}
+          >
+            Guardar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

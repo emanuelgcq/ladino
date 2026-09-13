@@ -1,5 +1,11 @@
 # Plan de implementación — Ladino
 
+> **Estado al 2026-09-12: los pasos 0–10 y 13–15 están construidos y en producción** desde el
+> 2026-09-07 (ver `HANDOFF.md` para la entrega más reciente y `ADR_INDEX.md` para las 58
+> decisiones). El paso 11 (emisión fiscal con imprenta) sigue desacoplado y pendiente del asesor
+> (`docs/02_COMPLIANCE/PENDIENTES_ASESOR.md`). Este documento se conserva como el orden con el
+> que se construyó; no se reescribe.
+>
 > **Actualizado 2026-08-15 por cambio regulatorio.** PA SNAT/2024/000121 derogada sin sustituta
 > (PA SNAT/2026/00084, Gaceta 43.435, 12/08/2026). Ver `docs/02_COMPLIANCE/REGULATORY_STATUS.md`,
 > ADR-0027 y ADR-0028.

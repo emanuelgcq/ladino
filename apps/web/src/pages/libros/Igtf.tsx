@@ -13,11 +13,30 @@ import { Table, TBody, TD, TDNum, TH, THead, TR } from "../../ui/table.js";
 import { Textarea } from "../../ui/input.js";
 import { useToast } from "../../ui/toast.js";
 import { mostrarImporte } from "../../money.js";
+import { mostrarPorcentaje } from "../../porcentaje.js";
 import { MensajeError } from "../ventas/comunes.js";
-import type { IgtfPerceptions, IgtfStatus } from "../../lib.js";
+import { errorDePersona, type IgtfPerceptions, type IgtfStatus } from "../../lib.js";
+import { quincenaLocal } from "../../fechas.js";
+
+/** El permiso REAL que exigen enable / instruments / taxpayer-type (packages/domain/src/igtf.ts). */
+const PERMISO_CONFIGURAR = "company.settings.manage";
+
+/** Cuántas filas trae cada página de percepciones (el default del servidor). */
+const POR_PAGINA = 50;
 
 /**
- * IGTF — la percepción del 3 % (migración 46).
+ * La tasa VIGENTE, como texto, o una frase honesta mientras no se sabe. El
+ * «3 %» que antes iba escrito a mano en tres sitios es una regla efectiva por
+ * fecha y fuente (CLAUDE.md §1.8): la manda el servidor y aquí solo se enseña.
+ */
+function tasaTexto(estado: IgtfStatus | undefined): string {
+  return estado?.rate === null || estado?.rate === undefined
+    ? "la tasa vigente"
+    : `el ${mostrarPorcentaje(estado.rate)}`;
+}
+
+/**
+ * IGTF — la percepción a la tasa vigente (migración 46).
  *
  * Lo que la pantalla tiene que dejar claro, porque el error es caro en las dos
  * direcciones: percibir de más es cobrarle al cliente un impuesto que no
@@ -27,13 +46,9 @@ import type { IgtfPerceptions, IgtfStatus } from "../../lib.js";
  * en silencio.
  */
 function quincenaActual(): { from: string; to: string } {
-  const hoy = new Date();
-  const y = hoy.getUTCFullYear();
-  const m = hoy.getUTCMonth();
-  const dia = hoy.getUTCDate();
-  const desde = new Date(Date.UTC(y, m, dia <= 15 ? 1 : 16));
-  const hasta = dia <= 15 ? new Date(Date.UTC(y, m, 15)) : new Date(Date.UTC(y, m + 1, 0));
-  return { from: desde.toISOString().slice(0, 10), to: hasta.toISOString().slice(0, 10) };
+  // La quincena del día de CARACAS, no del día UTC (CLAUDE.md §3).
+  const q = quincenaLocal();
+  return { from: q.desde, to: q.hasta };
 }
 
 const ROTULO: Record<string, string> = {
@@ -61,11 +76,21 @@ export function Igtf(): React.JSX.Element {
     <div>
       <PageHeader
         title="IGTF"
-        description="El 3 % que un sujeto pasivo especial percibe en los pagos en divisas. Se calcula en el servidor, pago por pago, y se entera quincenalmente."
+        description={`Lo que un sujeto pasivo especial percibe en los pagos en divisas (${tasaTexto(estado.data)}). Se calcula en el servidor, pago por pago, y se entera quincenalmente.`}
       />
-      {estado.isLoading ? (
+      {estado.isPending ? (
         <Skeleton className="h-64" />
-      ) : estado.data?.enabled !== true ? (
+      ) : estado.isError ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive-soft px-3 py-2 text-[0.88rem] text-destructive-soft-foreground"
+        >
+          <span>{errorDePersona(estado.error)}</span>
+          <Button variant="secondary" size="sm" onClick={() => void estado.refetch()}>
+            Reintentar
+          </Button>
+        </div>
+      ) : estado.data.enabled !== true ? (
         <Activacion estado={estado.data} />
       ) : (
         <div className="space-y-4">
@@ -79,7 +104,8 @@ export function Igtf(): React.JSX.Element {
               </FormField>
             </CardContent>
           </Card>
-          <Percepciones desde={rango.from} hasta={rango.to} />
+          {/* La clave reinicia la página al cambiar la quincena. */}
+          <Percepciones key={`${rango.from}_${rango.to}`} desde={rango.from} hasta={rango.to} />
         </div>
       )}
     </div>
@@ -87,9 +113,12 @@ export function Igtf(): React.JSX.Element {
 }
 
 function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
+  // Que la pantalla esconda el botón no es control de acceso (el servidor lo
+  // repite); es no ofrecer un acto que va a fallar.
+  const puedeConfigurar = puede(PERMISO_CONFIGURAR);
   const [acta, setActa] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [enviando, setEnviando] = useState(false);
@@ -134,7 +163,11 @@ function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.E
         "Queda en la auditoría con su valor anterior. Ya puedes activar la percepción.",
       );
       await qc.invalidateQueries({ queryKey: ["igtf-status", empresa.id] });
-      await qc.invalidateQueries({ queryKey: ["empresas"] });
+      // La empresa de la sesión (`useSesion().empresa`) no vive en una query
+      // de TanStack — la carga session.tsx por su cuenta y no expone una
+      // recarga—, así que no hay clave que invalidar: el `taxpayer_type` nuevo
+      // se verá en la sesión al recargarla. Lo que esta pantalla necesita
+      // (`igtf-status`) sí se invalida arriba.
     } catch (e) {
       setError(e);
     } finally {
@@ -155,52 +188,69 @@ function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.E
         <MensajeError error={error} />
         {estado?.rate !== null && estado?.rate !== undefined && (
           <p className="text-[0.88rem] text-muted-foreground">
-            Regla vigente: <strong>{(Number(estado.rate) * 100).toFixed(0)} %</strong>.{" "}
-            {estado.legal_source}
+            Regla vigente: <strong>{mostrarPorcentaje(estado.rate)}</strong>. {estado.legal_source}
           </p>
         )}
-        <div className="rounded-md border border-border bg-surface-muted px-3 py-2">
-          <p className="text-[0.88rem]">
-            ¿El SENIAT designó a esta empresa <strong>sujeto pasivo especial</strong> y aún no está
-            marcada así en Ladino?
+        {!puedeConfigurar ? (
+          <p className="text-[0.88rem] text-muted-foreground">
+            Activarla, o clasificar la empresa, exige el permiso{" "}
+            <code className="text-[0.82rem]">{PERMISO_CONFIGURAR}</code>. Pídeselo a quien
+            administra la empresa.
           </p>
-          <Button
-            variant="secondary"
-            className="mt-2"
-            onClick={() => void marcarEspecial()}
-            disabled={clasificando}
-          >
-            {clasificando ? "Guardando…" : "Marcarla como sujeto pasivo especial"}
-          </Button>
-        </div>
-        <FormField label="Por qué esta empresa percibe (queda en la auditoría)">
-          {(a) => (
-            <Textarea
-              id={a.id}
-              value={acta}
-              rows={3}
-              placeholder="Ej.: Designada sujeto pasivo especial según notificación del SENIAT del …"
-              onChange={(e) => setActa(e.target.value)}
-            />
-          )}
-        </FormField>
-        <Button onClick={() => void activar()} disabled={enviando || acta.trim().length < 10}>
-          <ShieldCheck className="mr-2 h-4 w-4" />
-          Activar la percepción
-        </Button>
+        ) : (
+          <>
+            <div className="rounded-md border border-border bg-surface-muted px-3 py-2">
+              <p className="text-[0.88rem]">
+                ¿El SENIAT designó a esta empresa <strong>sujeto pasivo especial</strong> y aún no
+                está marcada así en Ladino?
+              </p>
+              <Button
+                variant="secondary"
+                className="mt-2"
+                onClick={() => void marcarEspecial()}
+                disabled={clasificando || enviando}
+              >
+                {clasificando ? "Guardando…" : "Marcarla como sujeto pasivo especial"}
+              </Button>
+            </div>
+            <FormField label="Por qué esta empresa percibe (queda en la auditoría)">
+              {(a) => (
+                <Textarea
+                  id={a.id}
+                  value={acta}
+                  rows={3}
+                  placeholder="Ej.: Designada sujeto pasivo especial según notificación del SENIAT del …"
+                  onChange={(e) => setActa(e.target.value)}
+                />
+              )}
+            </FormField>
+            <Button
+              onClick={() => void activar()}
+              disabled={enviando || clasificando || acta.trim().length < 10}
+            >
+              <ShieldCheck className="mr-2 h-4 w-4" />
+              Activar la percepción
+            </Button>
+          </>
+        )}
       </CardContent>
     </Card>
   );
 }
 
 function Instrumentos({ estado }: { estado: IgtfStatus }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
   const [error, setError] = useState<unknown>(null);
+  // Mientras un cambio viaja, los interruptores se bloquean: dos clics
+  // seguidos sobre el mismo mandaban dos PUT con dos claves distintas.
+  const [cambiando, setCambiando] = useState(false);
+  const puedeConfigurar = puede(PERMISO_CONFIGURAR);
 
   async function cambiar(instrument: string, causes: boolean): Promise<void> {
     setError(null);
+    setCambiando(true);
     try {
       await llamar("/v1/igtf/instruments", {
         method: "PUT",
@@ -216,6 +266,8 @@ function Instrumentos({ estado }: { estado: IgtfStatus }): React.JSX.Element {
       await qc.invalidateQueries({ queryKey: ["igtf-status", empresa.id] });
     } catch (e) {
       setError(e);
+    } finally {
+      setCambiando(false);
     }
   }
 
@@ -238,8 +290,8 @@ function Instrumentos({ estado }: { estado: IgtfStatus }): React.JSX.Element {
         >
           Ladino no trae cargada ninguna exención del IGTF: mientras no las cargue tu asesor, todo
           pago que encaje aquí <strong>percibe</strong>. Y «Otro» viene apagado a propósito — bajo
-          ese nombre suele esconderse un pago en bolívares, y percibirle el 3 % sería cobrarle al
-          cliente un impuesto que no causó.
+          ese nombre suele esconderse un pago en bolívares, y percibirle {tasaTexto(estado)} sería
+          cobrarle al cliente un impuesto que no causó.
           {otroCausa && (
             <>
               {" "}
@@ -247,6 +299,12 @@ function Instrumentos({ estado }: { estado: IgtfStatus }): React.JSX.Element {
             </>
           )}
         </p>
+        {!puedeConfigurar && (
+          <p className="text-[0.85rem] text-muted-foreground">
+            Cambiar el catálogo exige el permiso{" "}
+            <code className="text-[0.82rem]">{PERMISO_CONFIGURAR}</code>: aquí se ve, no se toca.
+          </p>
+        )}
         <Table>
           <THead>
             <TR>
@@ -261,6 +319,7 @@ function Instrumentos({ estado }: { estado: IgtfStatus }): React.JSX.Element {
                 <TD className="text-right">
                   <Switch
                     checked={i.causes}
+                    disabled={cambiando || !puedeConfigurar}
                     aria-label={`${ROTULO[i.instrument] ?? i.instrument} causa IGTF`}
                     onCheckedChange={(v) => void cambiar(i.instrument, v)}
                   />
@@ -276,14 +335,34 @@ function Instrumentos({ estado }: { estado: IgtfStatus }): React.JSX.Element {
 
 function Percepciones({ desde, hasta }: { desde: string; hasta: string }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
+  const [pagina, setPagina] = useState(1);
+  // El servidor pagina (default 50) y manda `total`; el importe a enterar lo
+  // suma sobre TODAS las filas, así que la cabecera es completa aunque la
+  // tabla sea una página.
   const percepciones = useQuery({
-    queryKey: ["igtf-percepciones", empresa.id, desde, hasta],
-    queryFn: () => llamar<IgtfPerceptions>(`/v1/igtf/perceptions?from=${desde}&to=${hasta}`),
+    queryKey: ["igtf-percepciones", empresa.id, desde, hasta, pagina],
+    queryFn: () =>
+      llamar<IgtfPerceptions & { total: number }>(
+        `/v1/igtf/perceptions?from=${desde}&to=${hasta}&per_page=${POR_PAGINA}&page=${pagina}`,
+      ),
   });
 
-  if (percepciones.isLoading) return <Skeleton className="h-48" />;
+  if (percepciones.isPending) return <Skeleton className="h-48" />;
+  if (percepciones.isError) {
+    return (
+      <div
+        role="alert"
+        className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive-soft px-3 py-2 text-[0.88rem] text-destructive-soft-foreground"
+      >
+        <span>{errorDePersona(percepciones.error)}</span>
+        <Button variant="secondary" size="sm" onClick={() => void percepciones.refetch()}>
+          Reintentar
+        </Button>
+      </div>
+    );
+  }
   const datos = percepciones.data;
-  if (datos === undefined) return <></>;
+  const paginas = Math.max(1, Math.ceil(datos.total / POR_PAGINA));
   const pendientes = datos.items.filter((p) => p.status === "pendiente_reintegro");
 
   return (
@@ -310,7 +389,8 @@ function Percepciones({ desde, hasta }: { desde: string; hasta: string }): React
             {pendientes.length === 1
               ? "Hay 1 percepción pendiente de reintegro"
               : `Hay ${pendientes.length} percepciones pendientes de reintegro`}
-            : su factura se anuló después de cobrarla. Habla con tu contador antes de devolver.
+            {paginas > 1 ? " en esta página" : ""}: su factura se anuló después de cobrarla. Habla
+            con tu contador antes de devolver.
           </p>
         )}
         {datos.items.length === 0 ? (
@@ -353,6 +433,31 @@ function Percepciones({ desde, hasta }: { desde: string; hasta: string }): React
               ))}
             </TBody>
           </Table>
+        )}
+        {paginas > 1 && (
+          <div className="mt-3 flex items-center justify-between text-[0.82rem] text-muted-foreground">
+            <span>
+              {datos.total} cobros · página {pagina} de {paginas}
+            </span>
+            <span className="flex gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={pagina <= 1}
+                onClick={() => setPagina(pagina - 1)}
+              >
+                Anterior
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={pagina >= paginas}
+                onClick={() => setPagina(pagina + 1)}
+              >
+                Siguiente
+              </Button>
+            </span>
+          </div>
         )}
       </CardContent>
     </Card>

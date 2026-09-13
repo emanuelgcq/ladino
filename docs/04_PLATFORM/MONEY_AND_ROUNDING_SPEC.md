@@ -228,9 +228,14 @@ sea la otra.
 
 | Concepto | Escala | Modo | Fuente |
 |---|---|---|---|
-| Subtotal | `VALIDAR-TRIBUTARIO` | `VALIDAR-TRIBUTARIO` | |
+| Base e impuesto de cada línea | minor units ISO-4217 de la moneda del documento (2 en VES y USD) | `HALF_UP` — `VALIDAR-TRIBUTARIO` | ADR-0058 |
+| Subtotal y total del documento | suma de las líneas ya redondeadas (PER_LINE, §6.2) | — | ADR-0058 |
 | Descuentos | `VALIDAR-TRIBUTARIO` | `VALIDAR-TRIBUTARIO` | |
-| Total del documento | `VALIDAR-TRIBUTARIO` | `VALIDAR-TRIBUTARIO` | |
+| Conversión a moneda funcional | minor units de la moneda funcional; impuesto funcional = total − subtotal | `HALF_UP` | ADR-0058 |
+
+Política persistida: `sales:document:<minorUnits>:<modo>` en `documents` y `document_lines`. Los
+documentos anteriores al 2026-09-12 llevan `sales:document:8:HALF_UP`, que es la regla con la que
+se calcularon y no se reinterpretan (ADR-0058 §Lo que no cambia).
 
 **Absorción del residuo: parámetro de la política, no una constante del código.**
 

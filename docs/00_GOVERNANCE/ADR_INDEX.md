@@ -30,7 +30,7 @@ Usa la skill `adr` de Claude Code.
 | [0022](adr/ADR-0022-mobile-dentro-del-workspace.md) | `apps/mobile` dentro del workspace, con criterio de salida escrito | Aceptado | NO |
 | [0023](adr/ADR-0023-money-y-exactmoney.md) | `Money` (persistible) separado de `ExactMoney` (calculado); solo se sale redondeando | Aceptado | SÍ |
 | [0024](adr/ADR-0024-politica-de-redondeo-en-el-hecho-monetario.md) | `MonetaryFact` pasa a ocho campos: la política de redondeo se persiste (amplía ADR-0020) | Aceptado | SÍ |
-| [0025](adr/ADR-0025-modelo-rbac-y-aislamiento.md) | Modelo RBAC con `requires_scope`; `permissions` global; por qué la inmutabilidad es un trigger y no una policy | **Propuesto** | NO |
+| [0025](adr/ADR-0025-modelo-rbac-y-aislamiento.md) | Modelo RBAC con `requires_scope`; `permissions` global; por qué la inmutabilidad es un trigger y no una policy | Aceptado (retroactivo 2026-09-12; §3 matizado por ADR-0057) | NO |
 | [0026](adr/ADR-0026-auditoria-outbox-e-idempotencia.md) | Esquema de `audit_events`, `outbox` e `idempotency_keys` | Aceptado | SÍ |
 | [0027](adr/ADR-0027-la-regulacion-es-dato.md) | La regulación es dato, no código | Aceptado | SÍ |
 | [0028](adr/ADR-0028-transmision-seniat-como-consumidor-de-outbox.md) | Transmisión SENIAT como consumidor de outbox tras interfaz (`NullTransmitter` hoy) | Aceptado | SÍ |
@@ -58,6 +58,12 @@ Usa la skill `adr` de Claude Code.
 | [0050](adr/ADR-0050-politica-de-rif-en-tres-niveles.md) | El RIF en tres niveles (libre sin documentos, bloqueado con ellos, corrección con acta); perfil y logo del negocio | Aceptado | SÍ |
 | [0051](adr/ADR-0051-notas-de-debito-y-credito-directas.md) | ND y NC directa por el motor común; la ND es deuda (aging gana `debit_note` y `receipt`); asientos de NC/ND y del saldo a favor aplicado (cierra R-20) | Aceptado | SÍ |
 | [0052](adr/ADR-0052-declaraciones-de-iva-y-percepcion-de-igtf.md) | Planilla demostrativa NO OFICIAL sin casillas; retención soportada como instrumento de pago; período insert-only con arrastre encadenado; IGTF por PAGO con conservadurismo asimétrico; calendario sin fechas de fábrica | Aceptado | SÍ |
+| [0053](adr/ADR-0053-escala-de-la-percepcion-de-igtf.md) | La percepción de IGTF se redondea a las minor units ISO-4217 de su moneda; modo `HALF_UP` con nombre propio y política persistida por fila (migración 47) | Aceptado | NO |
+| [0054](adr/ADR-0054-el-dia-del-negocio-es-el-de-caracas.md) | El día del negocio es el de Caracas en esquema y dominio: libros, antigüedad, saldos en moneda del documento y asientos cortan por `platform.caracas_day()` / `diaNegocio()` (migración 48) | Aceptado | SÍ |
+| [0055](adr/ADR-0055-la-primera-vigencia-contable-rige-desde-siempre.md) | La primera plantilla contable y el primer papel por empresa rigen desde `-infinity`; las versiones siguientes empiezan al crearse (migración 50) | Aceptado | NO |
+| [0056](adr/ADR-0056-la-reserva-de-idempotencia-se-mide-desde-su-reclamacion.md) | El reaper libera reservas huérfanas por `claimed_at`, no por `created_at`; la misma llave en otro endpoint es `IDEMPOTENCY_KEY_REUSED` (migración 49) | Aceptado | NO |
+| [0057](adr/ADR-0057-lo-manual-es-de-cada-empresa-lo-oficial-de-la-plataforma.md) | Tasas manuales, alícuotas aceptadas y reglas de retención llevan empresa; `NULL` = plataforma (BCV, sistema); lo propio gana a lo oficial; firmas sin empresa eliminadas; la RLS decide quién escribe qué (migración 52) | Aceptado | SÍ |
+| [0058](adr/ADR-0058-el-documento-de-venta-se-redondea-a-la-moneda.md) | Base e impuesto de cada línea a las minor units de la moneda del documento (`sales:document:2:HALF_UP`); conversión funcional a las de la funcional; vuelto entregable; valoración de cobros y diferencial siguen a ocho decimales | Aceptado | SÍ |
 
 ## Decisiones aún abiertas
 

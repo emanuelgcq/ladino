@@ -19,8 +19,15 @@ export const CreateCustomerRequest = z
     tax_id: taxId.nullable().optional(),
     legal_name: texto(200),
     trade_name: texto(200).optional(),
-    person_type_code: z.string().regex(CODE_RE),
-    taxpayer_type_code: z.string().regex(CODE_RE),
+    /**
+     * Opcionales desde la auditoría 2026-09-11 (M-06): si faltan, el dominio
+     * los infiere del prefijo del RIF (J/G → jurídica/gobierno ordinario,
+     * P → extranjera no domiciliada, V/E o sin RIF → natural consumidor final).
+     * Antes la web los decidía en tres pantallas distintas — lógica tributaria
+     * en componentes, prohibida por CLAUDE.md §2.
+     */
+    person_type_code: z.string().regex(CODE_RE).optional(),
+    taxpayer_type_code: z.string().regex(CODE_RE).optional(),
     fiscal_address: texto(500).optional(),
     email: z.string().trim().email().max(254).optional(),
     phone: texto(40).optional(),

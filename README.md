@@ -22,8 +22,12 @@ arquitectura moderna, UX cloud-first, trazabilidad fiscal fuerte y separación e
 
 ## Estado
 
-**Sprint 0 — bootstrap.** No hay código de negocio todavía.
-Empieza por [`docs/00_GOVERNANCE/SPRINT_0_BOOTSTRAP.md`](docs/00_GOVERNANCE/SPRINT_0_BOOTSTRAP.md).
+**En producción desde 2026-09-07** ([app.ladinosystem.com](https://app.ladinosystem.com)).
+Ventas, compras, inventario valorado, tesorería, contabilidad de partida doble, libros y
+declaraciones de IVA, percepción de IGTF y puesta a punto fiscal. La entrega más reciente y lo
+que queda en vuelo están en [`docs/00_GOVERNANCE/HANDOFF.md`](docs/00_GOVERNANCE/HANDOFF.md);
+las decisiones, en [`docs/00_GOVERNANCE/ADR_INDEX.md`](docs/00_GOVERNANCE/ADR_INDEX.md).
+[`SPRINT_0_BOOTSTRAP.md`](docs/00_GOVERNANCE/SPRINT_0_BOOTSTRAP.md) es historia.
 
 > **Regla de cumplimiento:** ninguna tasa, formato tributario, obligación o interpretación
 > jurídica queda hard-coded sin una fuente normativa versionada. Los puntos marcados

@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@ladino/core";
+import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
 import { Money, parseDecimal, type Decimal } from "@ladino/money";
 import { generateReversalLines, validateEntryBalance, type EntryLine } from "@ladino/accounting";
@@ -360,10 +361,17 @@ export async function setAccountPurpose(
       update public.company_account_settings set effective_to = now()
        where company_id = ${input.company_id} and purpose = ${input.purpose}
          and effective_to is null`;
+    // ADR-0055: el PRIMER papel rige desde siempre; los siguientes, desde ahora.
     await sql.savepoint(
       (sp) => sp`
-        insert into public.company_account_settings (tenant_id, company_id, purpose, account_id)
-        values (${ctx.value.tenantId}, ${input.company_id}, ${input.purpose}, ${input.account_id})`,
+        insert into public.company_account_settings
+          (tenant_id, company_id, purpose, account_id, effective_from)
+        values (${ctx.value.tenantId}, ${input.company_id}, ${input.purpose}, ${input.account_id},
+                case when exists (select 1 from public.company_account_settings
+                                   where company_id = ${input.company_id}
+                                     and purpose = ${input.purpose}
+                                     and effective_to is not null)
+                     then now() else '-infinity'::timestamptz end)`,
     );
   } catch (e) {
     const conocido = traducir(e);
@@ -603,7 +611,7 @@ export async function reverseJournalEntry(
     return err({ code: "VALIDATION_FAILED", message: reversas.error.message });
   }
 
-  const fecha = input.posting_date ?? new Date().toISOString().slice(0, 10);
+  const fecha = input.posting_date ?? diaNegocio(new Date());
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   try {
     const contra = await sql.savepoint(async (sp) => {
@@ -984,11 +992,19 @@ export async function importJournalTemplates(
            and source_event = ${e.source_event} and is_active`;
       if (existe) continue;
 
+      // ADR-0055: la PRIMERA plantilla de este hecho rige desde siempre, para
+      // que lo emitido antes de configurar la contabilidad se contabilice con
+      // ella; una versión posterior empieza cuando se crea.
       const [t] = await sql<{ id: string }[]>`
         insert into public.journal_templates
-          (tenant_id, company_id, source_kind, source_event, description)
+          (tenant_id, company_id, source_kind, source_event, description, effective_from)
         values (${ctx.value.tenantId}, ${input.company_id}, ${e.source_kind}, ${e.source_event},
-                ${e.description})
+                ${e.description},
+                case when exists (select 1 from public.journal_templates
+                                   where company_id = ${input.company_id}
+                                     and source_kind = ${e.source_kind}
+                                     and source_event = ${e.source_event})
+                     then now() else '-infinity'::timestamptz end)
         returning id`;
       plantillas += 1;
 

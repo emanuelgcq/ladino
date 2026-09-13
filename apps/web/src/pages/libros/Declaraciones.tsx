@@ -20,8 +20,82 @@ import { Tabs, TabsList, TabsPanel, TabsTab } from "../../ui/tabs.js";
 import { Table, TBody, TD, TDNum, TH, THead, TR } from "../../ui/table.js";
 import { useToast } from "../../ui/toast.js";
 import { mostrarImporte } from "../../money.js";
+import { mostrarPorcentaje } from "../../porcentaje.js";
 import { MensajeError } from "../ventas/comunes.js";
-import type { FiscalDeadline, IvaPeriodResult, SupportedRetention } from "../../lib.js";
+import {
+  errorDePersona,
+  type FiscalDeadline,
+  type IvaPeriodResult,
+  type SupportedRetention,
+} from "../../lib.js";
+import { hoyLocal, fechaLocal, mesLocalAnterior } from "../../fechas.js";
+
+/** Cuántas filas trae cada página de los listados de esta pantalla (el default del servidor). */
+const POR_PAGINA = 50;
+
+/**
+ * Un fallo de carga NO es una lista vacía: «ningún comprobante» y «no se pudo
+ * consultar» son dos frases distintas, y pintar la primera cuando pasó lo
+ * segundo es mentir con cara de tranquilidad (auditoría 2026-09-11).
+ */
+function FalloDeCarga({
+  error,
+  reintentar,
+}: {
+  error: unknown;
+  reintentar: () => void;
+}): React.JSX.Element {
+  return (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive-soft px-3 py-2 text-[0.88rem] text-destructive-soft-foreground"
+    >
+      <span>{errorDePersona(error)}</span>
+      <Button variant="secondary" size="sm" onClick={reintentar}>
+        Reintentar
+      </Button>
+    </div>
+  );
+}
+
+/** «Mostrar más» / paginador mínimo para los listados con `total` del servidor. */
+function Paginador({
+  total,
+  pagina,
+  onPagina,
+}: {
+  total: number;
+  pagina: number;
+  onPagina: (p: number) => void;
+}): React.JSX.Element | null {
+  const paginas = Math.max(1, Math.ceil(total / POR_PAGINA));
+  if (paginas <= 1) return null;
+  return (
+    <div className="mt-3 flex items-center justify-between text-[0.82rem] text-muted-foreground">
+      <span>
+        {total} filas · página {pagina} de {paginas}
+      </span>
+      <span className="flex gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={pagina <= 1}
+          onClick={() => onPagina(pagina - 1)}
+        >
+          Anterior
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={pagina >= paginas}
+          onClick={() => onPagina(pagina + 1)}
+        >
+          Siguiente
+        </Button>
+      </span>
+    </div>
+  );
+}
 
 /**
  * DECLARAR IVA — la planilla DEMOSTRATIVA (migración 46).
@@ -37,11 +111,9 @@ import type { FiscalDeadline, IvaPeriodResult, SupportedRetention } from "../../
  *     una cuota falsa.
  */
 function mesAnterior(): { from: string; to: string } {
-  const hoy = new Date();
-  const primeroDeEste = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), 1));
-  const ultimo = new Date(primeroDeEste.getTime() - 86_400_000);
-  const primero = new Date(Date.UTC(ultimo.getUTCFullYear(), ultimo.getUTCMonth(), 1));
-  return { from: primero.toISOString().slice(0, 10), to: ultimo.toISOString().slice(0, 10) };
+  // El mes anterior del día de CARACAS, no del día UTC (CLAUDE.md §3).
+  const m = mesLocalAnterior();
+  return { from: m.desde, to: m.hasta };
 }
 
 export function Declaraciones(): React.JSX.Element {
@@ -74,7 +146,9 @@ export function Declaraciones(): React.JSX.Element {
           <Periodo desde={rango.from} hasta={rango.to} />
         </TabsPanel>
         <TabsPanel value="retenciones">
-          <Retenciones desde={rango.from} hasta={rango.to} />
+          {/* La clave reinicia la página al cambiar el período: la página 3 de
+              un período no es la página 3 de otro. */}
+          <Retenciones key={`${rango.from}_${rango.to}`} desde={rango.from} hasta={rango.to} />
         </TabsPanel>
         <TabsPanel value="calendario">
           <Calendario />
@@ -90,6 +164,25 @@ export function Declaraciones(): React.JSX.Element {
  * rótulo «NO OFICIAL» y la huella en su cabecera: quien lo abra dentro de seis
  * meses tiene que poder saber qué es y de qué generación salió.
  */
+/**
+ * El importe del CSV con dos decimales y coma, SIN símbolo — y sin aritmética:
+ * el mismo criterio que `money.ts`. Los importes de la planilla son dinero ya
+ * redondeado por el servidor a dos decimales y viajan con los ocho ceros de
+ * `numeric(24,8)`; aquí solo se quitan CEROS FINALES (representación, no
+ * precisión) y se rellena hasta dos. Si un importe trajera de verdad más de
+ * dos decimales significativos, se escribe EXACTO: recortarlo sería redondear
+ * dinero en el cliente, y eso está prohibido.
+ */
+function aDosDecimalesTexto(importe: string): string {
+  const neg = importe.startsWith("-");
+  const cuerpo = neg ? importe.slice(1) : importe;
+  const [entera = "0", decimal = ""] = cuerpo.split(".");
+  const ent = entera.replace(/^0+(?=\d)/, "");
+  const dec = decimal.replace(/0+$/, "");
+  const dosDecimales = dec.length <= 2 ? `${dec}00`.slice(0, 2) : dec;
+  return `${neg ? "-" : ""}${ent},${dosDecimales}`;
+}
+
 function descargarPlanilla(p: IvaPeriodResult, desde: string, hasta: string): void {
   const filas: string[][] = [
     ["PLANILLA DEMOSTRATIVA — NO OFICIAL (generada por Ladino)"],
@@ -99,16 +192,24 @@ function descargarPlanilla(p: IvaPeriodResult, desde: string, hasta: string): vo
     [`Huella`, p.dataset_hash],
     [],
     ["Concepto", "Importe"],
-    ["Débito fiscal del período", p.debitos],
-    ...p.detalle.map((d) => [`  alícuota ${d.alicuota} — base ${d.base}`, d.impuesto]),
-    ["Crédito fiscal del período", p.creditos],
+    ["Débito fiscal del período", aDosDecimalesTexto(p.debitos)],
+    ...p.detalle.map((d) => [
+      `  alícuota ${mostrarPorcentaje(d.alicuota)} — base ${aDosDecimalesTexto(d.base)}`,
+      aDosDecimalesTexto(d.impuesto),
+    ]),
+    ["Crédito fiscal del período", aDosDecimalesTexto(p.creditos)],
     ...(p.prorrata_pct === null
       ? []
-      : [[`Crédito deducible tras la prorrata (${p.prorrata_pct})`, p.creditos_deducibles]]),
-    ["Retenciones de IVA soportadas", p.retenciones_soportadas],
-    ["Excedente del período anterior", p.excedente_anterior],
-    ["Cuota a pagar", p.cuota_a_pagar],
-    ["Excedente que pasa al período siguiente", p.excedente_siguiente],
+      : [
+          [
+            `Crédito deducible tras la prorrata (${mostrarPorcentaje(p.prorrata_pct)})`,
+            aDosDecimalesTexto(p.creditos_deducibles),
+          ],
+        ]),
+    ["Retenciones de IVA soportadas", aDosDecimalesTexto(p.retenciones_soportadas)],
+    ["Excedente del período anterior", aDosDecimalesTexto(p.excedente_anterior)],
+    ["Cuota a pagar", aDosDecimalesTexto(p.cuota_a_pagar)],
+    ["Excedente que pasa al período siguiente", aDosDecimalesTexto(p.excedente_siguiente)],
   ];
   // Separador «;» y BOM, como el resto de las descargas de Ladino: es lo que
   // abre bien un Excel en español sin pelearse con las comas decimales.
@@ -188,8 +289,13 @@ function Periodo({ desde, hasta }: { desde: string; hasta: string }): React.JSX.
     }
   }
 
-  if (generaciones.isLoading) return <Skeleton className="h-64" />;
-  const items = generaciones.data?.items ?? [];
+  if (generaciones.isPending) return <Skeleton className="h-64" />;
+  if (generaciones.isError) {
+    return (
+      <FalloDeCarga error={generaciones.error} reintentar={() => void generaciones.refetch()} />
+    );
+  }
+  const items = generaciones.data.items;
   // La ÚLTIMA generación manda: la fila es insert-only y regenerar crea otra.
   const ultima = items[0];
   const moneda = ultima?.functional_currency ?? "";
@@ -261,7 +367,7 @@ function Periodo({ desde, hasta }: { desde: string; hasta: string }): React.JSX.
                   {ultima.detalle.map((d) => (
                     <Renglon
                       key={d.alicuota}
-                      concepto={`— alícuota ${(Number(d.alicuota) * 100).toFixed(2)} %`}
+                      concepto={`— alícuota ${mostrarPorcentaje(d.alicuota)}`}
                       nota={`Base ${mostrarImporte({ amount: d.base, currency: moneda })}`}
                       importe={d.impuesto}
                       moneda={moneda}
@@ -276,7 +382,7 @@ function Periodo({ desde, hasta }: { desde: string; hasta: string }): React.JSX.
                   {ultima.prorrata_pct !== null && (
                     <Renglon
                       concepto="Crédito deducible tras la prorrata"
-                      nota={`Prorrata ${(Number(ultima.prorrata_pct) * 100).toFixed(2)} % — hubo ventas sin impuesto en el período`}
+                      nota={`Prorrata ${mostrarPorcentaje(ultima.prorrata_pct)} — hubo ventas sin impuesto en el período`}
                       importe={ultima.creditos_deducibles}
                       moneda={moneda}
                     />
@@ -363,16 +469,27 @@ function Periodo({ desde, hasta }: { desde: string; hasta: string }): React.JSX.
 
 function Retenciones({ desde, hasta }: { desde: string; hasta: string }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
+  const [pagina, setPagina] = useState(1);
+  // El servidor pagina (default 50) y manda `total`: sin paginador, la fila 51
+  // desaparecía en silencio — lo mismo que este módulo condena en los libros.
   const retenciones = useQuery({
-    queryKey: ["retenciones-soportadas", empresa.id, desde, hasta],
+    queryKey: ["retenciones-soportadas", empresa.id, desde, hasta, pagina],
     queryFn: () =>
-      llamar<{ items: SupportedRetention[] }>(
-        `/v1/fiscal-declarations/supported-retentions?from=${desde}&to=${hasta}`,
+      llamar<{ items: SupportedRetention[]; total: number }>(
+        `/v1/fiscal-declarations/supported-retentions?from=${desde}&to=${hasta}&per_page=${POR_PAGINA}&page=${pagina}`,
       ),
   });
 
-  if (retenciones.isLoading) return <Skeleton className="h-48" />;
-  const items = retenciones.data?.items ?? [];
+  if (retenciones.isPending) return <Skeleton className="h-48" />;
+  if (retenciones.isError) {
+    return (
+      <div className="space-y-4">
+        <CargarRetencion />
+        <FalloDeCarga error={retenciones.error} reintentar={() => void retenciones.refetch()} />
+      </div>
+    );
+  }
+  const items = retenciones.data.items;
 
   return (
     <div className="space-y-4">
@@ -423,6 +540,7 @@ function Retenciones({ desde, hasta }: { desde: string; hasta: string }): React.
               </TBody>
             </Table>
           )}
+          <Paginador total={retenciones.data.total} pagina={pagina} onPagina={setPagina} />
         </CardContent>
       </Card>
     </div>
@@ -435,6 +553,12 @@ function Retenciones({ desde, hasta }: { desde: string; hasta: string }): React.
  * regla que Ladino resuelva. Al guardar, el servidor abona la factura por el
  * importe exacto — por eso el formulario pide la factura y no un importe
  * suelto.
+ *
+ * VALIDAR-SENIAT: las dos porciones del selector (75 % general, 100 % en los
+ * supuestos que la providencia enumera) se ofrecen porque son las que traen
+ * los comprobantes, no porque Ladino las afirme. La cita es la providencia
+ * vigente de retenciones de IVA (PA SNAT/2025/000054); qué artículo fija cada
+ * porcentaje lo confirma el asesor, y por eso el texto de ayuda no lo inventa.
  */
 function CargarRetencion(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
@@ -444,7 +568,7 @@ function CargarRetencion(): React.JSX.Element {
   const [cliente, setCliente] = useState<EntityOption | null>(null);
   const [factura, setFactura] = useState<EntityOption | null>(null);
   const [numero, setNumero] = useState("");
-  const [fecha, setFecha] = useState(() => new Date().toISOString().slice(0, 10));
+  const [fecha, setFecha] = useState(() => hoyLocal());
   const [base, setBase] = useState("");
   const [porcion, setPorcion] = useState("0.75");
   const [monto, setMonto] = useState("");
@@ -532,7 +656,7 @@ function CargarRetencion(): React.JSX.Element {
                 buscar={async (q) => {
                   const r = await llamar<{
                     items: { id: string; legal_name: string; tax_id: string | null }[];
-                  }>(`/v1/customers?q=${encodeURIComponent(q)}&per_page=10`);
+                  }>(`/v1/customers?search=${encodeURIComponent(q)}&per_page=10`);
                   return r.items.map((c) => ({
                     id: c.id,
                     label: c.legal_name,
@@ -550,8 +674,13 @@ function CargarRetencion(): React.JSX.Element {
                 onChange={setFactura}
                 disabled={cliente === null}
                 placeholder={cliente === null ? "Elige el cliente primero" : "Buscar factura…"}
-                buscar={async () => {
+                buscar={async (q) => {
                   if (cliente === null) return [];
+                  // `GET /v1/documents` acepta `search` (número o serie) desde la
+                  // auditoría 2026-09-11: la búsqueda la hace el servidor, no
+                  // esta pantalla sobre las últimas 50.
+                  const aguja = q.trim();
+                  const busqueda = aguja === "" ? "" : `&search=${encodeURIComponent(aguja)}`;
                   const r = await llamar<{
                     items: {
                       id: string;
@@ -561,11 +690,13 @@ function CargarRetencion(): React.JSX.Element {
                       functional_currency: string;
                       issued_at: string | null;
                     }[];
-                  }>(`/v1/documents?kind=invoice&customer_id=${cliente.id}&per_page=25`);
+                  }>(
+                    `/v1/documents?kind=invoice&status=issued&customer_id=${cliente.id}&per_page=20${busqueda}`,
+                  );
                   return r.items.map((d) => ({
                     id: d.id,
                     label: `${d.series}-${d.document_number ?? "—"}`,
-                    detalle: `${(d.issued_at ?? "").slice(0, 10)} · ${mostrarImporte({
+                    detalle: `${fechaLocal(d.issued_at)} · ${mostrarImporte({
                       amount: d.total_amount,
                       currency: d.functional_currency,
                     })}`,
@@ -604,7 +735,10 @@ function CargarRetencion(): React.JSX.Element {
               />
             )}
           </FormField>
-          <FormField label="Porción retenida">
+          <FormField
+            label="Porción retenida"
+            hint="La que dice el comprobante: 75 % en general, 100 % en los supuestos que fija la providencia vigente de retenciones de IVA (PA SNAT/2025/000054). Confírmalo con tu contador."
+          >
             {(a) => (
               <SimpleSelect
                 id={a.id}
@@ -658,9 +792,17 @@ function Calendario(): React.JSX.Element {
     queryFn: () => llamar<{ items: FiscalDeadline[] }>("/v1/fiscal-declarations/deadlines"),
   });
 
-  if (vencimientos.isLoading) return <Skeleton className="h-48" />;
-  const items = vencimientos.data?.items ?? [];
-  const hoy = new Date().toISOString().slice(0, 10);
+  if (vencimientos.isPending) return <Skeleton className="h-48" />;
+  if (vencimientos.isError) {
+    return (
+      <div className="space-y-4">
+        <CargarVencimiento />
+        <FalloDeCarga error={vencimientos.error} reintentar={() => void vencimientos.refetch()} />
+      </div>
+    );
+  }
+  const items = vencimientos.data.items;
+  const hoy = hoyLocal();
 
   return (
     <div className="space-y-4">

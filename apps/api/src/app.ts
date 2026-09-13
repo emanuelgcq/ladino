@@ -98,8 +98,10 @@ export function buildApp(cfg: AppConfig): Hono {
   // CORS con UN origen explícito, nunca "*": la webapp manda Authorization y
   // headers propios, y el navegador exige el preflight. En producción es el
   // dominio de la webapp (CORS_ORIGIN); en local, el dev server de Vite.
-  // PATCH y PUT están porque los usan tesorería y el mapeo tributario: un
-  // método que falta aquí falla en el preflight con un error que no dice CORS.
+  // PATCH y PUT están porque los usan tesorería y el mapeo tributario; DELETE
+  // porque lo usan «quitar rol» (members) y «descartar cuenta» (pos/carts). Un
+  // método que falta aquí falla en el preflight con un error que no dice CORS:
+  // pasó con DELETE en producción (auditoría 2026-09-11).
   app.use(
     "*",
     cors({
@@ -111,7 +113,7 @@ export function buildApp(cfg: AppConfig): Hono {
         "X-Company-Id",
         "X-Request-Id",
       ],
-      allowMethods: ["GET", "POST", "PATCH", "PUT", "OPTIONS"],
+      allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
       maxAge: 600,
     }),
   );

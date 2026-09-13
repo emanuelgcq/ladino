@@ -14,7 +14,11 @@ import { Skeleton } from "../../ui/card.js";
 import { Table, TBody, TD, TDNum, TH, THead, TR } from "../../ui/table.js";
 import { mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
-import { numeroDe, KIND_LABEL } from "./comunes.js";
+import { KIND_LABEL, MensajeError } from "./comunes.js";
+import { numeroDocumento } from "../../components/documento.js";
+import { Button } from "../../ui/button.js";
+import { Badge, type BadgeTone } from "../../ui/badge.js";
+import { fechaLocal } from "../../fechas.js";
 
 /**
  * Estado de cuenta del cliente con su AGING visual. Todas las cifras —saldos,
@@ -38,7 +42,13 @@ interface Statement {
   customer_id: string;
   currency: string;
   documents: DocumentoStatement[];
-  credits: { id: string; amount: string; applied_amount: string; status: string }[];
+  credits: {
+    id: string;
+    source_document_id: string;
+    amount: string;
+    applied_amount: string;
+    status: string;
+  }[];
   total_outstanding: string;
   total_credit_available: string;
 }
@@ -123,6 +133,21 @@ export function Cuentas(): React.JSX.Element {
           title="Elige un cliente"
           description="Su estado de cuenta aparece aquí: saldo pendiente, aging y documentos."
         />
+      ) : statement.isError || aging.isError ? (
+        // Un fallo no es un esqueleto eterno: se dice en voz de persona y se
+        // reintenta lo que falló.
+        <div className="space-y-2">
+          <MensajeError error={statement.isError ? statement.error : aging.error} />
+          <Button
+            variant="secondary"
+            onClick={() => {
+              if (statement.isError) void statement.refetch();
+              if (aging.isError) void aging.refetch();
+            }}
+          >
+            Reintentar
+          </Button>
+        </div>
       ) : statement.data === undefined || aging.data === undefined ? (
         <div className="space-y-3">
           <Skeleton className="h-24 w-full" />
@@ -146,6 +171,12 @@ const ETIQUETA_BUCKET: Record<string, string> = {
   "31-60": "31–60",
   "61-90": "61–90",
   "90+": "+90 días",
+};
+
+const ESTADO_CREDITO: Record<string, { etiqueta: string; tone: BadgeTone }> = {
+  available: { etiqueta: "Disponible", tone: "accent" },
+  applied: { etiqueta: "Aplicado", tone: "neutral" },
+  expired: { etiqueta: "Vencido", tone: "destructive" },
 };
 
 function EstadoDeCuenta({
@@ -222,66 +253,135 @@ function EstadoDeCuenta({
         </CardContent>
       </Card>
 
+      {data.credits.length > 0 && (
+        <Card className="lg:col-span-3">
+          <CardHeader>
+            <CardTitle>Saldos a favor</CardTitle>
+          </CardHeader>
+          <CardContent className="px-0 pb-1">
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Origen</TH>
+                  <TH>Estado</TH>
+                  <TH className="text-right">Importe</TH>
+                  <TH className="text-right">Aplicado</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {data.credits.map((c) => {
+                  const e = ESTADO_CREDITO[c.status] ?? {
+                    etiqueta: c.status,
+                    tone: "outline" as const,
+                  };
+                  return (
+                    <TR key={c.id}>
+                      <TD>
+                        <button
+                          type="button"
+                          className="font-mono text-[0.84rem] text-accent-soft-foreground hover:underline"
+                          onClick={() => onAbrirDocumento(c.source_document_id)}
+                        >
+                          Ver la nota de crédito
+                        </button>
+                      </TD>
+                      <TD>
+                        <Badge tone={e.tone}>{e.etiqueta}</Badge>
+                      </TD>
+                      <TDNum>{mostrarImporte({ amount: c.amount, currency: data.currency })}</TDNum>
+                      <TDNum className="text-muted-foreground">
+                        {mostrarImporte({ amount: c.applied_amount, currency: data.currency })}
+                      </TDNum>
+                    </TR>
+                  );
+                })}
+              </TBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="lg:col-span-3">
         <CardHeader>
           <CardTitle>Documentos</CardTitle>
         </CardHeader>
         <CardContent className="px-0 pb-1">
-          <Table>
-            <THead>
-              <TR>
-                <TH>Fecha</TH>
-                <TH>Documento</TH>
-                <TH>Estado</TH>
-                <TH className="text-right">Total</TH>
-                <TH className="text-right">Cobrado</TH>
-                <TH className="text-right">Saldo</TH>
-                <TH className="text-right">Días</TH>
-              </TR>
-            </THead>
-            <TBody>
-              {data.documents.map((d) => (
-                <TR
-                  key={d.id}
-                  data-clickable
-                  onClick={() => onAbrirDocumento(d.id)}
-                  className="cursor-pointer"
-                >
-                  <TD>{d.issued_at?.slice(0, 10) ?? "—"}</TD>
-                  <TD>
-                    <span className="font-mono text-[0.84rem]">
-                      {KIND_LABEL[d.kind] ?? d.kind} {numeroDe(d)}
-                    </span>
-                  </TD>
-                  <TD>
-                    <FiscalStatusBadge estado={d.status} />
-                  </TD>
-                  <TDNum>
-                    {mostrarImporte({ amount: d.total_amount, currency: data.currency })}
-                  </TDNum>
-                  <TDNum>
-                    {mostrarImporte({ amount: d.paid_amount, currency: data.currency })}
-                  </TDNum>
-                  {/* Una ANULADA llega con saldo NULL del servidor: no hay
-                      deuda que mostrar, y pintarla como 0 diría «pagada». */}
-                  <TDNum
-                    className={
-                      d.balance === null || esCero(d.balance)
-                        ? "text-faint-foreground"
-                        : "text-warning-soft-foreground"
-                    }
-                  >
-                    {d.balance === null
-                      ? "—"
-                      : mostrarImporte({ amount: d.balance, currency: data.currency })}
-                  </TDNum>
-                  <TDNum className={d.days_outstanding > 60 ? "text-warning-soft-foreground" : ""}>
-                    {d.days_outstanding}
-                  </TDNum>
+          {data.documents.length === 0 ? (
+            <div className="px-4 pb-3">
+              <EmptyState
+                icon={Banknote}
+                title="Sin documentos"
+                description="Este cliente no tiene facturas ni notas emitidas todavía."
+              />
+            </div>
+          ) : (
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Fecha</TH>
+                  <TH>Documento</TH>
+                  <TH>Estado</TH>
+                  <TH className="text-right">Total</TH>
+                  <TH className="text-right">Cobrado</TH>
+                  <TH className="text-right">Saldo</TH>
+                  <TH className="text-right">Días</TH>
                 </TR>
-              ))}
-            </TBody>
-          </Table>
+              </THead>
+              <TBody>
+                {data.documents.map((d) => (
+                  <TR
+                    key={d.id}
+                    data-clickable
+                    onClick={() => onAbrirDocumento(d.id)}
+                    className="cursor-pointer"
+                    // Fila clicable navegable por teclado: Enter o espacio abren.
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onAbrirDocumento(d.id);
+                      }
+                    }}
+                  >
+                    <TD>{fechaLocal(d.issued_at)}</TD>
+                    <TD>
+                      <span className="font-mono text-[0.84rem]">
+                        {KIND_LABEL[d.kind] ?? d.kind}{" "}
+                        {numeroDocumento(d.series, d.document_number)}
+                      </span>
+                    </TD>
+                    <TD>
+                      <FiscalStatusBadge estado={d.status} />
+                    </TD>
+                    <TDNum>
+                      {mostrarImporte({ amount: d.total_amount, currency: data.currency })}
+                    </TDNum>
+                    <TDNum>
+                      {mostrarImporte({ amount: d.paid_amount, currency: data.currency })}
+                    </TDNum>
+                    {/* Una ANULADA llega con saldo NULL del servidor: no hay
+                      deuda que mostrar, y pintarla como 0 diría «pagada». */}
+                    <TDNum
+                      className={
+                        d.balance === null || esCero(d.balance)
+                          ? "text-faint-foreground"
+                          : "text-warning-soft-foreground"
+                      }
+                    >
+                      {d.balance === null
+                        ? "—"
+                        : mostrarImporte({ amount: d.balance, currency: data.currency })}
+                    </TDNum>
+                    <TDNum
+                      className={d.days_outstanding > 60 ? "text-warning-soft-foreground" : ""}
+                    >
+                      {d.days_outstanding}
+                    </TDNum>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
     </div>

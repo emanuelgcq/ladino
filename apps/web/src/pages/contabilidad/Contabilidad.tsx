@@ -1,22 +1,31 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpenCheck, CalendarX2, Import, Plus, Trash2 } from "lucide-react";
+import { BookOpenCheck, CalendarX2, Import, Pencil, Plus, Trash2 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
 import { DatePicker, FormField } from "../../components/forms.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
+import { esCero } from "../../components/decimal-compare.js";
 import { Button } from "../../ui/button.js";
 import { Input, Textarea } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
+import { Switch } from "../../ui/switch.js";
 import { Badge, type BadgeTone } from "../../ui/badge.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../ui/card.js";
 import { Skeleton } from "../../ui/card.js";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../../ui/tabs.js";
 import { Table, TBody, TD, TDNum, TH, THead, TR } from "../../ui/table.js";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../ui/dialog.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from "../../ui/dialog.js";
 import { useToast } from "../../ui/toast.js";
-import { mostrarImporte } from "../../money.js";
+import { mostrarCantidad, mostrarImporte } from "../../money.js";
+import { LlamadaApiError, errorDePersona } from "../../lib.js";
 import { MensajeError } from "../ventas/comunes.js";
 import type { ColumnDef } from "@tanstack/react-table";
 import type {
@@ -32,6 +41,7 @@ import type {
   PendingJournal,
   TrialBalance,
 } from "../../lib.js";
+import { hoyLocal } from "../../fechas.js";
 
 /**
  * Contabilidad — Fase B. Siete superficies en pestañas; la pantalla NO calcula
@@ -39,15 +49,70 @@ import type {
  *
  * La ÚNICA excepción sigue siendo la del asiento manual, y sigue cumpliendo
  * sus tres condiciones (apps/web/CLAUDE.md): no persiste nada, no decide nada
- * —el trigger del servidor rechaza igual— y compara ENTEROS de céntimos.
+ * —el trigger del servidor rechaza igual— y compara ENTEROS (BigInt escalado
+ * a 8 decimales, la escala del numeric del servidor; ver `sumarEscala8`).
  */
-const HOY = (): string => new Date().toISOString().slice(0, 10);
+const HOY = (): string => hoyLocal();
 
 const ESTADO_ASIENTO: Record<string, { etiqueta: string; tone: BadgeTone }> = {
   draft: { etiqueta: "Borrador", tone: "neutral" },
   posted: { etiqueta: "Posteado", tone: "accent" },
   reversed: { etiqueta: "Reversado", tone: "warning" },
 };
+
+/**
+ * Orígenes de un asiento (`source_kind` del servidor) con su etiqueta en
+ * español. La lista es la que el filtro del diario ofrece; un valor que el
+ * servidor mande y no esté aquí se enseña tal cual, nunca se oculta.
+ */
+const ORIGEN_ASIENTO: { value: string; label: string }[] = [
+  { value: "manual", label: "Manual" },
+  { value: "sales_invoice", label: "Factura de venta" },
+  { value: "sales_receipt", label: "Recibo de venta" },
+  { value: "sales_credit_note", label: "Nota de crédito (venta)" },
+  { value: "sales_debit_note", label: "Nota de débito (venta)" },
+  { value: "payment_received", label: "Cobro recibido" },
+  { value: "purchase_invoice", label: "Factura de compra" },
+  { value: "payment_made", label: "Pago realizado" },
+  { value: "expense", label: "Gasto" },
+  { value: "cash_closing", label: "Cierre de caja" },
+  { value: "inventory_move", label: "Movimiento de inventario" },
+  { value: "landed_cost", label: "Costo en destino" },
+  { value: "igtf_perception", label: "Percepción IGTF" },
+];
+const etiquetaOrigen = (k: string): string => ORIGEN_ASIENTO.find((o) => o.value === k)?.label ?? k;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Moneda con la que se VISTE un importe cuando la fila no la trae. El listado
+ * del diario (`GET /v1/journal-entries`) no manda la moneda funcional y el
+ * tipo `Company` de la webapp tampoco la tiene: hasta que uno de los dos la
+ * traiga, es el único dato disponible. El detalle del asiento sí usa la de sus
+ * líneas.
+ */
+const MONEDA_FUNCIONAL_POR_DEFECTO = "VES";
+
+/**
+ * Error de una consulta con el botón de volver a pedirla. Ninguna pestaña se
+ * queda en blanco ni con un esqueleto eterno: el fallo se lee y se reintenta.
+ */
+function ErrorConReintento({
+  error,
+  onRetry,
+}: {
+  error: unknown;
+  onRetry: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="space-y-2">
+      <MensajeError error={error} />
+      <Button variant="secondary" size="sm" onClick={onRetry}>
+        Reintentar
+      </Button>
+    </div>
+  );
+}
 
 export function Contabilidad(): React.JSX.Element {
   return (
@@ -98,13 +163,23 @@ export function Contabilidad(): React.JSX.Element {
 // ── Plan de cuentas ─────────────────────────────────────────────────────────
 
 function PlanDeCuentas(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
   const [alta, setAlta] = useState({ code: "", name: "", kind: "activo", parent_id: "" });
   const [importando, setImportando] = useState<ChartTemplate | null>(null);
   const [desactivando, setDesactivando] = useState<Account | null>(null);
+  const [editando, setEditando] = useState<Account | null>(null);
+  const [edicion, setEdicion] = useState({ name: "", description: "", requires_analytical: false });
+  const [guardandoEdicion, setGuardandoEdicion] = useState(false);
+  const [asignando, setAsignando] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
+  // Permisos EXACTOS de packages/domain/src/accounting.ts: crear, editar,
+  // desactivar e importar el plan exigen `account.manage`; asignar papeles y
+  // los presets de asiento, `template.manage`. Ocultar es cortesía: el
+  // servidor vuelve a comprobarlo.
+  const gestionaCuentas = puede("accounting.account.manage");
+  const gestionaPapeles = puede("accounting.template.manage");
 
   const datos = useQuery({
     queryKey: ["plan", empresa.id],
@@ -133,8 +208,9 @@ function PlanDeCuentas(): React.JSX.Element {
       toast.success("Plantilla importada", `${r.imported} cuentas y ${r.purposes} papeles.`);
       // ADR-0049: el plan SIN las plantillas de asiento deja toda venta en la
       // cola para siempre — la auditoría de superficie encontró este hueco.
-      // Se importan juntas; si el preset ya estaba, el servidor lo dice y no
-      // es un error que detenga nada.
+      // Se importan juntas. El único fallo que NO es fallo es el 409 (el
+      // preset ya estaba); cualquier otro se dice, porque un plan sin
+      // plantillas de asiento es exactamente el hueco que esto cierra.
       try {
         const t = await llamar<{ imported: number; lines: number }>(
           "/v1/journal-templates/import-preset",
@@ -145,8 +221,12 @@ function PlanDeCuentas(): React.JSX.Element {
           },
         );
         toast.success("Plantillas de asiento importadas", `${t.imported} plantillas.`);
-      } catch {
-        /* preset ya importado o plantilla sin preset: el plan quedó igual */
+      } catch (e) {
+        if (e instanceof LlamadaApiError && e.status === 409) {
+          toast.info("Las plantillas de asiento ya estaban");
+        } else {
+          toast.error("No se importaron las plantillas de asiento", errorDePersona(e));
+        }
       }
       recargar();
     } catch (e) {
@@ -192,10 +272,92 @@ function PlanDeCuentas(): React.JSX.Element {
     }
   }
 
+  function abrirEdicion(a: Account): void {
+    setEdicion({
+      name: a.name,
+      description: a.description ?? "",
+      requires_analytical: a.requires_analytical,
+    });
+    setEditando(a);
+  }
+
+  /**
+   * Editar es solo lo NO estructural (`UpdateAccountRequest`): nombre,
+   * descripción y si exige dimensiones analíticas. El código, el tipo y el
+   * padre no se tocan — cambiarlos sería otra cuenta.
+   */
+  async function guardarEdicion(): Promise<void> {
+    if (editando === null) return;
+    setError(null);
+    setGuardandoEdicion(true);
+    try {
+      const descripcion = edicion.description.trim();
+      await llamar(`/v1/accounts/${editando.id}`, {
+        method: "PATCH",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          name: edicion.name.trim(),
+          description: descripcion === "" ? null : descripcion,
+          requires_analytical: edicion.requires_analytical,
+        }),
+      });
+      toast.success("Cuenta actualizada", `${editando.code} — ${edicion.name.trim()}`);
+      setEditando(null);
+      recargar();
+    } catch (e) {
+      setError(e);
+      toast.error("No se guardó la cuenta", errorDePersona(e));
+    } finally {
+      setGuardandoEdicion(false);
+    }
+  }
+
+  /**
+   * Asignar (o cambiar) la cuenta de un papel. El servidor cierra la vigencia
+   * anterior y abre la nueva (ADR-0029); la pantalla solo dice cuál.
+   */
+  async function asignarPapel(papel: AccountPurposeRow, accountId: string): Promise<void> {
+    if (accountId === papel.account_id) return;
+    setError(null);
+    setAsignando(papel.purpose);
+    try {
+      await llamar("/v1/company-account-settings", {
+        method: "PUT",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          purpose: papel.purpose,
+          account_id: accountId,
+        }),
+      });
+      const cuenta = datos.data?.cuentas.find((c) => c.id === accountId);
+      toast.success(
+        "Papel asignado",
+        `${papel.name} → ${cuenta === undefined ? accountId : `${cuenta.code} — ${cuenta.name}`}`,
+      );
+      recargar();
+    } catch (e) {
+      setError(e);
+      toast.error("No se asignó el papel", errorDePersona(e));
+    } finally {
+      setAsignando(null);
+    }
+  }
+
   const d = datos.data;
   const sinAsignar = (d?.papeles ?? []).filter((p) => p.account_id === null);
 
-  if (d === undefined) return <Skeleton className="h-48 w-full" />;
+  if (datos.isPending) return <Skeleton className="h-48 w-full" />;
+  if (datos.isError || d === undefined) {
+    return <ErrorConReintento error={datos.error} onRetry={() => void datos.refetch()} />;
+  }
+
+  // Un papel apunta a una cuenta que RECIBE asientos: hoja y activa. Ofrecer
+  // una agrupadora sería ofrecer el 409 de después.
+  const cuentasAsignables = d.cuentas
+    .filter((c) => c.is_active && c.is_leaf)
+    .map((c) => ({ value: c.id, label: `${c.code} — ${c.name}` }));
 
   return (
     <div className="space-y-4">
@@ -225,14 +387,16 @@ function PlanDeCuentas(): React.JSX.Element {
                 <p className="mt-1 text-[0.78rem] text-faint-foreground">
                   Fuente: {t.legal_source}
                 </p>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  className="mt-2"
-                  onClick={() => setImportando(t)}
-                >
-                  <Import /> Importar esta plantilla…
-                </Button>
+                {gestionaCuentas && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => setImportando(t)}
+                  >
+                    <Import /> Importar esta plantilla…
+                  </Button>
+                )}
               </div>
             ))}
           </CardContent>
@@ -281,10 +445,22 @@ function PlanDeCuentas(): React.JSX.Element {
                       )}
                     </TD>
                     <TD>
-                      {a.is_active && (
-                        <Button variant="ghost" size="sm" onClick={() => setDesactivando(a)}>
-                          Desactivar
-                        </Button>
+                      {gestionaCuentas && (
+                        <span className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label={`Editar ${a.code}`}
+                            onClick={() => abrirEdicion(a)}
+                          >
+                            <Pencil /> Editar
+                          </Button>
+                          {a.is_active && (
+                            <Button variant="ghost" size="sm" onClick={() => setDesactivando(a)}>
+                              Desactivar
+                            </Button>
+                          )}
+                        </span>
                       )}
                     </TD>
                   </TR>
@@ -295,69 +471,74 @@ function PlanDeCuentas(): React.JSX.Element {
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Crear cuenta</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <FormField label="Código" required>
-              {(a) => (
-                <Input
-                  id={a.id}
-                  className="font-mono"
-                  value={alta.code}
-                  onChange={(e) => setAlta({ ...alta, code: e.target.value })}
-                />
-              )}
-            </FormField>
-            <FormField label="Nombre" required>
-              {(a) => (
-                <Input
-                  id={a.id}
-                  value={alta.name}
-                  onChange={(e) => setAlta({ ...alta, name: e.target.value })}
-                />
-              )}
-            </FormField>
-            <FormField
-              label="Tipo"
-              required
-              hint="La naturaleza la impone el tipo: activo y gasto, deudoras."
+      {gestionaCuentas && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Crear cuenta</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <FormField label="Código" required>
+                {(a) => (
+                  <Input
+                    id={a.id}
+                    className="font-mono"
+                    value={alta.code}
+                    onChange={(e) => setAlta({ ...alta, code: e.target.value })}
+                  />
+                )}
+              </FormField>
+              <FormField label="Nombre" required>
+                {(a) => (
+                  <Input
+                    id={a.id}
+                    value={alta.name}
+                    onChange={(e) => setAlta({ ...alta, name: e.target.value })}
+                  />
+                )}
+              </FormField>
+              <FormField
+                label="Tipo"
+                required
+                hint="La naturaleza la impone el tipo: activo y gasto, deudoras."
+              >
+                {(a) => (
+                  <SimpleSelect
+                    id={a.id}
+                    value={alta.kind}
+                    onValueChange={(v) => setAlta({ ...alta, kind: v })}
+                    options={["activo", "pasivo", "patrimonio", "ingreso", "gasto", "orden"].map(
+                      (k) => ({ value: k, label: k }),
+                    )}
+                  />
+                )}
+              </FormField>
+              <FormField label="Cuenta padre">
+                {(a) => (
+                  <SimpleSelect
+                    id={a.id}
+                    value={alta.parent_id === "" ? null : alta.parent_id}
+                    onValueChange={(v) => setAlta({ ...alta, parent_id: v })}
+                    placeholder="Sin padre (raíz)"
+                    options={d.cuentas.map((c) => ({
+                      value: c.id,
+                      label: `${c.code} — ${c.name}`,
+                    }))}
+                  />
+                )}
+              </FormField>
+            </div>
+            <Button
+              variant="secondary"
+              className="mt-3"
+              disabled={alta.code.trim() === "" || alta.name.trim() === ""}
+              onClick={() => void crear()}
             >
-              {(a) => (
-                <SimpleSelect
-                  id={a.id}
-                  value={alta.kind}
-                  onValueChange={(v) => setAlta({ ...alta, kind: v })}
-                  options={["activo", "pasivo", "patrimonio", "ingreso", "gasto", "orden"].map(
-                    (k) => ({ value: k, label: k }),
-                  )}
-                />
-              )}
-            </FormField>
-            <FormField label="Cuenta padre">
-              {(a) => (
-                <SimpleSelect
-                  id={a.id}
-                  value={alta.parent_id === "" ? null : alta.parent_id}
-                  onValueChange={(v) => setAlta({ ...alta, parent_id: v })}
-                  placeholder="Sin padre (raíz)"
-                  options={d.cuentas.map((c) => ({ value: c.id, label: `${c.code} — ${c.name}` }))}
-                />
-              )}
-            </FormField>
-          </div>
-          <Button
-            variant="secondary"
-            className="mt-3"
-            disabled={alta.code.trim() === "" || alta.name.trim() === ""}
-            onClick={() => void crear()}
-          >
-            <Plus /> Crear cuenta
-          </Button>
-        </CardContent>
-      </Card>
+              <Plus /> Crear cuenta
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -369,6 +550,7 @@ function PlanDeCuentas(): React.JSX.Element {
             <p role="alert" className="px-4 pb-2 text-[0.85rem] text-warning-soft-foreground">
               Cada papel sin cuenta impide generar el asiento automático que lo usa: el documento
               cae a la cola de pendientes.
+              {gestionaPapeles && " Elige la cuenta en la fila del papel."}
             </p>
           )}
           <Table>
@@ -383,7 +565,25 @@ function PlanDeCuentas(): React.JSX.Element {
                 <TR key={p.purpose}>
                   <TD title={p.description}>{p.name}</TD>
                   <TD>
-                    {p.account_code === null ? (
+                    {gestionaPapeles ? (
+                      <div className="flex items-center gap-2">
+                        <div className="w-80 max-w-full">
+                          <SimpleSelect
+                            ariaLabel={`Cuenta para ${p.name}`}
+                            value={p.account_id}
+                            onValueChange={(v) => void asignarPapel(p, v)}
+                            disabled={asignando !== null}
+                            placeholder="Sin asignar — elige una cuenta…"
+                            options={cuentasAsignables}
+                          />
+                        </div>
+                        {p.account_code === null ? (
+                          <Badge tone="warning">sin asignar</Badge>
+                        ) : asignando === p.purpose ? (
+                          <span className="text-[0.82rem] text-faint-foreground">Guardando…</span>
+                        ) : null}
+                      </div>
+                    ) : p.account_code === null ? (
                       <Badge tone="warning">sin asignar</Badge>
                     ) : (
                       <span className="font-mono text-[0.84rem]">
@@ -397,6 +597,58 @@ function PlanDeCuentas(): React.JSX.Element {
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={editando !== null} onOpenChange={(v) => !v && setEditando(null)}>
+        <DialogContent>
+          <DialogTitle>Editar {editando?.code ?? ""}</DialogTitle>
+          <DialogDescription>
+            Solo lo que no es estructural: el código, el tipo y la cuenta padre no cambian.
+          </DialogDescription>
+          <div className="mt-3 space-y-3">
+            <FormField label="Nombre" required>
+              {(a) => (
+                <Input
+                  id={a.id}
+                  value={edicion.name}
+                  onChange={(e) => setEdicion({ ...edicion, name: e.target.value })}
+                />
+              )}
+            </FormField>
+            <FormField label="Descripción">
+              {(a) => (
+                <Textarea
+                  id={a.id}
+                  value={edicion.description}
+                  onChange={(e) => setEdicion({ ...edicion, description: e.target.value })}
+                />
+              )}
+            </FormField>
+            <div className="flex items-center gap-3">
+              <Switch
+                id="cuenta-requiere-analitica"
+                checked={edicion.requires_analytical}
+                onCheckedChange={(v: boolean) => setEdicion({ ...edicion, requires_analytical: v })}
+                aria-label="Exige dimensiones analíticas en cada línea"
+              />
+              <label htmlFor="cuenta-requiere-analitica" className="text-[0.9rem]">
+                Exige centro de costo, proyecto o tercero en cada línea
+              </label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditando(null)} disabled={guardandoEdicion}>
+              Volver
+            </Button>
+            <Button
+              variant="primary"
+              disabled={guardandoEdicion || edicion.name.trim() === ""}
+              onClick={() => void guardarEdicion()}
+            >
+              {guardandoEdicion ? "Guardando…" : "Guardar la cuenta"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={importando !== null}
@@ -426,11 +678,16 @@ function PlanDeCuentas(): React.JSX.Element {
 
 // ── Diario ──────────────────────────────────────────────────────────────────
 
+const DIARIO_POR_PAGINA = 25;
+
 function Diario(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
+  const [pagina, setPagina] = useState(1);
   const [status, setStatus] = useState("");
+  const [origen, setOrigen] = useState("");
+  const [sourceId, setSourceId] = useState("");
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
   const [abierto, setAbierto] = useState<string | null>(null);
@@ -438,18 +695,37 @@ function Diario(): React.JSX.Element {
   const [reversando, setReversando] = useState<string | null>(null);
   const [motivo, setMotivo] = useState("");
   const [error, setError] = useState<unknown>(null);
+  const puedePostear = puede("accounting.entry.post");
+  const puedeReversar = puede("accounting.entry.reverse");
+
+  // Cambiar un filtro vuelve a la página 1: la página 4 de otro filtro no
+  // significa nada.
+  const filtrar =
+    <T,>(poner: (v: T) => void) =>
+    (v: T): void => {
+      poner(v);
+      setPagina(1);
+    };
+  // El ID de origen solo viaja cuando ya es un uuid entero: mandarlo a medias
+  // sería un 400 por cada tecla.
+  const sourceIdFiltro = UUID_RE.test(sourceId.trim()) ? sourceId.trim().toLowerCase() : "";
+
+  const consulta = useMemo(() => {
+    const q = new URLSearchParams();
+    q.set("page", String(pagina));
+    q.set("per_page", String(DIARIO_POR_PAGINA));
+    if (status !== "") q.set("status", status);
+    if (origen !== "") q.set("source_kind", origen);
+    if (sourceIdFiltro !== "") q.set("source_id", sourceIdFiltro);
+    if (desde !== "") q.set("from", desde);
+    if (hasta !== "") q.set("to", hasta);
+    return q.toString();
+  }, [pagina, status, origen, sourceIdFiltro, desde, hasta]);
 
   const asientos = useQuery({
-    queryKey: ["diario", empresa.id, status, desde, hasta],
-    queryFn: () => {
-      const q = new URLSearchParams();
-      if (status !== "") q.set("status", status);
-      if (desde !== "") q.set("from", desde);
-      if (hasta !== "") q.set("to", hasta);
-      return llamar<{ items: JournalEntry[]; total: number }>(
-        `/v1/journal-entries?${q.toString()}`,
-      );
-    },
+    queryKey: ["diario", empresa.id, consulta],
+    queryFn: () =>
+      llamar<{ items: JournalEntry[]; total: number }>(`/v1/journal-entries?${consulta}`),
   });
   const recargar = () => void qc.invalidateQueries({ queryKey: ["diario", empresa.id] });
 
@@ -496,7 +772,13 @@ function Diario(): React.JSX.Element {
       },
       { id: "fecha", header: "Fecha", accessorKey: "posting_date" },
       { id: "descripcion", header: "Descripción", accessorKey: "description" },
-      { id: "origen", header: "Origen", accessorKey: "source_kind", enableSorting: false },
+      {
+        id: "origen",
+        header: "Origen",
+        accessorKey: "source_kind",
+        enableSorting: false,
+        cell: (c) => etiquetaOrigen(c.getValue<string>()),
+      },
       {
         id: "estado",
         header: "Estado",
@@ -517,7 +799,10 @@ function Diario(): React.JSX.Element {
         accessorKey: "total_debit",
         cell: (c) => (
           <span className="block text-right font-mono text-[0.84rem]">
-            {mostrarImporte({ amount: c.getValue<string>(), currency: "VES" })}
+            {mostrarImporte({
+              amount: c.getValue<string>(),
+              currency: MONEDA_FUNCIONAL_POR_DEFECTO,
+            })}
           </span>
         ),
       },
@@ -529,12 +814,12 @@ function Diario(): React.JSX.Element {
           const e = c.row.original;
           return (
             <span className="flex justify-end gap-1" onClick={(ev) => ev.stopPropagation()}>
-              {e.status === "draft" && (
+              {e.status === "draft" && puedePostear && (
                 <Button variant="outline" size="sm" onClick={() => setPosteando(e.id)}>
                   Postear
                 </Button>
               )}
-              {e.status === "posted" && (
+              {e.status === "posted" && puedeReversar && (
                 <Button variant="ghost" size="sm" onClick={() => setReversando(e.id)}>
                   Reversar
                 </Button>
@@ -544,7 +829,7 @@ function Diario(): React.JSX.Element {
         },
       },
     ],
-    [],
+    [puedePostear, puedeReversar],
   );
 
   return (
@@ -553,19 +838,25 @@ function Diario(): React.JSX.Element {
       <DataTable
         columns={columnas}
         data={asientos.data?.items}
-        error={asientos.error instanceof Error ? asientos.error.message : null}
+        error={asientos.isError ? errorDePersona(asientos.error) : null}
         onRetry={() => void asientos.refetch()}
         getRowId={(e) => e.id}
         onRowClick={(e) => setAbierto(e.id)}
         density="compact"
         exportCsv={{ filename: `diario-${empresa.tax_id}.csv` }}
+        pagination={{
+          total: asientos.data?.total ?? 0,
+          page: pagina,
+          perPage: DIARIO_POR_PAGINA,
+          onPageChange: setPagina,
+        }}
         toolbar={
           <div className="flex flex-wrap items-center gap-2">
             <div className="w-40">
               <SimpleSelect
                 ariaLabel="Estado del asiento"
                 value={status === "" ? "todos" : status}
-                onValueChange={(v) => setStatus(v === "todos" ? "" : v)}
+                onValueChange={filtrar((v: string) => setStatus(v === "todos" ? "" : v))}
                 options={[
                   { value: "todos", label: "Todos" },
                   { value: "draft", label: "Borrador" },
@@ -574,9 +865,25 @@ function Diario(): React.JSX.Element {
                 ]}
               />
             </div>
-            <DatePicker value={desde} onChange={setDesde} />
+            <div className="w-52">
+              <SimpleSelect
+                ariaLabel="Origen del asiento"
+                value={origen === "" ? "todos" : origen}
+                onValueChange={filtrar((v: string) => setOrigen(v === "todos" ? "" : v))}
+                options={[{ value: "todos", label: "Cualquier origen" }, ...ORIGEN_ASIENTO]}
+              />
+            </div>
+            <Input
+              aria-label="ID del documento de origen"
+              placeholder="ID de origen (uuid)"
+              className="w-72 font-mono text-[0.84rem]"
+              value={sourceId}
+              onChange={(e) => filtrar(setSourceId)(e.target.value)}
+              aria-invalid={sourceId.trim() !== "" && sourceIdFiltro === "" ? true : undefined}
+            />
+            <DatePicker value={desde} onChange={filtrar(setDesde)} />
             <span className="text-faint-foreground">–</span>
-            <DatePicker value={hasta} onChange={setHasta} />
+            <DatePicker value={hasta} onChange={filtrar(setHasta)} />
           </div>
         }
         empty={{
@@ -630,11 +937,26 @@ function DetalleAsiento({ id, onCerrar }: { id: string; onCerrar: () => void }):
     queryFn: () => llamar<JournalEntryDetail>(`/v1/journal-entries/${id}`),
   });
   const d = detalle.data;
+  // La moneda funcional viene en CADA línea; el asiento entero está en una
+  // sola (partida doble en moneda funcional), así que la primera vale.
+  const moneda = d?.lines[0]?.functional_currency ?? MONEDA_FUNCIONAL_POR_DEFECTO;
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
       <DialogContent className="max-w-3xl">
-        {d === undefined ? (
-          <Skeleton className="h-40 w-full" />
+        {detalle.isPending ? (
+          <>
+            <DialogTitle>Asiento</DialogTitle>
+            <DialogDescription>Cargando el asiento…</DialogDescription>
+            <Skeleton className="mt-3 h-40 w-full" />
+          </>
+        ) : detalle.isError || d === undefined ? (
+          <>
+            <DialogTitle>Asiento</DialogTitle>
+            <DialogDescription>No se pudo cargar el asiento.</DialogDescription>
+            <div className="mt-3">
+              <ErrorConReintento error={detalle.error} onRetry={() => void detalle.refetch()} />
+            </div>
+          </>
         ) : (
           <>
             <DialogTitle>
@@ -645,7 +967,7 @@ function DetalleAsiento({ id, onCerrar }: { id: string; onCerrar: () => void }):
               {d.entry.is_reversal_of !== null && " · es la reversión de otro asiento"}
               {d.entry.reversed_by_entry_id !== null && " · reversado por otro asiento"}
               {d.entry.source_id !== null &&
-                ` · origen: ${d.entry.source_kind} (${d.entry.source_event ?? ""})`}
+                ` · origen: ${etiquetaOrigen(d.entry.source_kind)} (${d.entry.source_event ?? ""})`}
             </DialogDescription>
             <div className="mt-3">
               <Table>
@@ -667,7 +989,7 @@ function DetalleAsiento({ id, onCerrar }: { id: string; onCerrar: () => void }):
                         {l.account_name}
                       </TD>
                       <TDNum>
-                        {l.functional_debit === "0.00000000"
+                        {esCero(l.functional_debit)
                           ? ""
                           : mostrarImporte({
                               amount: l.functional_debit,
@@ -675,7 +997,7 @@ function DetalleAsiento({ id, onCerrar }: { id: string; onCerrar: () => void }):
                             })}
                       </TDNum>
                       <TDNum>
-                        {l.functional_credit === "0.00000000"
+                        {esCero(l.functional_credit)
                           ? ""
                           : mostrarImporte({
                               amount: l.functional_credit,
@@ -697,11 +1019,11 @@ function DetalleAsiento({ id, onCerrar }: { id: string; onCerrar: () => void }):
               <p className="mt-2 text-right text-[0.9rem]">
                 Débitos{" "}
                 <span className="font-mono font-medium">
-                  {mostrarImporte({ amount: d.entry.total_debit, currency: "VES" })}
+                  {mostrarImporte({ amount: d.entry.total_debit, currency: moneda })}
                 </span>{" "}
                 · Créditos{" "}
                 <span className="font-mono font-medium">
-                  {mostrarImporte({ amount: d.entry.total_credit, currency: "VES" })}
+                  {mostrarImporte({ amount: d.entry.total_credit, currency: moneda })}
                 </span>
               </p>
             </div>
@@ -713,6 +1035,40 @@ function DetalleAsiento({ id, onCerrar }: { id: string; onCerrar: () => void }):
 }
 
 // ── Asiento manual ──────────────────────────────────────────────────────────
+
+const ESCALA = 8;
+
+/**
+ * Un importe tecleado, como BigInt escalado a 8 decimales. `null` si no es un
+ * decimal legible (la API tampoco lo aceptaría). Vacío cuenta como cero para
+ * que una línea a medio escribir no rompa la ayuda.
+ */
+function aEscala8(s: string): bigint | null {
+  const t = s.trim();
+  if (t === "") return BigInt(0);
+  const m = /^(-)?(\d+)(?:\.(\d{1,8}))?$/.exec(t);
+  if (m === null) return null;
+  const v = BigInt((m[2] ?? "0") + (m[3] ?? "").padEnd(ESCALA, "0"));
+  return m[1] === "-" ? -v : v;
+}
+
+/** Suma de importes escalados; `null` en cuanto uno no se entiende. */
+function sumarEscala8(importes: string[]): bigint | null {
+  let acc = BigInt(0);
+  for (const s of importes) {
+    const v = aEscala8(s);
+    if (v === null) return null;
+    acc += v;
+  }
+  return acc;
+}
+
+/** De vuelta a decimal en string («12.50000000»), para enseñarlo con `mostrarCantidad`. */
+function escala8ADecimal(v: bigint): string {
+  const neg = v < BigInt(0);
+  const abs = (neg ? -v : v).toString().padStart(ESCALA + 1, "0");
+  return `${neg ? "-" : ""}${abs.slice(0, -ESCALA)}.${abs.slice(-ESCALA)}`;
+}
 
 interface LineaBorrador {
   clave: string;
@@ -741,21 +1097,18 @@ function AsientoManual(): React.JSX.Element {
   /**
    * EL único cálculo del cliente en todo el módulo, y es legítimo por las tres
    * condiciones documentadas en apps/web/CLAUDE.md: no persiste nada, no
-   * decide nada (el trigger del servidor rechaza igual) y compara ENTEROS de
-   * céntimos para no arrastrar coma flotante en la comparación.
+   * decide nada (el trigger del servidor rechaza igual) y compara ENTEROS.
+   *
+   * El entero es un BigInt ESCALADO A 8 DECIMALES —la escala del numeric(24,8)
+   * del servidor—, no céntimos: la API admite importes con hasta ocho
+   * decimales, y `Math.round(n * 100)` daba «cuadra» a 1.005 contra 1.004999
+   * y «no cuadra» a sumas que el servidor aceptaba. Ningún importe pasa por
+   * `Number`.
    */
-  const centimos = (s: string): number => {
-    const n = Number.parseFloat(s.trim() === "" ? "0" : s);
-    return Number.isFinite(n) ? Math.round(n * 100) : Number.NaN;
-  };
-  const debitos = lineas
-    .filter((l) => l.side === "debit")
-    .reduce((acc, l) => acc + centimos(l.amount), 0);
-  const creditos = lineas
-    .filter((l) => l.side === "credit")
-    .reduce((acc, l) => acc + centimos(l.amount), 0);
+  const debitos = sumarEscala8(lineas.filter((l) => l.side === "debit").map((l) => l.amount));
+  const creditos = sumarEscala8(lineas.filter((l) => l.side === "credit").map((l) => l.amount));
   const cuadra =
-    Number.isFinite(debitos) && Number.isFinite(creditos) && debitos === creditos && debitos > 0;
+    debitos !== null && creditos !== null && debitos === creditos && debitos > BigInt(0);
   const completo =
     lineas.every((l) => l.account_id !== "" && l.amount.trim() !== "") &&
     descripcion.trim().length >= 3;
@@ -803,6 +1156,9 @@ function AsientoManual(): React.JSX.Element {
           Se crea en <strong>borrador</strong>. Postear es un acto aparte, con su propio permiso,
           porque es el que lo hace inmutable.
         </CardDescription>
+        {cuentas.isError && (
+          <ErrorConReintento error={cuentas.error} onRetry={() => void cuentas.refetch()} />
+        )}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <FormField label="Fecha" required>
             {(a) => <DatePicker id={a.id} value={fecha} onChange={setFecha} />}
@@ -907,8 +1263,14 @@ function AsientoManual(): React.JSX.Element {
             <span className="font-medium text-accent-soft-foreground">Cuadra.</span>
           ) : (
             <span className="font-medium text-warning-soft-foreground">
-              No cuadra todavía: débitos {(debitos / 100).toFixed(2)} contra créditos{" "}
-              {(creditos / 100).toFixed(2)}.
+              {debitos === null || creditos === null ? (
+                "Hay un importe que no se entiende: usa punto decimal y hasta ocho decimales."
+              ) : (
+                <>
+                  No cuadra todavía: débitos {mostrarCantidad(escala8ADecimal(debitos))} contra
+                  créditos {mostrarCantidad(escala8ADecimal(creditos))}.
+                </>
+              )}
             </span>
           )}{" "}
           <span className="text-[0.8rem] text-faint-foreground">
@@ -957,6 +1319,9 @@ function Mayor(): React.JSX.Element {
 
   return (
     <div className="space-y-3">
+      {cuentas.isError && (
+        <ErrorConReintento error={cuentas.error} onRetry={() => void cuentas.refetch()} />
+      )}
       <Card>
         <CardContent className="flex flex-wrap items-end gap-3 pt-4">
           <div className="w-72">
@@ -964,7 +1329,8 @@ function Mayor(): React.JSX.Element {
               ariaLabel="Cuenta"
               value={cuentaId === "" ? null : cuentaId}
               onValueChange={setCuentaId}
-              placeholder="Elige cuenta…"
+              placeholder={cuentas.isPending ? "Cargando cuentas…" : "Elige cuenta…"}
+              disabled={cuentas.isPending}
               options={(cuentas.data ?? []).map((a) => ({
                 value: a.id,
                 label: `${a.code} — ${a.name}`,
@@ -976,13 +1342,20 @@ function Mayor(): React.JSX.Element {
           <DatePicker value={hasta} onChange={setHasta} />
           <Button
             variant="primary"
-            disabled={cuentaId === ""}
+            disabled={cuentaId === "" || mayor.isFetching}
             onClick={() => setConsulta({ cuenta: cuentaId, desde, hasta })}
           >
-            <BookOpenCheck /> Consultar
+            <BookOpenCheck /> {mayor.isFetching ? "Consultando…" : "Consultar"}
           </Button>
         </CardContent>
       </Card>
+
+      {/* `isLoading` = pendiente Y pidiendo: con la consulta aún sin lanzar
+          (enabled=false) no hay esqueleto, hay silencio. */}
+      {mayor.isLoading && <Skeleton className="h-40 w-full" />}
+      {mayor.isError && (
+        <ErrorConReintento error={mayor.error} onRetry={() => void mayor.refetch()} />
+      )}
 
       {m !== undefined && (
         <Card>
@@ -1020,16 +1393,18 @@ function Mayor(): React.JSX.Element {
                     <TD className="font-mono text-[0.84rem]">{mov.entry_number ?? "—"}</TD>
                     <TD className="max-w-72 truncate whitespace-normal">{mov.description}</TD>
                     <TDNum>
-                      {mov.debit === "0.00000000"
+                      {esCero(mov.debit)
                         ? ""
                         : mostrarImporte({ amount: mov.debit, currency: m.currency })}
                     </TDNum>
                     <TDNum>
-                      {mov.credit === "0.00000000"
+                      {esCero(mov.credit)
                         ? ""
                         : mostrarImporte({ amount: mov.credit, currency: m.currency })}
                     </TDNum>
-                    <TD className="text-[0.82rem] text-muted-foreground">{mov.source_kind}</TD>
+                    <TD className="text-[0.82rem] text-muted-foreground">
+                      {etiquetaOrigen(mov.source_kind)}
+                    </TD>
                   </TR>
                 ))}
               </TBody>
@@ -1068,11 +1443,20 @@ function Comprobacion(): React.JSX.Element {
           <DatePicker value={desde} onChange={setDesde} />
           <span className="text-faint-foreground">–</span>
           <DatePicker value={fecha} onChange={setFecha} />
-          <Button variant="primary" onClick={() => setConsulta({ fecha, desde })}>
-            Generar
+          <Button
+            variant="primary"
+            disabled={balance.isFetching}
+            onClick={() => setConsulta({ fecha, desde })}
+          >
+            {balance.isFetching ? "Generando…" : "Generar"}
           </Button>
         </CardContent>
       </Card>
+
+      {balance.isLoading && <Skeleton className="h-40 w-full" />}
+      {balance.isError && (
+        <ErrorConReintento error={balance.error} onRetry={() => void balance.refetch()} />
+      )}
 
       {b !== undefined && (
         <>
@@ -1081,8 +1465,10 @@ function Comprobacion(): React.JSX.Element {
               role="alert"
               className="rounded-md border border-destructive bg-destructive-soft px-3 py-2 text-[0.9rem] text-destructive-soft-foreground"
             >
-              El balance NO cuadra: débitos {b.total_debit} contra créditos {b.total_credit}. Eso es
-              un asiento roto en la base, no un error de esta pantalla.
+              El balance NO cuadra: débitos{" "}
+              {mostrarImporte({ amount: b.total_debit, currency: b.currency })} contra créditos{" "}
+              {mostrarImporte({ amount: b.total_credit, currency: b.currency })}. Eso es un asiento
+              roto en la base, no un error de esta pantalla.
             </p>
           )}
           <Card>
@@ -1144,9 +1530,14 @@ function Comprobacion(): React.JSX.Element {
 // ── Cierre ──────────────────────────────────────────────────────────────────
 
 function Cierre(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
+  // Reprocesar la cola GENERA asientos posteados: mismo permiso que postear
+  // (packages/domain/src/journal-backfill.ts).
+  const puedeCerrar = puede("accounting.period.close");
+  const puedeReabrir = puede("accounting.period.reopen");
+  const puedePostear = puede("accounting.entry.post");
   const [anio, setAnio] = useState(String(new Date().getFullYear()));
   const [cerrando, setCerrando] = useState<FiscalPeriod | null>(null);
   const [reabriendo, setReabriendo] = useState<FiscalPeriod | null>(null);
@@ -1194,6 +1585,7 @@ function Cierre(): React.JSX.Element {
       recargar();
     } catch (e) {
       setError(e);
+      toast.error("No se contabilizaron los pendientes", errorDePersona(e));
     } finally {
       setReprocesando(false);
     }
@@ -1265,8 +1657,10 @@ function Cierre(): React.JSX.Element {
       )}
       {error !== null && <MensajeError error={error} />}
 
-      {d === undefined ? (
+      {datos.isPending ? (
         <Skeleton className="h-40 w-full" />
+      ) : datos.isError || d === undefined ? (
+        <ErrorConReintento error={datos.error} onRetry={() => void datos.refetch()} />
       ) : (
         <Card>
           <CardHeader>
@@ -1311,20 +1705,22 @@ function Cierre(): React.JSX.Element {
                       {p.reopened_reason ?? ""}
                     </TD>
                     <TD>
-                      {p.status !== "closed" ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={p.draft_entry_count > 0 || pendientes > 0}
-                          onClick={() => setCerrando(p)}
-                        >
-                          <CalendarX2 /> Cerrar
-                        </Button>
-                      ) : (
-                        <Button variant="ghost" size="sm" onClick={() => setReabriendo(p)}>
-                          Reabrir
-                        </Button>
-                      )}
+                      {p.status !== "closed"
+                        ? puedeCerrar && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={p.draft_entry_count > 0 || pendientes > 0}
+                              onClick={() => setCerrando(p)}
+                            >
+                              <CalendarX2 /> Cerrar
+                            </Button>
+                          )
+                        : puedeReabrir && (
+                            <Button variant="ghost" size="sm" onClick={() => setReabriendo(p)}>
+                              Reabrir
+                            </Button>
+                          )}
                     </TD>
                   </TR>
                 ))}
@@ -1352,18 +1748,20 @@ function Cierre(): React.JSX.Element {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <Button onClick={() => void reprocesar()} disabled={reprocesando}>
-                {reprocesando ? "Contabilizando…" : "Contabilizar los pendientes"}
-              </Button>
-              <span className="text-[0.84rem] text-faint-foreground">
-                Se hacen de 200 en 200, en el orden en que ocurrieron.
-              </span>
-            </div>
+            {puedePostear && (
+              <div className="flex flex-wrap items-center gap-3">
+                <Button onClick={() => void reprocesar()} disabled={reprocesando}>
+                  {reprocesando ? "Contabilizando…" : "Contabilizar los pendientes"}
+                </Button>
+                <span className="text-[0.84rem] text-faint-foreground">
+                  Se hacen de 200 en 200, en el orden en que ocurrieron.
+                </span>
+              </div>
+            )}
             <ul className="space-y-1 text-[0.85rem] text-muted-foreground">
               {d.pendientes.items.map((i) => (
                 <li key={i.id}>
-                  {i.source_kind} · {i.source_event} · {i.reason}
+                  {etiquetaOrigen(i.source_kind)} · {i.source_event} · {i.reason}
                 </li>
               ))}
             </ul>
@@ -1371,27 +1769,30 @@ function Cierre(): React.JSX.Element {
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Cierre anual</CardTitle>
-        </CardHeader>
-        <CardContent className="flex items-end gap-3">
-          <FormField label="Ejercicio">
-            {(a) => (
-              <Input
-                id={a.id}
-                inputMode="numeric"
-                className="w-24 text-center font-mono"
-                value={anio}
-                onChange={(e) => setAnio(e.target.value.replace(/\D/g, ""))}
-              />
-            )}
-          </FormField>
-          <Button variant="secondary" onClick={() => setCierreAnualAbierto(true)}>
-            Ejecutar cierre de ejercicio…
-          </Button>
-        </CardContent>
-      </Card>
+      {/* El cierre anual exige `period.close` (packages/domain/src/accounting.ts). */}
+      {puedeCerrar && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Cierre anual</CardTitle>
+          </CardHeader>
+          <CardContent className="flex items-end gap-3">
+            <FormField label="Ejercicio">
+              {(a) => (
+                <Input
+                  id={a.id}
+                  inputMode="numeric"
+                  className="w-24 text-center font-mono"
+                  value={anio}
+                  onChange={(e) => setAnio(e.target.value.replace(/\D/g, ""))}
+                />
+              )}
+            </FormField>
+            <Button variant="secondary" onClick={() => setCierreAnualAbierto(true)}>
+              Ejecutar cierre de ejercicio…
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <ConfirmDialog
         open={cerrando !== null}
@@ -1411,6 +1812,7 @@ function Cierre(): React.JSX.Element {
         title={`Reabrir ${reabriendo?.year ?? ""}-${String(reabriendo?.month ?? "").padStart(2, "0")}`}
         confirmLabel="Reabrir el período"
         destructive
+        confirmDisabled={motivo.trim().length < 10}
         onConfirm={() => reabrir(reabriendo?.id ?? "")}
       >
         <div className="space-y-2">
@@ -1484,11 +1886,20 @@ function Estados(): React.JSX.Element {
           <DatePicker value={desde} onChange={setDesde} />
           <span className="text-faint-foreground">–</span>
           <DatePicker value={hasta} onChange={setHasta} />
-          <Button variant="primary" onClick={() => setConsulta({ desde, hasta })}>
-            Generar
+          <Button
+            variant="primary"
+            disabled={estados.isFetching}
+            onClick={() => setConsulta({ desde, hasta })}
+          >
+            {estados.isFetching ? "Generando…" : "Generar"}
           </Button>
         </CardContent>
       </Card>
+
+      {estados.isLoading && <Skeleton className="h-40 w-full" />}
+      {estados.isError && (
+        <ErrorConReintento error={estados.error} onRetry={() => void estados.refetch()} />
+      )}
 
       {d !== undefined && (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -1604,21 +2015,31 @@ function Estados(): React.JSX.Element {
  */
 function CoberturaContable(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
+  // La ruta devuelve `{ gaps, healthy }` (accounting.ts). Leer otra clave aquí
+  // dejaba la tarjeta en «Cero huecos» para siempre — ausencia de fallo leída
+  // como éxito (ADR-0023), en el panel que existe para vigilar eso.
   const q = useQuery({
     queryKey: ["cobertura", empresa.id],
     queryFn: () =>
-      llamar<{ items: { source_kind: string; source_id: string; problem: string }[] }>(
-        "/v1/accounting/coverage-gaps",
-      ),
+      llamar<{
+        gaps: { source_kind: string; source_id: string; problem: string }[];
+        healthy: boolean;
+      }>("/v1/accounting/coverage-gaps"),
   });
-  const items = q.data?.items ?? [];
+  const items = q.data?.gaps ?? [];
   return (
-    <Card className={items.length > 0 ? "border-warning-soft" : undefined}>
+    <Card className={items.length > 0 || q.isError ? "border-warning-soft" : undefined}>
       <CardHeader>
         <CardTitle>Cobertura contable</CardTitle>
       </CardHeader>
       <CardContent>
-        {items.length === 0 ? (
+        {q.isPending ? (
+          <CardDescription>Comprobando la cobertura…</CardDescription>
+        ) : q.isError ? (
+          <CardDescription className="text-warning-soft-foreground">
+            No se pudo comprobar la cobertura: {errorDePersona(q.error)}
+          </CardDescription>
+        ) : items.length === 0 ? (
           <CardDescription>
             Cero huecos: todo documento posteado tiene su asiento o su fila en cola. Es el número
             que este panel existe para vigilar.

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardCheck } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card.js";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, Skeleton } from "../ui/card.js";
 import { MiEmpresa } from "./configuracion/MiEmpresa.js";
 import { SimpleSelect } from "../ui/select.js";
 import { Switch } from "../ui/switch.js";
@@ -126,13 +126,29 @@ export function Configuracion(): React.JSX.Element {
                 también lo exige, no solo la pantalla.
               </CardDescription>
             </div>
-            <Switch
-              id="cfg-sin-identificar"
-              checked={ajustes.data?.allow_unidentified_sales ?? true}
-              disabled={ajustes.isLoading || cambiar.isPending}
-              onCheckedChange={(v: boolean) => cambiar.mutate(v)}
-              aria-label="Permitir ventas sin identificar al cliente"
-            />
+            {/* Hasta que el ajuste llegue no se pinta un interruptor: uno
+                encendido «por defecto» enseñaba un valor que nadie había
+                confirmado (auditoría 2026-09-11). */}
+            {ajustes.data !== undefined ? (
+              <Switch
+                id="cfg-sin-identificar"
+                checked={ajustes.data.allow_unidentified_sales}
+                disabled={cambiar.isPending}
+                onCheckedChange={(v: boolean) => cambiar.mutate(v)}
+                aria-label="Permitir ventas sin identificar al cliente"
+              />
+            ) : ajustes.isError ? (
+              <button
+                type="button"
+                className="shrink-0 text-[0.82rem] text-destructive-soft-foreground hover:underline"
+                onClick={() => void ajustes.refetch()}
+                title={errorDePersona(ajustes.error)}
+              >
+                No se pudo leer · reintentar
+              </button>
+            ) : (
+              <Skeleton className="h-5 w-9 shrink-0 rounded-full" aria-label="Cargando" />
+            )}
           </div>
         </CardContent>
       </Card>

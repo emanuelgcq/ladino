@@ -1,6 +1,6 @@
 # ADR-0025 — Modelo RBAC, alcance por recurso y las dos capas del aislamiento
 
-- **Estado:** Propuesto · **Fecha:** 2026-08-08 · **Impacto fiscal:** NO
+- **Estado:** Aceptado (retroactivo, 2026-09-12: implementado desde la migración 20260809175358 y en producción; su §3 queda matizado por ADR-0057) · **Fecha:** 2026-08-08 · **Impacto fiscal:** NO
   (pero sostiene la segregación de funciones, que sí lo tiene)
 - **Concreta:** ADR-0014 (permisos desde memberships) y ADR-0006 (append-only)
 

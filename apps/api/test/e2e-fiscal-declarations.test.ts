@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { diaCaracas } from "./_dia-caracas.js";
 
 /**
  * DECLARACIONES DE IVA de extremo a extremo (migración 46).
@@ -34,9 +35,9 @@ const ROL = crypto.randomUUID();
 const MEM = crypto.randomUUID();
 const ASIG = crypto.randomUUID();
 const RUN = Date.now().toString(36);
-const HOY = new Date().toISOString().slice(0, 10);
-const AYER = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-const MANANA = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+const HOY = diaCaracas();
+const AYER = diaCaracas(-1);
+const MANANA = diaCaracas(1);
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -148,7 +149,7 @@ beforeAll(async () => {
         select 'VE', 'iva', 'ordinario', 'gravado_general', 0.16, ${AYER}::date,
                'Carga de prueba E2E — VALIDAR-SENIAT antes de producción.', 10, ${tipo}
          where not exists (select 1 from public.tax_rules
-                            where jurisdiction = 'VE' and tax_code = 'iva'
+                            where company_id is null and jurisdiction = 'VE' and tax_code = 'iva'
                               and taxpayer_type = 'ordinario'
                               and product_tax_category = 'gravado_general'
                               and transaction_type = ${tipo})`;

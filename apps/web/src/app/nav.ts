@@ -208,8 +208,18 @@ export function rutaInicial(puede: (p: string | readonly string[]) => boolean): 
   if (puede("sales.invoice.issue")) return "/vender";
   if (puede("accounting.entry.create")) return "/admin/contabilidad";
   if (puede("report.export")) return "/admin/reportes";
-  return "/vender";
+  // Quien no encaje en nada de lo anterior aterriza en la PRIMERA entrada que
+  // su rol abre (un operador de almacén, en /admin/inventario). Antes caía en
+  // /vender, cuya guardia lo devolvía aquí: bucle de redirección y pantalla en
+  // blanco (auditoría 2026-09-11). Sin ninguna entrada, «sin acceso».
+  const abierta = [...NAV_NEGOCIO, ...NAV_ADMIN.flatMap((g) => g.items), NAV_EMPEZAR].find(
+    (i) => i.permiso === undefined || puede(i.permiso),
+  );
+  return abierta?.to ?? RUTA_SIN_ACCESO;
 }
+
+/** Pantalla de cortesía para un miembro cuyo rol no abre ninguna entrada. */
+export const RUTA_SIN_ACCESO = "/sin-acceso";
 
 /** Ruta → miga. Lo consumen breadcrumbs y el título del documento. */
 export const CRUMBS: Record<string, string> = {

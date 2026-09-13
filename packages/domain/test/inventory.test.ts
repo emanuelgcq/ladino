@@ -148,8 +148,9 @@ describe("costeo promedio ponderado móvil, de punta a punta", () => {
     await como(JEFE, async ({ sql }) => {
       await sql`
         insert into public.exchange_rates
-          (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
-        values ('USD', 'VES', 50, 'BCV unit-inventario', '2019-06-02',
+          (tenant_id, company_id, from_currency, to_currency, rate, source, rate_date,
+           rate_timestamp)
+        values (${TENANT}, ${COMPANY}, 'USD', 'VES', 50, 'BCV unit-inventario', '2019-06-02',
                 '2019-06-02T12:00:00Z')
         on conflict on constraint exchange_rates_day_key do nothing`;
     });

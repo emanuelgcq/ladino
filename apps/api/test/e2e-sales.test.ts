@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { diaCaracas } from "./_dia-caracas.js";
 
 /**
  * Ventas de extremo a extremo con JWT real, como `ladino_api`.
@@ -46,8 +47,8 @@ const ASIG_MIRON = crypto.randomUUID();
 const RUN = Date.now().toString(36);
 const FUENTE_TASA = "Carga manual E2E (NullBCVAdapter)";
 const FUENTE_REGLA = "Carga de prueba E2E — VALIDAR-SENIAT antes de producción.";
-const HOY = new Date().toISOString().slice(0, 10);
-const AYER = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+const HOY = diaCaracas();
+const AYER = diaCaracas(-1);
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -302,7 +303,7 @@ describe("ventas de extremo a extremo", () => {
       select 'VE', 'iva', 'ordinario', 'gravado_general', 0.16, ${AYER}::date,
              ${FUENTE_REGLA}, 10
        where not exists (select 1 from public.tax_rules
-                          where jurisdiction = 'VE' and tax_code = 'iva'
+                          where company_id is null and jurisdiction = 'VE' and tax_code = 'iva'
                             and taxpayer_type = 'ordinario'
                             and product_tax_category = 'gravado_general')`;
       // La regla GENERAL (taxpayer NULL, prioridad menor): la del Consumidor
@@ -312,7 +313,7 @@ describe("ventas de extremo a extremo", () => {
                                     rate, effective_from, legal_source, priority, transaction_type)
       select 'VE', 'iva', null, 'gravado_general', 0.16, ${AYER}::date, ${FUENTE_REGLA}, 5, 'sale'
        where not exists (select 1 from public.tax_rules
-                          where jurisdiction = 'VE' and tax_code = 'iva'
+                          where company_id is null and jurisdiction = 'VE' and tax_code = 'iva'
                             and taxpayer_type is null
                             and product_tax_category = 'gravado_general'
                             and transaction_type = 'sale')`;
@@ -543,7 +544,7 @@ describe("ventas de extremo a extremo", () => {
       issued_at: `${AYER}T12:00:00.000Z`,
       lines: [{ product_id: PROD, quantity: "1" }],
     });
-    expect(emitida.status).toBe(201);
+    expect(emitida.status, await emitida.clone().text()).toBe(201);
     const doc = (await emitida.json()) as Record<string, string>;
     expect(doc["transaction_currency"]).toBe("USD");
     expect(doc["fx_rate"]).toBe("40.00000000");

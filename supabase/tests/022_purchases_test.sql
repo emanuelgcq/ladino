@@ -351,12 +351,12 @@ select is(platform.compute_retention(10000, 'rate_minus_subtrahend', 0.03, 500, 
   0::numeric,
   'justo en el mínimo sí se aplica la fórmula: 10 000 × 0,03 − 500 = −200 → 0, nunca negativa');
 
-select is((select rate from platform.resolve_retention(
+select is((select rate from platform.resolve_retention('aaaa0022-0000-4000-8000-0000000000a2',
              current_date, 'VE', 'iva', 'iva_compras', 'especial', 'juridica')),
   0.75::numeric, 'resolve_retention devuelve LA regla vigente para contribuyente especial');
 
 select throws_ok($$
-  select * from platform.resolve_retention(
+  select * from platform.resolve_retention('aaaa0022-0000-4000-8000-0000000000a2',
     current_date, 'VE', 'islr', 'islr_fletes', 'especial', 'juridica')
 $$, 'LAD53', null,
   'sin regla cargada, resolve_retention FALLA (LAD53): retener cero sería deber al fisco en silencio');
@@ -368,7 +368,7 @@ insert into public.retention_rules
 values ('VE', 'iva', 'iva_compras', 'especial', 'rate', 1.0, current_date - 30,
         'SEGUNDA REGLA DE PRUEBA, deliberadamente ambigua.', 10);
 select throws_ok($$
-  select * from platform.resolve_retention(
+  select * from platform.resolve_retention('aaaa0022-0000-4000-8000-0000000000a2',
     current_date, 'VE', 'iva', 'iva_compras', 'especial', 'juridica')
 $$, 'LAD53', null,
   'dos reglas con la MISMA prioridad son catálogo ambiguo y también fallan: elegir sería arbitrario');

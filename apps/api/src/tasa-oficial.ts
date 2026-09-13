@@ -10,7 +10,7 @@
  * El botón manual (POST /v1/exchange-rates/bcv) y la carga manual (ADR-0028)
  * siguen intactos: son el fallback con la fuente caída o sin internet.
  */
-import type { createClient } from "@ladino/db";
+import { withTransaction, type createClient } from "@ladino/db";
 import { tasaOficialBcv, BcvNoDisponible, type BcvConfig } from "./bcv.js";
 
 type Sql = ReturnType<typeof createClient>;
@@ -25,7 +25,12 @@ export type ResultadoRefresco =
    *  repite el último día hábil, y esa fila ya existe). */
   | "publicacion_repetida"
   /** La fuente no respondió o respondió basura. El fallback manual sigue. */
-  | "sin_fuente";
+  | "sin_fuente"
+  /** La fuente respondió un número que no se parece a la última tasa
+   *  conocida (otra unidad, otra moneda, un cero perdido): NO se persiste,
+   *  porque `exchange_rates` es global y convertiría las ventas de todos los
+   *  tenants con él (auditoría 2026-09-11, M-18). */
+  | "implausible";
 
 /**
  * Asegura la tasa oficial del día: base primero, fuente solo si falta, insert
@@ -37,7 +42,7 @@ export async function asegurarTasaOficial(sql: Sql, bcv: BcvConfig): Promise<Res
   const [hay] = await sql<{ ok: boolean }[]>`
     select exists (
       select 1 from public.exchange_rates
-       where from_currency = 'USD' and to_currency = 'VES'
+       where from_currency = 'USD' and to_currency = 'VES' and company_id is null
          and rate_date = (now() at time zone 'America/Caracas')::date
     ) as ok`;
   if (hay?.ok === true) return "ya_estaba";
@@ -50,15 +55,34 @@ export async function asegurarTasaOficial(sql: Sql, bcv: BcvConfig): Promise<Res
     throw e;
   }
 
+  // Cota de plausibilidad: frente a la ÚLTIMA tasa OFICIAL conocida (las
+  // propias de cada empresa no cuentan: ADR-0057), una desviación mayor del 50 % en un día no es una devaluación:
+  // es un cambio de formato o de unidad en la fuente. Sin tasa previa, la
+  // primera vale (la carga manual la corrige si hace falta).
+  const [previa] = await sql<{ rate: string }[]>`
+    select rate::text as rate from public.exchange_rates
+     where from_currency = 'USD' and to_currency = 'VES' and company_id is null
+     order by rate_date desc, created_at desc limit 1`;
+  if (previa) {
+    const [plausible] = await sql<{ ok: boolean }[]>`
+      select abs(${tasa.rate}::numeric - ${previa.rate}::numeric) <= ${previa.rate}::numeric * 0.5 as ok`;
+    if (plausible?.ok !== true) return "implausible";
+  }
+
   // La MISMA fuente citada que el botón manual: quien lea el documento no
   // distingue si la tasa la trajo una persona o el refresco — y no debe.
+  // Escrita dentro de withTransaction con el actor de sistema: era la única
+  // escritura del repo fuera del punto de entrada único (created_by nulo).
   const fuente = `BCV oficial vía DolarAPI (${tasa.actualizada})`;
-  const [insertada] = await sql<{ id: string }[]>`
-    insert into public.exchange_rates
-      (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
-    values ('USD', 'VES', ${tasa.rate}, ${fuente}, ${tasa.rateDate}::date, now())
-    on conflict on constraint exchange_rates_day_key do nothing
-    returning id`;
+  const insertada = await withTransaction(sql, { kind: "system" }, async ({ sql: tx }) => {
+    const [fila] = await tx<{ id: string }[]>`
+      insert into public.exchange_rates
+        (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+      values ('USD', 'VES', ${tasa.rate}, ${fuente}, ${tasa.rateDate}::date, now())
+      on conflict on constraint exchange_rates_day_key do nothing
+      returning id`;
+    return fila ?? null;
+  });
   return insertada ? "guardada" : "publicacion_repetida";
 }
 
@@ -84,6 +108,7 @@ export function iniciarRefrescoBcv(
       const resultado = await asegurarTasaOficial(sql, bcv);
       if (resultado === "guardada") log("info", "api.bcv_refresh_saved");
       else if (resultado === "sin_fuente") log("error", "api.bcv_refresh_source_down");
+      else if (resultado === "implausible") log("error", "api.bcv_refresh_implausible");
     } catch (e) {
       // Un fallo del refresco no puede tumbar el servidor: se registra y el
       // siguiente tick lo reintenta. El botón manual sigue existiendo.

@@ -29,6 +29,11 @@ import { formatearDocumento } from "../negocio/comunes.js";
  * uso existentes (POST /v1/onboarding + POST /v1/companies/logo) — cero
  * lógica de negocio aquí — y desemboca SIN pantalla intermedia en /empezar
  * (history.replaceState antes de recargar la sesión).
+ *
+ * El BORRADOR de los diez pasos vive en sessionStorage por usuario
+ * (`ladino.registro.<userId>`): una recarga a mitad de camino no borra lo
+ * escrito. Se limpia al fundar. El logo no se guarda (es un Blob): se vuelve
+ * a elegir.
  */
 
 interface Props {
@@ -52,6 +57,23 @@ type Paso =
   | "contacto"
   | "tu"
   | "resumen";
+
+const PASOS: readonly Paso[] = [
+  "bienvenida",
+  "nombre",
+  "rubro",
+  "rif",
+  "rif-numero",
+  "razon",
+  "direccion",
+  "logo",
+  "contacto",
+  "tu",
+  "resumen",
+];
+
+/** Los prefijos que el SENIAT asigna: J/G empresa y gobierno, V/E persona, P pasaporte. */
+const PREFIJOS_RIF = ["J", "V", "E", "G", "P"] as const;
 
 const RUBROS: {
   code: string;
@@ -114,36 +136,121 @@ interface Datos {
   duenoCedula: string;
 }
 
+const DATOS_VACIOS: Datos = {
+  nombre: "",
+  rubro: null,
+  tieneRif: null,
+  prefijoRif: "J",
+  numeroRif: "",
+  razonSocial: "",
+  direccion: "",
+  logo: null,
+  logoUrl: null,
+  telefono: "",
+  estado: null,
+  ciudad: "",
+  duenoNombre: "",
+  duenoCedula: "",
+};
+
+// ── El borrador en sessionStorage ────────────────────────────────────────────
+
+/** Lo que se guarda: los textos y el paso. El logo (Blob) no cabe; se vuelve a elegir. */
+interface Borrador {
+  paso: Paso;
+  datos: Omit<Datos, "logo" | "logoUrl">;
+  ciudadLibre: boolean;
+}
+
+/**
+ * La clave lleva el `sub` del token de Supabase (el id del usuario), leído
+ * del JWT sin verificarlo: aquí solo sirve para no mezclar borradores de dos
+ * cuentas en el mismo navegador, no para autorizar nada. Si el token no se
+ * deja leer, se usa el correo.
+ */
+function claveBorrador(token: string, correo: string): string {
+  let usuario = correo;
+  try {
+    const cuerpo = token.split(".")[1];
+    if (cuerpo !== undefined) {
+      const json = JSON.parse(atob(cuerpo.replace(/-/g, "+").replace(/_/g, "/"))) as {
+        sub?: unknown;
+      };
+      if (typeof json.sub === "string" && json.sub !== "") usuario = json.sub;
+    }
+  } catch {
+    // Token ilegible: el correo identifica igual.
+  }
+  return `ladino.registro.${usuario}`;
+}
+
+function leerBorrador(clave: string): Borrador | null {
+  try {
+    const crudo = sessionStorage.getItem(clave);
+    if (crudo === null) return null;
+    const b = JSON.parse(crudo) as Partial<Borrador> | null;
+    if (b === null || typeof b !== "object" || typeof b.datos !== "object" || b.datos === null) {
+      return null;
+    }
+    const paso = PASOS.includes(b.paso as Paso) ? (b.paso as Paso) : "bienvenida";
+    const { logo: _l, logoUrl: _u, ...base } = DATOS_VACIOS;
+    return {
+      paso,
+      datos: { ...base, ...b.datos },
+      ciudadLibre: b.ciudadLibre === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function escribirBorrador(clave: string, b: Borrador): void {
+  try {
+    sessionStorage.setItem(clave, JSON.stringify(b));
+  } catch {
+    // Sin sessionStorage el registro sigue; solo que una recarga lo pierde.
+  }
+}
+
+function borrarBorrador(clave: string): void {
+  try {
+    sessionStorage.removeItem(clave);
+  } catch {
+    // nada que borrar
+  }
+}
+
 const REDUCIR = () =>
   typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.Element {
-  const [paso, setPaso] = useState<Paso>("bienvenida");
+  // La clave y el borrador se resuelven UNA vez, al montar: los `useState`
+  // de abajo arrancan de ahí.
+  const [clave] = useState(() => claveBorrador(token, correo));
+  const [borrador] = useState(() => leerBorrador(clave));
+  const [paso, setPaso] = useState<Paso>(borrador?.paso ?? "bienvenida");
   const [rumbo, setRumbo] = useState<1 | -1>(1);
   const [aviso, setAviso] = useState<string | null>(null);
   const [creando, setCreando] = useState(false);
   const [celebrando, setCelebrando] = useState(false);
   const [errorCrear, setErrorCrear] = useState<string | null>(null);
-  const [d, setD] = useState<Datos>({
-    nombre: "",
-    rubro: null,
-    tieneRif: null,
-    prefijoRif: "J",
-    numeroRif: "",
-    razonSocial: "",
-    direccion: "",
-    logo: null,
-    logoUrl: null,
-    telefono: "",
-    estado: null,
-    ciudad: "",
-    duenoNombre: "",
-    duenoCedula: "",
-  });
+  const [d, setD] = useState<Datos>(() =>
+    borrador === null ? DATOS_VACIOS : { ...DATOS_VACIOS, ...borrador.datos },
+  );
+  // «Otra…» ciudad: estado EXPLÍCITO, no un espacio en blanco como centinela
+  // dentro del nombre de la ciudad (auditoría 2026-09-11).
+  const [ciudadLibre, setCiudadLibre] = useState(borrador?.ciudadLibre ?? false);
   const pon = useCallback(<K extends keyof Datos>(k: K, v: Datos[K]) => {
     setAviso(null);
     setD((prev) => ({ ...prev, [k]: v }));
   }, []);
+
+  // Cada cambio deja el borrador escrito. Tras fundar ya no: se borró.
+  useEffect(() => {
+    if (celebrando) return;
+    const { logo: _l, logoUrl: _u, ...datos } = d;
+    escribirBorrador(clave, { paso, datos, ciudadLibre });
+  }, [clave, d, paso, ciudadLibre, celebrando]);
 
   // El orden REAL del viaje según la rama elegida: la barra de progreso y el
   // Atrás salen de aquí, no de un contador suelto.
@@ -161,7 +268,12 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
       "resumen",
     ];
   }, [d.tieneRif]);
+  // Un borrador restaurado en un paso que ya no está en la rama (cambió
+  // «tengo RIF») vuelve al paso del RIF, no a una pantalla huérfana.
   const indice = viaje.indexOf(paso);
+  useEffect(() => {
+    if (indice === -1) setPaso("rif");
+  }, [indice]);
 
   const irA = useCallback((destino: Paso, dir: 1 | -1) => {
     setRumbo(dir);
@@ -210,9 +322,13 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
   }, [indice, viaje, creando, irA]);
 
   // Esc retrocede desde cualquier paso; Enter lo maneja cada formulario.
+  // Con el foco en un <select>, Esc es del select (cierra su lista): no se
+  // retrocede de pantalla por cerrar un desplegable.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") retroceder();
+      if (e.key !== "Escape") return;
+      if (e.target instanceof HTMLSelectElement) return;
+      retroceder();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -250,6 +366,7 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
       });
       if (r.status === 409) {
         // Ya estaba fundado (reintento de un éxito): recargar lo resuelve.
+        borrarBorrador(clave);
         onListo();
         return;
       }
@@ -263,6 +380,8 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
         return;
       }
       const { company_id } = (await r.json()) as { company_id: string };
+      // El negocio EXISTE: el borrador ya no tiene razón de ser.
+      borrarBorrador(clave);
       if (d.logo !== null) {
         // El logo es un adorno: si su subida falla, el negocio YA existe y se
         // reintenta después desde Mi empresa — jamás se bloquea la fundación.
@@ -425,7 +544,7 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
 
         {paso === "rif" && (
           <Pregunta titulo="¿Tu negocio ya tiene RIF?" aviso={aviso} onSeguir={avanzar} sinSeguir>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="¿Tienes RIF?">
               {(
                 [
                   [true, "Sí, tengo RIF", "Facturas legales desde el primer día."],
@@ -434,6 +553,9 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
               ).map(([valor, titulo, detalle]) => (
                 <button
                   key={String(valor)}
+                  type="button"
+                  role="radio"
+                  aria-checked={d.tieneRif === valor}
                   autoFocus={valor}
                   onClick={() => {
                     pon("tieneRif", valor);
@@ -482,7 +604,7 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
                 onChange={(e) => pon("prefijoRif", e.target.value)}
                 className="h-14 rounded-lg border border-border-strong bg-surface px-3 text-[1.2rem] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
               >
-                {["J", "V", "E", "G"].map((p) => (
+                {PREFIJOS_RIF.map((p) => (
                   <option key={p} value={p}>
                     {p}
                   </option>
@@ -590,6 +712,7 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
                   onChange={(e) => {
                     pon("estado", e.target.value === "" ? null : e.target.value);
                     pon("ciudad", "");
+                    setCiudadLibre(false);
                   }}
                   className="h-12 rounded-lg border border-border-strong bg-surface px-3 text-[1rem] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                 >
@@ -600,10 +723,12 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
                     </option>
                   ))}
                 </select>
-                {d.estado !== null && !ESTADOS[d.estado]!.includes(d.ciudad) && d.ciudad !== "" ? (
+                {ciudadLibre ? (
                   <input
                     aria-label="Ciudad"
                     value={d.ciudad}
+                    autoFocus
+                    placeholder="Escribe tu ciudad"
                     onChange={(e) => pon("ciudad", e.target.value)}
                     className="h-12 rounded-lg border border-border-strong bg-surface px-3 text-[1rem] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                   />
@@ -612,9 +737,14 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
                     aria-label="Ciudad"
                     value={d.ciudad}
                     disabled={d.estado === null}
-                    onChange={(e) =>
-                      pon("ciudad", e.target.value === "__otra__" ? " " : e.target.value)
-                    }
+                    onChange={(e) => {
+                      if (e.target.value === "__otra__") {
+                        pon("ciudad", "");
+                        setCiudadLibre(true);
+                      } else {
+                        pon("ciudad", e.target.value);
+                      }
+                    }}
                     className="h-12 rounded-lg border border-border-strong bg-surface px-3 text-[1rem] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
                   >
                     <option value="">Ciudad…</option>

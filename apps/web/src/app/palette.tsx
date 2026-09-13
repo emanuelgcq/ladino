@@ -30,7 +30,7 @@ export function CommandPalette({
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }): React.JSX.Element {
-  const { llamar, puede } = useSesion();
+  const { llamar, puede, empresa } = useSesion();
   const navigate = useNavigate();
   const [texto, setTexto] = useState("");
   const [indice, setIndice] = useState(0);
@@ -66,8 +66,10 @@ export function CommandPalette({
 
   // Entidades: solo con 2+ caracteres, con debounce vía staleTime corto de la
   // caché y la clave por texto. La búsqueda es la del SERVIDOR.
+  // La clave lleva la EMPRESA: cambiar de empresa y buscar «lo mismo» no
+  // puede servir los clientes de la anterior desde la caché.
   const entidades = useQuery({
-    queryKey: ["paleta", q],
+    queryKey: ["paleta", empresa.id, q],
     enabled: open && q.length >= 2,
     staleTime: 10_000,
     queryFn: async () => {
@@ -84,13 +86,17 @@ export function CommandPalette({
   });
 
   const acciones = useMemo<Accion[]>(() => {
+    // Cada entidad lleva a la pantalla que el ROL abre: el mostrador a
+    // /clientes y /productos; quien no vende, a la versión de administración
+    // (mismas puertas que el menú — ADR-0048).
+    const mostrador = puede("sales.invoice.issue");
     const deClientes: Accion[] = (entidades.data?.clientes ?? []).map((c) => ({
       id: `cliente:${c.id}`,
       tipo: "cliente",
       etiqueta: c.legal_name,
       ...(c.tax_id === null ? {} : { detalle: c.tax_id }),
       icono: <Users className="size-4 text-muted-foreground" />,
-      to: `/admin/cuentas?cliente=${c.id}`,
+      to: mostrador ? "/clientes" : "/admin/clientes",
     }));
     const deProductos: Accion[] = (entidades.data?.productos ?? []).map((p) => ({
       id: `producto:${p.id}`,
@@ -98,10 +104,12 @@ export function CommandPalette({
       etiqueta: p.name,
       detalle: p.sku,
       icono: <Package className="size-4 text-muted-foreground" />,
-      to: `/productos`,
+      // El mostrador abre sus productos ya BUSCANDO el elegido (`?q=`); la
+      // versión de administración no lee la búsqueda del query string.
+      to: mostrador ? `/productos?q=${encodeURIComponent(p.name)}` : "/admin/productos",
     }));
     return [...rutas, ...deClientes, ...deProductos];
-  }, [rutas, entidades.data]);
+  }, [rutas, entidades.data, puede]);
 
   useEffect(() => {
     setIndice((i) => Math.min(i, Math.max(acciones.length - 1, 0)));

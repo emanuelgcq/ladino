@@ -152,8 +152,12 @@ export function crearSincronizador(
           try {
             await subir(cuenta);
           } catch {
-            // Sin red, la copia local manda y el PRÓXIMO toque reintenta.
-            // No se reencola aquí: reintentar en caliente sería un bucle.
+            // Sin red, la copia local manda. Lo que falló se REENCOLA (si no
+            // llegó un estado más nuevo mientras tanto) y se sale del bucle:
+            // el próximo toque o `vaciar()` lo vuelve a intentar. Antes se
+            // descartaba y una cuenta podía no llegar nunca a la nube
+            // (auditoría 2026-09-11). Reintentar en caliente sería un bucle.
+            if (!sucias.has(id)) sucias.set(id, cuenta);
             break;
           }
         }
@@ -181,8 +185,10 @@ export function crearSincronizador(
       for (const [id, t] of temporizadores) {
         clearTimeout(t);
         temporizadores.delete(id);
-        void volar(id);
       }
+      // TODO lo pendiente, tenga temporizador o no: lo reencolado por un
+      // fallo de red ya no tiene timer y también sale ahora.
+      for (const id of new Set([...sucias.keys(), ...porBorrar])) void volar(id);
     },
   };
 }

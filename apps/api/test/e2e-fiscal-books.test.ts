@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { diaCaracas } from "./_dia-caracas.js";
 
 /**
  * LIBROS FISCALES de extremo a extremo (ADR-0044).
@@ -38,8 +39,8 @@ const ROL = crypto.randomUUID();
 const MEM = crypto.randomUUID();
 const ASIG = crypto.randomUUID();
 const RUN = Date.now().toString(36);
-const HOY = new Date().toISOString().slice(0, 10);
-const AYER = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+const HOY = diaCaracas();
+const AYER = diaCaracas(-1);
 // El período que se consulta: de ayer a hoy. Explícito y no «el mes en curso»,
 // porque un libro con período implícito no se puede volver a generar igual.
 const DESDE = AYER;
@@ -195,7 +196,7 @@ beforeAll(async () => {
           select 'VE', 'iva', 'ordinario', ${cat}, ${tasa}, ${AYER}::date,
                  'Carga de prueba E2E — VALIDAR-SENIAT antes de producción.', 10, ${tipo}
            where not exists (select 1 from public.tax_rules
-                              where jurisdiction = 'VE' and tax_code = 'iva'
+                              where company_id is null and jurisdiction = 'VE' and tax_code = 'iva'
                                 and taxpayer_type = 'ordinario'
                                 and product_tax_category = ${cat}
                                 and transaction_type = ${tipo})`;

@@ -98,15 +98,45 @@ if (docs !== null && docs.total > 0) {
   process.exit(0);
 }
 
-paso("rango de numeración");
-await api("POST", "/v1/fiscal-number-ranges", {
-  company_id: COMPANY,
-  kind: "invoice",
-  series: "A",
-  range_from: "1",
-  range_to: "5000",
-  printer_source: "Imprenta Gráficas Miranda C.A. — autorización demo",
-});
+paso("rangos de numeración (factura, NC y ND)");
+// Sin rango de NC/ND la demo no puede devolver ni corregir (ADR-0051): la
+// devolución quedaba en borrador con «sin rango» (auditoría 2026-09-11, A-13).
+for (const kind of ["invoice", "credit_note", "debit_note"]) {
+  await api("POST", "/v1/fiscal-number-ranges", {
+    company_id: COMPANY,
+    kind,
+    series: "A",
+    range_from: "1",
+    range_to: "5000",
+    printer_source: "Imprenta Gráficas Miranda C.A. — autorización demo",
+  });
+}
+
+paso("proveedores");
+// Dos proveedores: uno ordinario y un contribuyente especial, para que la demo
+// de compras (retención de IVA, pagos, CxP) tenga con quién trabajar.
+for (const proveedor of [
+  {
+    tax_id: "J-30111222-9",
+    legal_name: "Distribuidora El Trigal, C.A.",
+    trade_name: "El Trigal",
+    supplier_kind: "nacional",
+    person_type_code: "juridica",
+    taxpayer_type_code: "ordinario",
+    fiscal_address: "Av. Principal de La Yaguara, Caracas",
+  },
+  {
+    tax_id: "J-30333444-1",
+    legal_name: "Alimentos Polares del Centro, S.A.",
+    trade_name: "Polares",
+    supplier_kind: "nacional",
+    person_type_code: "juridica",
+    taxpayer_type_code: "especial",
+    fiscal_address: "Zona Industrial La Hamaca, Maracay",
+  },
+]) {
+  await api("POST", "/v1/suppliers", { company_id: COMPANY, ...proveedor });
+}
 
 paso("tasas BCV (ayer y hoy)");
 for (const [d, rate] of [

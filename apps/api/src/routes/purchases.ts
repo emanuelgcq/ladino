@@ -112,7 +112,17 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const search = c.req.query("search")?.trim() ?? "";
     const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 20) || 20, 1), 100);
     const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
-    const filas = await withTransaction(sql, actor, ({ sql: tx }) => {
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      // Antes sin ningún permiso: cualquier miembro listaba RIF, dirección y
+      // correo de los proveedores (auditoría 2026-09-11, M-31).
+      await exigeLecturaDeCompras(tx, actor, companyId, [
+        "purchase.order.manage",
+        "purchase.invoice.register",
+        "purchase.payment.register",
+        "purchase.receive",
+        "supplier.manage",
+        "expense.register",
+      ]);
       const filtro =
         search === ""
           ? tx``
@@ -454,19 +464,34 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
   app.get("/v1/retention-receipts", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
-    const filas = await withTransaction(
-      sql,
-      actor,
-      ({ sql: tx }) => tx<Record<string, unknown>[]>`
+    const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 50) || 50, 1), 200);
+    const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      // Antes sin permiso y con un tope de 200 sin total (auditoría
+      // 2026-09-11, M-31). Sigue devolviendo el ARRAY (la web lo lee así);
+      // el total viaja en la cabecera X-Total-Count.
+      await exigeLecturaDeCompras(tx, actor, companyId, [
+        "purchase.payment.register",
+        "retention.receipt.issue",
+        "fiscal_book.read",
+      ]);
+      return tx<Record<string, unknown>[]>`
         select id, supplier_id, supplier_invoice_id, series,
                receipt_number::int as receipt_number, control_number::int as control_number,
                status,
                to_char(issued_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as issued_at,
-               fiscal_period, total_retained::text as total_retained, functional_currency
+               fiscal_period, total_retained::text as total_retained, functional_currency,
+               count(*) over ()::int as total
           from public.retention_receipts where company_id = ${companyId}
-         order by series, receipt_number desc nulls last limit 200`,
+         order by series, receipt_number desc nulls last, id
+         limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
+    });
+    const total = filas.length > 0 ? (filas[0]!["total"] as number) : 0;
+    c.header("X-Total-Count", String(total));
+    return c.json(
+      filas.map(({ total: _t, ...r }) => r),
+      200,
     );
-    return c.json(filas, 200);
   });
 
   // ── Reglas de retención: el catálogo que nace vacío ───────────────────────
@@ -484,6 +509,7 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
   });
 
   app.get("/v1/retention-rules", async (c) => {
+    const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
     const filas = await withTransaction(
       sql,
@@ -493,8 +519,12 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
                supplier_person_type, formula_kind, rate::text as rate,
                subtrahend::text as subtrahend, minimum_exempt::text as minimum_exempt,
                effective_from::text as effective_from, effective_to::text as effective_to,
-               legal_source, priority, status
-          from public.retention_rules order by retention_code, concept_code, effective_from desc`,
+               legal_source, priority, status,
+               case when company_id is null then 'plataforma' else 'propia' end as scope
+          from public.retention_rules
+         -- Lo que esta empresa VE: la plataforma y lo suyo (ADR-0057).
+         where company_id is null or company_id = ${companyId}
+         order by (company_id is not null) desc, retention_code, concept_code, effective_from desc`,
     );
     return c.json(filas, 200);
   });
@@ -526,12 +556,15 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
           message: "Cargar una regla de retención exige el permiso retention.rules.manage.",
         });
       }
+      // Una regla cargada es DE ESTA EMPRESA (ADR-0057): retiene aquí, no en
+      // toda la instancia.
       const [r] = await tx<Record<string, unknown>[]>`
         insert into public.retention_rules
-          (jurisdiction, retention_code, concept_code, taxpayer_type, supplier_person_type,
-           formula_kind, rate, subtrahend, minimum_exempt, effective_from, effective_to,
-           legal_source, priority)
-        values (${d.jurisdiction}, ${d.retention_code}, ${d.concept_code},
+          (tenant_id, company_id, jurisdiction, retention_code, concept_code, taxpayer_type,
+           supplier_person_type, formula_kind, rate, subtrahend, minimum_exempt, effective_from,
+           effective_to, legal_source, priority)
+        values ((select tenant_id from public.companies where id = ${companyId}), ${companyId},
+                ${d.jurisdiction}, ${d.retention_code}, ${d.concept_code},
                 ${d.taxpayer_type ?? null}, ${d.supplier_person_type ?? null}, ${d.formula_kind},
                 ${d.rate}, ${d.subtrahend ?? null}, ${d.minimum_exempt ?? null},
                 ${d.effective_from}::date, ${d.effective_to ?? null}, ${d.legal_source},

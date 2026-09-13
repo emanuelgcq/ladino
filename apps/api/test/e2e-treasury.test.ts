@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { diaCaracas } from "./_dia-caracas.js";
 
 /**
  * Tesorería de extremo a extremo (Fase C, migraciones 29–31), como `ladino_api`
@@ -38,7 +39,7 @@ const MEM_MIRON = crypto.randomUUID();
 const ASIG = crypto.randomUUID();
 const ASIG_MIRON = crypto.randomUUID();
 const RUN = Date.now().toString(36);
-const HOY = new Date().toISOString().slice(0, 10);
+const HOY = diaCaracas();
 const FUENTE_TASA = `Carga E2E tesorería ${RUN}`;
 
 let sql: ReturnType<typeof createClient>;

@@ -118,12 +118,9 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
       const [tasa] = await tx<
         { rate: string; rate_date: string; source: string; es_de_hoy: boolean }[]
       >`
-        select rate::text as rate, rate_date::text as rate_date, source,
-               rate_date = (now() at time zone 'America/Caracas')::date as es_de_hoy
-          from public.exchange_rates
-         where from_currency = 'USD' and to_currency = ${funcional}
-           and rate_date <= (now() at time zone 'America/Caracas')::date + 1
-         order by rate_date desc, created_at desc limit 1`;
+        select f.rate::text as rate, f.rate_date::text as rate_date, f.source,
+               f.rate_date = (now() at time zone 'America/Caracas')::date as es_de_hoy
+          from platform.rate_for(${companyId}, 'USD', ${funcional}, (now() at time zone 'America/Caracas')::date + 1) f`;
 
       const ultimas = await tx<Record<string, unknown>[]>`
         select d.id,
@@ -161,7 +158,7 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
    * sería aritmética de dinero en el cliente.
    */
   app.get("/v1/negocio/convertir", async (c) => {
-    requireCompany(c);
+    const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
     const amount = c.req.query("amount") ?? "";
     const from = c.req.query("from") ?? "USD";
@@ -188,10 +185,8 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
         };
       }
       const [t] = await tx<{ rate: string | null; source: string | null }[]>`
-        select r.rate::text as rate, r.source from public.exchange_rates r
-         where r.from_currency = ${from} and r.to_currency = ${to}
-           and r.rate_date <= (now() at time zone 'America/Caracas')::date + 1
-         order by r.rate_date desc, r.created_at desc limit 1`;
+        select f.rate::text as rate, f.source
+          from platform.rate_for(${companyId}, ${from}, ${to}, (now() at time zone 'America/Caracas')::date + 1) f`;
       if (!t?.rate) {
         throw new DominioError({
           code: "EXCHANGE_RATE_MISSING",

@@ -12,7 +12,10 @@ import { DateRangePicker, EntityPicker, type EntityOption } from "../../componen
 import { useNombresDeCliente } from "../../components/nombres-cliente.js";
 import { Button } from "../../ui/button.js";
 import { SimpleSelect } from "../../ui/select.js";
-import { KIND_LABEL, numeroDe } from "./comunes.js";
+import { KIND_LABEL } from "./comunes.js";
+import { numeroDocumento } from "../../components/documento.js";
+import { errorDePersona } from "../../lib.js";
+import { fechaLocal } from "../../fechas.js";
 
 /**
  * Listado de ventas: DataTable con los filtros DEL SERVIDOR (estado, fechas,
@@ -93,11 +96,12 @@ export function Ventas(): React.JSX.Element {
 
   const columnas = useMemo<ColumnDef<FilaConCliente, unknown>[]>(
     () => [
-      { id: "fecha", header: "Fecha", accessorFn: (d) => d.issued_at?.slice(0, 10) ?? "—" },
+      { id: "fecha", header: "Fecha", accessorFn: (d) => fechaLocal(d.issued_at) },
       {
         id: "numero",
         header: "Número",
-        accessorFn: (d) => numeroDe(d),
+        // El mismo número que imprime el POS y el PDF: SERIE-00000012.
+        accessorFn: (d) => numeroDocumento(d.series, d.document_number),
         cell: (c) => <span className="font-mono text-[0.84rem]">{c.getValue<string>()}</span>,
       },
       {
@@ -160,7 +164,7 @@ export function Ventas(): React.JSX.Element {
       <DataTable
         columns={columnas}
         data={documentos.data === undefined ? undefined : filas}
-        error={documentos.error instanceof Error ? documentos.error.message : null}
+        error={documentos.isError ? errorDePersona(documentos.error) : null}
         onRetry={() => void documentos.refetch()}
         onRowClick={(d) => void navigate(`/admin/ventas/${d.id}`)}
         getRowId={(d) => d.id}
@@ -202,9 +206,11 @@ export function Ventas(): React.JSX.Element {
                 options={[
                   { value: "todos", label: "Todos los estados" },
                   { value: "draft", label: "Borrador" },
+                  { value: "confirmed", label: "Confirmado" },
                   { value: "issued", label: "Emitida" },
                   { value: "paid", label: "Pagada" },
                   { value: "annulled", label: "Anulada" },
+                  { value: "cancelled", label: "Cancelado" },
                 ]}
               />
             </div>

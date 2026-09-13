@@ -19,14 +19,22 @@ const currency = z.string().regex(/^[A-Z]{3}$/);
 
 export const SupplierKind = z.enum(["nacional", "extranjero"]);
 export const AllocationMethod = z.enum(["by_value", "by_weight", "by_units"]);
+/**
+ * Los mismos valores que el CHECK `supplier_payments_instrument_chk` de la base
+ * (migración 29). Antes el contrato ofrecía `cheque` y `nota_credito`, que la
+ * base rechazaba con 23514, y le faltaban punto de venta, pago móvil y tarjeta,
+ * que la base sí admite (auditoría 2026-09-11, A-21). Una nota de crédito del
+ * proveedor se aplica por su propio endpoint, no como instrumento de pago.
+ */
 export const PurchaseInstrument = z.enum([
   "efectivo_bs",
   "efectivo_usd",
   "zelle",
   "usdt",
   "transferencia",
-  "cheque",
-  "nota_credito",
+  "punto_venta",
+  "pago_movil",
+  "tarjeta",
   "otro",
 ]);
 

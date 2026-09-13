@@ -1322,7 +1322,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/documents",
-    summary: "Listar documentos de venta (filtros por tipo, estado, cliente y fechas)",
+    summary: "Listar documentos de venta (filtros por tipo, estado, cliente, origen y fechas)",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
@@ -1330,6 +1330,10 @@ export function buildOpenApiDocument(): object {
         kind: z.string().optional(),
         status: z.string().optional(),
         customer_id: z.string().uuid().optional(),
+        /** Las notas y devoluciones emitidas SOBRE ese documento. */
+        source_document_id: z.string().uuid().optional(),
+        /** Por «SERIE-número» (parcial) o número de control exacto. */
+        search: z.string().optional(),
         from: z.string().optional(),
         to: z.string().optional(),
         page: z.coerce.number().int().min(1).optional(),
@@ -1772,8 +1776,9 @@ export function buildOpenApiDocument(): object {
     path: "/v1/pos/change",
     summary: "El vuelto en vivo (permiso sales.payment.register)",
     description:
-      "`change = tendered − total/tasa`, en la moneda con la que pagaron y con la tasa del día " +
-      "citada. Negativo significa que falta plata. Es cálculo de dinero: vive en el servidor.",
+      "`change = tendered − (total − already_paid)/tasa`, en la moneda con la que pagaron y con " +
+      "la tasa del día citada. Negativo significa que falta plata. `already_paid` es lo que ya " +
+      "cubre la otra forma en un cobro mixto. Es cálculo de dinero: vive en el servidor.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
@@ -1782,6 +1787,8 @@ export function buildOpenApiDocument(): object {
         currency: z.string(),
         tendered: z.string(),
         tendered_currency: z.string().optional(),
+        already_paid: z.string().optional(),
+        already_paid_currency: z.string().optional(),
       }),
     },
     responses: { 200: okJson(vueltoResp, "El vuelto calculado."), ...erroresComunes },
@@ -2019,9 +2026,12 @@ export function buildOpenApiDocument(): object {
             rate: z.string(),
             source: z.string(),
             rate_date: z.string(),
+            created_at: z.string(),
+            /** «plataforma» = oficial (BCV, sistema); «propia» = de esta empresa (ADR-0057). */
+            scope: z.enum(["plataforma", "propia"]),
           }),
         ),
-        "Hasta 60 tasas, de la más reciente hacia atrás.",
+        "Hasta 60 tasas visibles para la empresa (las de la plataforma y las suyas), de la más reciente hacia atrás; a igual día, la propia primero.",
       ),
       ...erroresComunes,
     },
@@ -2391,11 +2401,17 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/retention-receipts",
-    summary: "Comprobantes de retención emitidos",
+    summary: "Comprobantes de retención emitidos (paginado; total en X-Total-Count)",
     security: [{ bearerAuth: [] }],
-    request: { headers: companyHeader },
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        page: z.coerce.number().int().min(1).optional(),
+        per_page: z.coerce.number().int().min(1).max(200).optional(),
+      }),
+    },
     responses: {
-      200: okJson(z.array(comprobante), "Los comprobantes de la empresa."),
+      200: okJson(z.array(comprobante), "Una página de comprobantes de la empresa."),
       ...erroresComunes,
     },
   });
@@ -2638,6 +2654,8 @@ export function buildOpenApiDocument(): object {
       query: z.object({
         status: z.string().optional(),
         source_kind: z.string().optional(),
+        /** El asiento DE un documento concreto (con source_kind). */
+        source_id: z.string().uuid().optional(),
         from: z.string().optional(),
         to: z.string().optional(),
         page: z.coerce.number().int().min(1).optional(),
@@ -2788,6 +2806,85 @@ export function buildOpenApiDocument(): object {
       body: { content: { "application/json": { schema: cierreAnual } } },
     },
     responses: { 201: okJson(asiento, "Asiento de cierre posteado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/journal-template-presets",
+    summary: "Presets de plantillas de asiento disponibles (catálogo global)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(
+        z.array(
+          z.object({
+            code: z.string(),
+            name: z.string(),
+            description: z.string().nullable().optional(),
+            legal_source: z.string().nullable().optional(),
+            entry_count: z.number().int(),
+          }),
+        ),
+        "Los presets.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/journal-templates/import-preset",
+    summary: "Importar un preset de plantillas de asiento (permiso accounting.template.manage)",
+    description:
+      "Idempotente: suma lo que falta y no duplica lo que ya está. Es lo que hace que una venta " +
+      "no caiga a la cola para siempre después de importar el plan.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({ company_id: z.string().uuid(), preset_code: z.string() }).strict(),
+          },
+        },
+      },
+    },
+    responses: {
+      201: okJson(
+        z.object({ imported: z.number().int(), lines: z.number().int() }),
+        "Plantillas importadas.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/accounting/pending/process",
+    summary: "Reprocesar la cola de contabilización pendiente (permiso accounting.entry.post)",
+    description:
+      "Recorre los pendientes y genera el asiento de cada uno con la plantilla vigente a su " +
+      "fecha; los que siguen sin plantilla se quedan en cola con su motivo.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({ limit: z.number().int().min(1).max(500).optional() }).strict(),
+          },
+        },
+      },
+    },
+    responses: {
+      200: okJson(
+        z.object({
+          revisados: z.number().int(),
+          contabilizados: z.number().int(),
+          pendientes: z.number().int(),
+          primer_motivo: z.string().nullable().optional(),
+        }),
+        "Resultado del reproceso.",
+      ),
+      ...erroresComunes,
+    },
   });
   registry.registerPath({
     method: "get",

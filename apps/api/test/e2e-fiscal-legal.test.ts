@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { diaCaracas } from "./_dia-caracas.js";
 
 /**
  * LO LEGAL DE LA FACTURA, de extremo a extremo (PA 00071 y PA 102):
@@ -32,7 +33,7 @@ const ROL_MIRON = crypto.randomUUID();
 const CLIENTE = crypto.randomUUID();
 const RUN = Date.now().toString(36);
 const DIRECCION = "Av. Legal 13.5, galpón 7, Maracay";
-const HOY = new Date().toISOString().slice(0, 10);
+const HOY = diaCaracas();
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -185,7 +186,7 @@ beforeAll(async () => {
                'REGLA DE PRUEBA E2E legal — no es la norma vigente', 5, 'sale'
          where not exists (
            select 1 from public.tax_rules
-            where jurisdiction = 'VE' and tax_code = 'iva' and taxpayer_type is null
+            where company_id is null and jurisdiction = 'VE' and tax_code = 'iva' and taxpayer_type is null
               and product_tax_category = ${categoria} and transaction_type = 'sale'
               and status = 'active')`;
     }

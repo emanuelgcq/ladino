@@ -66,7 +66,7 @@ select is(
 
 -- ── 2. resolve_tax: sin regla, NO hay emisión (LAD50) ───────────────────────
 select throws_ok(
-  $$ select * from platform.resolve_tax('2026-08-27'::date, 'VE', 'iva', 'ordinario', 'gravado_general') $$,
+  $$ select * from platform.resolve_tax('aaaa0021-0000-4000-8000-0000000000a2', '2026-08-27'::date, 'VE', 'iva', 'ordinario', 'gravado_general') $$,
   'LAD50', null,
   'sin regla vigente resolve_tax FALLA: no devuelve cero, porque un cero que parece '
   'correcto es un delito tributario (ADR-0038)');
@@ -78,10 +78,10 @@ insert into public.tax_rules
 values ('VE', 'iva', null, 'sale', 'gravado_general', 0.16, '2026-01-01',
         'REGLA DE PRUEBA pgTAP 021 — no es una fuente normativa real', 100);
 select is(
-  (select rate from platform.resolve_tax('2026-08-27'::date, 'VE', 'iva', 'ordinario', 'gravado_general')),
+  (select rate from platform.resolve_tax('aaaa0021-0000-4000-8000-0000000000a2', '2026-08-27'::date, 'VE', 'iva', 'ordinario', 'gravado_general')),
   0.16::numeric, 'con regla vigente, resolve_tax la devuelve');
 select throws_ok(
-  $$ select * from platform.resolve_tax('2025-06-01'::date, 'VE', 'iva', 'ordinario', 'gravado_general') $$,
+  $$ select * from platform.resolve_tax('aaaa0021-0000-4000-8000-0000000000a2', '2025-06-01'::date, 'VE', 'iva', 'ordinario', 'gravado_general') $$,
   'LAD50', null,
   'antes de su vigencia FALLA con LAD50 en vez de devolver NULL: la fecha es parámetro '
   'y una regla futura no aplica al pasado');
@@ -93,7 +93,7 @@ insert into public.tax_rules
 values ('VE', 'iva', null, 'sale', 'gravado_general', 0.10, '2026-01-01',
         'REGLA DE PRUEBA duplicada', 100);
 select throws_ok(
-  $$ select * from platform.resolve_tax('2026-08-27'::date, 'VE', 'iva', 'ordinario', 'gravado_general') $$,
+  $$ select * from platform.resolve_tax('aaaa0021-0000-4000-8000-0000000000a2', '2026-08-27'::date, 'VE', 'iva', 'ordinario', 'gravado_general') $$,
   'LAD50', null,
   'dos reglas con la MISMA prioridad detienen la emisión: elegir una por orden de '
   'inserción sería arbitrario y no reproducible');
@@ -105,21 +105,21 @@ insert into public.tax_rules
 values ('VE', 'iva', 'especial', 'sale', 'gravado_general', 0.08, '2026-01-01',
         'REGLA DE PRUEBA específica', 200);
 select is(
-  (select rate from platform.resolve_tax('2026-08-27'::date, 'VE', 'iva', 'especial', 'gravado_general')),
+  (select rate from platform.resolve_tax('aaaa0021-0000-4000-8000-0000000000a2', '2026-08-27'::date, 'VE', 'iva', 'especial', 'gravado_general')),
   0.08::numeric, 'lo específico (taxpayer especial, prioridad 200) gana a lo general');
 select is(
-  (select rate from platform.resolve_tax('2026-08-27'::date, 'VE', 'iva', 'ordinario', 'gravado_general')),
+  (select rate from platform.resolve_tax('aaaa0021-0000-4000-8000-0000000000a2', '2026-08-27'::date, 'VE', 'iva', 'ordinario', 'gravado_general')),
   0.16::numeric, 'y el ordinario sigue con la general');
 
 -- ── 3. Tasa de cambio con fuente ────────────────────────────────────────────
 insert into public.exchange_rates (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
 values ('USD', 'VES', 40.00000000, 'BCV', '2026-08-01', '2026-08-01T10:00:00Z'),
        ('USD', 'VES', 50.00000000, 'BCV', '2026-09-01', '2026-09-01T10:00:00Z');
-select is(platform.rate_at('USD', 'VES', '2026-08-15'), 40.00000000::numeric,
+select is(platform.rate_at('aaaa0021-0000-4000-8000-0000000000a2', 'USD', 'VES', '2026-08-15'), 40.00000000::numeric,
   'rate_at el 15-ago: la tasa del 1-ago, la más reciente que no es posterior');
-select is(platform.rate_at('USD', 'VES', '2026-09-15'), 50.00000000::numeric,
+select is(platform.rate_at('aaaa0021-0000-4000-8000-0000000000a2', 'USD', 'VES', '2026-09-15'), 50.00000000::numeric,
   'rate_at el 15-sep: ya la del 1-sep — la FECHA es parámetro, nunca now()');
-select is(platform.rate_at('USD', 'VES', '2025-01-01'), null::numeric,
+select is(platform.rate_at('aaaa0021-0000-4000-8000-0000000000a2', 'USD', 'VES', '2025-01-01'), null::numeric,
   'antes de toda tasa: NULL, no un invento');
 
 -- ── 4. Régimen fiscal y numeración ──────────────────────────────────────────
@@ -283,7 +283,7 @@ select 'aaaa0021-0000-4000-8000-00000000f101', 'aaaa0021-0000-4000-8000-00000000
        100, 100, 'aaaa0021-0000-4000-8000-00000000e001',
        t.tax_rule_id, t.rate, 16, 100, 100, 116, 116,
        116, 'VES', 1, 116, 'VES', 'identidad', now(), 'inventory:cost:8:HALF_UP', 60
-  from platform.resolve_tax('2026-08-27'::date, 'VE', 'iva', 'ordinario', 'gravado_general') t;
+  from platform.resolve_tax('aaaa0021-0000-4000-8000-0000000000a2', '2026-08-27'::date, 'VE', 'iva', 'ordinario', 'gravado_general') t;
 select is(
   (select tax_rate_snapshot from public.document_lines
     where id = 'aaaa0021-0000-4000-8000-00000000f101'),
@@ -303,7 +303,7 @@ select is(
   'CAMBIAR tax_rules después NO altera la factura emitida: el documento COPIÓ la '
   'alícuota, no la referencia (R-05 aplicado al impuesto)');
 select is(
-  (select rate from platform.resolve_tax('2026-08-29'::date, 'VE', 'iva', 'ordinario', 'gravado_general')),
+  (select rate from platform.resolve_tax('aaaa0021-0000-4000-8000-0000000000a2', '2026-08-29'::date, 'VE', 'iva', 'ordinario', 'gravado_general')),
   0.22::numeric, 'y la nueva alícuota sí aplica a lo que se emita a partir de su vigencia');
 
 -- ── 7. Inmutabilidad del documento emitido, las dos capas distinguibles ─────

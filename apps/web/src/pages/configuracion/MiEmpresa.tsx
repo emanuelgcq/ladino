@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, Camera, Pencil } from "lucide-react";
 import { useSesion } from "../../app/session.js";
-import { errorDePersona } from "../../lib.js";
+import { errorDePersona, LlamadaApiError } from "../../lib.js";
 import { Button } from "../../ui/button.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../ui/card.js";
 import {
@@ -113,13 +113,32 @@ export function MiEmpresa(): React.JSX.Element {
   });
 
   if (e === null || e === undefined) {
+    // «Cargando…» solo mientras carga: si la llamada falló, o la empresa
+    // activa no vino en la lista, se dice y se ofrece reintentar — antes era
+    // un «Cargando…» eterno (auditoría 2026-09-11).
+    const fallo = empresas.isError
+      ? errorDePersona(empresas.error)
+      : empresas.data === null
+        ? "La empresa activa no aparece en tu lista de empresas."
+        : null;
     return (
       <Card>
         <CardHeader>
           <CardTitle>Mi empresa</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-muted-foreground">Cargando…</p>
+          {fallo === null ? (
+            <p className="text-muted-foreground">Cargando…</p>
+          ) : (
+            <div className="space-y-2">
+              <p role="alert" className="text-[0.88rem] text-destructive-soft-foreground">
+                No se pudo cargar la ficha del negocio: {fallo}
+              </p>
+              <Button variant="secondary" size="sm" onClick={() => void empresas.refetch()}>
+                Reintentar
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     );
@@ -315,11 +334,20 @@ function EditarEmpresa({
       toast.success("Empresa actualizada");
       onCerrar(true);
     },
-    onError: (err) => {
+    onError: (err, reason) => {
       // El servidor pide MOTIVO cuando la identidad cambia con documentos
-      // emitidos: se pide aquí mismo, con las advertencias, y se reintenta.
-      const msg = errorDePersona(err);
-      if (msg.includes("motivo")) setPideMotivo(true);
+      // emitidos: responde 422 VALIDATION_FAILED (packages/domain/src/
+      // company-profile.ts, nivel 2). Se reconoce por status + código y por
+      // la situación —cambia la identidad y todavía no se mandó motivo—, no
+      // por el texto del mensaje. Se pide aquí mismo, con las advertencias,
+      // y se reintenta.
+      const exigeMotivo =
+        err instanceof LlamadaApiError &&
+        err.status === 422 &&
+        err.body.code === "VALIDATION_FAILED" &&
+        identidadCambia &&
+        (reason === undefined || reason.trim() === "");
+      if (exigeMotivo) setPideMotivo(true);
       else setError(err);
     },
   });

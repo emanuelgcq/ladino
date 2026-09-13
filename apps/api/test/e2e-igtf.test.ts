@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { diaCaracas } from "./_dia-caracas.js";
 
 /**
  * IGTF de extremo a extremo (migración 46) — RIGOR MÁXIMO.
@@ -38,8 +39,8 @@ const ROL = crypto.randomUUID();
 const MEM = crypto.randomUUID();
 const ASIG = crypto.randomUUID();
 const RUN = Date.now().toString(36);
-const HOY = new Date().toISOString().slice(0, 10);
-const AYER = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+const HOY = diaCaracas();
+const AYER = diaCaracas(-1);
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -190,7 +191,7 @@ beforeAll(async () => {
         select 'VE', 'iva', 'ordinario', 'gravado_general', 0.16, ${AYER}::date,
                'Carga de prueba E2E — VALIDAR-SENIAT antes de producción.', 10, ${tipo}
          where not exists (select 1 from public.tax_rules
-                            where jurisdiction = 'VE' and tax_code = 'iva'
+                            where company_id is null and jurisdiction = 'VE' and tax_code = 'iva'
                               and taxpayer_type = 'ordinario'
                               and product_tax_category = 'gravado_general'
                               and transaction_type = ${tipo})`;
@@ -207,7 +208,7 @@ beforeAll(async () => {
         (from_currency, to_currency, rate, rate_date, rate_timestamp, source)
       select 'USD', 'VES', 40, ${HOY}::date, now(), 'e2e-igtf'
        where not exists (select 1 from public.exchange_rates
-                          where from_currency = 'USD' and to_currency = 'VES'
+                          where company_id is null and from_currency = 'USD' and to_currency = 'VES'
                             and rate_date = ${HOY}::date)`;
 
     await tx`insert into public.inventory_moves
@@ -256,7 +257,7 @@ describe("IGTF — la activación es una designación, no una moneda", () => {
       amount: "5.00",
       instrument: "zelle",
     });
-    expect(r.status).toBe(201);
+    expect(r.status, await r.clone().text()).toBe(201);
     const cuerpo = (await r.json()) as CobroHecho;
     expect(cuerpo.igtf).toBeNull();
   });

@@ -141,8 +141,9 @@ export function productsRoutes(
               select i.amount::text as price_amount, l.currency_code as price_currency,
                      l.id as price_list_id,
                      case when l.currency_code = c.functional_currency_code then null
-                          else round(i.amount * platform.rate_at(l.currency_code,
-                                       c.functional_currency_code, current_date), 8)::text
+                          else round(i.amount * platform.rate_at(c.id, l.currency_code,
+                                       c.functional_currency_code,
+                                       (now() at time zone 'America/Caracas')::date), 8)::text
                      end as price_equivalent_amount,
                      case when l.currency_code = c.functional_currency_code then null
                           else c.functional_currency_code

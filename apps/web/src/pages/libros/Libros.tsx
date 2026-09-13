@@ -15,16 +15,108 @@ import { Skeleton } from "../../ui/card.js";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../../ui/tabs.js";
 import { Table, TBody, TD, TDNum, TH, THead, TR } from "../../ui/table.js";
 import { useToast } from "../../ui/toast.js";
-import { mostrarImporte } from "../../money.js";
+import { mostrarCantidad, mostrarImporte } from "../../money.js";
+import { mostrarPorcentaje } from "../../porcentaje.js";
 import { esCero } from "../../components/decimal-compare.js";
 import { MensajeError } from "../ventas/comunes.js";
-import type {
-  BookFormatAdapter,
-  BookKind,
-  BookReconciliation,
-  FiscalBook,
-  FiscalBookRun,
+import {
+  errorDePersona,
+  type BookFormatAdapter,
+  type BookKind,
+  type BookReconciliation,
+  type FiscalBook,
+  type FiscalBookRun,
 } from "../../lib.js";
+import { fechaHoraLocal, fechaLocal, mesLocalAnterior } from "../../fechas.js";
+
+/**
+ * Rótulos de las columnas de los cuatro libros (las fija la migración 27 y
+ * las proyecta packages/domain/src/fiscal-books.ts). Lo que no esté aquí se
+ * enseña con la clave humanizada — nunca crudo con guiones bajos.
+ */
+const ROTULO: Record<string, string> = {
+  // ventas
+  document_id: "Id",
+  issued_on: "Fecha",
+  kind: "Tipo",
+  series: "Serie",
+  document_number: "Número",
+  control_number: "N.º de control",
+  status: "Estado",
+  customer_tax_id: "RIF del cliente",
+  customer_name: "Cliente",
+  customer_taxpayer_type: "Tipo de contribuyente",
+  transaction_currency: "Moneda",
+  fx_rate: "Tasa",
+  base_gravada: "Base gravada",
+  iva_debito: "IVA débito",
+  base_exenta: "Base exenta",
+  base_exonerada: "Base exonerada",
+  base_no_sujeta: "No sujeta",
+  base_sin_clasificar: "Sin clasificar",
+  total_amount: "Total",
+  journal_entry_id: "Asiento",
+  // compras
+  invoice_id: "Id",
+  invoice_date: "Fecha de factura",
+  supplier_tax_id: "RIF del proveedor",
+  supplier_name: "Proveedor",
+  supplier_kind: "Tipo de proveedor",
+  supplier_document_number: "N.º de factura",
+  supplier_control_number: "N.º de control",
+  supplier_document_ref: "Referencia",
+  iva_credito: "IVA crédito",
+  iva_al_costo: "IVA al costo",
+  tax_is_recoverable: "IVA recuperable",
+  retenido_iva: "IVA retenido",
+  retenido_islr: "ISLR retenido",
+  // retenciones (IVA e ISLR)
+  retention_id: "Id",
+  receipt_number: "N.º de comprobante",
+  receipt_series: "Serie del comprobante",
+  fiscal_period: "Período fiscal",
+  base_amount: "Base",
+  rate: "Porcentaje",
+  subtrahend: "Sustraendo",
+  retained_amount: "Retenido",
+  legal_source: "Fuente legal",
+  receipt_status: "Estado del comprobante",
+  concept_code: "Código de concepto",
+  concept_name: "Concepto",
+  formula_kind: "Fórmula",
+};
+
+/**
+ * Las columnas de DINERO, por lista explícita: antes se decidía por prefijo
+ * (`base_`, `iva_`, `total_`…) y un prefijo decide también sobre lo que no
+ * conoce. `rate` es una fracción y `fx_rate` una tasa: ni una ni otra es un
+ * importe.
+ */
+const COLUMNAS_DINERO: ReadonlySet<string> = new Set([
+  "base_gravada",
+  "iva_debito",
+  "iva_credito",
+  "iva_al_costo",
+  "base_exenta",
+  "base_exonerada",
+  "base_no_sujeta",
+  "base_sin_clasificar",
+  "retenido_iva",
+  "retenido_islr",
+  "total_amount",
+  "base_amount",
+  "subtrahend",
+  "retained_amount",
+]);
+
+/** Columnas con fecha calendario («YYYY-MM-DD»): se enseñan como dd/mm/aaaa. */
+const COLUMNAS_FECHA: ReadonlySet<string> = new Set(["issued_on", "invoice_date"]);
+
+/** «supplier_document_ref» → «Supplier document ref», si la clave no tiene rótulo. */
+function humanizar(clave: string): string {
+  const texto = clave.replace(/_/g, " ");
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
 
 /**
  * Libros fiscales — Fase B sobre la pantalla de ayer. Las reglas visibles no
@@ -41,11 +133,9 @@ const LIBROS: readonly { value: BookKind; label: string }[] = [
 ];
 
 function mesAnterior(): { from: string; to: string } {
-  const hoy = new Date();
-  const primeroDeEste = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), 1));
-  const ultimo = new Date(primeroDeEste.getTime() - 86_400_000);
-  const primero = new Date(Date.UTC(ultimo.getUTCFullYear(), ultimo.getUTCMonth(), 1));
-  return { from: primero.toISOString().slice(0, 10), to: ultimo.toISOString().slice(0, 10) };
+  // El mes anterior del día de CARACAS, no del día UTC (CLAUDE.md §3).
+  const m = mesLocalAnterior();
+  return { from: m.desde, to: m.hasta };
 }
 
 export function Libros(): React.JSX.Element {
@@ -113,7 +203,10 @@ function Libro({
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
-  const [formato, setFormato] = useState("csv_columnas_legales");
+  // El formato elegido a mano; mientras no haya elección, manda el PRIMER
+  // formato con implementación del catálogo (antes iba fijo a un código que
+  // el servidor podía no tener implementado para este libro).
+  const [formatoElegido, setFormatoElegido] = useState<string | null>(null);
   const [confirmando, setConfirmando] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -126,8 +219,10 @@ function Libro({
     staleTime: 300_000,
     queryFn: () => llamar<BookFormatAdapter[]>("/v1/fiscal-books/formats"),
   });
+  const formato = formatoElegido ?? (formatos.data ?? []).find((f) => f.implemented)?.code ?? null;
 
   async function exportar(): Promise<void> {
+    if (formato === null) return;
     setError(null);
     try {
       const r = await llamar<{ content: string; filename: string; run: FiscalBookRun }>(
@@ -168,19 +263,38 @@ function Libro({
     const primera = b.rows[0] ?? {};
     return Object.keys(primera).map((clave) => ({
       id: clave,
-      header: clave,
+      header: COLUMNAS_DINERO.has(clave)
+        ? () => <span className="block text-right">{ROTULO[clave] ?? humanizar(clave)}</span>
+        : (ROTULO[clave] ?? humanizar(clave)),
       enableSorting: false,
       accessorFn: (fila: Record<string, unknown>) => fila[clave],
       cell: (c) => {
         const v = c.row.original[clave];
         if (v === null || v === undefined) return <span className="text-faint-foreground">—</span>;
         if (typeof v === "boolean") return v ? "sí" : "no";
-        if (typeof v === "string" && /^(base_|iva_|retenido_|total_|retained_)/.test(clave)) {
+        if (typeof v === "string" && COLUMNAS_DINERO.has(clave)) {
           return (
             <span className="block text-right font-mono text-[0.82rem]">
               {mostrarImporte({ amount: v, currency: b.currency })}
             </span>
           );
+        }
+        // La porción retenida viaja como fracción («0.75000000»): se enseña
+        // como «75 %», moviendo la coma sobre el string.
+        if (typeof v === "string" && clave === "rate") {
+          return (
+            <span className="block text-right font-mono text-[0.82rem]">
+              {mostrarPorcentaje(v)}
+            </span>
+          );
+        }
+        if (typeof v === "string" && clave === "fx_rate") {
+          return (
+            <span className="block text-right font-mono text-[0.82rem]">{mostrarCantidad(v)}</span>
+          );
+        }
+        if (typeof v === "string" && COLUMNAS_FECHA.has(clave)) {
+          return <span className="text-[0.84rem]">{fechaLocal(v)}</span>;
         }
         // Solo primitivos: las filas del libro traen strings y números, y un
         // objeto inesperado se enseña como «?» antes que como [object Object].
@@ -216,7 +330,7 @@ function Libro({
               <SimpleSelect
                 ariaLabel="Formato de exportación"
                 value={formato}
-                onValueChange={setFormato}
+                onValueChange={setFormatoElegido}
                 options={(formatos.data ?? []).map((f) => ({
                   value: f.code,
                   label: `${f.name}${f.is_official ? " (oficial)" : ""}${f.implemented ? "" : " — sin implementación"}`,
@@ -241,6 +355,16 @@ function Libro({
         </CardContent>
       </Card>
 
+      {/* El rótulo va también SOBRE la tabla: quien mire el libro en pantalla
+          (o lo imprima) tiene que ver que no es el formato de presentación. */}
+      <p
+        role="note"
+        className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-[0.86rem] text-warning-soft-foreground"
+      >
+        <strong>NO OFICIAL.</strong> Este libro se calcula desde los documentos para consultarlo;
+        ningún formato del catálogo es todavía el oficial de presentación al SENIAT.
+      </p>
+
       <DataTable
         columns={columnas}
         data={b?.rows}
@@ -262,7 +386,8 @@ function Libro({
         confirmLabel="Exportar y registrar"
         onConfirm={exportar}
       >
-        Libro de {kind} de {desde} a {hasta}. Queda registrada la generación con su{" "}
+        {LIBROS.find((l) => l.value === kind)?.label ?? kind} de {desde} a {hasta}, en formato{" "}
+        <strong>{elegido?.name ?? formato}</strong>. Queda registrada la generación con su{" "}
         <strong>hash del dataset</strong>: dos exportaciones iguales dan el mismo hash, y una
         distinta demuestra que algo cambió entre medias — que es exactamente lo que hay que poder
         probar en una fiscalización. Consultar en pantalla, en cambio, no deja rastro.
@@ -281,8 +406,23 @@ function Conciliacion({ desde, hasta }: { desde: string; hasta: string }): React
       ),
   });
 
+  // Un fallo no es «cargando para siempre»: antes, cualquier error dejaba el
+  // esqueleto eterno y nadie sabía si la conciliación existía.
+  if (rec.isPending) return <Skeleton className="h-40 w-full" />;
+  if (rec.isError) {
+    return (
+      <div
+        role="alert"
+        className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive-soft px-3 py-2 text-[0.88rem] text-destructive-soft-foreground"
+      >
+        <span>{errorDePersona(rec.error)}</span>
+        <Button variant="secondary" size="sm" onClick={() => void rec.refetch()}>
+          Reintentar
+        </Button>
+      </div>
+    );
+  }
   const r = rec.data;
-  if (r === undefined) return <Skeleton className="h-40 w-full" />;
 
   return (
     <Card>
@@ -380,7 +520,7 @@ function Generaciones(): React.JSX.Element {
       {
         id: "cuando",
         header: "Cuándo",
-        accessorFn: (r) => r.created_at.slice(0, 16).replace("T", " "),
+        accessorFn: (r) => fechaHoraLocal(r.created_at),
       },
     ],
     [],

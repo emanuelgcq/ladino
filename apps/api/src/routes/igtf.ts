@@ -20,7 +20,7 @@ async function exigePermiso(
   tx: TransactionSql,
   actor: { kind: string; userId?: string },
   companyId: string,
-  permiso: string,
+  permiso: string | readonly string[],
 ): Promise<void> {
   if (actor.kind !== "user" || actor.userId === undefined) {
     throw new DominioError({
@@ -28,12 +28,14 @@ async function exigePermiso(
       message: "Esta consulta exige un usuario real.",
     });
   }
+  const permisos = typeof permiso === "string" ? [permiso] : [...permiso];
   const [r] = await tx<{ ok: boolean }[]>`
-    select platform.ladino_user_has_permission(${actor.userId}, ${permiso}, ${companyId}) as ok`;
+    select bool_or(platform.ladino_user_has_permission(${actor.userId}, p, ${companyId})) as ok
+      from unnest(${permisos}::text[]) as p`;
   if (!r?.ok) {
     throw new DominioError({
       code: "PERMISSION_REQUIRED",
-      message: `Esta consulta exige el permiso ${permiso}.`,
+      message: `Esta consulta exige el permiso ${permisos.join(" o ")}.`,
     });
   }
 }
@@ -49,9 +51,15 @@ export function igtfRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler)
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
     const estado = await withTransaction(sql, actor, async ({ sql: tx }) => {
-      // La caja también necesita saber si el cobro causará: el permiso de
-      // cobrar basta para LEER el estado (configurarlo es otro permiso).
-      await exigePermiso(tx, actor, companyId, "sales.payment.register");
+      // La caja necesita saber si el cobro causará; el contador, la quincena a
+      // enterar; quien configura, el estado. Cualquiera de los tres LEE
+      // (configurar es otro permiso). Antes solo cobrar: el contador entraba
+      // por el menú y recibía 403 (auditoría 2026-09-11, A-09).
+      await exigePermiso(tx, actor, companyId, [
+        "sales.payment.register",
+        "fiscal_book.read",
+        "company.settings.manage",
+      ]);
       return readIgtfStatus(tx, companyId);
     });
     return c.json(estado, 200);
@@ -128,7 +136,7 @@ export function igtfRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler)
                count(*) over ()::int as total
           from public.igtf_perceptions
          where company_id = ${companyId}
-           ${periodo === null ? tx`` : tx`and occurred_at >= ${periodo[0]}::date and occurred_at < (${periodo[1]}::date + 1)`}
+           ${periodo === null ? tx`` : tx`and platform.caracas_day(occurred_at) between ${periodo[0]}::date and ${periodo[1]}::date`}
          order by occurred_at desc
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
       // El total de la quincena que se entera: SOLO lo percibido — lo
@@ -140,7 +148,7 @@ export function igtfRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler)
                  as moneda
           from public.igtf_perceptions p
          where p.company_id = ${companyId}
-           ${periodo === null ? tx`` : tx`and p.occurred_at >= ${periodo[0]}::date and p.occurred_at < (${periodo[1]}::date + 1)`}`;
+           ${periodo === null ? tx`` : tx`and platform.caracas_day(p.occurred_at) between ${periodo[0]}::date and ${periodo[1]}::date`}`;
       return {
         items: filas.map(({ total: _t, ...r }) => r),
         total: filas.length > 0 ? (filas[0]!["total"] as number) : 0,

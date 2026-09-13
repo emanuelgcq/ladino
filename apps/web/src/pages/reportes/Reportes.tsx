@@ -9,7 +9,10 @@ import { DualMoney } from "../../components/DualMoney.js";
 import { DateRangePicker } from "../../components/forms.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../ui/card.js";
 import { Skeleton } from "../../ui/card.js";
+import { Button } from "../../ui/button.js";
 import { mostrarImporte } from "../../money.js";
+import { errorDePersona } from "../../lib.js";
+import { hoyLocal } from "../../fechas.js";
 
 /**
  * Reportes — el índice de las respuestas que el sistema ya sabe dar, y el
@@ -32,7 +35,7 @@ export function Reportes(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const [rango, setRango] = useState({
     from: inicioDeAnio(),
-    to: new Date().toISOString().slice(0, 10),
+    to: hoyLocal(),
   });
 
   const diferencial = useQuery({
@@ -90,7 +93,18 @@ export function Reportes(): React.JSX.Element {
             <DateRangePicker from={rango.from} to={rango.to} onChange={setRango} />
           </CardHeader>
           <CardContent>
-            {d === undefined ? (
+            {/* Un fallo no es «cargando para siempre»: se dice y se ofrece reintentar. */}
+            {diferencial.isError ? (
+              <div
+                role="alert"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive-soft px-3 py-2 text-[0.88rem] text-destructive-soft-foreground"
+              >
+                <span>{errorDePersona(diferencial.error)}</span>
+                <Button variant="secondary" size="sm" onClick={() => void diferencial.refetch()}>
+                  Reintentar
+                </Button>
+              </div>
+            ) : d === undefined ? (
               <Skeleton className="h-40 w-full" />
             ) : (
               <>

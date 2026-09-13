@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Plus, Tags } from "lucide-react";
@@ -27,7 +28,9 @@ import {
 import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { MensajeError } from "../ventas/comunes.js";
+import { errorDePersona } from "../../lib.js";
 import type { PriceList, PriceItem, Product } from "../../lib.js";
+import { fechaHoraLocal } from "../../fechas.js";
 
 /**
  * Listas de precios — Fase B. La regla que esta pantalla ENSEÑA en vez de
@@ -36,7 +39,7 @@ import type { PriceList, PriceItem, Product } from "../../lib.js";
  * tabla es la prueba. La confirmación lo dice antes de escribir.
  */
 export function Precios(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const [seleccionada, setSeleccionada] = useState<PriceList | null>(null);
   const [creando, setCreando] = useState(false);
   const qc = useQueryClient();
@@ -57,9 +60,11 @@ export function Precios(): React.JSX.Element {
         title="Listas de precios"
         description="Los precios se ponen en dólares y se mantienen solos: la caja convierte a bolívares con la tasa BCV del día, y el recibo o la factura sale siempre en bolívares. La columna en Bs es la conversión de hoy, como referencia."
         actions={
-          <Button variant="primary" onClick={() => setCreando(true)}>
-            <Plus /> Nueva lista
-          </Button>
+          puede("price_list.manage") ? (
+            <Button variant="primary" onClick={() => setCreando(true)}>
+              <Plus /> Nueva lista
+            </Button>
+          ) : undefined
         }
       />
 
@@ -90,6 +95,9 @@ export function Precios(): React.JSX.Element {
                     Predeterminada · la usa la caja
                   </Badge>
                 )}
+                {/* Heurística por NOMBRE: la lista no lleva un flag de «al
+                    mayor» del servidor (solo `is_caja_default`). Cuando
+                    exista el dato, se lee de la fila y esta regex se va. */}
                 {alMayor && l.is_caja_default !== true && /mayor/i.test(l.name) && (
                   <Badge tone="info" className="mt-1">
                     Al mayor · clientes marcados
@@ -137,6 +145,28 @@ export function Precios(): React.JSX.Element {
       )}
     </div>
   );
+}
+
+/**
+ * El maestro ENTERO de productos, página a página (el endpoint tope a 100
+ * por página): `/v1/price-lists/:id/prices` devuelve solo `product_id`, así
+ * que el SKU y el nombre se resuelven aquí. Antes se pedía una sola página de
+ * 100 y el producto 101 salía como un uuid en la tabla.
+ */
+async function todosLosProductos(
+  llamar: <T>(path: string) => Promise<T>,
+): Promise<Pick<Product, "id" | "sku" | "name">[]> {
+  const POR_PAGINA = 100;
+  const todos: Pick<Product, "id" | "sku" | "name">[] = [];
+  let pagina = 1;
+  for (;;) {
+    const r = await llamar<{ items: Product[]; total: number }>(
+      `/v1/products?per_page=${POR_PAGINA}&page=${pagina}`,
+    );
+    todos.push(...r.items.map((p) => ({ id: p.id, sku: p.sku, name: p.name })));
+    if (r.items.length === 0 || todos.length >= r.total) return todos;
+    pagina += 1;
+  }
 }
 
 function NuevaLista({ onCerrar }: { onCerrar: (hecha: boolean) => void }): React.JSX.Element {
@@ -214,7 +244,7 @@ function PreciosDeLista({
   esPredeterminada: boolean;
   onPredeterminadaCambiada: () => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
   const [producto, setProducto] = useState<EntityOption | null>(null);
@@ -232,9 +262,9 @@ function PreciosDeLista({
           items: PriceItem[];
           rate: { rate: string; rate_date: string; source: string } | null;
         }>(`/v1/price-lists/${lista.id}/prices`),
-        llamar<{ items: Product[] }>(`/v1/products?per_page=100`),
+        todosLosProductos(llamar),
       ]);
-      const skuDe = new Map(prods.items.map((p) => [p.id, `${p.sku} · ${p.name}`]));
+      const skuDe = new Map(prods.map((p) => [p.id, `${p.sku} · ${p.name}`]));
       return {
         rate: r.rate,
         filas: r.items.map((i) => ({ ...i, producto: skuDe.get(i.product_id) ?? i.product_id })),
@@ -242,6 +272,7 @@ function PreciosDeLista({
     },
   });
   const tasa = precios.data?.rate ?? null;
+  const gestiona = puede("price_list.manage");
 
   async function hacerPredeterminada(): Promise<void> {
     try {
@@ -313,7 +344,7 @@ function PreciosDeLista({
       {
         id: "desde",
         header: "Desde",
-        accessorFn: (i) => i.effective_from.slice(0, 16).replace("T", " "),
+        accessorFn: (i) => fechaHoraLocal(i.effective_from),
       },
       {
         id: "hasta",
@@ -324,7 +355,7 @@ function PreciosDeLista({
             <Badge tone="accent">Vigente</Badge>
           ) : (
             <span className="text-muted-foreground">
-              {c.row.original.effective_to.slice(0, 16).replace("T", " ")}
+              {fechaHoraLocal(c.row.original.effective_to)}
             </span>
           ),
       },
@@ -334,7 +365,9 @@ function PreciosDeLista({
 
   async function cargarPrecio(): Promise<void> {
     setError(null);
-    const cuando = desde === "" ? new Date().toISOString() : new Date(desde).toISOString();
+    // Una fecha escrita por la persona es la MEDIANOCHE de Caracas de ese día, no la de UTC.
+    const cuando =
+      desde === "" ? new Date().toISOString() : new Date(`${desde}T00:00:00-04:00`).toISOString();
     try {
       await llamar(`/v1/price-lists/${lista.id}/prices`, {
         method: "POST",
@@ -366,7 +399,7 @@ function PreciosDeLista({
             </CardTitle>
             {esPredeterminada && <Badge tone="accent">Predeterminada · la usa la caja</Badge>}
           </div>
-          {!esPredeterminada && lista.status === "active" && (
+          {!esPredeterminada && lista.status === "active" && puede("company.settings.manage") && (
             <Button variant="secondary" size="sm" onClick={() => setConfirmandoDefault(true)}>
               Hacer predeterminada
             </Button>
@@ -374,13 +407,18 @@ function PreciosDeLista({
           {tasa === null && (
             <p className="text-[0.82rem] text-warning-soft-foreground">
               Sin tasa del día: la columna de equivalencia no puede calcularse.{" "}
-              <a href="/admin/facturacion-fiscal" className="underline">
+              <Link to="/admin/facturacion-fiscal" className="underline">
                 Cargar la tasa
-              </a>
+              </Link>
             </p>
           )}
         </CardHeader>
         <CardContent>
+          {!gestiona && (
+            <p className="mb-3 text-[0.85rem] text-muted-foreground">
+              Cargar precios exige el permiso de listas de precios: aquí solo se consultan.
+            </p>
+          )}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <FormField label="Producto" required>
               {(a) => (
@@ -389,6 +427,7 @@ function PreciosDeLista({
                   placeholder="SKU o nombre…"
                   value={producto}
                   onChange={setProducto}
+                  disabled={!gestiona}
                   buscar={async (q) => {
                     const r = await llamar<{ items: Product[] }>(
                       `/v1/products?search=${encodeURIComponent(q)}&per_page=8`,
@@ -405,6 +444,7 @@ function PreciosDeLista({
                   value={importe}
                   onChange={setImporte}
                   currency={lista.currency_code}
+                  disabled={!gestiona}
                 />
               )}
             </FormField>
@@ -414,6 +454,7 @@ function PreciosDeLista({
                   id={a.id}
                   type="datetime-local"
                   value={desde}
+                  disabled={!gestiona}
                   onChange={(e) => setDesde(e.target.value)}
                 />
               )}
@@ -427,7 +468,7 @@ function PreciosDeLista({
           <div className="mt-3">
             <Button
               variant="primary"
-              disabled={producto === null || !importeValido(importe)}
+              disabled={!gestiona || producto === null || !importeValido(importe)}
               onClick={() => setConfirmando(true)}
             >
               Cargar precio…
@@ -439,7 +480,7 @@ function PreciosDeLista({
       <DataTable
         columns={columnas}
         data={precios.data?.filas}
-        error={precios.error instanceof Error ? precios.error.message : null}
+        error={precios.error === null ? null : errorDePersona(precios.error)}
         onRetry={() => void precios.refetch()}
         density="compact"
         exportCsv={{ filename: `precios-${lista.name}.csv` }}

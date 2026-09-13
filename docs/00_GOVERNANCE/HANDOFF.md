@@ -1,3 +1,102 @@
+# Handoff — 2026-09-12 (19ª entrega) — la auditoría, cerrada
+
+> **Si eres Claude en una máquina nueva, lee en este orden:** la memoria
+> (`docs/00_GOVERNANCE/claude-memory/README.md`), esta entrega, y la 18ª.
+> `CLAUDE.md` §9 ya dice la verdad: Ladino está en producción desde 2026-09-07.
+
+## Estado
+
+Ladino **en producción** (`app.ladinosystem.com`, `api.ladinosystem.com`), con
+el VPS por detrás del repositorio. En esta sesión se hizo la **auditoría
+completa** (estática: 30 ficheros de dominio/API/esquema; en vivo: 22
+pantallas, cada botón, cada endpoint; informe en el artefacto de la sesión) y
+se **resolvieron sus 98 hallazgos** (26 altos, 42 medios, 30 bajos) en cinco
+lotes, con cinco migraciones y cinco ADR nuevos. **Nada de esto está
+desplegado.**
+
+## Hecho en esta sesión
+
+| Lote | Qué | Dónde |
+|---|---|---|
+| 1 · web | Todas las pantallas revisadas contra el contrato real: paginación, estados de error y carga, permisos en botones, invalidaciones tras escribir, fechas en día de Caracas (`fechas.ts`), PDF sin bloqueo de ventana (`pdf.ts`), diálogo único de cobro (`CobrarDocumento`), formas de pago alineadas con el enum del backend, `Vender` reiniciado al cambiar de empresa, rutas `/sin-acceso` y `*`, CSV con encabezado y fórmulas neutralizadas, `confirmDisabled` en anular/reabrir, paleta que abre productos buscando | `apps/web/src/**` |
+| 2 · API/dominio | CORS con `DELETE`; `person_message` en todos los errores (SQLSTATE 22001/22003/40001/57014, 23503 por constraint); permisos any-of (`company-scope.ts`); tope del cobro con `for update` (A-26); `search`/`source_document_id`/`source_id` en listados; recibos de retención paginados y con permiso; idempotencia por endpoint; BCV con día publicado y cota de plausibilidad; clasificación fiscal del cliente inferida del prefijo | `apps/api/src/**`, `packages/domain/src/**` |
+| 3 · fechas | `diaNegocio()` en dominio; libros, saldos, antigüedad, asientos y tasas cortan por el día de Caracas | ADR-0054, migración 48, pgTAP 048 |
+| 4 · migraciones | `claimed_at` en idempotencia (ADR-0056, m. 49); primera vigencia contable desde siempre (ADR-0055, m. 50); numeración de órdenes/recepciones bajo candado + `for update` en confirmar pedido, recepción, tope de NC y pago a proveedor (M-16, m. 51); tasas/alícuotas/retenciones **por empresa** (ADR-0057, m. 52); documento de venta **a la moneda** (ADR-0058, sin migración) | `supabase/migrations/20260912*`, pgTAP 048–052 |
+| 5 · docs | CLAUDE.md §9, README, ROADMAP, IMPLEMENTATION_PLAN al estado real; ADR_INDEX con 0053–0058 y ADR-0025 aceptado; REGULATORY_STATUS + IVA/RETENTIONS/IGTF_SPEC con PA 000054, 000048, 000091 y Decreto 4.972; semilla demo con proveedores y rangos NC/ND; `LADINO_PHASE=produccion` | `docs/**`, `scripts/demo` |
+
+## Decisiones tomadas (las tres que el informe dejaba abiertas)
+
+- **Redondeo del documento (A-12)**: a la moneda, para lo nuevo; lo emitido no
+  se toca; la valoración de cobros y del diferencial sigue a 8. **ADR-0058.**
+- **Tablas globales (A-22)**: `tenant_id`/`company_id` nulos = plataforma; lo
+  manual es de cada empresa; firmas sin empresa eliminadas. **ADR-0057.**
+- **Cola contable (A-11)**: la primera vigencia rige desde `-infinity`;
+  «Contabilizar los pendientes» vacía la cola de producción tras desplegar.
+  **ADR-0055.**
+
+## Cómo desplegar ESTA entrega (orden obligatorio)
+
+1. **Migraciones 48–52 y la API nueva van en la MISMA ventana.** La 52 elimina
+   `rate_at(text,…)`, `resolve_tax(date,…)` y `resolve_retention(date,…)`; la
+   API vieja las llama y fallaría con 42883. Aplicar las cinco al remoto por la
+   Management API (el patrón de la 18ª entrega) y de inmediato
+   `git pull && docker compose up -d --build api web worker` en el VPS.
+   La 47 (pendiente de la entrega anterior) va antes, en cualquier momento.
+2. Tras desplegar: **«Contabilizar los pendientes»** en Contabilidad (la cola de
+   1.527 hechos debe quedar en cero; `accounting_coverage_gaps()` lo comprueba).
+3. Comprobar en `/v1/fiscal/setup` de cada empresa activa que `iva_general` no
+   es nulo (ADR-0057: las reglas aceptadas por una empresa dejaron de valer para
+   las demás; el asistente enseña el paso pendiente). **VALIDAR-OPERACIÓN.**
+4. Un cobro en USD sobre factura en Bs: `rounding_policy_id` del documento nuevo
+   `sales:document:2:HALF_UP`, vuelto a dos decimales.
+
+## En vuelo / abierto
+
+- **Quitar el default de `igtf_perceptions.rounding_policy_id`** (migración
+  47): solo después de que la API de ADR-0053 esté viva en el VPS.
+- **Diferencia de redondeo de caja** (MONEY_AND_ROUNDING_SPEC §6.4): el vuelto
+  se entrega a céntimos y el aplicado sigue exacto; el residuo (< 1 minor unit)
+  no tiene asiento propio todavía. **VALIDAR-CONTABLE**, ADR-0058.
+- **«Al mayor» en listas de precios**: la web lo infiere por nombre; el flag de
+  servidor exige contrato + migración (fuera de la auditoría, anotado).
+- `GET /v1/documents` sin nombre de cliente (la web baja el maestro para 25
+  filas): cambio de contrato pendiente de aprobación.
+- Los seis puntos de la 18ª entrega siguen: cuenta semilla, siete endpoints sin
+  pantalla, rotar el token `sbp_`, begin/commit por venta, co-ubicar VPS y base.
+- **Siguiente encargo del dueño**: el plan comercial en dos niveles (sin RIF /
+  con RIF) con investigación de 30+ ERP y la competencia; **primero el plan,
+  luego el código**. La investigación fiscal previa está en la sesión
+  (PA 00084 deroga la homologación; PA 00071/0141/102 gobiernan; recomendación
+  (c): plan simple + módulo fiscal gateado por plan).
+
+## Bloqueantes (asesor)
+
+- **VALIDAR-TRIBUTARIO — modo de redondeo** del documento y de la percepción
+  (`MODO_DOCUMENTO`, `MODO_IGTF` = `HALF_UP`); la escala no está en duda.
+- **VALIDAR-TRIBUTARIO — 13 documentos históricos** con más de dos decimales
+  (`sales:document:8:HALF_UP`), P-13.
+- Texto primario en Gaceta de PA 000054 / 000048 / 000091 / Decreto 4.972 por
+  archivar en `EXPEDIENTE_TECNICO.md`.
+
+## Lecciones que quedan escritas
+
+- **Los E2E fechaban en UTC** (`toISOString().slice(0,10)`): a las 21:55 de
+  Caracas, 24 tests cayeron con `EXCHANGE_RATE_MISSING`/`TAX_RULE_MISSING`.
+  Ahora `apps/api/test/_dia-caracas.ts`; las semillas globales filtran
+  `company_id is null`. Sexta aparición de la familia fecha-contra-reloj.
+- La base local **acumula filas entre corridas** de E2E: con fechas o ámbitos
+  nuevos, `pnpm db:reset` antes de creer un rojo.
+- `set_row_provenance()` pisa `created_at` al insertar: una fila «vieja» en
+  pgTAP se siembra con `session_replication_role = replica`.
+
+## Estado del repo
+
+- Rama `main`; esta entrega va en el commit siguiente a `3928d12`.
+- Migraciones: **52 en el repo**, **46 aplicadas en producción** (47–52 pendientes).
+- `pnpm run verify` **verde** (2026-09-12, con `TURBO_CONCURRENCY=1` y `db:reset`
+  previo): `VERIFY EXIT=0`, 635 líneas de tarea, pgTAP 49 ficheros / 1.115 tests
+  (`All tests successful`), vitest domain 49 · api 277 · web 20 · worker 19.
+
 # Handoff — 2026-09-11 (18ª entrega) — cambio de PC
 
 > **Si eres Claude en una máquina nueva, lee en este orden:**

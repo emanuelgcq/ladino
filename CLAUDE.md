@@ -328,9 +328,22 @@ Delega a ellos las tareas de lectura amplia y revisión. El contexto principal e
 
 ## 9. Estado del proyecto
 
-Fase actual: **Sprint 0 — bootstrap.** Nada está construido todavía.
-Antes de escribir la primera línea de código de negocio, revisa
-`docs/00_GOVERNANCE/SPRINT_0_BOOTSTRAP.md` y `docs/00_GOVERNANCE/OPEN_QUESTIONS.md`.
+Fase actual: **en producción desde 2026-09-07** (`app.ladinosystem.com`,
+`api.ladinosystem.com`; VPS Hostinger + Supabase Cloud). Construido y desplegado: catálogo y
+listas de precios, clientes y proveedores, ventas (cotización, pedido, factura, notas de
+crédito/débito, recibos, POS con varias cuentas), compras (órdenes, recepciones, facturas de
+proveedor, retenciones, pagos), inventario valorado, tesorería (cuentas, cierres de caja,
+gastos, tasa del día), contabilidad (plantillas, asientos, mayor, comprobación, cola de
+pendientes), libros y declaraciones de IVA, percepción de IGTF y la puesta a punto fiscal.
+`SPRINT_0_BOOTSTRAP.md` es historia.
 
-Los bloqueantes SENIAT de `OPEN_QUESTIONS.md` **no impiden** construir Fases 1–3.
-Sí impiden liberar emisión fiscal productiva.
+Antes de tocar algo: `docs/00_GOVERNANCE/HANDOFF.md` (la entrega más reciente arriba),
+`docs/00_GOVERNANCE/ADR_INDEX.md` (58 ADR) y `docs/02_COMPLIANCE/REGULATORY_STATUS.md`. La
+homologación de software (PA SNAT/2024/000121) fue **derogada** por la PA SNAT/2026/00084
+sin sustituta: lo que gobierna la emisión es la PA 00071 (forma libre + imprenta autorizada)
+y la PA 102 (imprenta digital). Los `VALIDAR-SENIAT` / `VALIDAR-TRIBUTARIO` abiertos están en
+`docs/02_COMPLIANCE/PENDIENTES_ASESOR.md` y siguen impidiendo liberar emisión fiscal
+productiva sin el asesor.
+
+Desplegar = `git pull && docker compose up -d --build` en el VPS **por el dueño**, con las
+migraciones nuevas aplicadas en Supabase Cloud en la misma ventana cuando el HANDOFF lo diga.

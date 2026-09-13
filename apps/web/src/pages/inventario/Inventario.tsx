@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { ArrowLeftRight, ArrowDownToLine, ArrowUpFromLine, Scale, TimerReset } from "lucide-react";
@@ -24,6 +24,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../ui/
 import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { MensajeError } from "../ventas/comunes.js";
+import { errorDePersona } from "../../lib.js";
 import type {
   ExpiringLot,
   InventoryMove,
@@ -33,6 +34,7 @@ import type {
   StockBalance,
   Warehouse,
 } from "../../lib.js";
+import { fechaLocal, fechaHoraLocal } from "../../fechas.js";
 
 /**
  * Inventario — Fase B. Cuatro superficies en pestañas: existencias (con el
@@ -47,10 +49,18 @@ type Operacion = "entrada" | "salida" | "ajuste" | "transferencia";
 
 const OPERACION: Record<
   Operacion,
-  { etiqueta: string; icono: React.JSX.Element; consecuencia: string; permiso: string }
+  {
+    etiqueta: string;
+    /** «la entrada», «el ajuste»: el título de la confirmación concuerda. */
+    articulo: "la" | "el";
+    icono: React.JSX.Element;
+    consecuencia: string;
+    permiso: string;
+  }
 > = {
   entrada: {
     etiqueta: "Entrada",
+    articulo: "la",
     icono: <ArrowDownToLine />,
     permiso: "inventory.move",
     consecuencia:
@@ -58,6 +68,7 @@ const OPERACION: Record<
   },
   salida: {
     etiqueta: "Salida",
+    articulo: "la",
     icono: <ArrowUpFromLine />,
     permiso: "inventory.move",
     consecuencia:
@@ -65,6 +76,7 @@ const OPERACION: Record<
   },
   ajuste: {
     etiqueta: "Ajuste",
+    articulo: "el",
     icono: <Scale />,
     permiso: "inventory.adjust",
     consecuencia:
@@ -72,6 +84,7 @@ const OPERACION: Record<
   },
   transferencia: {
     etiqueta: "Transferencia",
+    articulo: "la",
     icono: <ArrowLeftRight />,
     permiso: "inventory.transfer",
     consecuencia:
@@ -207,7 +220,7 @@ export function Inventario(): React.JSX.Element {
           <DataTable
             columns={columnas}
             data={stock.data?.items}
-            error={stock.error instanceof Error ? stock.error.message : null}
+            error={stock.error === null ? null : errorDePersona(stock.error)}
             onRetry={() => void stock.refetch()}
             onRowClick={setKardexDe}
             density="compact"
@@ -295,11 +308,15 @@ function Kardex({
   onCerrar: () => void;
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
+  // El kardex de un producto con años de movimientos no cabe en una página:
+  // se pagina contra el servidor (`total`) y se dice cuántas hay.
+  const POR_PAGINA = 100;
+  const [pagina, setPagina] = useState(1);
   const movimientos = useQuery({
-    queryKey: ["kardex", empresa.id, balance.product_id],
+    queryKey: ["kardex", empresa.id, balance.product_id, pagina],
     queryFn: () =>
-      llamar<{ items: InventoryMove[] }>(
-        `/v1/inventory/moves?product_id=${balance.product_id}&per_page=100`,
+      llamar<{ items: InventoryMove[]; total: number }>(
+        `/v1/inventory/moves?product_id=${balance.product_id}&per_page=${POR_PAGINA}&page=${pagina}`,
       ),
   });
 
@@ -308,7 +325,7 @@ function Kardex({
       {
         id: "fecha",
         header: "Fecha",
-        accessorFn: (m) => m.occurred_at.slice(0, 16).replace("T", " "),
+        accessorFn: (m) => fechaHoraLocal(m.occurred_at),
       },
       {
         id: "tipo",
@@ -417,10 +434,16 @@ function Kardex({
           <DataTable
             columns={columnas}
             data={movimientos.data?.items}
-            error={movimientos.error instanceof Error ? movimientos.error.message : null}
+            error={movimientos.error === null ? null : errorDePersona(movimientos.error)}
             onRetry={() => void movimientos.refetch()}
             density="compact"
             virtualized
+            pagination={{
+              total: movimientos.data?.total ?? 0,
+              page: pagina,
+              perPage: POR_PAGINA,
+              onPageChange: setPagina,
+            }}
             exportCsv={{ filename: `kardex-${balance.product_sku}.csv` }}
             empty={{
               title: "Sin movimientos",
@@ -755,8 +778,8 @@ function Movimiento({
         <ConfirmDialog
           open={confirmando}
           onOpenChange={setConfirmando}
-          title={`Registrar la ${def.etiqueta.toLowerCase()}`}
-          confirmLabel={`Registrar la ${def.etiqueta.toLowerCase()}`}
+          title={`Registrar ${def.articulo} ${def.etiqueta.toLowerCase()}`}
+          confirmLabel={`Registrar ${def.articulo} ${def.etiqueta.toLowerCase()}`}
           onConfirm={enviar}
         >
           {mostrarCantidad(form.quantity || "0")} × {producto?.label ?? "—"}
@@ -771,7 +794,7 @@ function Movimiento({
 }
 
 function Alertas(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const [dias, setDias] = useState("30");
   const [definiendo, setDefiniendo] = useState(false);
   const qc = useQueryClient();
@@ -792,13 +815,17 @@ function Alertas(): React.JSX.Element {
       <Card>
         <CardHeader>
           <CardTitle>Por reponer ({alertas.data?.bajo.length ?? 0})</CardTitle>
-          <Button variant="secondary" size="sm" onClick={() => setDefiniendo(true)}>
-            Definir umbral…
-          </Button>
+          {puede("inventory.threshold.manage") && (
+            <Button variant="secondary" size="sm" onClick={() => setDefiniendo(true)}>
+              Definir umbral…
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           {alertas.isPending ? (
             <Skeleton className="h-16 w-full" />
+          ) : alertas.isError ? (
+            <AlertaFallida error={alertas.error} onReintentar={() => void alertas.refetch()} />
           ) : (alertas.data?.bajo ?? []).length === 0 ? (
             <CardDescription>
               Nada por debajo del mínimo. Solo aparecen los productos con umbral definido.
@@ -841,6 +868,8 @@ function Alertas(): React.JSX.Element {
         <CardContent>
           {alertas.isPending ? (
             <Skeleton className="h-16 w-full" />
+          ) : alertas.isError ? (
+            <AlertaFallida error={alertas.error} onReintentar={() => void alertas.refetch()} />
           ) : (alertas.data?.vencen ?? []).length === 0 ? (
             <CardDescription>Ningún lote con existencia vence en ese plazo.</CardDescription>
           ) : (
@@ -852,7 +881,7 @@ function Alertas(): React.JSX.Element {
                 >
                   <span>
                     <span className="font-mono text-[0.82rem]">{l.lot_code}</span> {l.product_sku} ·
-                    vence {l.expires_at.slice(0, 10)}
+                    vence {fechaLocal(l.expires_at)}
                   </span>
                   {l.days_left < 0 ? (
                     <Badge tone="destructive">vencido hace {String(-l.days_left)} d</Badge>
@@ -882,6 +911,26 @@ function Alertas(): React.JSX.Element {
   );
 }
 
+/** Una alerta que no pudo consultarse NO es «nada por reponer»: se dice y se reintenta. */
+function AlertaFallida({
+  error,
+  onReintentar,
+}: {
+  error: unknown;
+  onReintentar: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="space-y-2">
+      <p role="alert" className="text-[0.88rem] text-destructive-soft-foreground">
+        No se pudieron consultar las alertas: {errorDePersona(error)}
+      </p>
+      <Button variant="secondary" size="sm" onClick={onReintentar}>
+        Reintentar
+      </Button>
+    </div>
+  );
+}
+
 /**
  * UMBRAL DE REPOSICIÓN (Nivel B de la auditoría de superficie): la alerta de
  * «por reponer» decía «solo con umbral definido»… y no había dónde definirlo.
@@ -898,9 +947,12 @@ function DefinirUmbral({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
     queryKey: ["almacenes", empresa.id],
     queryFn: () => llamar<Warehouse[]>("/v1/warehouses"),
   });
-  if (almacen === null && (almacenes.data?.length ?? 0) > 0) {
-    setAlmacen(almacenes.data![0]!.id);
-  }
+  // El primer almacén se preselecciona cuando LLEGA la lista, en un efecto:
+  // un setState durante el render es un render extra y una advertencia.
+  const primerAlmacen = almacenes.data?.[0]?.id ?? null;
+  useEffect(() => {
+    if (primerAlmacen !== null) setAlmacen((actual) => actual ?? primerAlmacen);
+  }, [primerAlmacen]);
 
   const guardar = useMutation({
     mutationFn: () =>
@@ -919,13 +971,13 @@ function DefinirUmbral({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
       toast.success("Umbral definido", "La alerta de reposición ya lo vigila.");
       onCerrar(true);
     },
-    onError: (e) => toast.error("No se pudo definir", e instanceof Error ? e.message : undefined),
+    onError: (e) => toast.error("No se pudo definir", errorDePersona(e)),
   });
 
   const listo =
     producto !== null &&
     almacen !== null &&
-    /^d{1,16}(.d{1,8})?$/.test(minimo.trim().replace(",", "."));
+    /^\d{1,16}(\.\d{1,8})?$/.test(minimo.trim().replace(",", "."));
 
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
@@ -1015,8 +1067,9 @@ function Recetas({
   almacenes: Warehouse[];
   onConsumido: () => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
+  const qc = useQueryClient();
   const [compuesto, setCompuesto] = useState<EntityOption | null>(null);
   const [almacen, setAlmacen] = useState("");
   const [unidades, setUnidades] = useState("1");
@@ -1069,9 +1122,11 @@ function Recetas({
     <Card>
       <CardHeader>
         <CardTitle>Consumo por receta</CardTitle>
-        <Button variant="secondary" size="sm" onClick={() => setDefiniendo(true)}>
-          Definir receta…
-        </Button>
+        {puede("product.recipe.manage") && (
+          <Button variant="secondary" size="sm" onClick={() => setDefiniendo(true)}>
+            Definir receta…
+          </Button>
+        )}
       </CardHeader>
       <CardContent className="space-y-3">
         <CardDescription>
@@ -1173,24 +1228,32 @@ function Recetas({
 
         {error !== null && <MensajeError error={error} />}
 
-        <Button
-          variant="primary"
-          disabled={
-            compuesto === null ||
-            almacen === "" ||
-            faltaConversion ||
-            (receta.data?.lines ?? []).length === 0
-          }
-          onClick={() => setConfirmando(true)}
-        >
-          Consumir receta…
-        </Button>
+        {/* Consumir genera salidas de inventario: el servidor exige
+            `inventory.move` (recipe-consumptions → issueStockBatch). */}
+        {puede("inventory.move") && (
+          <Button
+            variant="primary"
+            disabled={
+              compuesto === null ||
+              almacen === "" ||
+              faltaConversion ||
+              (receta.data?.lines ?? []).length === 0
+            }
+            onClick={() => setConfirmando(true)}
+          >
+            Consumir receta…
+          </Button>
+        )}
 
         {definiendo && (
           <DefinirReceta
-            onCerrar={() => {
+            onCerrar={(compuestoId) => {
               setDefiniendo(false);
-              // La receta del compuesto elegido se rehace en la próxima consulta.
+              // La receta guardada se vuelve a leer: la que estaba en caché
+              // era la anterior, y consumir con ella descontaría lo viejo.
+              if (compuestoId !== null) {
+                void qc.invalidateQueries({ queryKey: ["receta", empresa.id, compuestoId] });
+              }
             }}
           />
         )}
@@ -1215,13 +1278,27 @@ function Recetas({
  * existía; crearla o corregirla, no. La receta se reemplaza ENTERA — una
  * receta a medias no es una receta (contrato del servidor).
  */
-function DefinirReceta({ onCerrar }: { onCerrar: () => void }): React.JSX.Element {
+interface LineaReceta {
+  /** Estable desde que nace: quitar la segunda línea no reasigna el estado de la tercera. */
+  id: string;
+  ingrediente: EntityOption | null;
+  quantity: string;
+  unit_code: string;
+}
+function lineaNueva(): LineaReceta {
+  return { id: crypto.randomUUID(), ingrediente: null, quantity: "", unit_code: "unidad" };
+}
+
+function DefinirReceta({
+  onCerrar,
+}: {
+  /** El id del compuesto cuya receta se guardó; null si se canceló. */
+  onCerrar: (compuestoId: string | null) => void;
+}): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [compuesto, setCompuesto] = useState<EntityOption | null>(null);
-  const [lineas, setLineas] = useState<
-    { ingrediente: EntityOption | null; quantity: string; unit_code: string }[]
-  >([{ ingrediente: null, quantity: "", unit_code: "unidad" }]);
+  const [lineas, setLineas] = useState<LineaReceta[]>(() => [lineaNueva()]);
   const [error, setError] = useState<unknown>(null);
   const [ocupado, setOcupado] = useState(false);
 
@@ -1253,7 +1330,7 @@ function DefinirReceta({ onCerrar }: { onCerrar: () => void }): React.JSX.Elemen
         }),
       });
       toast.success("Receta guardada", "Reemplaza a la anterior por completo.");
-      onCerrar();
+      onCerrar(compuesto?.id ?? null);
     } catch (e) {
       setError(e);
       toast.error("No se pudo guardar la receta");
@@ -1263,7 +1340,7 @@ function DefinirReceta({ onCerrar }: { onCerrar: () => void }): React.JSX.Elemen
   }
 
   return (
-    <Dialog open onOpenChange={(v) => !v && onCerrar()}>
+    <Dialog open onOpenChange={(v) => !v && onCerrar(null)}>
       <DialogContent className="max-w-xl">
         <DialogTitle>Definir la receta</DialogTitle>
         <DialogDescription>
@@ -1291,7 +1368,7 @@ function DefinirReceta({ onCerrar }: { onCerrar: () => void }): React.JSX.Elemen
           </FormField>
           <div className="space-y-2">
             {lineas.map((l, i) => (
-              <div key={i} className="flex items-start gap-2">
+              <div key={l.id} className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
                   <EntityPicker
                     placeholder="Ingrediente…"
@@ -1352,12 +1429,7 @@ function DefinirReceta({ onCerrar }: { onCerrar: () => void }): React.JSX.Elemen
             <Button
               variant="secondary"
               size="sm"
-              onClick={() =>
-                setLineas((prev) => [
-                  ...prev,
-                  { ingrediente: null, quantity: "", unit_code: "unidad" },
-                ])
-              }
+              onClick={() => setLineas((prev) => [...prev, lineaNueva()])}
             >
               Otro ingrediente
             </Button>
@@ -1365,7 +1437,7 @@ function DefinirReceta({ onCerrar }: { onCerrar: () => void }): React.JSX.Elemen
           {error !== null && <MensajeError error={error} />}
         </div>
         <div className="mt-4 flex justify-end gap-2">
-          <Button variant="ghost" onClick={onCerrar}>
+          <Button variant="ghost" onClick={() => onCerrar(null)} disabled={ocupado}>
             Cancelar
           </Button>
           <Button variant="primary" disabled={!listo || ocupado} onClick={() => void guardar()}>

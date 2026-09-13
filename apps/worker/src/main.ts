@@ -42,6 +42,13 @@ if (!url) {
 const sql = createClient(url);
 const transmitter = new NullTransmitter((linea) => console.log(linea));
 const intervaloMs = Number(process.env["WORKER_INTERVAL_MS"] ?? 2000);
+if (!Number.isInteger(intervaloMs) || intervaloMs < 100) {
+  // `setTimeout(NaN)` es un bucle caliente contra la base (auditoría 2026-09-11).
+  log("error", "worker.config_invalid", {
+    error: "WORKER_INTERVAL_MS debe ser un entero de milisegundos >= 100",
+  });
+  process.exit(1);
+}
 const latido = process.env["WORKER_HEARTBEAT_FILE"] ?? "/tmp/ladino-worker.heartbeat";
 const MAX_FALLOS_SEGUIDOS = 5;
 // Plazo de un ciclo entero: la entrega tiene 5 min por fila y el lote es de

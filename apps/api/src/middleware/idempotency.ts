@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Context, Next } from "hono";
 import { withTransaction, SYSTEM_ACTOR_ID, type Actor, type Sql, type JSONValue } from "@ladino/db";
 import { tenantVisible } from "@ladino/domain";
+import { mensajePersona } from "./errors.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -72,6 +73,7 @@ interface Reserva {
   readonly id: string;
   readonly status: "in_progress" | "completed" | "failed";
   readonly request_hash: Buffer;
+  readonly endpoint: string;
   readonly response: { status: number; body: unknown } | null;
 }
 
@@ -92,7 +94,11 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
       // Este middleware solo se monta en rutas críticas, así que aquí la
       // ausencia es un error del cliente, no una ruta exenta.
       return c.json(
-        { code: "IDEMPOTENCY_KEY_REQUIRED", message: "Esta operación exige Idempotency-Key." },
+        {
+          code: "IDEMPOTENCY_KEY_REQUIRED",
+          message: "Esta operación exige Idempotency-Key.",
+          person_message: mensajePersona("IDEMPOTENCY_KEY_REQUIRED"),
+        },
         400,
       );
     }
@@ -100,7 +106,11 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
       // La misma cota que el CHECK de la tabla: se corta aquí con un error que
       // dice qué pasa, no en el btree.
       return c.json(
-        { code: "VALIDATION_FAILED", message: "Idempotency-Key admite hasta 255 caracteres." },
+        {
+          code: "VALIDATION_FAILED",
+          message: "Idempotency-Key admite hasta 255 caracteres.",
+          person_message: mensajePersona("VALIDATION_FAILED"),
+        },
         422,
       );
     }
@@ -135,6 +145,7 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
         {
           code: "TENANT_SCOPE_REQUIRED",
           message: "No se pudo determinar el tenant de la operación.",
+          person_message: mensajePersona("TENANT_SCOPE_REQUIRED"),
         },
         422,
       );
@@ -162,7 +173,12 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
       // El MISMO cuerpo que devuelve el caso de uso para tenant invisible o
       // inexistente: los tres 404 indistinguibles, también en el cuerpo.
       return c.json(
-        { code: "NOT_FOUND", message: "Recurso no encontrado.", request_id: ctx.requestId },
+        {
+          code: "NOT_FOUND",
+          message: "Recurso no encontrado.",
+          person_message: mensajePersona("NOT_FOUND"),
+          request_id: ctx.requestId,
+        },
         404,
       );
     }
@@ -175,7 +191,7 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
       // sin clave natural única. Con el lock, la segunda T1 espera a la
       // primera y ve `in_progress`.
       const [existente] = await tx<Reserva[]>`
-        select id, status, request_hash, response
+        select id, status, request_hash, endpoint, response
           from public.idempotency_keys
          where tenant_id = ${tenantId}
            and company_id is not distinct from ${companyId}
@@ -215,6 +231,7 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
             update public.idempotency_keys
                set status = 'in_progress', response = null,
                    request_hash = ${cuerpo}, endpoint = ${endpoint},
+                   claimed_at = now(),
                    expires_at = now() + make_interval(hours => ${ttl})
              where tenant_id = ${tenantId}
                and company_id is not distinct from ${companyId}
@@ -227,7 +244,10 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
         }
       }
 
-      if (Buffer.compare(existente.request_hash, cuerpo) !== 0) {
+      // Misma llave y mismo cuerpo en OTRO endpoint (`{}` para confirmar dos
+      // devoluciones distintas) no es un replay: devolvía la respuesta de la
+      // primera y la segunda nunca ocurría (auditoría 2026-09-11, M-24).
+      if (Buffer.compare(existente.request_hash, cuerpo) !== 0 || existente.endpoint !== endpoint) {
         return { tipo: "reutilizada" as const };
       }
       if (existente.status === "in_progress") return { tipo: "en_vuelo" as const };
@@ -240,7 +260,8 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
       // algo cambió debajo y NO se reejecuta.
       const [rehabilitada] = await tx<{ id: string }[]>`
         update public.idempotency_keys
-           set status = 'in_progress', response = null, request_hash = ${cuerpo}
+           set status = 'in_progress', response = null, request_hash = ${cuerpo},
+               endpoint = ${endpoint}, claimed_at = now()
          where id = ${existente.id} and status = 'failed'
         returning id`;
       if (!rehabilitada) return { tipo: "en_vuelo" as const };
@@ -253,6 +274,7 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
           {
             code: "IDEMPOTENCY_KEY_REUSED",
             message: "Esta clave ya se usó con un cuerpo distinto.",
+            person_message: mensajePersona("IDEMPOTENCY_KEY_REUSED"),
           },
           409,
         );
@@ -262,6 +284,7 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
           {
             code: "IDEMPOTENCY_IN_PROGRESS",
             message: "La operación original sigue en curso. Reintenta con la misma clave.",
+            person_message: mensajePersona("IDEMPOTENCY_IN_PROGRESS"),
           },
           409,
         );

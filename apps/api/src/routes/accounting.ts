@@ -1,4 +1,5 @@
 import type { Hono, MiddlewareHandler } from "hono";
+import { z } from "zod";
 import { withTransaction, type Sql, type TransactionSql } from "@ladino/db";
 import {
   CreateAccountRequest,
@@ -194,10 +195,12 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
    */
   app.post("/v1/journal-templates/import-preset", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);
-    const cuerpo = (await c.req.json().catch(() => null)) as {
-      company_id?: string;
-      preset_code?: string;
-    } | null;
+    const parsedPreset = z
+      .object({ company_id: z.string().uuid(), preset_code: z.string().min(1).max(60) })
+      .strict()
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsedPreset.success) throw new ValidacionError(parsedPreset.error.issues);
+    const cuerpo: { company_id: string; preset_code: string } | null = parsedPreset.data;
     if (cuerpo?.company_id === undefined || cuerpo.preset_code === undefined) {
       throw new DominioError({
         code: "VALIDATION_FAILED",
@@ -251,6 +254,9 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
     const { actor } = c.get("ladino.auth");
     const status = c.req.query("status") ?? "";
     const sourceKind = c.req.query("source_kind") ?? "";
+    // El asiento DE un documento concreto: el detalle de la factura lo pide
+    // así en vez de barrer cien asientos (auditoría 2026-09-11, A-20).
+    const sourceId = c.req.query("source_id") ?? "";
     const desde = c.req.query("from") ?? "";
     const hasta = c.req.query("to") ?? "";
     const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 25) || 25, 1), 100);
@@ -272,6 +278,7 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
          where e.company_id = ${companyId}
            ${status === "" ? tx`` : tx`and e.status = ${status}`}
            ${sourceKind === "" ? tx`` : tx`and e.source_kind = ${sourceKind}`}
+           ${sourceId === "" ? tx`` : tx`and e.source_id = ${idValido(sourceId)}`}
            ${desde === "" ? tx`` : tx`and e.posting_date >= ${desde}::date`}
            ${hasta === "" ? tx`` : tx`and e.posting_date <= ${hasta}::date`}
          order by e.posting_date desc, e.entry_number desc nulls last, e.id
@@ -378,9 +385,13 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
         select e.id as entry_id, e.entry_number::int as entry_number,
                e.posting_date::text as posting_date, e.description,
                jl.functional_debit::text as debit, jl.functional_credit::text as credit,
-               sum(jl.functional_debit - jl.functional_credit)
-                 over (order by e.posting_date, e.entry_number, jl.line_number)::text
-                 as running_delta,
+               -- El contrato (LedgerResponse) dice running_balance: apertura + acumulado.
+               -- Antes salía running_delta (solo el acumulado) y el OpenAPI mentía
+               -- (auditoría 2026-09-11, M-27).
+               (${apertura?.balance ?? "0"}::numeric
+                + sum(jl.functional_debit - jl.functional_credit)
+                    over (order by e.posting_date, e.entry_number, jl.line_number))::text
+                 as running_balance,
                e.source_kind, e.source_id
           from public.journal_lines jl
           join public.journal_entries e on e.id = jl.entry_id
@@ -510,7 +521,12 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
   app.post("/v1/accounting/pending/process", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
-    const cuerpo = (await c.req.json().catch(() => ({}))) as { limit?: number };
+    const parsedLimite = z
+      .object({ limit: z.number().int().min(1).max(500).optional() })
+      .strict()
+      .safeParse(await c.req.json().catch(() => ({})));
+    if (!parsedLimite.success) throw new ValidacionError(parsedLimite.error.issues);
+    const cuerpo: { limit?: number | undefined } = parsedLimite.data;
     const r = await withTransaction(sql, actor, (uow) =>
       reprocessPendingJournals(uow, {
         company_id: companyId,

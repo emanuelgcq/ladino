@@ -35,6 +35,7 @@ import {
   createDirectCreditNote,
   createDebitNote,
   avisoIgtf,
+  minorUnitsOf,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -112,6 +113,10 @@ export function salesRoutes(
     const kind = c.req.query("kind") ?? "";
     const status = c.req.query("status") ?? "";
     const customerId = c.req.query("customer_id") ?? "";
+    // Las notas y devoluciones EMITIDAS SOBRE un documento (el detalle de la
+    // factura las lista); y una búsqueda por número para los selectores.
+    const sourceDocumentId = c.req.query("source_document_id") ?? "";
+    const search = (c.req.query("search") ?? "").trim();
     const desde = c.req.query("from") ?? "";
     const hasta = c.req.query("to") ?? "";
     const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 20) || 20, 1), 100);
@@ -124,8 +129,15 @@ export function salesRoutes(
            ${kind === "" ? tx`` : tx`and kind = ${kind}`}
            ${status === "" ? tx`` : tx`and status = ${status}`}
            ${customerId === "" ? tx`` : tx`and customer_id = ${idValido(customerId)}`}
-           ${desde === "" ? tx`` : tx`and coalesce(issued_at, created_at) >= ${desde}::date`}
-           ${hasta === "" ? tx`` : tx`and coalesce(issued_at, created_at) < (${hasta}::date + 1)`}
+           ${sourceDocumentId === "" ? tx`` : tx`and source_document_id = ${idValido(sourceDocumentId)}`}
+           ${
+             search === ""
+               ? tx``
+               : tx`and (series || '-' || coalesce(document_number::text, '') ilike ${`%${search}%`}
+                        or coalesce(control_number::text, '') = ${search})`
+           }
+           ${desde === "" ? tx`` : tx`and (coalesce(issued_at, created_at) at time zone ${"America/Caracas"})::date >= ${desde}::date`}
+           ${hasta === "" ? tx`` : tx`and (coalesce(issued_at, created_at) at time zone ${"America/Caracas"})::date <= ${hasta}::date`}
          order by coalesce(issued_at, created_at) desc, document_number desc nulls last, id
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
     });
@@ -338,17 +350,24 @@ export function salesRoutes(
     const currency = c.req.query("currency") ?? "";
     const tendered = c.req.query("tendered") ?? "";
     const tenderedCurrency = c.req.query("tendered_currency") ?? currency;
+    // Lo YA cubierto por otra forma de pago (cobro mixto): el vuelto y el
+    // «falta» se calculan sobre el RESTO, no sobre el total (auditoría
+    // 2026-09-11, M-03). Opcional; en la moneda que se declare.
+    const alreadyPaid = c.req.query("already_paid") ?? "";
+    const alreadyPaidCurrency = c.req.query("already_paid_currency") ?? currency;
     const AMOUNT_RE = /^\d{1,16}(\.\d{1,8})?$/;
     const CUR_RE = /^[A-Z]{3}$/;
     if (
       !AMOUNT_RE.test(total) ||
       !AMOUNT_RE.test(tendered) ||
       !CUR_RE.test(currency) ||
-      !CUR_RE.test(tenderedCurrency)
+      !CUR_RE.test(tenderedCurrency) ||
+      (alreadyPaid !== "" && (!AMOUNT_RE.test(alreadyPaid) || !CUR_RE.test(alreadyPaidCurrency)))
     ) {
       throw new DominioError({
         code: "VALIDATION_FAILED",
-        message: "El vuelto exige total, currency, tendered y tendered_currency válidos.",
+        message:
+          "El vuelto exige total, currency, tendered y tendered_currency válidos (y already_paid con su moneda, si viaja).",
       });
     }
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
@@ -365,10 +384,9 @@ export function salesRoutes(
       let rateSource = "identidad";
       if (tenderedCurrency !== currency) {
         const [t] = await tx<{ rate: string | null; source: string | null }[]>`
-          select r.rate::text as rate, r.source from public.exchange_rates r
-           where r.from_currency = ${tenderedCurrency} and r.to_currency = ${currency}
-             and r.rate_date <= current_date
-           order by r.rate_date desc, r.created_at desc limit 1`;
+          select f.rate::text as rate, f.source
+            from platform.rate_for(${companyId}, ${tenderedCurrency}, ${currency},
+                                   (now() at time zone 'America/Caracas')::date) f`;
         if (!t?.rate) {
           throw new DominioError({
             code: "EXCHANGE_RATE_MISSING",
@@ -378,11 +396,37 @@ export function salesRoutes(
         rate = t.rate;
         rateSource = t.source ?? "manual";
       }
-      // change = entregado − total/tasa, en la moneda con la que pagaron. El
-      // cálculo vive AQUÍ y no en el navegador: es dinero.
+      // Lo ya pagado con la OTRA forma, llevado a la moneda del total.
+      let yaPagadoEnTotal = "0";
+      if (alreadyPaid !== "") {
+        if (alreadyPaidCurrency === currency) {
+          yaPagadoEnTotal = alreadyPaid;
+        } else {
+          const [t2] = await tx<{ rate: string | null }[]>`
+            select f.rate::text as rate
+              from platform.rate_for(${companyId}, ${alreadyPaidCurrency}, ${currency},
+                                     (now() at time zone 'America/Caracas')::date) f`;
+          if (!t2?.rate) {
+            throw new DominioError({
+              code: "EXCHANGE_RATE_MISSING",
+              message: `No hay tasa de ${alreadyPaidCurrency} a ${currency}: carga la tasa del día.`,
+            });
+          }
+          const [conv] = await tx<{ v: string }[]>`
+            select round(${alreadyPaid}::numeric * ${t2.rate}::numeric, 8)::text as v`;
+          yaPagadoEnTotal = conv!.v;
+        }
+      }
+      // change = entregado − (total − ya pagado)/tasa, en la moneda con la que
+      // pagan. El cálculo vive AQUÍ y no en el navegador: es dinero. Y el vuelto
+      // va a las minor units de la moneda con la que se devuelve (ADR-0058): un
+      // vuelto de USD 0,476 no se puede entregar.
+      const escalaVuelto = minorUnitsOf(tenderedCurrency);
       const [calc] = await tx<{ change: string }[]>`
-        select (${tendered}::numeric - round(${total}::numeric / ${rate}::numeric, 8))::text
-               as change`;
+        select round(${tendered}::numeric
+                     - round(greatest(${total}::numeric - ${yaPagadoEnTotal}::numeric, 0)
+                             / ${rate}::numeric, 8),
+                     ${escalaVuelto})::numeric(24,8)::text as change`;
       return {
         total,
         currency,
@@ -615,9 +659,13 @@ export function salesRoutes(
         message: "Consultar la numeración exige un usuario real.",
       });
     }
+    // Quien administra los rangos, quien emite con ellos y quien AUDITA lo
+    // fiscal: los tres leen. El contador entraba por el menú y recibía 403
+    // (auditoría 2026-09-11, A-09).
     const [permiso] = await tx<{ ok: boolean }[]>`
       select platform.ladino_user_has_permission(${actor.userId}, 'fiscal.range.manage', ${companyId})
           or platform.ladino_user_has_permission(${actor.userId}, 'sales.invoice.issue', ${companyId})
+          or platform.ladino_user_has_permission(${actor.userId}, 'fiscal.audit.read', ${companyId})
           as ok`;
     if (!permiso?.ok) {
       throw new DominioError({
@@ -724,6 +772,7 @@ export function salesRoutes(
   });
 
   app.get("/v1/exchange-rates", async (c) => {
+    const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
     const from = c.req.query("from") ?? "USD";
     const to = c.req.query("to") ?? "VES";
@@ -732,10 +781,18 @@ export function salesRoutes(
       actor,
       ({ sql: tx }) => tx<Record<string, unknown>[]>`
         select id, from_currency, to_currency, rate::text as rate, source,
-               rate_date::text as rate_date
+               rate_date::text as rate_date,
+               to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at,
+               case when company_id is null then 'plataforma' else 'propia' end as scope
           from public.exchange_rates
          where from_currency = ${from} and to_currency = ${to}
-         order by rate_date desc limit 60`,
+           -- Lo que esta empresa VE: la plataforma y lo suyo (ADR-0057).
+           and (company_id is null or company_id = ${companyId})
+         -- El MISMO orden con el que rate_for elige «la tasa del día»: con dos
+         -- tasas para la misma fecha (BCV + propia) la primera fila es la que va
+         -- a usar la venta. Sin el desempate, cada pantalla enseñaba una
+         -- distinta (auditoría 2026-09-11, M-04).
+         order by rate_date desc, (company_id is not null) desc, created_at desc limit 60`,
     );
     return c.json(filas, 200);
   });
@@ -790,8 +847,11 @@ export function salesRoutes(
     // fuente y día lo dice): el reintento devuelve la fila que ya está. Si el
     // BCV actualiza intradía, `fechaActualizacion` cambia, la fuente citada
     // cambia con ella, y esa sí es una fila nueva.
+    // La tasa oficial es de la PLATAFORMA (company_id nulo), no de quien pulsó
+    // el botón: la escribe el actor de sistema, que es el único al que la RLS
+    // se lo permite (ADR-0057). El permiso ya se comprobó arriba, con el usuario.
     const fuente = `BCV oficial vía DolarAPI (${tasa.actualizada})`;
-    const { fila, nueva } = await withTransaction(sql, actor, async ({ sql: tx }) => {
+    const { fila, nueva } = await withTransaction(sql, { kind: "system" }, async ({ sql: tx }) => {
       const [insertada] = await tx<Record<string, unknown>[]>`
         insert into public.exchange_rates
           (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
@@ -804,7 +864,7 @@ export function salesRoutes(
         select id, from_currency, to_currency, rate::text as rate, source,
                rate_date::text as rate_date
           from public.exchange_rates
-         where from_currency = 'USD' and to_currency = 'VES'
+         where from_currency = 'USD' and to_currency = 'VES' and company_id is null
            and source = ${fuente} and rate_date = ${tasa.rateDate}::date`;
       return { fila: existente!, nueva: false };
     });
@@ -841,10 +901,12 @@ export function salesRoutes(
       // `rate_timestamp` es el instante en que se REGISTRA la tasa, distinto de
       // `rate_date`, que es el día para el que rige. Los dos, porque una tasa
       // cargada tarde sigue rigiendo su día y el desfase tiene que verse.
+      // Una tasa tecleada es DE ESTA EMPRESA: las demás no la ven (ADR-0057).
       const [r] = await tx<Record<string, unknown>[]>`
         insert into public.exchange_rates
-          (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
-        values (${d.from_currency}, ${d.to_currency}, ${d.rate}, ${d.source}, ${d.rate_date}::date,
+          (tenant_id, company_id, from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+        values ((select tenant_id from public.companies where id = ${companyId}), ${companyId},
+                ${d.from_currency}, ${d.to_currency}, ${d.rate}, ${d.source}, ${d.rate_date}::date,
                 now())
         returning id, from_currency, to_currency, rate::text as rate, source,
                   rate_date::text as rate_date`;

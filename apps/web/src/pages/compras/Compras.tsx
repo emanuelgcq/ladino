@@ -24,10 +24,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Skeleton } from "../../ui/card.js";
 import { Tabs, TabsList, TabsPanel, TabsTab } from "../../ui/tabs.js";
 import { Table, TBody, TD, TDNum, TH, THead, TR } from "../../ui/table.js";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../ui/dialog.js";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from "../../ui/dialog.js";
 import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
+import { compararImportes } from "../../components/decimal-compare.js";
 import { MensajeError } from "../ventas/comunes.js";
+import { errorDePersona } from "../../lib.js";
 import type {
   GoodsReceiptDetail,
   LandedCostResult,
@@ -42,6 +50,7 @@ import type {
   SupplierStatement,
   Warehouse,
 } from "../../lib.js";
+import { hoyLocal, fechaLocal } from "../../fechas.js";
 
 /**
  * Compras — Fase B. Cuatro superficies: órdenes (con recepción y landed cost),
@@ -55,6 +64,10 @@ import type {
  * repartido y la variación tal como el servidor los devolvió.
  */
 export function Compras(): React.JSX.Element {
+  // Cortesía de UX (ADR-0048): el permiso lo exige el servidor; aquí solo se
+  // esconde lo que igual fallaría.
+  const { puede } = useSesion();
+  const puedeOrdenar = puede("purchase.order.manage");
   return (
     <div>
       <PageHeader
@@ -64,16 +77,18 @@ export function Compras(): React.JSX.Element {
       <Tabs defaultValue="ordenes">
         <TabsList className="mb-3">
           <TabsTab value="ordenes">Órdenes</TabsTab>
-          <TabsTab value="nueva">Nueva orden</TabsTab>
+          {puedeOrdenar && <TabsTab value="nueva">Nueva orden</TabsTab>}
           <TabsTab value="cxp">Cuentas por pagar</TabsTab>
           <TabsTab value="retenciones">Reglas de retención</TabsTab>
         </TabsList>
         <TabsPanel value="ordenes">
           <Ordenes />
         </TabsPanel>
-        <TabsPanel value="nueva">
-          <NuevaOrden />
-        </TabsPanel>
+        {puedeOrdenar && (
+          <TabsPanel value="nueva">
+            <NuevaOrden />
+          </TabsPanel>
+        )}
         <TabsPanel value="cxp">
           <CuentasPorPagar />
         </TabsPanel>
@@ -87,13 +102,22 @@ export function Compras(): React.JSX.Element {
 
 // ── Órdenes ─────────────────────────────────────────────────────────────────
 
+/** Tamaño de página de las listas paginadas en servidor (órdenes y facturas). */
+const POR_PAGINA = 25;
+
 function Ordenes(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const [abierta, setAbierta] = useState<string | null>(null);
+  const [pagina, setPagina] = useState(1);
 
+  // PAGINADO (auditoría 2026-09-11): la ruta devuelve `{items, total}` a 20
+  // por página; sin pedir `page` la fila 21 no existía para la pantalla.
   const ordenes = useQuery({
-    queryKey: ["ordenes-compra", empresa.id],
-    queryFn: () => llamar<{ items: PurchaseOrder[] }>("/v1/purchase-orders"),
+    queryKey: ["ordenes-compra", empresa.id, pagina],
+    queryFn: () =>
+      llamar<{ items: PurchaseOrder[]; total: number }>(
+        `/v1/purchase-orders?page=${pagina}&per_page=${POR_PAGINA}`,
+      ),
   });
 
   const columnas = useMemo<ColumnDef<PurchaseOrder, unknown>[]>(
@@ -112,7 +136,7 @@ function Ordenes(): React.JSX.Element {
         accessorFn: (o) => o.derived_status ?? o.status,
         cell: (c) => <FiscalStatusBadge estado={c.getValue<string>()} />,
       },
-      { id: "fecha", header: "Fecha", accessorFn: (o) => o.ordered_at?.slice(0, 10) ?? "—" },
+      { id: "fecha", header: "Fecha", accessorFn: (o) => fechaLocal(o.ordered_at) },
       {
         id: "total",
         header: () => <span className="block text-right">Total</span>,
@@ -138,11 +162,17 @@ function Ordenes(): React.JSX.Element {
       <DataTable
         columns={columnas}
         data={ordenes.data?.items}
-        error={ordenes.error instanceof Error ? ordenes.error.message : null}
+        error={ordenes.error != null ? errorDePersona(ordenes.error) : null}
         onRetry={() => void ordenes.refetch()}
         getRowId={(o) => o.id}
         onRowClick={(o) => setAbierta(o.id)}
         density="compact"
+        pagination={{
+          total: ordenes.data?.total ?? 0,
+          page: pagina,
+          perPage: POR_PAGINA,
+          onPageChange: setPagina,
+        }}
         empty={{
           title: "Sin órdenes de compra",
           description: "La orden compromete cantidades y precios; nada se mueve hasta recibir.",
@@ -154,7 +184,9 @@ function Ordenes(): React.JSX.Element {
 }
 
 function DetalleOrden({ id, onCerrar }: { id: string; onCerrar: () => void }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
+  const puedeRecibir = puede("purchase.receive");
+  const puedeFacturar = puede("purchase.invoice.register");
   const toast = useToast();
   const qc = useQueryClient();
   const [cantidades, setCantidades] = useState<Record<string, string>>({});
@@ -196,9 +228,19 @@ function DetalleOrden({ id, onCerrar }: { id: string; onCerrar: () => void }): R
       });
       toast.success("Recepción confirmada", "El inventario ya la refleja.");
       setCantidades({});
-      await qc.invalidateQueries({ queryKey: ["orden-compra", empresa.id, id] });
+      // La recepción cambia el estado derivado de la orden en la lista, el
+      // stock y las alertas de inventario: sin invalidarlas, el usuario veía
+      // la orden «pendiente» y el stock viejo hasta recargar.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["orden-compra", empresa.id, id] }),
+        qc.invalidateQueries({ queryKey: ["ordenes-compra", empresa.id] }),
+        qc.invalidateQueries({ queryKey: ["stock", empresa.id] }),
+        qc.invalidateQueries({ queryKey: ["alertas-inv", empresa.id] }),
+      ]);
     } catch (e) {
       setError(e);
+      // Se RELANZA a propósito: el ConfirmDialog solo enseña el fallo y se
+      // queda abierto cuando `onConfirm` rechaza.
       throw e;
     }
   }
@@ -210,7 +252,25 @@ function DetalleOrden({ id, onCerrar }: { id: string; onCerrar: () => void }): R
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
       <DialogContent className="max-w-4xl">
         {d === undefined ? (
-          <Skeleton className="h-48 w-full" />
+          detalle.isError ? (
+            <>
+              <DialogTitle>No se pudo cargar la orden</DialogTitle>
+              <DialogDescription>{errorDePersona(detalle.error)}</DialogDescription>
+              <DialogFooter>
+                <Button variant="ghost" onClick={onCerrar}>
+                  Cerrar
+                </Button>
+                <Button variant="secondary" onClick={() => void detalle.refetch()}>
+                  Reintentar
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogTitle className="sr-only">Cargando la orden</DialogTitle>
+              <Skeleton className="h-48 w-full" />
+            </>
+          )
         ) : (
           <>
             <DialogTitle>
@@ -257,6 +317,8 @@ function DetalleOrden({ id, onCerrar }: { id: string; onCerrar: () => void }): R
                           <TD>
                             {completa ? (
                               <Badge tone="accent">Completa</Badge>
+                            ) : !puedeRecibir ? (
+                              <span className="text-muted-foreground">—</span>
                             ) : (
                               <Input
                                 aria-label={`Recibir de ${l.description}`}
@@ -274,16 +336,18 @@ function DetalleOrden({ id, onCerrar }: { id: string; onCerrar: () => void }): R
                     })}
                   </TBody>
                 </Table>
-                <div className="mt-2">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={!hayQueRecibir}
-                    onClick={() => setConfirmando(true)}
-                  >
-                    <PackageCheck /> Registrar recepción…
-                  </Button>
-                </div>
+                {puedeRecibir && (
+                  <div className="mt-2">
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      disabled={!hayQueRecibir}
+                      onClick={() => setConfirmando(true)}
+                    >
+                      <PackageCheck /> Registrar recepción…
+                    </Button>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -296,7 +360,7 @@ function DetalleOrden({ id, onCerrar }: { id: string; onCerrar: () => void }): R
                       {d.receipts.map((r) => (
                         <li key={r.id} className="flex items-center justify-between gap-2">
                           <span>
-                            Nº {r.receipt_number ?? "—"} · {r.received_at?.slice(0, 10) ?? "—"} ·{" "}
+                            Nº {r.receipt_number ?? "—"} · {fechaLocal(r.received_at)} ·{" "}
                             <span className="font-mono">
                               {mostrarImporte({
                                 amount: r.functional_amount,
@@ -315,9 +379,11 @@ function DetalleOrden({ id, onCerrar }: { id: string; onCerrar: () => void }): R
                 <div>
                   <div className="mb-1 flex items-center justify-between">
                     <p className="text-[0.85rem] font-medium">Facturas del proveedor</p>
-                    <Button variant="secondary" size="sm" onClick={() => setFacturando(true)}>
-                      Registrar factura…
-                    </Button>
+                    {puedeFacturar && (
+                      <Button variant="secondary" size="sm" onClick={() => setFacturando(true)}>
+                        Registrar factura…
+                      </Button>
+                    )}
                   </div>
                   {d.invoices.length === 0 ? (
                     <p className="text-[0.85rem] text-muted-foreground">
@@ -329,12 +395,21 @@ function DetalleOrden({ id, onCerrar }: { id: string; onCerrar: () => void }): R
                       {d.invoices.map((i) => (
                         <li key={i.id} className="flex items-center justify-between gap-2">
                           <span className="font-mono text-[0.84rem]">
-                            {i.supplier_document_number} · {i.invoice_date}
+                            {i.supplier_document_number} · {fechaLocal(i.invoice_date)}
                           </span>
                           <span className="font-mono">
+                            {/*
+                              `total_amount` está en la moneda de la TRANSACCIÓN de la
+                              factura, no en la funcional: rotularlo como Bs. era mentir
+                              sobre un importe en USD. La factura contra una orden se
+                              registra en la moneda de la orden (RegistrarFacturaProveedor).
+                              PENDIENTE (contrato): `GET /v1/purchase-orders/:id` no trae
+                              `invoices[].transaction_currency`; cuando lo traiga, usarlo
+                              aquí en vez de heredar la moneda de la orden.
+                            */}
                             {mostrarImporte({
                               amount: i.total_amount,
-                              currency: d.order.functional_currency,
+                              currency: d.order.transaction_currency,
                             })}
                           </span>
                         </li>
@@ -388,7 +463,8 @@ function LandedCost({
   receiptId: string;
   onCerrar: () => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
+  const puedeCostear = puede("purchase.landed_cost.apply");
   const toast = useToast();
   const qc = useQueryClient();
   const [gasto, setGasto] = useState({
@@ -396,7 +472,7 @@ function LandedCost({
     allocation_method: "by_value",
     amount: "",
     currency: "VES",
-    incurred_on: new Date().toISOString().slice(0, 10),
+    incurred_on: hoyLocal(),
   });
   const [confirmando, setConfirmando] = useState(false);
   const [ultimo, setUltimo] = useState<LandedCostResult | null>(null);
@@ -435,7 +511,25 @@ function LandedCost({
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
       <DialogContent className="max-w-3xl">
         {rec === undefined ? (
-          <Skeleton className="h-40 w-full" />
+          recepcion.isError ? (
+            <>
+              <DialogTitle>No se pudo cargar la recepción</DialogTitle>
+              <DialogDescription>{errorDePersona(recepcion.error)}</DialogDescription>
+              <DialogFooter>
+                <Button variant="ghost" onClick={onCerrar}>
+                  Cerrar
+                </Button>
+                <Button variant="secondary" onClick={() => void recepcion.refetch()}>
+                  Reintentar
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogTitle className="sr-only">Cargando la recepción</DialogTitle>
+              <Skeleton className="h-40 w-full" />
+            </>
+          )
         ) : (
           <>
             <DialogTitle>Costear la recepción Nº {rec.receipt.receipt_number ?? "—"}</DialogTitle>
@@ -490,64 +584,66 @@ function LandedCost({
                 </TBody>
               </Table>
 
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <FormField label="Concepto" required className="col-span-2">
-                  {(a) => (
-                    <Input
-                      id={a.id}
-                      placeholder="Flete, aduana…"
-                      value={gasto.concept}
-                      onChange={(e) => setGasto({ ...gasto, concept: e.target.value })}
-                    />
-                  )}
-                </FormField>
-                <FormField label="Reparto" required>
-                  {(a) => (
-                    <SimpleSelect
-                      id={a.id}
-                      value={gasto.allocation_method}
-                      onValueChange={(v) => setGasto({ ...gasto, allocation_method: v })}
-                      options={[
-                        { value: "by_value", label: "Por valor" },
-                        { value: "by_weight", label: "Por peso" },
-                        { value: "by_units", label: "Por unidades" },
-                      ]}
-                    />
-                  )}
-                </FormField>
-                <FormField label="Fecha del gasto" required>
-                  {(a) => (
-                    <DatePicker
-                      id={a.id}
-                      value={gasto.incurred_on}
-                      onChange={(v) => setGasto({ ...gasto, incurred_on: v })}
-                    />
-                  )}
-                </FormField>
-                <FormField label="Importe" required className="col-span-2">
-                  {(a) => (
-                    <MoneyInput
-                      id={a.id}
-                      value={gasto.amount}
-                      onChange={(v) => setGasto({ ...gasto, amount: v })}
-                      currency={gasto.currency}
-                    />
-                  )}
-                </FormField>
-                <FormField label="Moneda" required>
-                  {(a) => (
-                    <SimpleSelect
-                      id={a.id}
-                      value={gasto.currency}
-                      onValueChange={(v) => setGasto({ ...gasto, currency: v })}
-                      options={[
-                        { value: "VES", label: "VES" },
-                        { value: "USD", label: "USD" },
-                      ]}
-                    />
-                  )}
-                </FormField>
-              </div>
+              {puedeCostear && (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <FormField label="Concepto" required className="col-span-2">
+                    {(a) => (
+                      <Input
+                        id={a.id}
+                        placeholder="Flete, aduana…"
+                        value={gasto.concept}
+                        onChange={(e) => setGasto({ ...gasto, concept: e.target.value })}
+                      />
+                    )}
+                  </FormField>
+                  <FormField label="Reparto" required>
+                    {(a) => (
+                      <SimpleSelect
+                        id={a.id}
+                        value={gasto.allocation_method}
+                        onValueChange={(v) => setGasto({ ...gasto, allocation_method: v })}
+                        options={[
+                          { value: "by_value", label: "Por valor" },
+                          { value: "by_weight", label: "Por peso" },
+                          { value: "by_units", label: "Por unidades" },
+                        ]}
+                      />
+                    )}
+                  </FormField>
+                  <FormField label="Fecha del gasto" required>
+                    {(a) => (
+                      <DatePicker
+                        id={a.id}
+                        value={gasto.incurred_on}
+                        onChange={(v) => setGasto({ ...gasto, incurred_on: v })}
+                      />
+                    )}
+                  </FormField>
+                  <FormField label="Importe" required className="col-span-2">
+                    {(a) => (
+                      <MoneyInput
+                        id={a.id}
+                        value={gasto.amount}
+                        onChange={(v) => setGasto({ ...gasto, amount: v })}
+                        currency={gasto.currency}
+                      />
+                    )}
+                  </FormField>
+                  <FormField label="Moneda" required>
+                    {(a) => (
+                      <SimpleSelect
+                        id={a.id}
+                        value={gasto.currency}
+                        onValueChange={(v) => setGasto({ ...gasto, currency: v })}
+                        options={[
+                          { value: "VES", label: "VES" },
+                          { value: "USD", label: "USD" },
+                        ]}
+                      />
+                    )}
+                  </FormField>
+                </div>
+              )}
 
               {ultimo !== null && (
                 <div className="rounded-md border border-accent/30 bg-accent-soft/50 px-3 py-2 text-[0.88rem]">
@@ -559,8 +655,15 @@ function LandedCost({
                     })}
                   </span>
                   {" · "}variación del período{" "}
-                  <span className="font-mono">{mostrarCantidad(ultimo.total_variance)}</span> — la
-                  parte de unidades que ya habían salido, que por eso no encarece las que quedan.
+                  <span className="font-mono">
+                    {/* Es DINERO en moneda funcional, no una cantidad. */}
+                    {mostrarImporte({
+                      amount: ultimo.total_variance,
+                      currency: ultimo.functional_currency,
+                    })}
+                  </span>{" "}
+                  — la parte de unidades que ya habían salido, que por eso no encarece las que
+                  quedan.
                 </div>
               )}
 
@@ -575,7 +678,7 @@ function LandedCost({
                           currency: rec.receipt.functional_currency,
                         })}
                       </span>{" "}
-                      · {c.incurred_on} · {c.status}
+                      · {fechaLocal(c.incurred_on)} · {c.status}
                     </li>
                   ))}
                 </ul>
@@ -583,13 +686,15 @@ function LandedCost({
 
               {error !== null && <MensajeError error={error} />}
 
-              <Button
-                variant="primary"
-                disabled={gasto.concept.trim() === "" || !importeValido(gasto.amount)}
-                onClick={() => setConfirmando(true)}
-              >
-                Aplicar al costo…
-              </Button>
+              {puedeCostear && (
+                <Button
+                  variant="primary"
+                  disabled={gasto.concept.trim() === "" || !importeValido(gasto.amount)}
+                  onClick={() => setConfirmando(true)}
+                >
+                  Aplicar al costo…
+                </Button>
+              )}
             </div>
 
             <ConfirmDialog
@@ -770,7 +875,7 @@ function NuevaOrden(): React.JSX.Element {
                 />
               </div>
               <Input
-                aria-label="Cantidad"
+                aria-label={`Cantidad de la línea ${i + 1}`}
                 placeholder="Cant."
                 inputMode="decimal"
                 className="w-20 text-right font-mono"
@@ -782,7 +887,7 @@ function NuevaOrden(): React.JSX.Element {
                 }
               />
               <Input
-                aria-label="Precio unitario"
+                aria-label={`Precio unitario de la línea ${i + 1} en ${moneda}`}
                 placeholder={`P. unit. ${moneda}`}
                 inputMode="decimal"
                 className="w-28 text-right font-mono"
@@ -794,7 +899,7 @@ function NuevaOrden(): React.JSX.Element {
                 }
               />
               <Input
-                aria-label="Peso unitario"
+                aria-label={`Peso unitario de la línea ${i + 1}`}
                 placeholder="Peso (op.)"
                 inputMode="decimal"
                 className="w-24 text-right font-mono"
@@ -848,8 +953,25 @@ function NuevaOrden(): React.JSX.Element {
 
 // ── Cuentas por pagar ───────────────────────────────────────────────────────
 
+/** Fallo de una consulta con su salida: el mensaje de dominio y «Reintentar». */
+function Reintento({ error, onRetry }: { error: unknown; onRetry: () => void }): React.JSX.Element {
+  return (
+    <div className="rounded-md border border-destructive/30 bg-destructive-soft/40 px-3 py-2 text-[0.88rem]">
+      <p className="text-destructive-soft-foreground">{errorDePersona(error)}</p>
+      <Button variant="secondary" size="sm" className="mt-2" onClick={onRetry}>
+        Reintentar
+      </Button>
+    </div>
+  );
+}
+
 function CuentasPorPagar(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
+  const qc = useQueryClient();
+  // Cortesía de UX (ADR-0048): el servidor exige el permiso igual.
+  const puedePagar = puede("purchase.payment.register");
+  const puedeNotaCredito = puede("purchase.credit_note.register");
+  const puedeCrearProveedor = puede("supplier.manage");
   const variaciones = useQuery({
     queryKey: ["variaciones-costo", empresa.id],
     queryFn: () =>
@@ -864,30 +986,61 @@ function CuentasPorPagar(): React.JSX.Element {
         currency: string;
       }>("/v1/landed-costs/variances"),
   });
-  const [proveedor, setProveedor] = useState<EntityOption | null>(null);
-  const [matching, setMatching] = useState<{ rows: MatchingRow[]; tol: string } | null>(null);
+  const [proveedor, setProveedorElegido] = useState<EntityOption | null>(null);
+  const [pagina, setPagina] = useState(1);
+  const [matching, setMatching] = useState<{
+    rows: MatchingRow[];
+    tol: string;
+    currency: string;
+  } | null>(null);
   const [notaDe, setNotaDe] = useState<SupplierInvoice | null>(null);
+  const [pagando, setPagando] = useState<SupplierInvoice | null>(null);
+  const [creandoProveedor, setCreandoProveedor] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
-  const datos = useQuery({
-    queryKey: ["cxp", empresa.id, proveedor?.id],
-    enabled: proveedor !== null,
-    queryFn: async () => {
-      const [estado, facturas] = await Promise.all([
-        llamar<SupplierStatement>(`/v1/suppliers/${proveedor?.id}/statement`),
-        llamar<{ items: SupplierInvoice[] }>(`/v1/supplier-invoices?supplier_id=${proveedor?.id}`),
-      ]);
-      return { estado, facturas: facturas.items };
-    },
-  });
+  /** Cambiar de proveedor vuelve a la primera página: la paginación es suya. */
+  function setProveedor(p: EntityOption | null): void {
+    setProveedorElegido(p);
+    setPagina(1);
+  }
 
-  async function verMatching(invoiceId: string): Promise<void> {
+  const proveedorId = proveedor?.id ?? null;
+  // Dos consultas separadas: el estado de cuenta no se pagina; las facturas sí
+  // (`{items, total}` a 20 por página — antes la fila 21 no existía).
+  const estado = useQuery({
+    queryKey: ["cxp-estado", empresa.id, proveedorId],
+    enabled: proveedorId !== null,
+    queryFn: () =>
+      llamar<SupplierStatement>(`/v1/suppliers/${encodeURIComponent(proveedorId ?? "")}/statement`),
+  });
+  const facturas = useQuery({
+    queryKey: ["cxp-facturas", empresa.id, proveedorId, pagina],
+    enabled: proveedorId !== null,
+    queryFn: () =>
+      llamar<{ items: SupplierInvoice[]; total: number }>(
+        `/v1/supplier-invoices?supplier_id=${encodeURIComponent(proveedorId ?? "")}&page=${pagina}&per_page=${POR_PAGINA}`,
+      ),
+  });
+  const totalPaginas = Math.max(1, Math.ceil((facturas.data?.total ?? 0) / POR_PAGINA));
+
+  /** Un pago o una nota cambian el saldo, las facturas y el estado de las órdenes. */
+  async function refrescarCuenta(): Promise<void> {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["cxp-estado", empresa.id] }),
+      qc.invalidateQueries({ queryKey: ["cxp-facturas", empresa.id] }),
+      qc.invalidateQueries({ queryKey: ["ordenes-compra", empresa.id] }),
+      qc.invalidateQueries({ queryKey: ["orden-compra", empresa.id] }),
+    ]);
+  }
+
+  async function verMatching(f: SupplierInvoice): Promise<void> {
     setError(null);
     try {
       const r = await llamar<{ rows: MatchingRow[]; price_tolerance_pct: string }>(
-        `/v1/purchases/matching?supplier_invoice_id=${invoiceId}`,
+        `/v1/purchases/matching?supplier_invoice_id=${f.id}`,
       );
-      setMatching({ rows: r.rows, tol: r.price_tolerance_pct });
+      // Los precios del matching van en la moneda de la TRANSACCIÓN de la factura.
+      setMatching({ rows: r.rows, tol: r.price_tolerance_pct, currency: f.transaction_currency });
     } catch (e) {
       setError(e);
     }
@@ -895,135 +1048,217 @@ function CuentasPorPagar(): React.JSX.Element {
 
   return (
     <div className="space-y-4">
-      <div className="max-w-md">
-        <EntityPicker
-          placeholder="Elige un proveedor para ver su cuenta…"
-          value={proveedor}
-          onChange={setProveedor}
-          buscar={async (q) => {
-            const r = await llamar<{ items: Supplier[] }>(
-              `/v1/suppliers?search=${encodeURIComponent(q)}&per_page=8`,
-            );
-            return r.items.map((s) => ({
-              id: s.id,
-              label: s.legal_name,
-              detalle: s.tax_id ?? "extranjero",
-            }));
-          }}
-        />
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="w-full max-w-md">
+          <EntityPicker
+            placeholder="Elige un proveedor para ver su cuenta…"
+            value={proveedor}
+            onChange={setProveedor}
+            buscar={async (q) => {
+              const r = await llamar<{ items: Supplier[] }>(
+                `/v1/suppliers?search=${encodeURIComponent(q)}&per_page=8`,
+              );
+              return r.items.map((s) => ({
+                id: s.id,
+                label: s.legal_name,
+                detalle: s.tax_id ?? "extranjero",
+              }));
+            }}
+          />
+        </div>
+        {puedeCrearProveedor && (
+          <Button variant="secondary" size="sm" onClick={() => setCreandoProveedor(true)}>
+            <Plus /> Nuevo proveedor
+          </Button>
+        )}
       </div>
 
       {error !== null && <MensajeError error={error} />}
 
-      {proveedor !== null && datos.data !== undefined && (
+      {proveedor !== null && (
         <>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <Card>
-              <CardHeader>
-                <CardTitle>Pendiente por pagar</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <DualMoney
-                  variant="kpi"
-                  amount={datos.data.estado.total_outstanding}
-                  currency={datos.data.estado.currency}
-                />
-                <p className="mt-2 text-[0.85rem] text-muted-foreground">
-                  Retenido acumulado:{" "}
-                  <span className="font-mono">
-                    {mostrarImporte({
-                      amount: datos.data.estado.total_retained,
-                      currency: datos.data.estado.currency,
-                    })}
-                  </span>
-                </p>
-              </CardContent>
-            </Card>
-            <Card className="lg:col-span-2">
-              <CardHeader>
-                <CardTitle>Antigüedad</CardTitle>
-                <span className="text-[0.8rem] text-muted-foreground">
-                  al {datos.data.estado.aging.reference_date}
-                </span>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-x-5 gap-y-1 text-[0.85rem]">
-                  {datos.data.estado.aging.buckets.map((b) => (
-                    <span key={b.bucket} className="font-mono text-muted-foreground">
-                      {b.bucket}:{" "}
-                      <span className="text-foreground">
-                        {mostrarImporte({ amount: b.amount, currency: datos.data.estado.currency })}
-                      </span>{" "}
-                      ({b.document_count})
+          {estado.isError ? (
+            <Reintento error={estado.error} onRetry={() => void estado.refetch()} />
+          ) : estado.data === undefined ? (
+            <Skeleton className="h-28 w-full" />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Pendiente por pagar</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <DualMoney
+                    variant="kpi"
+                    amount={estado.data.total_outstanding}
+                    currency={estado.data.currency}
+                  />
+                  <p className="mt-2 text-[0.85rem] text-muted-foreground">
+                    Retenido acumulado:{" "}
+                    <span className="font-mono">
+                      {mostrarImporte({
+                        amount: estado.data.total_retained,
+                        currency: estado.data.currency,
+                      })}
                     </span>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+                  </p>
+                </CardContent>
+              </Card>
+              <Card className="lg:col-span-2">
+                <CardHeader>
+                  <CardTitle>Antigüedad</CardTitle>
+                  <span className="text-[0.8rem] text-muted-foreground">
+                    al {fechaLocal(estado.data.aging.reference_date)}
+                  </span>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-wrap gap-x-5 gap-y-1 text-[0.85rem]">
+                    {estado.data.aging.buckets.map((b) => (
+                      <span key={b.bucket} className="font-mono text-muted-foreground">
+                        {b.bucket}:{" "}
+                        <span className="text-foreground">
+                          {mostrarImporte({ amount: b.amount, currency: estado.data.currency })}
+                        </span>{" "}
+                        ({b.document_count})
+                      </span>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
 
           <Card>
             <CardHeader>
               <CardTitle>Facturas</CardTitle>
             </CardHeader>
             <CardContent className="px-0 pb-1">
-              <Table>
-                <THead>
-                  <TR>
-                    <TH>Documento</TH>
-                    <TH>Control</TH>
-                    <TH>Fecha</TH>
-                    <TH>Estado</TH>
-                    <TH className="text-right">Total</TH>
-                    <TH className="text-right">Retenido</TH>
-                    <TH>IVA</TH>
-                    <TH />
-                  </TR>
-                </THead>
-                <TBody>
-                  {datos.data.facturas.map((f) => (
-                    <TR key={f.id}>
-                      <TD className="font-mono text-[0.84rem]">{f.supplier_document_number}</TD>
-                      <TD className="font-mono text-[0.84rem]">
-                        {f.supplier_control_number ?? f.supplier_document_ref ?? "—"}
-                      </TD>
-                      <TD>{f.invoice_date}</TD>
-                      <TD>
-                        <FiscalStatusBadge estado={f.status} />
-                      </TD>
-                      <TDNum>
-                        {mostrarImporte({
-                          amount: f.total_amount,
-                          currency: f.transaction_currency,
-                        })}
-                      </TDNum>
-                      <TDNum>
-                        {mostrarImporte({
-                          amount: f.retention_total,
-                          currency: f.functional_currency,
-                        })}
-                      </TDNum>
-                      <TD>
-                        {/* Derivado del taxpayer_type de la empresa, no configurable. */}
-                        <Badge tone={f.tax_is_recoverable ? "accent" : "warning"}>
-                          {f.tax_is_recoverable ? "crédito" : "costo"}
-                        </Badge>
-                      </TD>
-                      <TD>
-                        <Button variant="ghost" size="sm" onClick={() => void verMatching(f.id)}>
-                          Matching
+              {facturas.isError ? (
+                <div className="px-4 pb-3">
+                  <Reintento error={facturas.error} onRetry={() => void facturas.refetch()} />
+                </div>
+              ) : facturas.data === undefined ? (
+                <Skeleton className="mx-4 mb-3 h-24" />
+              ) : facturas.data.items.length === 0 ? (
+                <p className="px-4 pb-3 text-[0.88rem] text-muted-foreground">
+                  Sin facturas registradas para este proveedor.
+                </p>
+              ) : (
+                <>
+                  <Table>
+                    <THead>
+                      <TR>
+                        <TH>Documento</TH>
+                        <TH>Control</TH>
+                        <TH>Fecha</TH>
+                        <TH>Estado</TH>
+                        <TH className="text-right">Total</TH>
+                        <TH className="text-right">Saldo</TH>
+                        <TH className="text-right">Retenido</TH>
+                        <TH>IVA</TH>
+                        <TH />
+                      </TR>
+                    </THead>
+                    <TBody>
+                      {facturas.data.items.map((f) => {
+                        // Solo se paga lo asentado y con saldo; comparar en string,
+                        // sin pasar el importe por un float.
+                        const conSaldo =
+                          f.status === "posted" &&
+                          f.balance !== undefined &&
+                          compararImportes(f.balance, "0") > 0;
+                        return (
+                          <TR key={f.id}>
+                            <TD className="font-mono text-[0.84rem]">
+                              {f.supplier_document_number}
+                            </TD>
+                            <TD className="font-mono text-[0.84rem]">
+                              {f.supplier_control_number ?? f.supplier_document_ref ?? "—"}
+                            </TD>
+                            <TD>{fechaLocal(f.invoice_date)}</TD>
+                            <TD>
+                              <FiscalStatusBadge estado={f.status} />
+                            </TD>
+                            <TDNum>
+                              {mostrarImporte({
+                                amount: f.total_amount,
+                                currency: f.transaction_currency,
+                              })}
+                            </TDNum>
+                            <TDNum>
+                              {f.balance !== undefined
+                                ? mostrarImporte({
+                                    amount: f.balance,
+                                    currency: f.transaction_currency,
+                                  })
+                                : "—"}
+                            </TDNum>
+                            <TDNum>
+                              {mostrarImporte({
+                                amount: f.retention_total,
+                                currency: f.functional_currency,
+                              })}
+                            </TDNum>
+                            <TD>
+                              {/* Derivado del taxpayer_type de la empresa, no configurable. */}
+                              <Badge tone={f.tax_is_recoverable ? "accent" : "warning"}>
+                                {f.tax_is_recoverable ? "crédito" : "costo"}
+                              </Badge>
+                            </TD>
+                            <TD className="whitespace-nowrap">
+                              {puedePagar && conSaldo && (
+                                <Button variant="secondary" size="sm" onClick={() => setPagando(f)}>
+                                  Pagar…
+                                </Button>
+                              )}
+                              <Button variant="ghost" size="sm" onClick={() => void verMatching(f)}>
+                                Matching
+                              </Button>
+                              {puedeNotaCredito && (
+                                <Button variant="ghost" size="sm" onClick={() => setNotaDe(f)}>
+                                  NC…
+                                </Button>
+                              )}
+                            </TD>
+                          </TR>
+                        );
+                      })}
+                    </TBody>
+                  </Table>
+                  {facturas.data.total > POR_PAGINA && (
+                    <div className="flex items-center justify-between px-4 py-2 text-[0.85rem] text-muted-foreground">
+                      <span>
+                        {facturas.data.total} facturas · página {pagina} de {totalPaginas}
+                      </span>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={pagina <= 1}
+                          onClick={() => setPagina(pagina - 1)}
+                        >
+                          Anterior
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => setNotaDe(f)}>
-                          NC…
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={pagina >= totalPaginas}
+                          onClick={() => setPagina(pagina + 1)}
+                        >
+                          Siguiente
                         </Button>
-                      </TD>
-                    </TR>
-                  ))}
-                </TBody>
-              </Table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
             </CardContent>
           </Card>
         </>
+      )}
+
+      {variaciones.isError && (
+        <Reintento error={variaciones.error} onRetry={() => void variaciones.refetch()} />
       )}
 
       {(variaciones.data?.items ?? []).length > 0 && (
@@ -1039,7 +1274,7 @@ function CuentasPorPagar(): React.JSX.Element {
             <ul className="space-y-1 text-[0.88rem]">
               {(variaciones.data?.items ?? []).map((v) => (
                 <li key={v.id} className="flex justify-between gap-2 tabular-nums">
-                  <span className="text-muted-foreground">{v.occurred_on}</span>
+                  <span className="text-muted-foreground">{fechaLocal(v.occurred_on)}</span>
                   <span className="min-w-0 flex-1 truncate">{v.reason ?? "—"}</span>
                   <span className="font-mono">
                     {mostrarImporte({
@@ -1054,12 +1289,31 @@ function CuentasPorPagar(): React.JSX.Element {
         </Card>
       )}
 
+      {creandoProveedor && (
+        <NuevoProveedor
+          onCerrar={(creado) => {
+            setCreandoProveedor(false);
+            if (creado !== null) setProveedor(creado);
+          }}
+        />
+      )}
+
+      {pagando !== null && (
+        <PagarProveedor
+          factura={pagando}
+          onCerrar={(hecho) => {
+            setPagando(null);
+            if (hecho) void refrescarCuenta();
+          }}
+        />
+      )}
+
       {notaDe !== null && (
         <NotaCreditoProveedor
           factura={notaDe}
           onCerrar={(hecho) => {
             setNotaDe(null);
-            if (hecho) void datos.refetch();
+            if (hecho) void refrescarCuenta();
           }}
         />
       )}
@@ -1069,9 +1323,9 @@ function CuentasPorPagar(): React.JSX.Element {
           <DialogContent className="max-w-3xl">
             <DialogTitle>Matching de tres vías</DialogTitle>
             <DialogDescription>
-              Umbral de precio: {matching.tol} %. El precio admite el umbral acordado; la cantidad
-              NO admite ninguno — una diferencia de cantidad es una recepción que falta o un error,
-              no un redondeo.
+              Umbral de precio: {mostrarCantidad(matching.tol)} %. El precio admite el umbral
+              acordado; la cantidad NO admite ninguno — una diferencia de cantidad es una recepción
+              que falta o un error, no un redondeo.
             </DialogDescription>
             <div className="mt-3">
               <Table>
@@ -1087,8 +1341,12 @@ function CuentasPorPagar(): React.JSX.Element {
                 </THead>
                 <TBody>
                   {matching.rows.map((r) => {
+                    // Porcentajes comparados como decimales en string, no como
+                    // floats: `Number("0.1") > Number("0.10")` sale bien por
+                    // casualidad; con más dígitos deja de hacerlo.
                     const fuera =
-                      r.price_diff_pct !== null && Number(r.price_diff_pct) > Number(matching.tol);
+                      r.price_diff_pct !== null &&
+                      compararImportes(r.price_diff_pct, matching.tol) > 0;
                     return (
                       <TR key={r.invoice_line_id}>
                         <TDNum>
@@ -1101,11 +1359,23 @@ function CuentasPorPagar(): React.JSX.Element {
                         </TDNum>
                         <TDNum>{mostrarCantidad(r.qty_invoiced)}</TDNum>
                         <TDNum>
-                          {r.price_ordered !== null ? mostrarCantidad(r.price_ordered) : "—"}
+                          {r.price_ordered !== null
+                            ? mostrarImporte({
+                                amount: r.price_ordered,
+                                currency: matching.currency,
+                              })
+                            : "—"}
                         </TDNum>
-                        <TDNum>{mostrarCantidad(r.price_invoiced)}</TDNum>
+                        <TDNum>
+                          {mostrarImporte({
+                            amount: r.price_invoiced,
+                            currency: matching.currency,
+                          })}
+                        </TDNum>
                         <TDNum className={fuera ? "text-warning-soft-foreground" : ""}>
-                          {r.price_diff_pct ?? "—"}
+                          {r.price_diff_pct !== null
+                            ? `${mostrarCantidad(r.price_diff_pct)} %`
+                            : "—"}
                           {fuera && " ⚠"}
                         </TDNum>
                       </TR>
@@ -1124,20 +1394,24 @@ function CuentasPorPagar(): React.JSX.Element {
 // ── Reglas de retención ─────────────────────────────────────────────────────
 
 function Retenciones(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
+  // Cortesía de UX (ADR-0048): sin el permiso, el formulario no se enseña.
+  const puedeCargar = puede("retention.rules.manage");
   const comprobantes = useQuery({
     queryKey: ["comprobantes-retencion", empresa.id],
+    // La ruta devuelve el ARRAY directamente y el campo es `total_retained`
+    // (purchases.ts): con `.items[].retained_total` la tarjeta nunca se pintaba.
     queryFn: () =>
-      llamar<{
-        items: {
+      llamar<
+        {
           id: string;
           series: string;
           receipt_number: number | null;
           issued_at: string | null;
-          retained_total: string;
+          total_retained: string;
           functional_currency: string;
-        }[];
-      }>("/v1/retention-receipts"),
+        }[]
+      >("/v1/retention-receipts"),
   });
   const toast = useToast();
   const qc = useQueryClient();
@@ -1149,7 +1423,7 @@ function Retenciones(): React.JSX.Element {
     rate: "",
     subtrahend: "",
     minimum_exempt: "",
-    effective_from: new Date().toISOString().slice(0, 10),
+    effective_from: hoyLocal(),
     legal_source: "",
   });
   const [confirmando, setConfirmando] = useState(false);
@@ -1215,6 +1489,14 @@ function Retenciones(): React.JSX.Element {
         </CardContent>
       </Card>
 
+      {catalogo.isError && (
+        <Reintento error={catalogo.error} onRetry={() => void catalogo.refetch()} />
+      )}
+      {comprobantes.isError && (
+        <Reintento error={comprobantes.error} onRetry={() => void comprobantes.refetch()} />
+      )}
+      {reglas === undefined && !catalogo.isError && <Skeleton className="h-24 w-full" />}
+
       {reglas !== undefined && (
         <Card>
           <CardHeader>
@@ -1246,7 +1528,7 @@ function Retenciones(): React.JSX.Element {
                       <TD className="text-[0.82rem] text-muted-foreground">{r.formula_kind}</TD>
                       <TDNum>{mostrarCantidad(r.rate)}</TDNum>
                       <TDNum>{r.subtrahend !== null ? mostrarCantidad(r.subtrahend) : "—"}</TDNum>
-                      <TD>{r.effective_from}</TD>
+                      <TD>{fechaLocal(r.effective_from)}</TD>
                       <TD className="max-w-56 truncate whitespace-normal text-[0.82rem]">
                         {r.legal_source}
                       </TD>
@@ -1259,22 +1541,22 @@ function Retenciones(): React.JSX.Element {
         </Card>
       )}
 
-      {(comprobantes.data?.items ?? []).length > 0 && (
+      {(comprobantes.data ?? []).length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Comprobantes emitidos ({comprobantes.data?.items.length ?? 0})</CardTitle>
+            <CardTitle>Comprobantes emitidos ({comprobantes.data?.length ?? 0})</CardTitle>
           </CardHeader>
           <CardContent>
             <ul className="space-y-1 text-[0.88rem]">
-              {(comprobantes.data?.items ?? []).map((r) => (
+              {(comprobantes.data ?? []).map((r) => (
                 <li key={r.id} className="flex justify-between gap-2 tabular-nums">
                   <span className="font-mono">
                     {r.series}-{String(r.receipt_number ?? "")}
                   </span>
-                  <span className="text-muted-foreground">{r.issued_at?.slice(0, 10) ?? "—"}</span>
+                  <span className="text-muted-foreground">{fechaLocal(r.issued_at)}</span>
                   <span className="font-mono">
                     {mostrarImporte({
-                      amount: r.retained_total,
+                      amount: r.total_retained,
                       currency: r.functional_currency,
                     })}
                   </span>
@@ -1285,128 +1567,132 @@ function Retenciones(): React.JSX.Element {
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Cargar regla</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <FormField label="Tributo" required>
-              {(a) => (
-                <SimpleSelect
-                  id={a.id}
-                  value={nueva.retention_code}
-                  onValueChange={(v) => setNueva({ ...nueva, retention_code: v, concept_code: "" })}
-                  options={[
-                    { value: "iva", label: "IVA" },
-                    { value: "islr", label: "ISLR" },
-                  ]}
-                />
+      {puedeCargar && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Cargar regla</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <FormField label="Tributo" required>
+                {(a) => (
+                  <SimpleSelect
+                    id={a.id}
+                    value={nueva.retention_code}
+                    onValueChange={(v) =>
+                      setNueva({ ...nueva, retention_code: v, concept_code: "" })
+                    }
+                    options={[
+                      { value: "iva", label: "IVA" },
+                      { value: "islr", label: "ISLR" },
+                    ]}
+                  />
+                )}
+              </FormField>
+              <FormField label="Concepto" required>
+                {(a) => (
+                  <SimpleSelect
+                    id={a.id}
+                    value={nueva.concept_code === "" ? null : nueva.concept_code}
+                    onValueChange={(v) => setNueva({ ...nueva, concept_code: v })}
+                    placeholder="Elige…"
+                    options={(catalogo.data?.conceptos ?? [])
+                      .filter((c) => c.retention_code === nueva.retention_code)
+                      .map((c) => ({ value: c.code, label: c.name }))}
+                  />
+                )}
+              </FormField>
+              <FormField label="Fórmula" required>
+                {(a) => (
+                  <SimpleSelect
+                    id={a.id}
+                    value={nueva.formula_kind}
+                    onValueChange={(v) => setNueva({ ...nueva, formula_kind: v })}
+                    options={[
+                      { value: "rate", label: "base × tasa" },
+                      { value: "rate_minus_subtrahend", label: "base × tasa − sustraendo" },
+                    ]}
+                  />
+                )}
+              </FormField>
+              <FormField label="Tasa" required hint="0.75 = 75 %">
+                {(a) => (
+                  <Input
+                    id={a.id}
+                    inputMode="decimal"
+                    className="text-right font-mono"
+                    value={nueva.rate}
+                    onChange={(e) => setNueva({ ...nueva, rate: e.target.value })}
+                  />
+                )}
+              </FormField>
+              {nueva.formula_kind === "rate_minus_subtrahend" && (
+                <>
+                  <FormField label="Sustraendo" required>
+                    {(a) => (
+                      <Input
+                        id={a.id}
+                        inputMode="decimal"
+                        className="text-right font-mono"
+                        value={nueva.subtrahend}
+                        onChange={(e) => setNueva({ ...nueva, subtrahend: e.target.value })}
+                      />
+                    )}
+                  </FormField>
+                  <FormField label="Mínimo exento">
+                    {(a) => (
+                      <Input
+                        id={a.id}
+                        inputMode="decimal"
+                        className="text-right font-mono"
+                        value={nueva.minimum_exempt}
+                        onChange={(e) => setNueva({ ...nueva, minimum_exempt: e.target.value })}
+                      />
+                    )}
+                  </FormField>
+                </>
               )}
-            </FormField>
-            <FormField label="Concepto" required>
-              {(a) => (
-                <SimpleSelect
-                  id={a.id}
-                  value={nueva.concept_code === "" ? null : nueva.concept_code}
-                  onValueChange={(v) => setNueva({ ...nueva, concept_code: v })}
-                  placeholder="Elige…"
-                  options={(catalogo.data?.conceptos ?? [])
-                    .filter((c) => c.retention_code === nueva.retention_code)
-                    .map((c) => ({ value: c.code, label: c.name }))}
-                />
-              )}
-            </FormField>
-            <FormField label="Fórmula" required>
-              {(a) => (
-                <SimpleSelect
-                  id={a.id}
-                  value={nueva.formula_kind}
-                  onValueChange={(v) => setNueva({ ...nueva, formula_kind: v })}
-                  options={[
-                    { value: "rate", label: "base × tasa" },
-                    { value: "rate_minus_subtrahend", label: "base × tasa − sustraendo" },
-                  ]}
-                />
-              )}
-            </FormField>
-            <FormField label="Tasa" required hint="0.75 = 75 %">
-              {(a) => (
-                <Input
-                  id={a.id}
-                  inputMode="decimal"
-                  className="text-right font-mono"
-                  value={nueva.rate}
-                  onChange={(e) => setNueva({ ...nueva, rate: e.target.value })}
-                />
-              )}
-            </FormField>
-            {nueva.formula_kind === "rate_minus_subtrahend" && (
-              <>
-                <FormField label="Sustraendo" required>
-                  {(a) => (
-                    <Input
-                      id={a.id}
-                      inputMode="decimal"
-                      className="text-right font-mono"
-                      value={nueva.subtrahend}
-                      onChange={(e) => setNueva({ ...nueva, subtrahend: e.target.value })}
-                    />
-                  )}
-                </FormField>
-                <FormField label="Mínimo exento">
-                  {(a) => (
-                    <Input
-                      id={a.id}
-                      inputMode="decimal"
-                      className="text-right font-mono"
-                      value={nueva.minimum_exempt}
-                      onChange={(e) => setNueva({ ...nueva, minimum_exempt: e.target.value })}
-                    />
-                  )}
-                </FormField>
-              </>
-            )}
-            <FormField label="Vigente desde" required>
-              {(a) => (
-                <DatePicker
-                  id={a.id}
-                  value={nueva.effective_from}
-                  onChange={(v) => setNueva({ ...nueva, effective_from: v })}
-                />
-              )}
-            </FormField>
-            <FormField
-              label="Norma (obligatoria)"
-              required
-              className="col-span-2"
-              hint="Gaceta, providencia… Una regla sin norma citada es una retención inventada."
+              <FormField label="Vigente desde" required>
+                {(a) => (
+                  <DatePicker
+                    id={a.id}
+                    value={nueva.effective_from}
+                    onChange={(v) => setNueva({ ...nueva, effective_from: v })}
+                  />
+                )}
+              </FormField>
+              <FormField
+                label="Norma (obligatoria)"
+                required
+                className="col-span-2"
+                hint="Gaceta, providencia… Una regla sin norma citada es una retención inventada."
+              >
+                {(a) => (
+                  <Input
+                    id={a.id}
+                    value={nueva.legal_source}
+                    onChange={(e) => setNueva({ ...nueva, legal_source: e.target.value })}
+                  />
+                )}
+              </FormField>
+            </div>
+
+            {error !== null && <MensajeError error={error} />}
+
+            <Button
+              variant="primary"
+              disabled={
+                nueva.concept_code === "" ||
+                nueva.rate.trim() === "" ||
+                nueva.legal_source.trim() === ""
+              }
+              onClick={() => setConfirmando(true)}
             >
-              {(a) => (
-                <Input
-                  id={a.id}
-                  value={nueva.legal_source}
-                  onChange={(e) => setNueva({ ...nueva, legal_source: e.target.value })}
-                />
-              )}
-            </FormField>
-          </div>
-
-          {error !== null && <MensajeError error={error} />}
-
-          <Button
-            variant="primary"
-            disabled={
-              nueva.concept_code === "" ||
-              nueva.rate.trim() === "" ||
-              nueva.legal_source.trim() === ""
-            }
-            onClick={() => setConfirmando(true)}
-          >
-            Cargar regla…
-          </Button>
-        </CardContent>
-      </Card>
+              Cargar regla…
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <ConfirmDialog
         open={confirmando}
@@ -1442,9 +1728,12 @@ function RegistrarFacturaProveedor({
   const toast = useToast();
   const [nroFactura, setNroFactura] = useState("");
   const [nroControl, setNroControl] = useState("");
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
+  const [fecha, setFecha] = useState(hoyLocal());
   const [lineas, setLineas] = useState(
     detalle.lines.map((l) => ({
+      // Clave estable para React: con el índice, borrar o reordenar mezclaba
+      // el estado de los inputs entre líneas.
+      clave: crypto.randomUUID(),
       product_id: l.product_id,
       description: l.description,
       quantity: l.quantity,
@@ -1527,7 +1816,7 @@ function RegistrarFacturaProveedor({
           </div>
           <div className="space-y-2">
             {lineas.map((l, i) => (
-              <div key={i} className="flex items-center gap-2">
+              <div key={l.clave} className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-[0.9rem]">{l.description}</span>
                 <Input
                   aria-label={`Cantidad facturada de ${l.description}`}
@@ -1589,11 +1878,11 @@ function NotaCreditoProveedor({
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [nroNota, setNroNota] = useState("");
-  const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
+  const [fecha, setFecha] = useState(hoyLocal());
   const [motivo, setMotivo] = useState("");
   const [lineas, setLineas] = useState<
-    { producto: EntityOption | null; quantity: string; unit_price: string }[]
-  >([{ producto: null, quantity: "", unit_price: "" }]);
+    { clave: string; producto: EntityOption | null; quantity: string; unit_price: string }[]
+  >([{ clave: crypto.randomUUID(), producto: null, quantity: "", unit_price: "" }]);
   const [error, setError] = useState<unknown>(null);
   const [ocupado, setOcupado] = useState(false);
 
@@ -1663,7 +1952,7 @@ function NotaCreditoProveedor({
           </FormField>
           <div className="space-y-2">
             {lineas.map((l, i) => (
-              <div key={i} className="flex items-start gap-2">
+              <div key={l.clave} className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
                   <EntityPicker
                     placeholder="Producto…"
@@ -1680,7 +1969,7 @@ function NotaCreditoProveedor({
                   />
                 </div>
                 <Input
-                  aria-label="Cantidad"
+                  aria-label={`Cantidad de la línea ${i + 1}`}
                   placeholder="Cant."
                   inputMode="decimal"
                   className="w-20 text-right font-mono"
@@ -1692,7 +1981,7 @@ function NotaCreditoProveedor({
                   }
                 />
                 <Input
-                  aria-label="Precio unitario"
+                  aria-label={`Precio unitario de la línea ${i + 1}`}
                   placeholder="P. unit."
                   inputMode="decimal"
                   className="w-24 text-right font-mono"
@@ -1718,7 +2007,10 @@ function NotaCreditoProveedor({
               variant="secondary"
               size="sm"
               onClick={() =>
-                setLineas((prev) => [...prev, { producto: null, quantity: "", unit_price: "" }])
+                setLineas((prev) => [
+                  ...prev,
+                  { clave: crypto.randomUUID(), producto: null, quantity: "", unit_price: "" },
+                ])
               }
             >
               <Plus /> Otra línea
@@ -1734,6 +2026,429 @@ function NotaCreditoProveedor({
             {ocupado ? "Registrando…" : "Registrar la nota"}
           </Button>
         </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Pago al proveedor y alta de proveedor (auditoría 2026-09-11) ────────────
+
+/** Lo que devuelve `GET /v1/treasury/accounts` (CompanyAccountResponse). */
+interface CuentaTesoreria {
+  id: string;
+  name: string;
+  currency: string;
+  kind: string;
+  is_active: boolean;
+  /** Las «Sin asignar» del backfill: no se eligen a mano. */
+  is_system: boolean;
+}
+
+/**
+ * El vocabulario de `PurchaseInstrument` (packages/schemas/src/purchases.ts),
+ * con la moneda que cada instrumento implica. `moneda: null` = la elige quien
+ * paga (`otro`). Una nota de crédito del proveedor se aplica por su propio
+ * diálogo («NC…»), no como instrumento de pago (contrato alineado con la base).
+ */
+const INSTRUMENTOS_PAGO: { value: string; label: string; moneda: string | null }[] = [
+  { value: "transferencia", label: "Transferencia", moneda: "VES" },
+  { value: "efectivo_bs", label: "Efectivo Bs.", moneda: "VES" },
+  { value: "efectivo_usd", label: "Efectivo USD", moneda: "USD" },
+  { value: "zelle", label: "Zelle", moneda: "USD" },
+  { value: "usdt", label: "USDT", moneda: "USD" },
+  { value: "pago_movil", label: "Pago móvil", moneda: "VES" },
+  { value: "punto_venta", label: "Punto de venta", moneda: "VES" },
+  { value: "tarjeta", label: "Tarjeta", moneda: null },
+  { value: "otro", label: "Otro", moneda: null },
+];
+
+/**
+ * PAGAR una factura de proveedor con saldo (`POST /v1/supplier-payments`). El
+ * bruto cancela deuda; la retención —si la hay y se cancela entera— la aplica
+ * el servidor y el proveedor cobra el neto. La cuenta de la que sale el dinero
+ * es opcional: sin ella el servidor resuelve por la forma de pago configurada
+ * y, en último término, por «Sin asignar (<moneda>)».
+ */
+function PagarProveedor({
+  factura,
+  onCerrar,
+}: {
+  factura: SupplierInvoice;
+  onCerrar: (hecho: boolean) => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [instrumento, setInstrumento] = useState(
+    factura.transaction_currency === "USD" ? "zelle" : "transferencia",
+  );
+  const [monedaLibre, setMonedaLibre] = useState(factura.transaction_currency);
+  const [monto, setMonto] = useState(factura.balance ?? "");
+  const [referencia, setReferencia] = useState("");
+  const [cuenta, setCuenta] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  const cuentas = useQuery({
+    queryKey: ["cuentas", empresa.id],
+    queryFn: () => llamar<{ accounts: CuentaTesoreria[] }>("/v1/treasury/accounts"),
+  });
+
+  const def = INSTRUMENTOS_PAGO.find((i) => i.value === instrumento);
+  const esNota = instrumento === "nota_credito";
+  const moneda = esNota ? factura.transaction_currency : (def?.moneda ?? monedaLibre);
+  // Solo cuentas activas, no de sistema y EN LA MONEDA del pago: el servidor
+  // rechaza la cuenta en otra moneda, así que ni se ofrece.
+  const cuentasElegibles = (cuentas.data?.accounts ?? []).filter(
+    (c) => c.is_active && !c.is_system && c.currency === moneda,
+  );
+  const cuentaValida = cuenta !== null && cuentasElegibles.some((c) => c.id === cuenta);
+  const montoLimpio = monto.trim().replace(",", ".");
+  const listo = importeValido(montoLimpio) && !ocupado;
+
+  async function pagar(): Promise<void> {
+    setError(null);
+    setOcupado(true);
+    try {
+      await llamar("/v1/supplier-payments", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          supplier_invoice_id: factura.id,
+          gross_amount: montoLimpio,
+          currency: moneda,
+          instrument: instrumento,
+          ...(referencia.trim() === "" ? {} : { reference: referencia.trim() }),
+          ...(esNota || !cuentaValida ? {} : { account_id: cuenta }),
+        }),
+      });
+      toast.success("Pago registrado", "La deuda con el proveedor bajó.");
+      onCerrar(true);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Pagar la factura {factura.supplier_document_number}</DialogTitle>
+        <DialogDescription>
+          Saldo pendiente{" "}
+          <span className="font-mono">
+            {factura.balance !== undefined
+              ? mostrarImporte({ amount: factura.balance, currency: factura.transaction_currency })
+              : "—"}
+          </span>
+          . Puede ser un abono. Si hay retención calculada, se aplica solo al cancelar la factura
+          entera y el proveedor cobra el neto.
+        </DialogDescription>
+        <div className="mt-3 space-y-3">
+          <FormField label="Instrumento" required>
+            {(a) => (
+              <SimpleSelect
+                id={a.id}
+                value={instrumento}
+                onValueChange={(v) => {
+                  setInstrumento(v);
+                  setCuenta(null);
+                }}
+                options={INSTRUMENTOS_PAGO.map((i) => ({ value: i.value, label: i.label }))}
+              />
+            )}
+          </FormField>
+          {instrumento === "otro" && (
+            <FormField label="Moneda del pago" required>
+              {(a) => (
+                <SimpleSelect
+                  id={a.id}
+                  value={monedaLibre}
+                  onValueChange={(v) => {
+                    setMonedaLibre(v);
+                    setCuenta(null);
+                  }}
+                  options={[
+                    { value: "VES", label: "VES" },
+                    { value: "USD", label: "USD" },
+                  ]}
+                />
+              )}
+            </FormField>
+          )}
+          <FormField label="Importe bruto" required hint={`En ${moneda}: lo que cancela deuda.`}>
+            {(a) => <MoneyInput id={a.id} value={monto} onChange={setMonto} currency={moneda} />}
+          </FormField>
+          {!esNota && (
+            <FormField
+              label="Cuenta de la que sale"
+              hint="Opcional: sin ella, el sistema usa la forma de pago configurada o «Sin asignar»."
+            >
+              {(a) => (
+                <SimpleSelect
+                  id={a.id}
+                  value={cuentaValida ? cuenta : null}
+                  onValueChange={setCuenta}
+                  placeholder={
+                    cuentas.isError
+                      ? "No se pudieron cargar las cuentas"
+                      : cuentasElegibles.length === 0
+                        ? `Sin cuentas en ${moneda}`
+                        : "La decide el sistema"
+                  }
+                  options={cuentasElegibles.map((c) => ({
+                    value: c.id,
+                    label: `${c.name} · ${c.currency}`,
+                  }))}
+                />
+              )}
+            </FormField>
+          )}
+          <FormField label="Referencia" hint="Nº de transferencia, cheque o nota.">
+            {(a) => (
+              <Input
+                id={a.id}
+                value={referencia}
+                onChange={(e) => setReferencia(e.target.value)}
+                maxLength={100}
+              />
+            )}
+          </FormField>
+          {error !== null && <MensajeError error={error} />}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onCerrar(false)} disabled={ocupado}>
+            Cancelar
+          </Button>
+          <Button variant="primary" disabled={!listo} onClick={() => void pagar()}>
+            {ocupado ? "Pagando…" : "Registrar el pago"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * ALTA DE PROVEEDOR desde cuentas por pagar (`POST /v1/suppliers`,
+ * CreateSupplierRequest). El nacional exige RIF y clasificación (persona y
+ * contribuyente); el extranjero no lleva ninguna de las tres — lo impone el
+ * CHECK de la tabla, aquí solo se refleja. Sin validar el formato del RIF
+ * (VALIDAR-SENIAT, OPEN_QUESTIONS 9).
+ */
+function NuevoProveedor({
+  onCerrar,
+}: {
+  onCerrar: (creado: EntityOption | null) => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [form, setForm] = useState({
+    legal_name: "",
+    trade_name: "",
+    supplier_kind: "nacional",
+    tax_id: "",
+    person_type_code: "juridica",
+    taxpayer_type_code: "ordinario",
+    fiscal_address: "",
+    email: "",
+    phone: "",
+    payment_terms_days: "",
+  });
+  const [error, setError] = useState<unknown>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  const nacional = form.supplier_kind === "nacional";
+  const dias = form.payment_terms_days.trim();
+  const listo =
+    form.legal_name.trim() !== "" &&
+    (!nacional || form.tax_id.trim() !== "") &&
+    (dias === "" || /^\d{1,4}$/.test(dias)) &&
+    !ocupado;
+
+  function campo(k: keyof typeof form): (v: string) => void {
+    return (v) => setForm((f) => ({ ...f, [k]: v }));
+  }
+  const opcional = (v: string): string | null => (v.trim() === "" ? null : v.trim());
+
+  async function crear(): Promise<void> {
+    setError(null);
+    setOcupado(true);
+    try {
+      const r = await llamar<Supplier>("/v1/suppliers", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          legal_name: form.legal_name.trim(),
+          trade_name: opcional(form.trade_name),
+          supplier_kind: form.supplier_kind,
+          tax_id: nacional ? form.tax_id.trim().toUpperCase() : opcional(form.tax_id),
+          person_type_code: nacional ? form.person_type_code : null,
+          taxpayer_type_code: nacional ? form.taxpayer_type_code : null,
+          fiscal_address: opcional(form.fiscal_address),
+          email: opcional(form.email),
+          phone: opcional(form.phone),
+          ...(dias === "" ? {} : { payment_terms_days: Number(dias) }),
+        }),
+      });
+      toast.success("Proveedor creado", r.legal_name);
+      void qc.invalidateQueries({ queryKey: ["proveedores", empresa.id] });
+      onCerrar({
+        id: r.id,
+        label: r.legal_name,
+        detalle: r.tax_id ?? "extranjero",
+      });
+    } catch (e) {
+      setError(e);
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onCerrar(null)}>
+      <DialogContent className="max-w-xl">
+        <DialogTitle>Nuevo proveedor</DialogTitle>
+        <DialogDescription>
+          El nacional lleva RIF y clasificación fiscal para el libro de compras; el extranjero, no.
+        </DialogDescription>
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField label="Razón social" required className="sm:col-span-2">
+            {(a) => (
+              <Input
+                id={a.id}
+                value={form.legal_name}
+                onChange={(e) => campo("legal_name")(e.target.value)}
+                maxLength={200}
+              />
+            )}
+          </FormField>
+          <FormField label="Nombre comercial">
+            {(a) => (
+              <Input
+                id={a.id}
+                value={form.trade_name}
+                onChange={(e) => campo("trade_name")(e.target.value)}
+                maxLength={200}
+              />
+            )}
+          </FormField>
+          <FormField label="Tipo" required>
+            {(a) => (
+              <SimpleSelect
+                id={a.id}
+                value={form.supplier_kind}
+                onValueChange={campo("supplier_kind")}
+                options={[
+                  { value: "nacional", label: "Nacional" },
+                  { value: "extranjero", label: "Extranjero" },
+                ]}
+              />
+            )}
+          </FormField>
+          <FormField label={nacional ? "RIF" : "Identificación fiscal"} required={nacional}>
+            {(a) => (
+              <Input
+                id={a.id}
+                placeholder={nacional ? "J-12345678-9" : "Opcional"}
+                value={form.tax_id}
+                onChange={(e) => campo("tax_id")(e.target.value)}
+                maxLength={30}
+              />
+            )}
+          </FormField>
+          {nacional && (
+            <>
+              <FormField label="Persona" required>
+                {(a) => (
+                  <SimpleSelect
+                    id={a.id}
+                    value={form.person_type_code}
+                    onValueChange={campo("person_type_code")}
+                    options={[
+                      { value: "juridica", label: "Jurídica" },
+                      { value: "natural", label: "Natural" },
+                      { value: "gobierno", label: "Ente público" },
+                    ]}
+                  />
+                )}
+              </FormField>
+              <FormField label="Contribuyente" required>
+                {(a) => (
+                  <SimpleSelect
+                    id={a.id}
+                    value={form.taxpayer_type_code}
+                    onValueChange={campo("taxpayer_type_code")}
+                    options={[
+                      { value: "ordinario", label: "Ordinario" },
+                      { value: "especial", label: "Especial" },
+                      { value: "formal", label: "Formal" },
+                      { value: "no_sujeto", label: "No sujeto" },
+                    ]}
+                  />
+                )}
+              </FormField>
+            </>
+          )}
+          <FormField label="Dirección fiscal" className="sm:col-span-2">
+            {(a) => (
+              <Input
+                id={a.id}
+                value={form.fiscal_address}
+                onChange={(e) => campo("fiscal_address")(e.target.value)}
+                maxLength={500}
+              />
+            )}
+          </FormField>
+          <FormField label="Correo">
+            {(a) => (
+              <Input
+                id={a.id}
+                type="email"
+                value={form.email}
+                onChange={(e) => campo("email")(e.target.value)}
+                maxLength={254}
+              />
+            )}
+          </FormField>
+          <FormField label="Teléfono">
+            {(a) => (
+              <Input
+                id={a.id}
+                value={form.phone}
+                onChange={(e) => campo("phone")(e.target.value)}
+                maxLength={40}
+              />
+            )}
+          </FormField>
+          <FormField label="Días de crédito" hint="Vacío = contado.">
+            {(a) => (
+              <Input
+                id={a.id}
+                inputMode="numeric"
+                className="text-right font-mono"
+                value={form.payment_terms_days}
+                onChange={(e) => campo("payment_terms_days")(e.target.value)}
+              />
+            )}
+          </FormField>
+        </div>
+        {error !== null && (
+          <div className="mt-3">
+            <MensajeError error={error} />
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onCerrar(null)} disabled={ocupado}>
+            Cancelar
+          </Button>
+          <Button variant="primary" disabled={!listo} onClick={() => void crear()}>
+            {ocupado ? "Creando…" : "Crear proveedor"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

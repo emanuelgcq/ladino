@@ -208,15 +208,15 @@ export function treasuryRoutes(
                branch_id, attachment_path, journal_entry_id
           from public.expenses
          where company_id = ${companyId}
-           and (${desde}::date is null or paid_at::date >= ${desde}::date)
-           and (${hasta}::date is null or paid_at::date <= ${hasta}::date)
+           and (${desde}::date is null or (paid_at at time zone ${"America/Caracas"})::date >= ${desde}::date)
+           and (${hasta}::date is null or (paid_at at time zone ${"America/Caracas"})::date <= ${hasta}::date)
          order by paid_at desc
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
       const [total] = await tx<{ n: number }[]>`
         select count(*)::int as n from public.expenses
          where company_id = ${companyId}
-           and (${desde}::date is null or paid_at::date >= ${desde}::date)
-           and (${hasta}::date is null or paid_at::date <= ${hasta}::date)`;
+           and (${desde}::date is null or (paid_at at time zone ${"America/Caracas"})::date >= ${desde}::date)
+           and (${hasta}::date is null or (paid_at at time zone ${"America/Caracas"})::date <= ${hasta}::date)`;
       return { items: filas, total: total?.n ?? 0 };
     });
     return c.json(cuerpo, 200);

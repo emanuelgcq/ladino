@@ -6,6 +6,15 @@ import { z } from "zod";
  * la resuelve `platform.resolve_tax()` y la línea la persiste (ADR-0038).
  */
 const uuid = z.string().uuid();
+/**
+ * La serie de un documento fiscal: letras, dígitos y guion. Va impresa, a la
+ * numeración y a la cabecera Content-Disposition del PDF — un carácter libre
+ * ahí es inyección de cabeceras (auditoría 2026-09-11, M-32).
+ */
+const serie = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9-]{1,30}$/, "la serie admite letras, dígitos y guion, hasta 30");
 const amount = z
   .string()
   .regex(/^\d{1,16}(\.\d{1,8})?$/, "importe decimal como string: hasta 16 enteros y 8 decimales");
@@ -72,7 +81,7 @@ const documentoBase = {
    * atribución, no una preferencia de pantalla.
    */
   price_list_id: uuid.optional(),
-  series: z.string().trim().min(1).max(30).optional(),
+  series: serie.optional(),
   lines: z.array(DocumentLineRequest).min(1).max(500),
   notes: z.string().trim().min(1).max(1000).optional(),
 };
@@ -417,7 +426,7 @@ export const QuickSaleRequest = z
     customer_id: uuid.optional(),
     warehouse_id: uuid,
     branch_id: uuid.nullable().optional(),
-    series: z.string().trim().min(1).max(30).optional(),
+    series: serie.optional(),
     price_list_id: uuid.optional(),
     lines: z.array(DocumentLineRequest).min(1).max(200),
     /** Hasta DOS formas de pago (decisión de la fase: más es otra pantalla). */
@@ -589,7 +598,7 @@ export const CreateFiscalRangeRequest = z
   .object({
     company_id: uuid,
     kind: z.enum(["invoice", "credit_note", "debit_note", "delivery_note"]),
-    series: z.string().trim().min(1).max(30),
+    series: serie,
     range_from: z.string().regex(/^\d{1,18}$/),
     range_to: z.string().regex(/^\d{1,18}$/),
     printer_source: z.string().trim().min(1).max(200),
@@ -626,6 +635,7 @@ export const RegisterContingencyRangeRequest = z
     series: z
       .string()
       .trim()
+      .regex(/^[A-Za-z0-9-]{1,30}$/, "la serie admite letras, dígitos y guion, hasta 30")
       .regex(
         /^contingencia/i,
         "la serie de un talonario de contingencia empieza por «contingencia»",

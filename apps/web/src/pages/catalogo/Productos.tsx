@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Camera, PackagePlus, Pencil, Upload } from "lucide-react";
 import {
@@ -27,6 +27,7 @@ import {
 import { useToast } from "../../ui/toast.js";
 import { mostrarImporte } from "../../money.js";
 import { MensajeError } from "../ventas/comunes.js";
+import { errorDePersona } from "../../lib.js";
 import type { Product, PriceList, PriceItem, Unit, TaxCategory } from "../../lib.js";
 
 /**
@@ -47,7 +48,9 @@ const ESTADO: Record<string, { etiqueta: string; tone: BadgeTone }> = {
 const PER_PAGE = 25;
 
 export function Productos(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
+  // ADR-0048: los verbos del catálogo aparecen según el rol; el servidor decide.
+  const gestiona = puede("product.manage");
   const [busqueda, setBusqueda] = useState("");
   const [pagina, setPagina] = useState(1);
   const [creando, setCreando] = useState(false);
@@ -112,14 +115,16 @@ export function Productos(): React.JSX.Element {
         title="Productos"
         description="El catálogo: SKU, unidad y clasificación tributaria — la clasificación se congela en cada documento al emitir."
         actions={
-          <>
-            <Button variant="secondary" onClick={() => setImportando(true)}>
-              <Upload /> Importar
-            </Button>
-            <Button variant="primary" onClick={() => setCreando(true)}>
-              <PackagePlus /> Nuevo producto
-            </Button>
-          </>
+          gestiona ? (
+            <>
+              <Button variant="secondary" onClick={() => setImportando(true)}>
+                <Upload /> Importar
+              </Button>
+              <Button variant="primary" onClick={() => setCreando(true)}>
+                <PackagePlus /> Nuevo producto
+              </Button>
+            </>
+          ) : undefined
         }
       />
 
@@ -137,7 +142,7 @@ export function Productos(): React.JSX.Element {
       <DataTable
         columns={columnas}
         data={productos.data?.items}
-        error={productos.error instanceof Error ? productos.error.message : null}
+        error={productos.error === null ? null : errorDePersona(productos.error)}
         onRetry={() => void productos.refetch()}
         getRowId={(p) => p.id}
         onRowClick={setDetalle}
@@ -163,7 +168,7 @@ export function Productos(): React.JSX.Element {
               ? "Sin productos no hay precios, ni inventario, ni ventas: es la primera pieza."
               : "La búsqueda es del servidor: prueba con parte del SKU o del nombre.",
           action:
-            busqueda === "" ? (
+            busqueda === "" && gestiona ? (
               <Button variant="primary" size="sm" onClick={() => setCreando(true)}>
                 Crear el primero
               </Button>
@@ -356,10 +361,14 @@ function DetalleProducto({
   const [clasif, setClasif] = useState(producto.tax_category_code);
   const [confirmandoClasif, setConfirmandoClasif] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [guardando, setGuardando] = useState(false);
   const fotoRef = useRef<HTMLInputElement>(null);
   const [subiendoFoto, setSubiendoFoto] = useState(false);
+  const qc = useQueryClient();
 
   // Paridad de los dos mundos (2026-09-08): la foto también se gestiona AQUÍ.
+  // Subirla NO cierra el detalle: la persona sigue donde estaba (quizá va a
+  // editar después); el listado se invalida para que la miniatura cambie.
   async function cambiarFoto(f: File): Promise<void> {
     setSubiendoFoto(true);
     try {
@@ -367,12 +376,14 @@ function DetalleProducto({
       form.append("file", f);
       await llamar(`/v1/products/${producto.id}/image`, { method: "POST", body: form });
       toast.success("Foto actualizada");
-      onCerrar(true);
+      void qc.invalidateQueries({ queryKey: ["productos", empresa.id] });
     } catch (e) {
       setError(e);
       toast.error("No se pudo cambiar la foto");
     } finally {
       setSubiendoFoto(false);
+      // El mismo archivo elegido dos veces seguidas tiene que volver a disparar onChange.
+      if (fotoRef.current !== null) fotoRef.current.value = "";
     }
   }
 
@@ -399,29 +410,39 @@ function DetalleProducto({
     }
   }
 
-  // El precio VIGENTE por lista, a fecha EXPLÍCITA (hoy, elegido aquí como
-  // parámetro — ADR-0032). Un documento con otra fecha pedirá otro vigente.
-  const precios = useQuery({
-    queryKey: ["precios-de", empresa.id, producto.id],
-    queryFn: async () => {
-      const listas = await llamar<PriceList[]>("/v1/price-lists");
-      const hoy = new Date().toISOString();
-      return Promise.all(
-        listas.map(async (lista) => {
-          const r = await llamar<{
-            items: PriceItem[];
-            vigente: { amount: string; currency: string } | null;
-          }>(
-            `/v1/price-lists/${lista.id}/prices?product_id=${producto.id}&at=${encodeURIComponent(hoy)}`,
-          );
-          return { lista, vigente: r.vigente, historial: r.items.length };
-        }),
-      );
-    },
+  // El precio VIGENTE por lista, a fecha EXPLÍCITA (el instante de abrir el
+  // detalle, fijado UNA vez como parámetro — ADR-0032). Un documento con otra
+  // fecha pedirá otro vigente.
+  //
+  // Sigue siendo una consulta POR LISTA: ni `GET /v1/products/:id` trae
+  // precios ni hay un endpoint que dé el vigente de un producto en todas sus
+  // listas de una vez (`/v1/price-lists/:id/prices` va por lista). Con
+  // `useQueries` cada lista se cachea y reintenta por su cuenta, y una lista
+  // que falle no tumba a las demás.
+  const [hoy] = useState(() => new Date().toISOString());
+  const listas = useQuery({
+    queryKey: ["listas", empresa.id],
+    queryFn: () => llamar<PriceList[]>("/v1/price-lists"),
   });
+  const vigentes = useQueries({
+    queries: (listas.data ?? []).map((lista) => ({
+      queryKey: ["precio-vigente", empresa.id, lista.id, producto.id, hoy],
+      queryFn: async () => {
+        const r = await llamar<{
+          items: PriceItem[];
+          vigente: { amount: string; currency: string } | null;
+        }>(
+          `/v1/price-lists/${lista.id}/prices?product_id=${producto.id}&at=${encodeURIComponent(hoy)}`,
+        );
+        return { vigente: r.vigente, historial: r.items.length };
+      },
+    })),
+  });
+  const preciosCargando = listas.isPending || vigentes.some((v) => v.isPending);
 
   async function guardar(): Promise<void> {
     setError(null);
+    setGuardando(true);
     try {
       await llamar(`/v1/products/${producto.id}`, {
         method: "PATCH",
@@ -437,6 +458,8 @@ function DetalleProducto({
       onCerrar(true);
     } catch (e) {
       setError(e);
+    } finally {
+      setGuardando(false);
     }
   }
 
@@ -462,31 +485,46 @@ function DetalleProducto({
         {!editando ? (
           <div className="mt-3 space-y-2">
             <p className="text-[0.85rem] font-medium">Precio vigente hoy, por lista</p>
-            {precios.isPending ? (
+            {preciosCargando ? (
               <Skeleton className="h-12 w-full" />
-            ) : (precios.data ?? []).length === 0 ? (
+            ) : listas.isError ? (
+              <p role="alert" className="text-[0.88rem] text-destructive-soft-foreground">
+                {errorDePersona(listas.error)}
+              </p>
+            ) : (listas.data ?? []).length === 0 ? (
               <p className="text-[0.88rem] text-muted-foreground">
                 La empresa no tiene listas de precios todavía.
               </p>
             ) : (
               <ul className="space-y-1 text-[0.9rem]">
-                {(precios.data ?? []).map(({ lista, vigente, historial }) => (
-                  <li key={lista.id} className="flex items-baseline justify-between gap-3">
-                    <span className="text-muted-foreground">
-                      {lista.name} ({lista.currency_code})
-                    </span>
-                    <span className="font-mono">
-                      {vigente !== null ? (
-                        mostrarImporte(vigente)
-                      ) : (
-                        <span className="text-warning-soft-foreground">sin precio</span>
-                      )}
-                      <span className="ml-2 text-[0.78rem] text-faint-foreground">
-                        {historial} vigencia{historial === 1 ? "" : "s"}
+                {(listas.data ?? []).map((lista, i) => {
+                  const v = vigentes[i];
+                  return (
+                    <li key={lista.id} className="flex items-baseline justify-between gap-3">
+                      <span className="text-muted-foreground">
+                        {lista.name} ({lista.currency_code})
                       </span>
-                    </span>
-                  </li>
-                ))}
+                      <span className="font-mono">
+                        {v === undefined || v.data === undefined ? (
+                          <span className="text-destructive-soft-foreground">
+                            {errorDePersona(v?.error)}
+                          </span>
+                        ) : (
+                          <>
+                            {v.data.vigente !== null ? (
+                              mostrarImporte(v.data.vigente)
+                            ) : (
+                              <span className="text-warning-soft-foreground">sin precio</span>
+                            )}
+                            <span className="ml-2 text-[0.78rem] text-faint-foreground">
+                              {v.data.historial} vigencia{v.data.historial === 1 ? "" : "s"}
+                            </span>
+                          </>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             )}
             {puede("product.manage") && (
@@ -599,21 +637,23 @@ function DetalleProducto({
               <Button variant="ghost" onClick={() => onCerrar(false)}>
                 Cerrar
               </Button>
-              <Button variant="secondary" onClick={() => setEditando(true)}>
-                <Pencil /> Editar
-              </Button>
+              {puede("product.manage") && (
+                <Button variant="secondary" onClick={() => setEditando(true)}>
+                  <Pencil /> Editar
+                </Button>
+              )}
             </>
           ) : (
             <>
-              <Button variant="ghost" onClick={() => setEditando(false)}>
+              <Button variant="ghost" onClick={() => setEditando(false)} disabled={guardando}>
                 Volver
               </Button>
               <Button
                 variant="primary"
-                disabled={form.name.trim() === ""}
+                disabled={guardando || form.name.trim() === ""}
                 onClick={() => void guardar()}
               >
-                Guardar cambios
+                {guardando ? "Guardando…" : "Guardar cambios"}
               </Button>
             </>
           )}

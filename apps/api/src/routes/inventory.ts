@@ -32,7 +32,8 @@ const MOVE_SELECT = `m.id, m.company_id, m.warehouse_id, m.product_id, m.lot_id,
   m.rounding_policy_id, m.unit_cost::text as unit_cost,
   m.quantity_after::text as quantity_after, m.value_after::text as value_after,
   to_char(m.occurred_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as occurred_at,
-  m.reference, m.reason, m.transfer_id, m.source_document_id`;
+  m.reference, m.reason, m.transfer_id, m.source_document_id,
+  p.sku as product_sku, p.name as product_name`;
 
 function coherente(header: string, body: string): void {
   if (header !== body) {
@@ -103,14 +104,17 @@ export function inventoryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const warehouseId = uuidValido(c.req.query("warehouse_id"), "warehouse_id");
     const desde = c.req.query("from");
     const hasta = c.req.query("to");
+    // Días calendario («2026-09-11»), no instantes: comparados como instantes,
+    // `to=hoy` era la medianoche UTC y excluía todo el día pedido (auditoría
+    // 2026-09-11, M-12). El día es el de Caracas (CLAUDE.md §3).
     for (const [nombre, valor] of [
       ["from", desde],
       ["to", hasta],
     ] as const) {
-      if (valor !== undefined && Number.isNaN(Date.parse(valor))) {
+      if (valor !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(valor)) {
         throw new DominioError({
           code: "VALIDATION_FAILED",
-          message: `\`${nombre}\` debe ser una fecha ISO 8601.`,
+          message: `\`${nombre}\` debe ser un día calendario YYYY-MM-DD.`,
         });
       }
     }
@@ -120,11 +124,20 @@ export function inventoryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const filas = await withTransaction(sql, actor, ({ sql: tx }) => {
       const porProducto = productId === undefined ? tx`` : tx`and m.product_id = ${productId}`;
       const porAlmacen = warehouseId === undefined ? tx`` : tx`and m.warehouse_id = ${warehouseId}`;
-      const desdeF = desde === undefined ? tx`` : tx`and m.occurred_at >= ${desde}`;
-      const hastaF = hasta === undefined ? tx`` : tx`and m.occurred_at <= ${hasta}`;
+      const desdeF =
+        desde === undefined
+          ? tx``
+          : tx`and (m.occurred_at at time zone 'America/Caracas')::date >= ${desde}::date`;
+      const hastaF =
+        hasta === undefined
+          ? tx``
+          : tx`and (m.occurred_at at time zone 'America/Caracas')::date <= ${hasta}::date`;
       return tx<Record<string, unknown>[]>`
         select ${tx.unsafe(MOVE_SELECT)}, count(*) over ()::int as total
           from public.inventory_moves m
+          -- El nombre y el SKU viajan con el movimiento: un producto inactivo
+          -- (fuera de only_active=1) se pintaba como «Producto» (auditoría 2026-09-11).
+          join public.products p on p.id = m.product_id
          where m.company_id = ${companyId} ${porProducto} ${porAlmacen} ${desdeF} ${hastaF}
          order by m.occurred_at desc, m.id desc
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;

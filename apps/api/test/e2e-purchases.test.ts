@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { diaCaracas } from "./_dia-caracas.js";
 
 /**
  * Compras de extremo a extremo con JWT real, como `ladino_api`.
@@ -36,8 +37,8 @@ const ASIG_MIRON = crypto.randomUUID();
 const RUN = Date.now().toString(36);
 const FUENTE_TASA = `Carga E2E compras ${RUN}`;
 const FUENTE_REGLA = `REGLA DE PRUEBA E2E compras ${RUN} — no es la norma vigente`;
-const HOY = new Date().toISOString().slice(0, 10);
-const AYER = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+const HOY = diaCaracas();
+const AYER = diaCaracas(-1);
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -162,7 +163,7 @@ beforeAll(async () => {
       select 'VE', 'iva', null, 'purchase', 'gravado_general', 0.16, ${AYER}::date,
              ${`REGLA DE PRUEBA E2E compras ${RUN}`}, 50
        where not exists (select 1 from public.tax_rules
-                          where transaction_type = 'purchase' and jurisdiction = 'VE'
+                          where company_id is null and transaction_type = 'purchase' and jurisdiction = 'VE'
                             and tax_code = 'iva' and taxpayer_type is null
                             and product_tax_category = 'gravado_general')`;
   });

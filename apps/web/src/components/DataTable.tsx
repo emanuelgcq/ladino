@@ -6,6 +6,7 @@ import {
   useReactTable,
   type ColumnDef,
   type Row,
+  type RowData,
   type SortingState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -15,6 +16,15 @@ import { Button } from "../ui/button.js";
 import { Input } from "../ui/input.js";
 import { Skeleton } from "../ui/card.js";
 import { EmptyState, type EmptyStateProps } from "./EmptyState.js";
+
+declare module "@tanstack/react-table" {
+  // Los parámetros los fija TanStack; la ampliación tiene que repetirlos.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  interface ColumnMeta<TData extends RowData, TValue> {
+    /** Cabecera para el CSV cuando `header` no es un texto (un nodo con dos líneas, por ejemplo). */
+    exportHeader?: string;
+  }
+}
 
 /**
  * DataTable — la tabla del sistema, una vez, para los 12 módulos.
@@ -110,11 +120,24 @@ export function DataTable<T>({
     const escapar = (v: unknown): string => {
       // Solo primitivos: un objeto en una celda exportada sería `[object Object]`,
       // y una celda ilegible es peor que una vacía declarada.
-      const s =
+      let s =
         typeof v === "string" || typeof v === "number" || typeof v === "boolean" ? String(v) : "";
+      // Inyección de fórmulas: Excel y Calc EJECUTAN una celda que empieza por
+      // `=`, `+`, `-`, `@`, tabulador o retorno. Un nombre de producto escrito
+      // así en el catálogo no puede convertirse en una fórmula en la máquina
+      // de quien exporta: se antepone un apóstrofo y queda como texto.
+      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const cabecera = visibles.map((c) => escapar(c.id)).join(",");
+    // La cabecera es la que se lee en pantalla (o `meta.exportHeader` si la
+    // pantalla pinta un nodo), no el id interno de la columna.
+    const titulo = (c: (typeof visibles)[number]): string => {
+      const meta = c.columnDef.meta?.exportHeader;
+      if (meta !== undefined) return meta;
+      const h = c.columnDef.header;
+      return typeof h === "string" ? h : c.id;
+    };
+    const cabecera = visibles.map((c) => escapar(titulo(c))).join(",");
     const cuerpo = rows
       .map((r) => visibles.map((c) => escapar(r.getValue(c.id))).join(","))
       .join("\r\n");

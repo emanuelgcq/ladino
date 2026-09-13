@@ -191,6 +191,20 @@ async function hashDelDataset(
  * marcado `is_official = false`, y ponerle cabeceras con aspecto oficial haría
  * que un fichero que el SENIAT rechazaría pareciera el que espera.
  */
+/**
+ * Una celda que empieza por `=`, `+`, `-`, `@`, tabulador o retorno la
+ * interpreta Excel/LibreOffice como FÓRMULA al abrir el fichero. Los nombres
+ * de cliente y de proveedor los escribe un usuario (o vienen de la factura
+ * del proveedor): un cliente llamado `=HYPERLINK(...)` ejecutaría en la
+ * máquina del contador (auditoría 2026-09-11, M-21). Se antepone un
+ * apóstrofo, que es la neutralización estándar (OWASP CSV injection); los
+ * números de la proyección nunca empiezan así salvo los negativos, que
+ * también se protegen y siguen leyéndose.
+ */
+export function neutralizarCelda(s: string): string {
+  return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+}
+
 function aCsv(rows: Record<string, unknown>[], cabeceras: string[]): string {
   const escapar = (v: unknown): string => {
     // Solo lo que la proyección puede producir: string, number, boolean o null.
@@ -199,7 +213,9 @@ function aCsv(rows: Record<string, unknown>[], cabeceras: string[]): string {
     if (v === null || v === undefined) return "";
     const s =
       typeof v === "string" || typeof v === "number" || typeof v === "boolean" ? String(v) : "";
-    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    // Los importes (number o string numérico) no se tocan: solo el texto libre.
+    const protegido = typeof v === "string" && !/^-?\d+(\.\d+)?$/.test(s) ? neutralizarCelda(s) : s;
+    return /[",\n\r]/.test(protegido) ? `"${protegido.replace(/"/g, '""')}"` : protegido;
   };
   const lineas = [cabeceras.join(",")];
   for (const r of rows) lineas.push(cabeceras.map((c) => escapar(r[c])).join(","));
@@ -233,7 +249,13 @@ export function aTxtRetencionesIva(
   // que el agente declara, no la fecha de cada comprobante.
   const periodo = periodoDesde.slice(0, 7).replace("-", "");
   const texto = (v: unknown): string =>
-    typeof v === "string" || typeof v === "number" ? String(v) : "";
+    typeof v === "string"
+      ? // Texto libre (nombres, documentos) neutralizado contra fórmulas; el
+        // separador es el tabulador, así que uno dentro del campo se quita.
+        neutralizarCelda(v.replace(/[\t\r\n]/g, " "))
+      : typeof v === "number"
+        ? String(v)
+        : "";
   const ddmmyyyy = (iso: string): string => {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
     return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;

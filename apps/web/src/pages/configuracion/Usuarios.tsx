@@ -80,6 +80,7 @@ export function UsuariosYRoles(): React.JSX.Element {
     null,
   );
   const [apagando, setApagando] = useState<Miembro | null>(null);
+  const [reactivando, setReactivando] = useState<Miembro | null>(null);
 
   const miembros = useQuery({
     queryKey: ["miembros", empresa.id],
@@ -129,8 +130,17 @@ export function UsuariosYRoles(): React.JSX.Element {
           Cada persona se registra sola en Ladino con su correo; aquí le das su oficio. Lo que cada
           rol ve y puede hacer lo decide el servidor — quitar el rol corta el acceso en el momento.
         </CardDescription>
-        {miembros.isLoading ? (
+        {miembros.isPending ? (
           <p className="text-muted-foreground">Cargando…</p>
+        ) : miembros.isError ? (
+          <div className="space-y-2">
+            <p role="alert" className="text-[0.88rem] text-destructive-soft-foreground">
+              No se pudieron cargar las personas: {errorDePersona(miembros.error)}
+            </p>
+            <Button variant="secondary" size="sm" onClick={() => void miembros.refetch()}>
+              Reintentar
+            </Button>
+          </div>
         ) : (
           <div className="divide-y divide-border rounded-md border border-border">
             {(miembros.data?.members ?? []).map((m) => (
@@ -163,11 +173,7 @@ export function UsuariosYRoles(): React.JSX.Element {
                   </span>
                 </span>
                 {m.status !== "active" ? (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => cambiarEstado.mutate({ id: m.membership_id, status: "active" })}
-                  >
+                  <Button variant="secondary" size="sm" onClick={() => setReactivando(m)}>
                     <UserCheck /> Reactivar
                   </Button>
                 ) : (
@@ -222,6 +228,25 @@ export function UsuariosYRoles(): React.JSX.Element {
       >
         {apagando?.email} pierde el acceso COMPLETO al negocio, con todos sus roles. Su historial
         queda intacto y puedes reactivarle cuando quieras.
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={reactivando !== null}
+        onOpenChange={(v) => !v && setReactivando(null)}
+        title="Reactivar el acceso"
+        confirmLabel="Reactivar"
+        onConfirm={async () => {
+          if (reactivando !== null) {
+            await cambiarEstado.mutateAsync({ id: reactivando.membership_id, status: "active" });
+          }
+          setReactivando(null);
+        }}
+      >
+        {reactivando?.email} vuelve a entrar al negocio ahora mismo, con los roles que tenía
+        {(reactivando?.assignments.length ?? 0) === 0
+          ? " — hoy ninguno: tendrás que darle un oficio"
+          : ""}
+        .
       </ConfirmDialog>
     </Card>
   );

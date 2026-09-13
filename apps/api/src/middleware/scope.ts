@@ -1,6 +1,7 @@
 import type { Context, Next } from "hono";
 import { withTransaction, type Sql } from "@ladino/db";
 import { type RequestContext, CTX } from "./context.js";
+import { mensajePersona } from "./errors.js";
 
 const REQUEST_ID_RE = /^[\w.-]{1,64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -47,6 +48,7 @@ export function contextMiddleware(sql: Sql) {
           {
             code: "VALIDATION_FAILED",
             message: "X-Company-Id no tiene forma de UUID.",
+            person_message: mensajePersona("VALIDATION_FAILED"),
             request_id: requestId,
           },
           422,
@@ -66,7 +68,12 @@ export function contextMiddleware(sql: Sql) {
         // Inexistente, de otro tenant, o del tenant pero sin asignación que la
         // alcance: LOS TRES indistinguibles, cuerpo incluido.
         return c.json(
-          { code: "NOT_FOUND", message: "Recurso no encontrado.", request_id: requestId },
+          {
+            code: "NOT_FOUND",
+            message: "Recurso no encontrado.",
+            person_message: mensajePersona("NOT_FOUND"),
+            request_id: requestId,
+          },
           404,
         );
       }

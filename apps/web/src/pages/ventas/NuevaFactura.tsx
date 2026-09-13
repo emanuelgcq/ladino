@@ -88,9 +88,11 @@ export function NuevaFactura(): React.JSX.Element {
     enabled: cliente !== null,
     queryFn: () => llamar<{ default_price_list_id: string | null }>(`/v1/customers/${cliente?.id}`),
   });
+  // Al cambiar de cliente manda la preferida DEL NUEVO — o ninguna: la del
+  // anterior no se hereda (un cliente sin lista facturaba con la del último).
   useEffect(() => {
-    const porDefecto = clienteDetalle.data?.default_price_list_id;
-    if (porDefecto != null) setListaId(porDefecto);
+    if (clienteDetalle.data === undefined) return;
+    setListaId(clienteDetalle.data.default_price_list_id ?? "");
   }, [clienteDetalle.data]);
 
   useEffect(() => {
@@ -224,6 +226,7 @@ export function NuevaFactura(): React.JSX.Element {
                     value={cliente}
                     onChange={(v) => {
                       setCliente(v);
+                      setListaId("");
                       setCotizacion(null);
                     }}
                     buscar={async (q) => {
@@ -433,10 +436,10 @@ function LineaEditor({
   onChange: (l: LineaForm) => void;
   onQuitar: (() => void) | null;
 }): React.JSX.Element {
-  const { llamar } = useSesion();
+  const { empresa, llamar } = useSesion();
   // El precio VIGENTE según el servidor (platform.price_at) con fecha explícita.
   const precio = useQuery({
-    queryKey: ["precio", listaId, linea.producto?.id],
+    queryKey: ["precio", empresa.id, listaId, linea.producto?.id],
     enabled: listaId !== null && linea.producto !== null,
     queryFn: () =>
       llamar<{ vigente: { amount: string; currency: string } | null }>(

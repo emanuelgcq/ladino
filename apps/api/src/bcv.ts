@@ -69,5 +69,25 @@ export async function tasaOficialBcv(cfg: BcvConfig): Promise<TasaBcv> {
   if (rate === null || fecha === null) {
     throw new BcvNoDisponible("la respuesta no trae promedio o fecha reconocibles");
   }
-  return { rate, rateDate: fecha.slice(0, 10), actualizada: fecha };
+  return { rate, rateDate: diaCaracasDe(fecha), actualizada: fecha };
+}
+
+/**
+ * El día PUBLICADO, en Caracas. `fechaActualizacion` trae un instante con
+ * desplazamiento (`2026-09-11T00:00:00-04:00`); cortarlo a 10 caracteres
+ * daba el día del texto, que si la fuente cambiara a UTC (`…T02:30:00Z`)
+ * sería MAÑANA para Venezuela y el refresco llamaría a la fuente cada 30 min
+ * todo el día sin encontrar «hoy» (auditoría 2026-09-11, M-18). Un instante
+ * sin zona se toma como hora de Caracas.
+ */
+export function diaCaracasDe(fechaPublicada: string): string {
+  const tieneZona = /(Z|[+-]\d{2}:?\d{2})$/.test(fechaPublicada);
+  const instante = new Date(tieneZona ? fechaPublicada : `${fechaPublicada}-04:00`);
+  if (Number.isNaN(instante.getTime())) return fechaPublicada.slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Caracas",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(instante);
 }

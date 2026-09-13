@@ -1,4 +1,5 @@
 import type { Context, Next } from "hono";
+import { mensajePersona } from "./errors.js";
 
 /**
  * Límite de peticiones POR USUARIO AUTENTICADO. La clave es `userId`, nunca la
@@ -60,6 +61,7 @@ export function rateLimitMiddleware(cfg: RateLimitConfig) {
         {
           code: "RATE_LIMITED",
           message: `Límite de ${cfg.porMinuto} peticiones por minuto superado.`,
+          person_message: mensajePersona("RATE_LIMITED"),
         },
         429,
       );

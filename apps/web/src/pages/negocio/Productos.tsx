@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import {
   Camera,
@@ -70,7 +70,9 @@ function useDebounced<T>(valor: T, ms: number): T {
 
 export function ProductosNegocio(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
-  const [busqueda, setBusqueda] = useState("");
+  // La paleta (Ctrl+K) llega con `?q=<nombre>`: la pantalla abre ya buscándolo.
+  const [parametros] = useSearchParams();
+  const [busqueda, setBusqueda] = useState(() => parametros.get("q") ?? "");
   const [vista, setVista] = useState<"cuadricula" | "tabla">(() =>
     localStorage.getItem(CLAVE_VISTA) === "tabla" ? "tabla" : "cuadricula",
   );
@@ -132,6 +134,16 @@ export function ProductosNegocio(): React.JSX.Element {
 
       {productos.isLoading ? (
         <p className="text-muted-foreground">Cargando…</p>
+      ) : productos.isError ? (
+        <Card className="py-8 text-center" role="alert">
+          <p className="font-medium">No se pudieron cargar los productos</p>
+          <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
+            {errorDePersona(productos.error)}
+          </p>
+          <Button variant="secondary" className="mt-4" onClick={() => void productos.refetch()}>
+            Reintentar
+          </Button>
+        </Card>
       ) : items.length === 0 ? (
         <Card className="py-12 text-center">
           <Package className="mx-auto size-8 text-faint-foreground" />
@@ -165,8 +177,16 @@ export function ProductosNegocio(): React.JSX.Element {
               {items.map((p) => (
                 <tr
                   key={p.id}
-                  className="cursor-pointer border-b border-border last:border-0 hover:bg-surface-muted"
+                  tabIndex={0}
+                  aria-label={`Ver ${p.name}`}
+                  className="cursor-pointer border-b border-border last:border-0 hover:bg-surface-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
                   onClick={() => setDetalle(p)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setDetalle(p);
+                    }
+                  }}
                 >
                   <td className="px-3 py-2 font-mono text-[0.82rem] text-muted-foreground">
                     {p.sku}
@@ -340,6 +360,12 @@ export function AltaSimple({
   const [foto, setFoto] = useState<File | null>(null);
   const [vistaPrevia, setVistaPrevia] = useState<string | null>(null);
   const fotoRef = useRef<HTMLInputElement>(null);
+  // El objectURL de la vista previa se LIBERA al cambiar de foto y al cerrar:
+  // sin esto cada foto elegida se quedaba en memoria (auditoría 2026-09-11).
+  useEffect(() => {
+    if (vistaPrevia === null) return;
+    return () => URL.revokeObjectURL(vistaPrevia);
+  }, [vistaPrevia]);
 
   const ajustes = useQuery({
     queryKey: ["ajustes", empresa.id],
@@ -358,13 +384,19 @@ export function AltaSimple({
   const existenciaLimpia = existencia.trim().replace(",", ".");
   const costoLimpio = costo.trim().replace(",", ".");
   const conStock = !esServicio && existenciaLimpia !== "";
+  const mayorLimpio = mayor.trim().replace(",", ".");
+  const conMayor = ajustes.data?.sells_wholesale === true && mayorLimpio !== "";
+  // Un precio al mayor mal escrito NO se descarta en silencio: se avisa y
+  // no se envía hasta corregirlo (auditoría 2026-09-11).
+  const mayorInvalido = conMayor && !importeValido(mayorLimpio);
   const listo =
     nombre.trim().length > 0 &&
     importeValido(precioLimpio) &&
+    !mayorInvalido &&
     (!conStock || (importeValido(existenciaLimpia) && importeValido(costoLimpio)));
 
   const crear = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (): Promise<{ id: string; fotoFallo: boolean }> => {
       const creado = await llamar<{ product: { id: string } }>("/v1/products/simple", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
@@ -384,20 +416,32 @@ export function AltaSimple({
           ...(codigo.trim() === "" ? {} : { sku: codigo.trim() }),
           ...(barras.trim() === "" ? {} : { barcode: barras.trim() }),
           ...(categoria.trim() === "" ? {} : { category_name: categoria.trim() }),
-          ...(ajustes.data?.sells_wholesale && importeValido(mayor.trim().replace(",", "."))
-            ? { wholesale_price: { amount: mayor.trim().replace(",", "."), currency: moneda } }
-            : {}),
+          ...(conMayor ? { wholesale_price: { amount: mayorLimpio, currency: moneda } } : {}),
         }),
       });
+      // El producto YA existe: si la foto falla, no se reintenta el POST
+      // entero (crearía otro producto). Se cierra y se dice dónde subirla.
+      let fotoFallo = false;
       if (foto !== null) {
-        const form = new FormData();
-        form.append("file", foto);
-        await llamar(`/v1/products/${creado.product.id}/image`, { method: "POST", body: form });
+        try {
+          const form = new FormData();
+          form.append("file", foto);
+          await llamar(`/v1/products/${creado.product.id}/image`, { method: "POST", body: form });
+        } catch {
+          fotoFallo = true;
+        }
       }
-      return creado;
+      return { id: creado.product.id, fotoFallo };
     },
-    onSuccess: () => {
-      toast.success("Producto agregado", `${nombre.trim()} ya está listo para vender.`);
+    onSuccess: (r) => {
+      if (r.fotoFallo) {
+        toast.warning(
+          "Producto agregado",
+          "La foto no se pudo subir; inténtalo desde Administración → Productos.",
+        );
+      } else {
+        toast.success("Producto agregado", `${nombre.trim()} ya está listo para vender.`);
+      }
       onCreado();
       onCerrar();
     },
@@ -543,8 +587,25 @@ export function AltaSimple({
                 )}
               </FormField>
               {ajustes.data?.sells_wholesale && (
-                <FormField label="Precio al mayor" className="col-span-2">
-                  {(p) => <MoneyInput {...p} value={mayor} onChange={setMayor} currency={moneda} />}
+                <FormField
+                  label="Precio al mayor"
+                  className="col-span-2"
+                  error={
+                    mayorInvalido
+                      ? "Escríbelo como un importe: 12 o 12.50, sin símbolos."
+                      : undefined
+                  }
+                >
+                  {(p) => (
+                    <MoneyInput
+                      id={p.id}
+                      ariaInvalid={p["aria-invalid"]}
+                      ariaDescribedby={p["aria-describedby"]}
+                      value={mayor}
+                      onChange={setMayor}
+                      currency={moneda}
+                    />
+                  )}
                 </FormField>
               )}
             </div>
@@ -604,6 +665,7 @@ function DetalleProducto({
   producto: ProductoFila;
   onCerrar: () => void;
 }): React.JSX.Element {
+  const navigate = useNavigate();
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
       <DialogContent className="max-w-md">
@@ -633,11 +695,18 @@ function DetalleProducto({
             </div>
           )}
           <div className="flex gap-2">
-            <Link to={`/inventario?producto=${producto.id}`} className="flex-1">
-              <Button variant="ghost" className="w-full" onClick={onCerrar}>
-                Ver movimientos
-              </Button>
-            </Link>
+            {/* Un botón que navega, no un enlace envolviendo un botón: dos
+                controles anidados eran dos paradas de tabulador. */}
+            <Button
+              variant="ghost"
+              className="w-full flex-1"
+              onClick={() => {
+                onCerrar();
+                void navigate(`/inventario?producto=${producto.id}`);
+              }}
+            >
+              Ver movimientos
+            </Button>
           </div>
         </div>
       </DialogContent>

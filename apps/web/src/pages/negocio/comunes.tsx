@@ -1,3 +1,4 @@
+import { diaLocal } from "../../fechas.js";
 /**
  * Fechas RELATIVAS para el mundo del negocio (PARTE 16): «hoy», «ayer»,
  * «hace 3 días» — y a partir de la semana, la fecha corta de verdad. Compara
@@ -6,7 +7,10 @@
 export function fechaRelativa(iso: string): string {
   const fecha = new Date(iso);
   if (Number.isNaN(fecha.getTime())) return "—";
-  const dia = (d: Date) => Math.floor(d.getTime() / 86_400_000 + d.getTimezoneOffset() / 1440);
+  // Días de CARACAS comparados como días: la versión anterior sumaba el huso
+  // con el signo invertido y «hoy» pasaba a «ayer» a las 16:00 (auditoría
+  // 2026-09-11).
+  const dia = (d: Date) => Math.floor(Date.parse(`${diaLocal(d)}T00:00:00Z`) / 86_400_000);
   const diferencia = dia(new Date()) - dia(fecha);
   if (diferencia <= 0) return "hoy";
   if (diferencia === 1) return "ayer";

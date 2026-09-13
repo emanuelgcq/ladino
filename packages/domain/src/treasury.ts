@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@ladino/core";
+import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
 import { Money, parseDecimal } from "@ladino/money";
 import type {
@@ -115,17 +116,22 @@ async function cuentaDe(
 }
 
 /** Tasa vigente HOY para convertir a funcional; identidad si es la misma moneda. */
+/**
+ * La tasa vigente a un DÍA de Caracas (por omisión, hoy). `current_date` era
+ * el día UTC: de 20:00 a 23:59 ya era mañana (auditoría 2026-09-11, M-25).
+ */
 async function tasaHoy(
   sql: TransactionSql,
+  companyId: string,
   desde: string,
   hasta: string,
+  dia?: string,
 ): Promise<Result<{ rate: string; source: string }, TreasuryError>> {
   if (desde === hasta) return ok({ rate: "1", source: "identidad" });
   const [t] = await sql<{ rate: string | null; source: string | null }[]>`
-    select r.rate::text as rate, r.source from public.exchange_rates r
-     where r.from_currency = ${desde} and r.to_currency = ${hasta}
-       and r.rate_date <= current_date
-     order by r.rate_date desc, r.created_at desc limit 1`;
+    select f.rate::text as rate, f.source
+      from platform.rate_for(${companyId}, ${desde}, ${hasta},
+             coalesce(${dia ?? null}::date, (now() at time zone 'America/Caracas')::date)) f`;
   if (!t?.rate) {
     return err({
       code: "EXCHANGE_RATE_MISSING",
@@ -284,7 +290,18 @@ export async function listPaymentMethods(
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Ver formas de pago exige un usuario." });
   }
-  const ctx = await companyScope(sql, actor.userId, companyId, "treasury.read");
+  // El CATÁLOGO de formas de pago no es «ver el dinero»: la cajera lo necesita
+  // para cobrar con la forma configurada y el encargado para pagar una compra.
+  // Con solo treasury.read, cajero y encargado recibían 403 y sus cobros caían
+  // en «Sin asignar» (auditoría 2026-09-11, A-08).
+  const ctx = await companyScope(sql, actor.userId, companyId, [
+    "treasury.read",
+    "cash.close",
+    "sales.invoice.issue",
+    "sales.payment.register",
+    "purchase.payment.register",
+    "expense.register",
+  ]);
   if (!ctx.ok) return ctx;
   const filas = await sql<PaymentMethodResponse[]>`
     select id, name, kind, account_id, is_active from public.payment_methods
@@ -404,19 +421,30 @@ export async function registerExpense(
   const importe = Money.of(input.amount, cuenta.value.currency);
   if (!importe.ok) return err({ code: "VALIDATION_FAILED", message: importe.error.message });
 
-  const tasa = await tasaHoy(sql, cuenta.value.currency, funcionalCode);
+  const fecha = input.paid_at ?? new Date().toISOString();
+  // Regla 8: la tasa es la EFECTIVA a la fecha del pago (día de Caracas), no la
+  // de hoy — un gasto fechado el 1 se convertía con la tasa del 8 (auditoría
+  // 2026-09-11, M-15).
+  const [diaPago] = await sql<{ dia: string }[]>`
+    select ((${fecha}::timestamptz) at time zone 'America/Caracas')::date::text as dia`;
+  const tasa = await tasaHoy(
+    sql,
+    input.company_id,
+    cuenta.value.currency,
+    funcionalCode,
+    diaPago!.dia,
+  );
   if (!tasa.ok) return tasa;
   const tasaDec = parseDecimal(tasa.value.rate);
   if (!tasaDec.ok) return err({ code: "VALIDATION_FAILED", message: tasaDec.error.message });
   const funcional = importe.value.amount.times(tasaDec.value).toDecimalPlaces(8, 4);
 
-  const fecha = input.paid_at ?? new Date().toISOString();
   // El DÍA contable del gasto: si el llamante fechó el pago, su fecha manda;
   // si no, el día se decide con el reloj de Venezuela — a las 8 pm de Caracas
   // el UTC ya va por mañana (la familia de bugs de CLAUDE.md §3).
   let fechaContable: string;
   if (input.paid_at !== undefined) {
-    fechaContable = input.paid_at.slice(0, 10);
+    fechaContable = diaNegocio(input.paid_at);
   } else {
     const [hoy] = await sql<{ d: string }[]>`
       select (now() at time zone 'America/Caracas')::date::text as d`;
@@ -551,7 +579,7 @@ export async function closeCashRegister(
   const [empresa] = await sql<{ moneda: string }[]>`
     select functional_currency_code as moneda from public.companies where id = ${input.company_id}`;
   const funcionalCode = empresa!.moneda;
-  const tasa = await tasaHoy(sql, cuenta.currency, funcionalCode);
+  const tasa = await tasaHoy(sql, input.company_id, cuenta.currency, funcionalCode);
   if (!tasa.ok) return tasa;
   const tasaDec = parseDecimal(tasa.value.rate);
   if (!tasaDec.ok) return err({ code: "VALIDATION_FAILED", message: tasaDec.error.message });
@@ -655,11 +683,9 @@ export async function keepDailyRate(
   if (!ctx.ok) return ctx;
 
   const [ultima] = await sql<{ rate: string; source: string; rate_date: string }[]>`
-    select rate::text as rate, source, rate_date::text as rate_date
-      from public.exchange_rates
-     where from_currency = ${input.from_currency} and to_currency = ${input.to_currency}
-       and rate_date <= current_date
-     order by rate_date desc, created_at desc limit 1`;
+    select f.rate::text as rate, f.source, f.rate_date::text as rate_date
+      from platform.rate_for(${companyId}, ${input.from_currency}, ${input.to_currency},
+                             (now() at time zone 'America/Caracas')::date) f`;
   if (!ultima) {
     return err({
       code: "EXCHANGE_RATE_MISSING",
@@ -673,9 +699,9 @@ export async function keepDailyRate(
   const fuente = `sin cambio, confirmada (antes: ${ultima.source})`.slice(0, 120);
   const [fila] = await sql<DailyRateResponse[]>`
     insert into public.exchange_rates
-      (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
-    values (${input.from_currency}, ${input.to_currency}, ${ultima.rate}, ${fuente},
-            (now() at time zone 'America/Caracas')::date, now())
+      (tenant_id, company_id, from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+    values (${ctx.value.tenantId}, ${companyId}, ${input.from_currency}, ${input.to_currency},
+            ${ultima.rate}, ${fuente}, (now() at time zone 'America/Caracas')::date, now())
     returning from_currency, to_currency, rate::text as rate, rate_date::text as rate_date,
               source`;
   return ok(fila!);
@@ -717,11 +743,8 @@ export async function previsualizarConversion(
     });
   }
   const [t] = await sql<{ rate: string; source: string; rate_date: string }[]>`
-    select r.rate::text as rate, r.source, r.rate_date::text as rate_date
-      from public.exchange_rates r
-     where r.from_currency = ${ancla} and r.to_currency = ${funcional}
-       and r.rate_date <= (now() at time zone 'America/Caracas')::date
-     order by r.rate_date desc, r.created_at desc limit 1`;
+    select f.rate::text as rate, f.source, f.rate_date::text as rate_date
+      from platform.rate_for(${companyId}, ${ancla}, ${funcional}, (now() at time zone 'America/Caracas')::date) f`;
   if (!t) {
     return err({
       code: "EXCHANGE_RATE_MISSING",

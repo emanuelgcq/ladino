@@ -1,6 +1,7 @@
 import { jwtVerify, createRemoteJWKSet, type JWTVerifyGetKey } from "jose";
 import type { Context, Next } from "hono";
 import type { Actor } from "@ladino/db";
+import { mensajePersona } from "./errors.js";
 
 /**
  * LA API VERIFICA LA FIRMA DEL JWT ELLA MISMA. No delega.
@@ -165,7 +166,14 @@ export function authMiddleware(cfg: AuthConfig) {
     const m = header ? /^bearer\s+(\S+)$/i.exec(header.trim()) : null;
     const token = m?.[1] ?? null;
     if (!token) {
-      return c.json({ code: "UNAUTHENTICATED", message: "Autenticación requerida." }, 401);
+      return c.json(
+        {
+          code: "UNAUTHENTICATED",
+          message: "Autenticación requerida.",
+          person_message: mensajePersona("UNAUTHENTICATED"),
+        },
+        401,
+      );
     }
 
     const r = await verificarToken(token, cfg);
@@ -173,11 +181,18 @@ export function authMiddleware(cfg: AuthConfig) {
       if (r.code === "AUTH_BACKEND_UNAVAILABLE") {
         // 503 genérico: el detalle está en el log, no se filtra al cliente.
         c.header("Retry-After", "5");
-        return c.json({ code: r.code, message: "No se pudo verificar la autenticación." }, 503);
+        return c.json(
+          {
+            code: r.code,
+            message: "No se pudo verificar la autenticación.",
+            person_message: mensajePersona(r.code),
+          },
+          503,
+        );
       }
       const message =
         r.code === "TOKEN_EXPIRED" ? "El token ha expirado." : "Autenticación requerida.";
-      return c.json({ code: r.code, message }, 401);
+      return c.json({ code: r.code, message, person_message: mensajePersona(r.code) }, 401);
     }
 
     c.set("ladino.auth", r.value);

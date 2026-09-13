@@ -1878,9 +1878,7 @@
         },
         "required": [
           "company_id",
-          "legal_name",
-          "person_type_code",
-          "taxpayer_type_code"
+          "legal_name"
         ],
         "additionalProperties": false
       },
@@ -4132,8 +4130,7 @@
           },
           "series": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 30
+            "pattern": "^[A-Za-z0-9-]{1,30}$"
           },
           "lines": {
             "type": "array",
@@ -4203,8 +4200,7 @@
           },
           "series": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 30
+            "pattern": "^[A-Za-z0-9-]{1,30}$"
           },
           "lines": {
             "type": "array",
@@ -4296,8 +4292,7 @@
           },
           "series": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 30
+            "pattern": "^[A-Za-z0-9-]{1,30}$"
           },
           "lines": {
             "type": "array",
@@ -5028,8 +5023,7 @@
           },
           "series": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 30
+            "pattern": "^[A-Za-z0-9-]{1,30}$"
           },
           "range_from": {
             "type": "string",
@@ -5492,7 +5486,7 @@
           "series": {
             "type": "string",
             "maxLength": 30,
-            "pattern": "^contingencia"
+            "pattern": "^[A-Za-z0-9-]{1,30}$"
           },
           "range_from": {
             "type": "string",
@@ -5862,8 +5856,7 @@
           },
           "series": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 30
+            "pattern": "^[A-Za-z0-9-]{1,30}$"
           },
           "price_list_id": {
             "type": "string",
@@ -8042,8 +8035,9 @@
               "zelle",
               "usdt",
               "transferencia",
-              "cheque",
-              "nota_credito",
+              "punto_venta",
+              "pago_movil",
+              "tarjeta",
               "otro"
             ]
           },
@@ -8616,8 +8610,9 @@
                   "zelle",
                   "usdt",
                   "transferencia",
-                  "cheque",
-                  "nota_credito",
+                  "punto_venta",
+                  "pago_movil",
+                  "tarjeta",
                   "otro"
                 ]
               },
@@ -18309,7 +18304,7 @@
     },
     "/v1/documents": {
       "get": {
-        "summary": "Listar documentos de venta (filtros por tipo, estado, cliente y fechas)",
+        "summary": "Listar documentos de venta (filtros por tipo, estado, cliente, origen y fechas)",
         "security": [
           {
             "bearerAuth": []
@@ -18339,6 +18334,23 @@
             },
             "required": false,
             "name": "customer_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "source_document_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "search",
             "in": "query"
           },
           {
@@ -20618,7 +20630,7 @@
     "/v1/pos/change": {
       "get": {
         "summary": "El vuelto en vivo (permiso sales.payment.register)",
-        "description": "`change = tendered − total/tasa`, en la moneda con la que pagaron y con la tasa del día citada. Negativo significa que falta plata. Es cálculo de dinero: vive en el servidor.",
+        "description": "`change = tendered − (total − already_paid)/tasa`, en la moneda con la que pagaron y con la tasa del día citada. Negativo significa que falta plata. `already_paid` es lo que ya cubre la otra forma en un cobro mixto. Es cálculo de dinero: vive en el servidor.",
         "security": [
           {
             "bearerAuth": []
@@ -20655,6 +20667,22 @@
             },
             "required": false,
             "name": "tendered_currency",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "already_paid",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "already_paid_currency",
             "in": "query"
           },
           {
@@ -21930,7 +21958,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Hasta 60 tasas, de la más reciente hacia atrás.",
+            "description": "Hasta 60 tasas visibles para la empresa (las de la plataforma y las suyas), de la más reciente hacia atrás; a igual día, la propia primero.",
             "content": {
               "application/json": {
                 "schema": {
@@ -21956,6 +21984,16 @@
                       },
                       "rate_date": {
                         "type": "string"
+                      },
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "scope": {
+                        "type": "string",
+                        "enum": [
+                          "plataforma",
+                          "propia"
+                        ]
                       }
                     },
                     "required": [
@@ -21964,7 +22002,9 @@
                       "to_currency",
                       "rate",
                       "source",
-                      "rate_date"
+                      "rate_date",
+                      "created_at",
+                      "scope"
                     ]
                   }
                 }
@@ -23877,13 +23917,32 @@
     },
     "/v1/retention-receipts": {
       "get": {
-        "summary": "Comprobantes de retención emitidos",
+        "summary": "Comprobantes de retención emitidos (paginado; total en X-Total-Count)",
         "security": [
           {
             "bearerAuth": []
           }
         ],
         "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required": false,
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "required": false,
+            "name": "per_page",
+            "in": "query"
+          },
           {
             "schema": {
               "type": "string",
@@ -23896,7 +23955,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Los comprobantes de la empresa.",
+            "description": "Una página de comprobantes de la empresa.",
             "content": {
               "application/json": {
                 "schema": {
@@ -25161,6 +25220,15 @@
           },
           {
             "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "source_id",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "string"
             },
             "required": false,
@@ -26164,6 +26232,344 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/JournalEntryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/journal-template-presets": {
+      "get": {
+        "summary": "Presets de plantillas de asiento disponibles (catálogo global)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Los presets.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "legal_source": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "entry_count": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "name",
+                      "entry_count"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/journal-templates/import-preset": {
+      "post": {
+        "summary": "Importar un preset de plantillas de asiento (permiso accounting.template.manage)",
+        "description": "Idempotente: suma lo que falta y no duplica lo que ya está. Es lo que hace que una venta no caiga a la cola para siempre después de importar el plan.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "company_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "preset_code": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "company_id",
+                  "preset_code"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Plantillas importadas.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "imported": {
+                      "type": "integer"
+                    },
+                    "lines": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "imported",
+                    "lines"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounting/pending/process": {
+      "post": {
+        "summary": "Reprocesar la cola de contabilización pendiente (permiso accounting.entry.post)",
+        "description": "Recorre los pendientes y genera el asiento de cada uno con la plantilla vigente a su fecha; los que siguen sin plantilla se quedan en cola con su motivo.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resultado del reproceso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "revisados": {
+                      "type": "integer"
+                    },
+                    "contabilizados": {
+                      "type": "integer"
+                    },
+                    "pendientes": {
+                      "type": "integer"
+                    },
+                    "primer_motivo": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "revisados",
+                    "contabilizados",
+                    "pendientes"
+                  ]
                 }
               }
             }

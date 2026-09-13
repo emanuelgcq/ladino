@@ -210,32 +210,39 @@ export function EntityPicker({
   const [opciones, setOpciones] = useState<EntityOption[] | null>(null);
   const [indice, setIndice] = useState(0);
   const [cargando, setCargando] = useState(false);
+  const [fallo, setFallo] = useState(false);
   const raiz = useRef<HTMLDivElement>(null);
   const listaId = useId();
 
   useEffect(() => {
     if (!abierto) return;
+    // La bandera vive en el CLEANUP del efecto, no dentro del timer: antes
+    // se declaraba dentro del callback del setTimeout y su «cleanup» era el
+    // valor de retorno de ese callback — que nadie ejecuta —, así que una
+    // respuesta lenta pisaba a la más reciente (auditoría 2026-09-11).
+    let vigente = true;
     setCargando(true);
+    setFallo(false);
     const t = setTimeout(() => {
-      let vigente = true;
       buscar(texto.trim())
         .then((r) => {
-          if (vigente) {
-            setOpciones(r);
-            setIndice(0);
-          }
+          if (!vigente) return;
+          setOpciones(r);
+          setIndice(0);
         })
         .catch(() => {
-          if (vigente) setOpciones([]);
+          if (!vigente) return;
+          setOpciones([]);
+          setFallo(true);
         })
         .finally(() => {
           if (vigente) setCargando(false);
         });
-      return () => {
-        vigente = false;
-      };
     }, 250);
-    return () => clearTimeout(t);
+    return () => {
+      vigente = false;
+      clearTimeout(t);
+    };
   }, [texto, abierto, buscar]);
 
   useEffect(() => {
@@ -324,6 +331,10 @@ export function EntityPicker({
         >
           {cargando && opciones === null ? (
             <li className="px-3 py-2 text-[0.85rem] text-muted-foreground">Buscando…</li>
+          ) : fallo ? (
+            <li role="alert" className="px-3 py-2 text-[0.85rem] text-destructive-soft-foreground">
+              No se pudo buscar. Revisa la conexión y escribe de nuevo.
+            </li>
           ) : opciones === null || opciones.length === 0 ? (
             <li className="px-3 py-2 text-[0.85rem] text-muted-foreground">
               Sin resultados{texto.trim() === "" ? " todavía — escribe para buscar" : ""}.

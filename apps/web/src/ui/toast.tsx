@@ -67,15 +67,28 @@ export interface ToastFns {
   info: (title: string, description?: string) => void;
 }
 
-/** El hook que usan las pantallas. `error` no expira solo: un fallo se lee, no se escapa. */
+/**
+ * El hook que usan las pantallas. `error` no expira solo: un fallo se lee, no se escapa.
+ *
+ * El alta se difiere a una microtarea: las pantallas anuncian desde
+ * `onSuccess`/`onError` de mutaciones y desde callbacks de diálogos, y así el
+ * toast nunca entra en el commit de React que esté en curso. Nota honesta:
+ * el aviso «flushSync was called from inside a lifecycle method» que se ve en
+ * desarrollo con Base UI 1.0.0-rc.0 NO nace aquí — `ToastRoot` mide su alto
+ * con `flushSync` dentro de un layout effect al montarse, y eso avisa
+ * siempre; upstream ya lo cambió a un `flushSync` condicional, así que se va
+ * con la actualización de `@base-ui-components/react`.
+ */
 export function useToast(): ToastFns {
   const manager = BaseToast.useToastManager();
   const add = (type: string, title: string, description?: string, timeout?: number) => {
-    manager.add({
-      type,
-      title,
-      ...(description === undefined ? {} : { description }),
-      ...(timeout === undefined ? {} : { timeout }),
+    queueMicrotask(() => {
+      manager.add({
+        type,
+        title,
+        ...(description === undefined ? {} : { description }),
+        ...(timeout === undefined ? {} : { timeout }),
+      });
     });
   };
   return {

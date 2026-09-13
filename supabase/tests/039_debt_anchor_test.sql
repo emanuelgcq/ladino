@@ -43,10 +43,10 @@ insert into public.company_accounts (id, tenant_id, company_id, name, currency, 
    'aaaa0039-0000-4000-8000-0000000000a1', 'Caja Bs 39', 'VES', 'cash');
 
 -- El lunes la tasa es 100; el viernes, 150. (Fechas relativas a HOY para que
--- document_debt_today —que pregunta con current_date— vea la del viernes.)
+-- document_debt_today —que pregunta con platform.caracas_day(now())— vea la del viernes.)
 insert into public.exchange_rates (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
-values ('USD', 'VES', 100.00000000, 'BCV', current_date - 4, now() - interval '4 days'),
-       ('USD', 'VES', 150.00000000, 'BCV', current_date, now());
+values ('USD', 'VES', 100.00000000, 'BCV', platform.caracas_day(now()) - 4, now() - interval '4 days'),
+       ('USD', 'VES', 150.00000000, 'BCV', platform.caracas_day(now()), now());
 
 -- ── 1. La factura en divisa se emite otra vez, y pricing_* no existe ─────────
 select is(
@@ -64,9 +64,9 @@ select lives_ok(
     values ('aaaa0039-0000-4000-8000-00000000f001',
             'aaaa0039-0000-4000-8000-00000000000a', 'aaaa0039-0000-4000-8000-0000000000a1',
             'invoice', 'A', 'aaaa0039-0000-4000-8000-00000000c001', 'issued',
-            (current_date - 4)::timestamptz, 1, 101,
+            (platform.caracas_day(now()) - 4)::timestamptz, 1, 101,
             'aaaa0039-0000-4000-8000-00000000e101', 'test-039',
-            'USD', 'VES', 100, 'BCV', (current_date - 4)::timestamptz,
+            'USD', 'VES', 100, 'BCV', (platform.caracas_day(now()) - 4)::timestamptz,
             1, 100, 100, 0, 100)$$,
   'El LUNES se fía 1 USD a tasa 100: la factura en divisa se emite (ADR-0047 restituye ADR-0020)');
 

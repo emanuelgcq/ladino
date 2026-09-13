@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, Search, Users } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { errorDePersona } from "../../lib.js";
@@ -22,8 +22,9 @@ import { formatearDocumento } from "./comunes.js";
  * CLIENTES (Fase C, PARTE 9): a quién le vendo. SOLO la información del
  * cliente (decisión del dueño, 2026-09-05): la deuda, el cobro y el estado
  * de cuenta viven en Administración → Clientes. Aquí queda la lista, la
- * búsqueda y el alta rápida que infiere el tipo por el RIF (J/G = empresa,
- * V/E o vacío = persona).
+ * búsqueda y el alta rápida. El tipo de persona y de contribuyente los
+ * infiere el SERVIDOR del prefijo del RIF: la pantalla manda el documento y
+ * nada más.
  */
 
 interface ClienteFila {
@@ -35,6 +36,8 @@ interface ClienteFila {
   fiscal_address?: string | null;
   is_system?: boolean;
 }
+
+const POR_PAGINA = 50;
 
 function useDebounced<T>(valor: T, ms: number): T {
   const [v, setV] = useState(valor);
@@ -52,19 +55,34 @@ export function ClientesNegocio(): React.JSX.Element {
   const [ficha, setFicha] = useState<ClienteFila | null>(null);
   const qc = useQueryClient();
   const q = useDebounced(busqueda.trim(), 250);
+  // Crear y corregir un contacto van bajo el MISMO permiso: quien no puede
+  // editar la ficha tampoco ve «Agregar cliente» (auditoría 2026-09-11).
+  const puedeGestionar = puede("customer.manage");
 
-  const clientes = useQuery({
+  // PAGINADO DE VERDAD: antes `per_page=100` y el cliente 101 no existía
+  // para la pantalla. Se acumulan páginas y se dice cuántos hay de cuántos.
+  const clientes = useInfiniteQuery({
     queryKey: ["negocio-clientes", empresa.id, q],
-    queryFn: () =>
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) =>
       llamar<{ items: ClienteFila[]; total: number }>(
-        `/v1/customers?per_page=100${q === "" ? "" : `&search=${encodeURIComponent(q)}`}`,
+        `/v1/customers?per_page=${POR_PAGINA}&page=${pageParam}${
+          q === "" ? "" : `&search=${encodeURIComponent(q)}`
+        }`,
       ),
+    getNextPageParam: (ultima, todas) => {
+      const cargados = todas.reduce((n, p) => n + p.items.length, 0);
+      return cargados < ultima.total ? todas.length + 1 : undefined;
+    },
   });
   const recargar = () => void qc.invalidateQueries({ queryKey: ["negocio-clientes", empresa.id] });
 
   // El Consumidor final no se lista: es la contraparte del mostrador, no un
   // cliente que se gestione.
-  const items = (clientes.data?.items ?? []).filter((c) => c.is_system !== true);
+  const items = (clientes.data?.pages.flatMap((p) => p.items) ?? []).filter(
+    (c) => c.is_system !== true,
+  );
+  const total = clientes.data?.pages[0]?.total ?? 0;
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
@@ -83,9 +101,11 @@ export function ClientesNegocio(): React.JSX.Element {
         </div>
         {/* Importar es tarea ADMINISTRATIVA (regla de los dos mundos): el
             botón vive en Administración → Clientes, no aquí. */}
-        <Button variant="primary" onClick={() => setAlta(true)}>
-          <Plus /> Agregar cliente
-        </Button>
+        {puedeGestionar && (
+          <Button variant="primary" onClick={() => setAlta(true)}>
+            <Plus /> Agregar cliente
+          </Button>
+        )}
       </div>
 
       {/* Quien administra encuentra aquí la puerta a la deuda y los cobros. */}
@@ -101,8 +121,18 @@ export function ClientesNegocio(): React.JSX.Element {
         </Link>
       )}
 
-      {clientes.isLoading ? (
+      {clientes.isPending ? (
         <p className="text-muted-foreground">Cargando…</p>
+      ) : clientes.isError ? (
+        <Card className="py-8 text-center" role="alert">
+          <p className="font-medium">No se pudieron cargar los clientes</p>
+          <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
+            {errorDePersona(clientes.error)}
+          </p>
+          <Button variant="secondary" className="mt-4" onClick={() => void clientes.refetch()}>
+            Reintentar
+          </Button>
+        </Card>
       ) : items.length === 0 ? (
         <Card className="py-12 text-center">
           <Users className="mx-auto size-8 text-faint-foreground" />
@@ -114,33 +144,49 @@ export function ClientesNegocio(): React.JSX.Element {
               ? "Para vender de mostrador no hace falta ninguno. Registra a los que compran fiado o piden factura con sus datos."
               : "Revisa cómo lo escribiste, o agrégalo si es nuevo."}
           </p>
-          {q === "" && (
+          {q === "" && puedeGestionar && (
             <Button variant="primary" className="mt-4" onClick={() => setAlta(true)}>
               <Plus /> Agregar cliente
             </Button>
           )}
         </Card>
       ) : (
-        <div className="divide-y divide-border rounded-md border border-border bg-surface">
-          {items.map((c) => (
-            <button
-              key={c.id}
-              onClick={() => setFicha(c)}
-              className="flex w-full items-center gap-3 px-3 py-3 text-left hover:bg-surface-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-            >
-              <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent-soft font-medium text-accent-soft-foreground">
-                {c.legal_name.slice(0, 1).toUpperCase()}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">{c.legal_name}</span>
-                <span className="block text-[0.8rem] text-muted-foreground tabular-nums">
-                  {c.tax_id !== null ? formatearDocumento(c.tax_id) : "Sin RIF"}
-                  {c.phone !== null ? ` · ${c.phone}` : ""}
+        <>
+          <div className="divide-y divide-border rounded-md border border-border bg-surface">
+            {items.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => setFicha(c)}
+                className="flex w-full items-center gap-3 px-3 py-3 text-left hover:bg-surface-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-accent-soft font-medium text-accent-soft-foreground">
+                  {c.legal_name.slice(0, 1).toUpperCase()}
                 </span>
-              </span>
-            </button>
-          ))}
-        </div>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{c.legal_name}</span>
+                  <span className="block text-[0.8rem] text-muted-foreground tabular-nums">
+                    {c.tax_id !== null ? formatearDocumento(c.tax_id) : "Sin RIF"}
+                    {c.phone !== null ? ` · ${c.phone}` : ""}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+            <span className="text-[0.86rem] text-muted-foreground">
+              Mostrando {items.length} de {total}
+            </span>
+            {clientes.hasNextPage && (
+              <Button
+                variant="secondary"
+                onClick={() => void clientes.fetchNextPage()}
+                disabled={clientes.isFetchingNextPage}
+              >
+                {clientes.isFetchingNextPage ? "Cargando…" : "Mostrar más"}
+              </Button>
+            )}
+          </div>
+        </>
       )}
 
       {alta && <AltaCliente onCerrar={() => setAlta(false)} onCreado={recargar} />}
@@ -149,15 +195,6 @@ export function ClientesNegocio(): React.JSX.Element {
       )}
     </div>
   );
-}
-
-/** J/G → empresa; P → extranjera; V/E o sin RIF → persona. El contador afina en /admin. */
-function inferirTipo(taxId: string): { persona: string; contribuyente: string } {
-  const t = taxId.trim().toUpperCase();
-  if (t.startsWith("J")) return { persona: "juridica", contribuyente: "ordinario" };
-  if (t.startsWith("G")) return { persona: "gobierno", contribuyente: "ordinario" };
-  if (t.startsWith("P")) return { persona: "extranjera", contribuyente: "no_domiciliado" };
-  return { persona: "natural", contribuyente: "consumidor_final" };
 }
 
 function AltaCliente({
@@ -172,6 +209,7 @@ function AltaCliente({
   const [nombre, setNombre] = useState("");
   const [rif, setRif] = useState("");
   const [telefono, setTelefono] = useState("");
+  const [email, setEmail] = useState("");
   const [direccion, setDireccion] = useState("");
 
   // El documento viaja NORMALIZADO (prefijo + alfanumérico, sin separadores):
@@ -182,22 +220,22 @@ function AltaCliente({
     .replace(/[^A-Z0-9]/g, "");
 
   const crear = useMutation({
-    mutationFn: () => {
-      const tipo = inferirTipo(documento);
-      return llamar("/v1/customers", {
+    mutationFn: () =>
+      llamar("/v1/customers", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
+        // Sin `person_type_code` ni `taxpayer_type_code`: los infiere el
+        // servidor del prefijo del RIF (V/E persona, J/G empresa, P
+        // extranjera). Aquí no se decide nada tributario.
         body: JSON.stringify({
           company_id: empresa.id,
           legal_name: nombre.trim(),
           ...(documento === "" ? {} : { tax_id: documento }),
           ...(telefono.trim() === "" ? {} : { phone: telefono.trim() }),
+          ...(email.trim() === "" ? {} : { email: email.trim() }),
           ...(direccion.trim() === "" ? {} : { fiscal_address: direccion.trim() }),
-          person_type_code: tipo.persona,
-          taxpayer_type_code: tipo.contribuyente,
         }),
-      });
-    },
+      }),
     onSuccess: () => {
       toast.success("Cliente agregado");
       onCreado();
@@ -206,6 +244,8 @@ function AltaCliente({
     onError: (e) => toast.error("No se pudo agregar", errorDePersona(e)),
   });
 
+  // Solo para la AYUDA de pantalla y para exigir la dirección: la decisión
+  // real la toma el servidor.
   const esEmpresa = /^[JG]/.test(documento);
   const listo =
     nombre.trim().length > 0 && (!esEmpresa || (documento.length >= 3 && direccion.trim() !== ""));
@@ -243,6 +283,17 @@ function AltaCliente({
                 value={telefono}
                 onChange={(e) => setTelefono(e.target.value)}
                 placeholder="0414-1234567"
+              />
+            )}
+          </FormField>
+          <FormField label="Email">
+            {(p) => (
+              <Input
+                {...p}
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="cliente@correo.com"
               />
             )}
           </FormField>

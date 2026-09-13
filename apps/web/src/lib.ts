@@ -41,7 +41,12 @@ export class LlamadaApiError extends Error {
  */
 export function errorDePersona(e: unknown): string {
   if (e instanceof LlamadaApiError) {
-    return e.body.person_message ?? e.body.message;
+    // Un cuerpo sin texto (o con un texto vacío) no puede acabar pintando
+    // «undefined» en pantalla: la frase fija es el suelo.
+    const texto = e.body.person_message ?? e.body.message;
+    return typeof texto === "string" && texto.trim() !== ""
+      ? texto
+      : "El servidor rechazó la operación sin explicar por qué. Vuelve a intentar; si sigue, avísanos.";
   }
   if (e instanceof TypeError) {
     return "No hay conexión con el servidor. Revisa tu internet y vuelve a intentar.";
@@ -177,11 +182,25 @@ export interface TaxCategory {
   description: string;
 }
 
-/** fetch con el contrato de la API: Bearer, JSON, y errores con `code` estable. */
+/** Una sola salida de sesión aunque diez consultas reciban 401 a la vez. */
+let cerrandoSesion = false;
+
+/**
+ * fetch con el contrato de la API: Bearer, JSON, y errores con `code` estable.
+ *
+ * Un 401 significa que el token que llevaba la llamada ya no vale para la
+ * API. Si supabase-js lo renovó mientras la llamada viajaba, se reintenta
+ * UNA vez con el token nuevo; si no hay token más nuevo, la sesión está
+ * muerta y se cierra: la web vuelve al login en vez de quedarse con listas
+ * vacías y una lluvia de toasts (auditoría 2026-09-11). El login mismo no
+ * pasa por aquí —habla con Supabase Auth directamente—, así que un
+ * «contraseña incorrecta» nunca llega a esta rama.
+ */
 export async function api<T>(
   session: Session,
   path: string,
   init: RequestInit & { companyId?: string } = {},
+  reintentado = false,
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${session.access_token}`);
@@ -193,6 +212,21 @@ export async function api<T>(
   if (init.companyId) headers.set("X-Company-Id", init.companyId);
   const res = await fetch(`${API_URL}${path}`, { ...init, headers });
   const body: unknown = await res.json().catch(() => null);
+  if (res.status === 401) {
+    if (!reintentado) {
+      const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+      const fresca = data.session;
+      if (fresca !== null && fresca.access_token !== session.access_token) {
+        return api<T>(fresca, path, init, true);
+      }
+    }
+    if (!cerrandoSesion) {
+      cerrandoSesion = true;
+      void supabase.auth.signOut().finally(() => {
+        cerrandoSesion = false;
+      });
+    }
+  }
   if (!res.ok) {
     throw new LlamadaApiError(
       res.status,
@@ -714,7 +748,7 @@ export interface LedgerView {
     description: string;
     debit: string;
     credit: string;
-    running_delta: string;
+    running_balance: string;
     source_kind: string;
     source_id: string | null;
   }[];

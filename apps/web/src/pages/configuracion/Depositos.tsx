@@ -49,18 +49,35 @@ export function Depositos(): React.JSX.Element {
           Donde vive la mercancía. Con más de uno, Inventario gana el botón «Mover» y cada entrada
           pregunta a cuál llega.
         </CardDescription>
-        <div className="flex flex-wrap gap-2">
-          {(depositos.data ?? []).map((d) => (
-            <span
-              key={d.id}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-[0.88rem]"
-            >
-              <Boxes className="size-3.5 text-muted-foreground" />
-              {d.name}
-              <span className="font-mono text-[0.75rem] text-faint-foreground">{d.code}</span>
-            </span>
-          ))}
-        </div>
+        {depositos.isPending ? (
+          <p className="text-[0.88rem] text-muted-foreground">Cargando…</p>
+        ) : depositos.isError ? (
+          <div className="space-y-2">
+            <p role="alert" className="text-[0.88rem] text-destructive-soft-foreground">
+              No se pudieron cargar los depósitos: {errorDePersona(depositos.error)}
+            </p>
+            <Button variant="secondary" size="sm" onClick={() => void depositos.refetch()}>
+              Reintentar
+            </Button>
+          </div>
+        ) : depositos.data.length === 0 ? (
+          <p className="text-[0.88rem] text-muted-foreground">
+            Sin depósitos todavía: el primero nace con el negocio.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {depositos.data.map((d) => (
+              <span
+                key={d.id}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-[0.88rem]"
+              >
+                <Boxes className="size-3.5 text-muted-foreground" />
+                {d.name}
+                <span className="font-mono text-[0.75rem] text-faint-foreground">{d.code}</span>
+              </span>
+            ))}
+          </div>
+        )}
       </CardContent>
       {creando && (
         <NuevoDeposito

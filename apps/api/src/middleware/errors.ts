@@ -96,6 +96,15 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // la validación de forma debe cazarlo ANTES en Zod o en el middleware; si
   // llega aquí es un 422 correcto y una señal de que faltó una comprobación.
   "22P02": { code: "VALIDATION_FAILED", status: 422 },
+  // Texto más largo que la columna / número fuera de rango: datos, no avería.
+  "22001": { code: "VALIDATION_FAILED", status: 422 },
+  "22003": { code: "VALIDATION_FAILED", status: 422 },
+  // Serialización / deadlock: la operación está BIEN, chocó con otra. 409 con
+  // Retry-After para que el cliente reintente en vez de leer un 500.
+  "40001": { code: "RETRY", status: 409 },
+  "40P01": { code: "RETRY", status: 409 },
+  // statement_timeout del servidor: el mismo contrato que el timeout de la API.
+  "57014": { code: "GATEWAY_TIMEOUT", status: 504 },
   "54000": { code: "PAYLOAD_TOO_LARGE", status: 413 },
   // EXCLUDE de vigencias de precio (ADR-0032). El caso de uso ya lo traduce
   // con mensaje propio; esta fila es la red para cualquier otro camino.
@@ -181,6 +190,24 @@ export class ValidacionError extends Error {
 interface ErrorPg {
   readonly code?: string;
   readonly message?: string;
+  readonly constraint_name?: string;
+}
+
+/**
+ * Un 23503 no siempre es «recurso de otro tenant». Por el NOMBRE de la
+ * constraint se distinguen tres casos que antes caían todos en un 404 ciego:
+ * el actor que ya no existe (`created_by`, `user_id`: la sesión sobrevivió a
+ * un borrado — la web debe cerrar sesión), una FK de catálogo (moneda,
+ * unidad, categoría: dato inválido, 422), y la FK compuesta tenant/company
+ * (404 por la regla 404/403).
+ */
+function mapear23503(constraint: string | undefined): { code: string; status: number } {
+  const c = (constraint ?? "").toLowerCase();
+  if (/created_by|updated_by|posted_by|user_id|actor/.test(c)) {
+    return { code: "UNAUTHENTICATED", status: 401 };
+  }
+  if (/tenant|company/.test(c)) return { code: "NOT_FOUND", status: 404 };
+  return { code: "VALIDATION_FAILED", status: 422 };
 }
 
 function esErrorPg(e: unknown): e is ErrorPg {
@@ -201,6 +228,16 @@ export function mapearError(e: unknown): { code: string; status: number; message
   if (esErrorPg(e) && typeof e.code === "string") {
     if (e.code === "42501") {
       return { ...PRIVILEGIO_DENEGADO, message: "Recurso no encontrado." };
+    }
+    if (e.code === "23503") {
+      const m = mapear23503(e.constraint_name);
+      return {
+        ...m,
+        message:
+          m.code === "UNAUTHENTICATED"
+            ? "Tu usuario ya no existe en el sistema: sal y vuelve a entrar."
+            : mensajePara(m.code),
+      };
     }
     const m = POR_SQLSTATE[e.code];
     if (m) {
@@ -255,6 +292,42 @@ function mensajePara(code: string): string {
       return "Falta la conversión entre esas unidades. Cárgala: el sistema no la adivina.";
     case "VARIANT_ATTRIBUTES_INVALID":
       return "Los atributos de la variante no coinciden con los que declara su plantilla.";
+    // Los que levanta el ESQUEMA (LAD49/50/51/59/61/62/68) y antes salían como
+    // «Error interno» con 409 (auditoría 2026-09-11).
+    case "FISCAL_NUMBERING_INVALID":
+      return "No hay rango de numeración disponible para ese tipo de documento y serie.";
+    case "TAX_RULE_MISSING":
+      return "No hay regla tributaria vigente para esa operación: cárgala con su fuente.";
+    case "EXCHANGE_RATE_MISSING":
+      return "No hay tasa de cambio vigente para esa fecha y moneda.";
+    case "ENTRY_UNBALANCED":
+      return "El asiento no cuadra: la suma de débitos debe igualar la de créditos.";
+    case "PERIOD_CLOSED":
+      return "El período contable de esa fecha está cerrado.";
+    case "ACCOUNT_NOT_POSTABLE":
+      return "Esa cuenta no admite movimientos: elige una cuenta de detalle activa.";
+    case "ACCOUNT_PURPOSE_MISSING":
+      return "Falta asignar la cuenta contable de ese papel en la configuración.";
+    case "DOCUMENT_SNAPSHOT_FROZEN":
+      return "Los datos impresos en un documento emitido no se cambian.";
+    case "RBAC_INCOHERENT":
+      return "La asignación de rol no es coherente con su alcance.";
+    case "ISOLATION_ANCHOR_IMMUTABLE":
+      return "El registro no puede cambiar de empresa ni de tenant.";
+    case "TENANT_SUSPENDED":
+      return "El tenant está suspendido.";
+    case "COMPANY_SUSPENDED":
+      return "La empresa está suspendida.";
+    case "BOOK_FORMAT_UNAVAILABLE":
+      return "Ese formato de libro no está disponible en este release.";
+    case "REGIME_KIND_NOT_ALLOWED":
+      return "El régimen fiscal de la empresa no emite ese tipo de documento.";
+    case "MONEY_ERROR":
+      return "Un importe no se pudo interpretar o redondear.";
+    case "UNAUTHENTICATED":
+      return "Autenticación requerida.";
+    case "RETRY":
+      return "La operación chocó con otra en curso. Reintenta.";
     default:
       return "Error interno.";
   }
@@ -267,7 +340,7 @@ function mensajePara(code: string): string {
  * pantallas de negocio enseñan esta; las de /admin pueden enseñar las dos.
  * La tabla espejo vive en ERROR_CATALOG.md §Mensajes de persona.
  */
-function mensajePersona(code: string): string {
+export function mensajePersona(code: string): string {
   switch (code) {
     case "VALIDATION_FAILED":
       return "Algo en el formulario no está bien. Revisa los campos marcados y vuelve a intentar.";
@@ -282,7 +355,7 @@ function mensajePersona(code: string): string {
     case "TAX_RULE_MISSING":
       return "Falta configurar el impuesto de venta. Se completa en Empezar antes de poder vender.";
     case "FISCAL_NUMBERING_INVALID":
-      return "No hay números de factura disponibles. Carga un rango nuevo en Facturación fiscal.";
+      return "No hay números disponibles para ese tipo de documento. Carga un rango nuevo en Facturación fiscal.";
     case "NEGATIVE_STOCK":
       return "No hay suficiente mercancía para esa cantidad. Revisa la existencia o registra la entrada primero.";
     case "APPEND_ONLY_VIOLATION":
@@ -305,9 +378,73 @@ function mensajePersona(code: string): string {
       return "Esto está tardando más de la cuenta. Revisa en un momento si quedó registrado antes de repetirlo.";
     case "UPSTREAM_UNAVAILABLE":
       return "No se pudo consultar la fuente en este momento. Intenta de nuevo, o carga el dato a mano.";
+    case "UNAUTHENTICATED":
+    case "TOKEN_EXPIRED":
+      return "Tu sesión terminó. Vuelve a entrar.";
+    case "AUTH_BACKEND_UNAVAILABLE":
+      return "No se pudo comprobar tu sesión ahora mismo. Espera unos segundos y reintenta.";
+    case "IDEMPOTENCY_KEY_REQUIRED":
+    case "TENANT_SCOPE_REQUIRED":
+      return "La aplicación mandó la operación incompleta. Recarga la página y vuelve a intentar.";
+    case "IDEMPOTENCY_KEY_REUSED":
+      return "Esa operación ya se registró con otros datos. Revisa si quedó hecha antes de repetirla.";
+    case "IDEMPOTENCY_IN_PROGRESS":
+      return "La operación anterior sigue en curso. Espera un momento y no la repitas.";
+    case "RETRY":
+      return "Chocó con otra operación al mismo tiempo. Vuelve a intentar: casi siempre pasa a la primera.";
+    case "TENANT_SUSPENDED":
+      return "El negocio está suspendido en el sistema. Contacta a soporte.";
+    case "PRICE_OVERLAP":
+      return "Ese precio pisa una vigencia ya cerrada. Ponle una fecha posterior.";
+    case "TRANSFER_UNBALANCED":
+      return "La transferencia no cuadra entre origen y destino. Vuelve a intentar.";
+    case "RECIPE_INVALID":
+      return "La receta no es válida: el compuesto debe tener ingredientes que no sean compuestos.";
+    case "UNIT_CONVERSION_MISSING":
+      return "Falta la conversión entre esas unidades. Cárgala en el catálogo antes de seguir.";
+    case "ACCOUNT_PURPOSE_MISSING":
+      return "Falta asignar una cuenta contable a ese papel. Se hace en Contabilidad → Plan de cuentas.";
+    case "ACCOUNT_NOT_POSTABLE":
+      return "Esa cuenta no admite movimientos. Elige una cuenta de detalle activa.";
+    case "ENTRY_UNBALANCED":
+      return "El asiento no cuadra: los débitos deben ser iguales a los créditos.";
+    case "BOOK_FORMAT_UNAVAILABLE":
+      return "Ese formato de libro todavía no está disponible. Elige otro.";
+    case "PRICE_ABOVE_TOLERANCE":
+      return "El precio facturado supera lo pactado en la orden y necesita aprobación.";
+    case "RETENTION_RULE_MISSING":
+      return "Falta la regla de retención para ese concepto. Se carga en Compras → Reglas de retención.";
+    case "MONEY_ERROR":
+      return "Un importe no se pudo interpretar. Revisa los números y vuelve a intentar.";
+    case "MISSING_WEIGHT":
+      return "Falta el peso de algún producto para repartir el costo. Complétalo en el catálogo.";
     default:
       return "Algo salió mal de nuestro lado. Vuelve a intentar; si sigue, avísanos.";
   }
+}
+
+/**
+ * Códigos cuya frase de persona es FIJA: el `message` del dominio habla de
+ * permisos, tenants o internals que no se le dicen a la cajera. Para todos los
+ * demás, el dominio ya escribe su mensaje en voz de persona («el pago supera lo
+ * pendiente y Zelle no da vuelto: ajusta el monto») y esconderlo detrás de una
+ * frase genérica era el hallazgo A-07 de la auditoría 2026-09-11.
+ */
+const PERSONA_FIJA = new Set([
+  "PERMISSION_REQUIRED",
+  "NOT_FOUND",
+  "COMPANY_SUSPENDED",
+  "TENANT_SUSPENDED",
+  "APPEND_ONLY_VIOLATION",
+  "COSTING_MISMATCH",
+  "UPSTREAM_UNAVAILABLE",
+  "MONEY_ERROR",
+]);
+
+function personaDeDominio(code: string, message: string): string {
+  if (PERSONA_FIJA.has(code)) return mensajePersona(code);
+  const limpio = message.trim();
+  return limpio === "" ? mensajePersona(code) : limpio;
 }
 
 /**
@@ -346,7 +483,7 @@ export function onErrorResponder(e: Error, c: Context): Response {
       {
         code: e.domainError.code,
         message: e.domainError.message,
-        person_message: mensajePersona(e.domainError.code),
+        person_message: personaDeDominio(e.domainError.code, e.domainError.message),
         ...(e.domainError.details !== undefined ? { details: e.domainError.details } : {}),
         request_id: requestId,
       },
@@ -355,6 +492,7 @@ export function onErrorResponder(e: Error, c: Context): Response {
   }
 
   const { code, status, message } = mapearError(e);
+  if (code === "RETRY") c.header("Retry-After", "1");
   return c.json(
     { code, message, person_message: mensajePersona(code), request_id: requestId },
     status as 400,

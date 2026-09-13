@@ -89,11 +89,8 @@ export function pricingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
       // hoy y el encabezado de la pantalla lo dice. Sin tasa: null, y la UI
       // enseña «sin tasa del día», no un cero.
       const [tasa] = await tx<{ rate: string; rate_date: string; source: string }[]>`
-        select rate::text as rate, rate_date::text as rate_date, source
-          from public.exchange_rates
-         where from_currency = 'USD' and to_currency = 'VES' and rate_date <= current_date
-         order by rate_date desc, created_at desc
-         limit 1`;
+        select f.rate::text as rate, f.rate_date::text as rate_date, f.source
+          from platform.rate_for(${companyId}, 'USD', 'VES', (now() at time zone 'America/Caracas')::date) f`;
       const equivalencia =
         tasa === undefined
           ? { expr: tx`null`, moneda: null }

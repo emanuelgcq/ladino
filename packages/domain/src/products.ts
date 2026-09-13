@@ -506,10 +506,9 @@ export async function createProductSimple(
     let fx: { rate: string; source: string; at: string } | undefined;
     if (monedaCosto !== funcional) {
       const [t] = await sql<{ rate: string | null; source: string | null }[]>`
-        select r.rate::text as rate, r.source from public.exchange_rates r
-         where r.from_currency = ${monedaCosto} and r.to_currency = ${funcional}
-           and r.rate_date <= current_date
-         order by r.rate_date desc, r.created_at desc limit 1`;
+        select f.rate::text as rate, f.source
+          from platform.rate_for(${input.company_id}, ${monedaCosto}, ${funcional},
+                                 (now() at time zone 'America/Caracas')::date) f`;
       if (!t?.rate) {
         return err({
           code: "VALIDATION_FAILED",

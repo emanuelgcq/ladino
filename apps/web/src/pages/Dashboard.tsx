@@ -15,6 +15,31 @@ import { useNombresDeCliente } from "../components/nombres-cliente.js";
 import { Button } from "../ui/button.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card.js";
 import { mostrarImporte } from "../money.js";
+import { errorDePersona } from "../lib.js";
+import { fechaLocal, mesLocal, mesLocalAnterior } from "../fechas.js";
+
+/**
+ * El valor de una tarjeta cuando su consulta FALLÓ: el mensaje en voz de
+ * persona y un reintento. Antes, un estado de resultados caído se pintaba en
+ * silencio como «N facturas» —una cifra verdadera contestando otra pregunta—
+ * y un diferencial caído quedaba en blanco (auditoría 2026-09-11).
+ */
+function FalloKpi({
+  error,
+  reintentar,
+}: {
+  error: unknown;
+  reintentar: () => void;
+}): React.JSX.Element {
+  return (
+    <div role="alert" className="space-y-1">
+      <p className="text-[0.85rem] text-destructive-soft-foreground">{errorDePersona(error)}</p>
+      <Button variant="ghost" size="sm" onClick={reintentar}>
+        Reintentar
+      </Button>
+    </div>
+  );
+}
 
 /**
  * El dashboard: las CINCO respuestas del dueño, consumibles en 30 segundos.
@@ -50,22 +75,28 @@ interface EstadoResultados {
   result: string;
 }
 
+// El mes es el del día de CARACAS: con UTC, de 20:00 a 24:00 del último día
+// ya se consultaba el mes siguiente.
 const mesDe = (d: Date): { from: string; to: string } => {
-  const y = d.getUTCFullYear();
-  const m = d.getUTCMonth();
-  const primero = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
-  const ultimo = new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10);
-  return { from: primero, to: ultimo };
+  const m = mesLocal(d);
+  return { from: m.desde, to: m.hasta };
 };
 
 export function Dashboard(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
+  // PENDIENTE: `useModulosActivos` devuelve `{ contabilidad: false }` MIENTRAS
+  // CARGA y no expone `isPending` (app/shell.tsx). Durante ese instante las dos
+  // primeras tarjetas enseñan la rama «sin contabilidad» y luego saltan a la
+  // otra. Cuando el hook exponga el estado de carga, aquí va un skeleton.
   const activos = useModulosActivos();
   const navigate = useNavigate();
 
   const hoy = new Date();
   const mes = mesDe(hoy);
-  const mesAnterior = mesDe(new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth() - 1, 15)));
+  const mesAnterior = (() => {
+    const m = mesLocalAnterior(hoy);
+    return { from: m.desde, to: m.hasta };
+  })();
 
   const resultados = useQuery({
     queryKey: ["dash-resultados", empresa.id, mes.from],
@@ -156,7 +187,7 @@ export function Dashboard(): React.JSX.Element {
       {
         id: "fecha",
         header: "Fecha",
-        accessorFn: (d) => d.issued_at?.slice(0, 10) ?? "—",
+        accessorFn: (d) => fechaLocal(d.issued_at),
       },
       {
         id: "numero",
@@ -222,17 +253,25 @@ export function Dashboard(): React.JSX.Element {
       />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {/* «Ingresos», no «ventas»: la cifra es `total_income` del estado de
+            resultados — todo ingreso contabilizado, no solo lo facturado. */}
         <KpiCard
-          title="Ventas del mes"
+          title="Ingresos del mes"
           icon={Wallet}
           loading={activos.contabilidad ? resultados.isPending : facturasMes.isPending}
           value={
-            activos.contabilidad && resultados.data !== undefined ? (
-              <DualMoney
-                variant="kpi"
-                amount={resultados.data[0].total_income}
-                currency={resultados.data[0].currency}
-              />
+            activos.contabilidad ? (
+              resultados.isError ? (
+                <FalloKpi error={resultados.error} reintentar={() => void resultados.refetch()} />
+              ) : resultados.data !== undefined ? (
+                <DualMoney
+                  variant="kpi"
+                  amount={resultados.data[0].total_income}
+                  currency={resultados.data[0].currency}
+                />
+              ) : null
+            ) : facturasMes.isError ? (
+              <FalloKpi error={facturasMes.error} reintentar={() => void facturasMes.refetch()} />
             ) : (
               <span className="font-mono text-[1.55rem] font-semibold">
                 {facturasMes.data?.total ?? 0}
@@ -242,7 +281,7 @@ export function Dashboard(): React.JSX.Element {
               </span>
             )
           }
-          delta={activos.contabilidad ? deltaVentas : null}
+          delta={activos.contabilidad && !resultados.isError ? deltaVentas : null}
           footer={activos.contabilidad ? null : "Importe al activar contabilidad"}
         />
         <KpiCard
@@ -250,29 +289,39 @@ export function Dashboard(): React.JSX.Element {
           icon={Scale}
           loading={activos.contabilidad && resultados.isPending}
           value={
-            activos.contabilidad && resultados.data !== undefined ? (
-              <DualMoney
-                variant="kpi"
-                amount={resultados.data[0].result}
-                currency={resultados.data[0].currency}
-              />
+            activos.contabilidad ? (
+              resultados.isError ? (
+                <FalloKpi error={resultados.error} reintentar={() => void resultados.refetch()} />
+              ) : resultados.data !== undefined ? (
+                <DualMoney
+                  variant="kpi"
+                  amount={resultados.data[0].result}
+                  currency={resultados.data[0].currency}
+                />
+              ) : null
             ) : (
               <span className="text-[1rem] text-muted-foreground">Requiere contabilidad</span>
             )
           }
           footer={activos.contabilidad ? "Estado de resultados del mes" : null}
         />
+        {/* Es un CONTEO de facturas en estado `issued`, no un importe por
+            cobrar: el rótulo dice exactamente eso. */}
         <KpiCard
-          title="Cobros pendientes"
+          title="Facturas emitidas sin cerrar"
           icon={Banknote}
           loading={porCobrar.isPending}
           value={
-            <span className="font-mono text-[1.55rem] font-semibold">
-              {porCobrar.data?.total ?? 0}
-              <span className="ml-1 text-[0.85rem] font-normal text-muted-foreground">
-                facturas emitidas
+            porCobrar.isError ? (
+              <FalloKpi error={porCobrar.error} reintentar={() => void porCobrar.refetch()} />
+            ) : (
+              <span className="font-mono text-[1.55rem] font-semibold">
+                {porCobrar.data?.total ?? 0}
+                <span className="ml-1 text-[0.85rem] font-normal text-muted-foreground">
+                  facturas
+                </span>
               </span>
-            </span>
+            )
           }
           footer={
             <Link to="/admin/cuentas" className="text-accent-soft-foreground hover:underline">
@@ -285,7 +334,9 @@ export function Dashboard(): React.JSX.Element {
           icon={ArrowLeftRight}
           loading={diferencial.isPending}
           value={
-            diferencial.data !== undefined ? (
+            diferencial.isError ? (
+              <FalloKpi error={diferencial.error} reintentar={() => void diferencial.refetch()} />
+            ) : diferencial.data !== undefined ? (
               <DualMoney variant="kpi" amount={neto} currency={diferencial.data.currency} />
             ) : null
           }

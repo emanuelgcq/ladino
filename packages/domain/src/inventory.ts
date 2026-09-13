@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@ladino/core";
+import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
 import {
   Money,
@@ -424,13 +425,11 @@ export async function receiveStock(
   let fx = input.fx;
   if (fx === undefined && input.currency !== ctx.value.functionalCurrency) {
     const [t] = await sql<{ rate: string; source: string | null; at: string }[]>`
-      select r.rate::text as rate, r.source,
-             to_char(r.rate_timestamp at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as at
-        from public.exchange_rates r
-       where r.from_currency = ${input.currency}
-         and r.to_currency = ${ctx.value.functionalCurrency}
-         and r.rate_date <= ((${momentoTasa}::timestamptz) at time zone 'America/Caracas')::date
-       order by r.rate_date desc, r.created_at desc limit 1`;
+      select f.rate::text as rate, f.source,
+             to_char(f.rate_timestamp at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as at
+        from platform.rate_for(${input.company_id}, ${input.currency},
+               ${ctx.value.functionalCurrency},
+               ((${momentoTasa}::timestamptz) at time zone 'America/Caracas')::date) f`;
     if (!t) {
       return err({
         code: "EXCHANGE_RATE_MISSING",
@@ -897,7 +896,7 @@ export async function adjustStock(
     sourceKind: "inventory_move",
     sourceEvent: "stock.adjusted",
     sourceId: fila.id,
-    postingDate: (input.occurred_at ?? new Date().toISOString()).slice(0, 10),
+    postingDate: diaNegocio(input.occurred_at ?? new Date().toISOString()),
     postedBy: actor.userId,
     description: `Ajuste de existencias: ${input.reason}`,
     functionalCurrency: ctx.value.functionalCurrency,

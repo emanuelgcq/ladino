@@ -101,7 +101,7 @@
     ]
   },
   "env": {
-    "LADINO_PHASE": "sprint-0",
+    "LADINO_PHASE": "produccion",
     "NODE_OPTIONS": "--max-old-space-size=4096"
   }
 }

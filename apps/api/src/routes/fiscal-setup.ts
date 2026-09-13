@@ -67,9 +67,11 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
          where jurisdiction = 'VE' and tax_code = 'iva' and transaction_type = 'sale'
            and taxpayer_type is null and product_tax_category = 'gravado_general'
            and status = 'active'
+           and (company_id is null or company_id = ${companyId})
            and effective_from <= (now() at time zone 'America/Caracas')::date
            and (effective_to is null or effective_to > (now() at time zone 'America/Caracas')::date)
-         order by priority desc limit 1`;
+         -- La propia antes que la de la plataforma (ADR-0057).
+         order by (company_id is not null) desc, priority desc limit 1`;
       return {
         regimes: regimenes,
         current_regime: vigente?.regime_code ?? null,
@@ -183,15 +185,20 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
         ["exento", "0"],
       ] as const) {
         for (const tipo of ["sale", "purchase"] as const) {
+          // Las reglas son DE ESTA EMPRESA (ADR-0057): que otra empresa de la
+          // instancia ya las tenga no exime a esta de aceptar las suyas.
           const r = await tx`
             insert into public.tax_rules
-              (jurisdiction, tax_code, taxpayer_type, product_tax_category, rate,
-               effective_from, legal_source, priority, transaction_type)
-            select 'VE', 'iva', null, ${categoria}, ${tasa}::numeric,
-                   (now() at time zone 'America/Caracas')::date, ${fuente}, 5, ${tipo}
+              (tenant_id, company_id, jurisdiction, tax_code, taxpayer_type,
+               product_tax_category, rate, effective_from, legal_source, priority,
+               transaction_type)
+            select ${empresa!.tenant_id}, ${companyId}, 'VE', 'iva', null, ${categoria},
+                   ${tasa}::numeric, (now() at time zone 'America/Caracas')::date, ${fuente}, 5,
+                   ${tipo}
              where not exists (
                select 1 from public.tax_rules
-                where jurisdiction = 'VE' and tax_code = 'iva' and taxpayer_type is null
+                where company_id = ${companyId}
+                  and jurisdiction = 'VE' and tax_code = 'iva' and taxpayer_type is null
                   and product_tax_category = ${categoria} and transaction_type = ${tipo}
                   and status = 'active')`;
           creadas += r.count;
@@ -199,7 +206,7 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
       }
 
       // El ACTA: quién aceptó qué, cuándo, para esta empresa. Queda aunque las
-      // reglas ya existieran (otra empresa de la instancia las creó antes).
+      // reglas ya existieran (esta misma empresa las aceptó antes).
       await tx`
         insert into public.audit_events
           (tenant_id, company_id, aggregate_type, aggregate_id, event_type,

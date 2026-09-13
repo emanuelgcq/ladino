@@ -146,7 +146,7 @@ export {
 } from "./igtf.js";
 export { onboardBusiness, type OnboardingError } from "./onboarding.js";
 export { listPosCarts, upsertPosCart, deletePosCart, type PosCartError } from "./pos-carts.js";
-export { createDirectCreditNote, createDebitNote } from "./sales.js";
+export { createDirectCreditNote, createDebitNote, minorUnitsOf } from "./sales.js";
 export {
   updateCompanyProfile,
   setCompanyTaxId,
@@ -163,3 +163,4 @@ export {
   setMemberStatus,
   type MembersError,
 } from "./members.js";
+export { diaNegocio, ZONA_NEGOCIO } from "./dia-negocio.js";

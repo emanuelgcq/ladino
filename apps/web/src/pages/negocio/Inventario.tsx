@@ -3,8 +3,10 @@ import { Link, useSearchParams } from "react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowRight, PackageCheck, PackageX, TriangleAlert } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { errorDePersona } from "../../lib.js";
 import { mostrarCantidad } from "../../money.js";
 import { compararImportes, esCero } from "../../components/decimal-compare.js";
+import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
 import { fechaRelativa } from "./comunes.js";
 
@@ -26,10 +28,36 @@ interface Movimiento {
   id: string;
   kind: string;
   product_id: string;
+  /** Si el servidor los manda, valen aunque el producto ya no esté activo. */
+  product_name?: string | null;
+  product_sku?: string | null;
   quantity: string;
   occurred_at: string;
   reason: string | null;
   reference: string | null;
+}
+
+const MOVS_POR_PAGINA = 50;
+
+/** El listado que no pudo cargar: el motivo y el reintento, nunca «vacío». */
+function ErrorDeLista({
+  error,
+  onReintentar,
+}: {
+  error: unknown;
+  onReintentar: () => void;
+}): React.JSX.Element {
+  return (
+    <Card className="py-8 text-center" role="alert">
+      <p className="font-medium">No se pudo cargar</p>
+      <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
+        {errorDePersona(error)}
+      </p>
+      <Button variant="secondary" className="mt-4" onClick={onReintentar}>
+        Reintentar
+      </Button>
+    </Card>
+  );
 }
 
 export function InventarioNegocio(): React.JSX.Element {
@@ -65,7 +93,7 @@ export function InventarioNegocio(): React.JSX.Element {
   useEffect(() => {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
-  const catalogoCompleto = !productos.isLoading && !hasNextPage;
+  const catalogoCompleto = !productos.isLoading && !productos.isError && !hasNextPage;
   const todosLosProductos = productos.data?.pages.flatMap((p) => p.items) ?? [];
   const bajoMinimo = useQuery({
     queryKey: ["inv-bajos", empresa.id],
@@ -78,6 +106,11 @@ export function InventarioNegocio(): React.JSX.Element {
   ).length;
   const sinExistencia = fisicos.length - conExistencia;
 
+  const pestanas = [
+    ["existencias", "Existencias"],
+    ["movimientos", "Movimientos"],
+  ] as const;
+
   return (
     <div className="space-y-5">
       <h1 className="text-xl font-semibold">Inventario</h1>
@@ -86,21 +119,31 @@ export function InventarioNegocio(): React.JSX.Element {
         <Contador
           icono={PackageCheck}
           titulo="Con existencia"
-          valor={catalogoCompleto ? String(conExistencia) : "…"}
+          valor={catalogoCompleto ? String(conExistencia) : productos.isError ? "—" : "…"}
         />
         <Contador
           icono={TriangleAlert}
           titulo="Por agotarse"
-          valor={bajoMinimo.data ? String(bajoMinimo.data.items.length) : "…"}
+          valor={
+            bajoMinimo.data ? String(bajoMinimo.data.items.length) : bajoMinimo.isError ? "—" : "…"
+          }
           alerta={(bajoMinimo.data?.items.length ?? 0) > 0}
         />
         <Contador
           icono={PackageX}
           titulo="Sin existencia"
-          valor={catalogoCompleto ? String(sinExistencia) : "…"}
+          valor={catalogoCompleto ? String(sinExistencia) : productos.isError ? "—" : "…"}
           alerta={catalogoCompleto && sinExistencia > 0}
         />
       </div>
+      {bajoMinimo.isError && (
+        <p role="alert" className="text-[0.85rem] text-warning-soft-foreground">
+          No se pudo saber qué está por agotarse: {errorDePersona(bajoMinimo.error)}{" "}
+          <button type="button" className="underline" onClick={() => void bajoMinimo.refetch()}>
+            Reintentar
+          </button>
+        </p>
+      )}
 
       {/* Quien puede registrar movimientos encuentra la puerta aquí: los
           verbos viven en la administración, no en el mostrador. */}
@@ -117,16 +160,23 @@ export function InventarioNegocio(): React.JSX.Element {
         </Link>
       )}
 
-      <div className="flex gap-1 border-b border-border">
-        {(
-          [
-            ["existencias", "Existencias"],
-            ["movimientos", "Movimientos"],
-          ] as const
-        ).map(([clave, etiqueta]) => (
+      <div className="flex gap-1 border-b border-border" role="tablist" aria-label="Qué ver">
+        {pestanas.map(([clave, etiqueta]) => (
           <button
             key={clave}
+            id={`inv-tab-${clave}`}
+            role="tab"
+            aria-selected={pestana === clave}
+            aria-controls={`inv-panel-${clave}`}
+            tabIndex={pestana === clave ? 0 : -1}
             onClick={() => setPestana(clave)}
+            onKeyDown={(e) => {
+              if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+              e.preventDefault();
+              const otra = clave === "existencias" ? "movimientos" : "existencias";
+              setPestana(otra);
+              document.getElementById(`inv-tab-${otra}`)?.focus();
+            }}
             className={`border-b-2 px-3 py-2 text-[0.92rem] ${
               pestana === clave
                 ? "border-accent font-medium text-foreground"
@@ -139,9 +189,17 @@ export function InventarioNegocio(): React.JSX.Element {
       </div>
 
       {pestana === "existencias" ? (
-        <Existencias productos={fisicos} cargando={productos.isLoading} />
+        <div role="tabpanel" id="inv-panel-existencias" aria-labelledby="inv-tab-existencias">
+          {productos.isError ? (
+            <ErrorDeLista error={productos.error} onReintentar={() => void productos.refetch()} />
+          ) : (
+            <Existencias productos={fisicos} cargando={productos.isLoading} />
+          )}
+        </div>
       ) : (
-        <Movimientos productoFiltro={productoFiltro} productos={todosLosProductos} />
+        <div role="tabpanel" id="inv-panel-movimientos" aria-labelledby="inv-tab-movimientos">
+          <Movimientos productoFiltro={productoFiltro} productos={todosLosProductos} />
+        </div>
       )}
     </div>
   );
@@ -184,7 +242,7 @@ function Existencias({
   if (productos.length === 0) {
     return (
       <p className="py-8 text-center text-muted-foreground">
-        Sin productos físicos todavía. Agrégalos en Productos.
+        Sin productos físicos todavía. Se agregan en Administración → Productos.
       </p>
     );
   }
@@ -235,37 +293,75 @@ function Movimientos({
   productos: ProductoFila[];
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
-  const movs = useQuery({
+  // PAGINADO (auditoría 2026-09-11): antes `per_page=50` y los movimientos
+  // anteriores no existían para la pantalla. Se acumulan páginas con «Mostrar
+  // más» y se dice cuántos hay de cuántos.
+  const movs = useInfiniteQuery({
     queryKey: ["inv-movs", empresa.id, productoFiltro],
-    queryFn: () =>
-      llamar<{ items: Movimiento[] }>(
-        `/v1/inventory/moves?per_page=50${productoFiltro === null ? "" : `&product_id=${productoFiltro}`}`,
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) =>
+      llamar<{ items: Movimiento[]; total: number }>(
+        `/v1/inventory/moves?per_page=${MOVS_POR_PAGINA}&page=${pageParam}${
+          productoFiltro === null ? "" : `&product_id=${encodeURIComponent(productoFiltro)}`
+        }`,
       ),
+    getNextPageParam: (ultima, todas) => {
+      const cargados = todas.reduce((n, p) => n + p.items.length, 0);
+      return cargados < ultima.total ? todas.length + 1 : undefined;
+    },
   });
   const nombreDe = useMemo(() => {
     const m = new Map(productos.map((p) => [p.id, p.name]));
-    return (id: string) => m.get(id) ?? "Producto";
+    // Un producto INACTIVO no está en el catálogo activo: vale lo que traiga
+    // el movimiento (nombre o, si no, el código), y en último caso «Producto».
+    return (mov: Movimiento) => {
+      const activo = m.get(mov.product_id);
+      if (activo !== undefined) return activo;
+      if (mov.product_name != null && mov.product_name !== "") return mov.product_name;
+      if (mov.product_sku != null && mov.product_sku !== "") return `Producto ${mov.product_sku}`;
+      return "Producto";
+    };
   }, [productos]);
 
-  const items = movs.data?.items ?? [];
-  if (movs.isLoading) return <p className="text-muted-foreground">Cargando…</p>;
+  const items = movs.data?.pages.flatMap((p) => p.items) ?? [];
+  const total = movs.data?.pages[0]?.total ?? 0;
+  if (movs.isPending) return <p className="text-muted-foreground">Cargando…</p>;
+  if (movs.isError) {
+    return <ErrorDeLista error={movs.error} onReintentar={() => void movs.refetch()} />;
+  }
   if (items.length === 0) {
     return <p className="py-8 text-center text-muted-foreground">Todavía no hay movimientos.</p>;
   }
   return (
-    <div className="divide-y divide-border rounded-md border border-border bg-surface">
-      {items.map((m) => (
-        <div key={m.id} className="flex items-center gap-3 px-3 py-2.5 text-[0.9rem]">
-          <span className="w-24 shrink-0 text-[0.82rem] text-muted-foreground">
-            {fechaRelativa(m.occurred_at)}
-          </span>
-          <span className="min-w-0 flex-1 truncate">
-            <strong>{VERBO_MOV[m.kind] ?? m.kind}</strong> · {nombreDe(m.product_id)}
-            {m.reason !== null && <span className="text-muted-foreground"> — {m.reason}</span>}
-          </span>
-          <span className="shrink-0 tabular-nums">{mostrarCantidad(m.quantity)}</span>
-        </div>
-      ))}
-    </div>
+    <>
+      <div className="divide-y divide-border rounded-md border border-border bg-surface">
+        {items.map((m) => (
+          <div key={m.id} className="flex items-center gap-3 px-3 py-2.5 text-[0.9rem]">
+            <span className="w-24 shrink-0 text-[0.82rem] text-muted-foreground">
+              {fechaRelativa(m.occurred_at)}
+            </span>
+            <span className="min-w-0 flex-1 truncate">
+              <strong>{VERBO_MOV[m.kind] ?? m.kind}</strong> · {nombreDe(m)}
+              {m.reason !== null && <span className="text-muted-foreground"> — {m.reason}</span>}
+            </span>
+            <span className="shrink-0 tabular-nums">{mostrarCantidad(m.quantity)}</span>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center justify-center gap-3 pt-3">
+        <span className="text-[0.86rem] text-muted-foreground">
+          Mostrando {items.length} de {total}
+        </span>
+        {movs.hasNextPage && (
+          <Button
+            variant="secondary"
+            onClick={() => void movs.fetchNextPage()}
+            disabled={movs.isFetchingNextPage}
+          >
+            {movs.isFetchingNextPage ? "Cargando…" : "Mostrar más"}
+          </Button>
+        )}
+      </div>
+    </>
   );
 }

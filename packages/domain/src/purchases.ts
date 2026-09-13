@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@ladino/core";
+import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
 import { Money, parseDecimal, type Decimal, type RoundingPolicy } from "@ladino/money";
 import {
@@ -128,6 +129,7 @@ async function autorizar(
 /** La tasa vigente a una fecha, con su fuente. Sin tasa NO se compra. */
 async function tasaA(
   sql: TransactionSql,
+  companyId: string,
   desde: string,
   hasta: string,
   fecha: string,
@@ -137,11 +139,11 @@ async function tasaA(
     if (!uno.ok) return err({ code: "VALIDATION_FAILED", message: uno.error.message });
     return ok({ rate: uno.value, source: "identidad" });
   }
+  // La tasa vigente PARA LA EMPRESA: la propia gana a la oficial del mismo
+  // día, y la de otra empresa no existe (ADR-0057).
   const [t] = await sql<{ rate: string | null; source: string | null }[]>`
-    select r.rate::text as rate, r.source from public.exchange_rates r
-     where r.from_currency = ${desde} and r.to_currency = ${hasta}
-       and r.rate_date <= ${fecha}::date
-     order by r.rate_date desc, r.created_at desc limit 1`;
+    select f.rate::text as rate, f.source
+      from platform.rate_for(${companyId}, ${desde}, ${hasta}, ${diaNegocio(fecha)}::date) f`;
   if (!t?.rate) {
     return err({
       code: "EXCHANGE_RATE_MISSING",
@@ -275,7 +277,13 @@ export async function createPurchaseOrder(
   if (!ctx.ok) return ctx;
 
   const hoy = new Date().toISOString();
-  const tasa = await tasaA(sql, input.currency, ctx.value.functionalCurrency, hoy);
+  const tasa = await tasaA(
+    sql,
+    input.company_id,
+    input.currency,
+    ctx.value.functionalCurrency,
+    hoy,
+  );
   if (!tasa.ok) return tasa;
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
@@ -347,9 +355,11 @@ export async function createPurchaseOrder(
       if (!totalMoney.ok) throw new Error("total fuera de rango");
       const totalFunc = aFuncional(totalMoney.value, tasa.value.rate, ctx.value.functionalCurrency);
       if (!totalFunc.ok) throw new Error("total funcional fuera de rango");
+      // El correlativo se reclama en la base, bajo candado consultivo por
+      // empresa: dos confirmaciones simultáneas se serializan en vez de chocar
+      // contra el índice único (auditoría 2026-09-11, M-16; migración 51).
       const [num] = await sp<{ n: string }[]>`
-        select (coalesce(max(order_number), 0) + 1)::text as n
-          from public.purchase_orders where company_id = ${input.company_id}`;
+        select platform.claim_purchase_order_number(${input.company_id})::text as n`;
       const [actualizada] = await sp<PurchaseOrderResponse[]>`
         update public.purchase_orders
            set amount_transaction_currency = ${totalMoney.value.toAmountString()},
@@ -413,18 +423,30 @@ export async function receiveGoods(
   if (!ctx.ok) return ctx;
 
   const fecha = input.received_at ?? new Date().toISOString();
-  const tasa = await tasaA(sql, input.currency, ctx.value.functionalCurrency, fecha);
+  const tasa = await tasaA(
+    sql,
+    input.company_id,
+    input.currency,
+    ctx.value.functionalCurrency,
+    fecha,
+  );
   if (!tasa.ok) return tasa;
 
   // No se recibe más de lo pendiente: la recepción parcial es legítima, recibir
   // de más es un error que después nadie sabe si fue robo o dedo.
   for (const l of input.lines) {
     if (l.purchase_order_line_id === undefined) continue;
+    // `for update` sobre la línea de la orden: dos recepciones simultáneas de
+    // la misma línea se serializan y la segunda ve lo pendiente REAL
+    // (auditoría 2026-09-11, M-16).
+    const [linea] = await sql<{ purchase_order_id: string }[]>`
+      select purchase_order_id from public.purchase_order_lines
+       where id = ${l.purchase_order_line_id} and company_id = ${input.company_id}
+       for update`;
+    if (!linea) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
     const [prog] = await sql<{ pendiente: string }[]>`
       select quantity_pending::text as pendiente
-        from platform.purchase_order_progress(${input.company_id},
-             (select purchase_order_id from public.purchase_order_lines
-               where id = ${l.purchase_order_line_id}))
+        from platform.purchase_order_progress(${input.company_id}, ${linea.purchase_order_id})
        where order_line_id = ${l.purchase_order_line_id}`;
     const pendiente = parseDecimal(prog?.pendiente ?? "0");
     const recibiendo = parseDecimal(l.quantity);
@@ -509,8 +531,7 @@ export async function receiveGoods(
       );
       if (!totalFuncional.ok) throw new Error("total funcional fuera de rango");
       const [num] = await sp<{ n: string }[]>`
-        select (coalesce(max(receipt_number), 0) + 1)::text as n
-          from public.goods_receipts where company_id = ${input.company_id}`;
+        select platform.claim_goods_receipt_number(${input.company_id})::text as n`;
       const [actualizada] = await sp<GoodsReceiptResponse[]>`
         update public.goods_receipts
            set amount_transaction_currency = ${totalMoney.value.toAmountString()},
@@ -625,7 +646,13 @@ export async function registerSupplierInvoice(
   }
   const ivaRecuperable = ctx.value.companyTaxpayerType === "ordinario";
 
-  const tasa = await tasaA(sql, input.currency, ctx.value.functionalCurrency, input.invoice_date);
+  const tasa = await tasaA(
+    sql,
+    input.company_id,
+    input.currency,
+    ctx.value.functionalCurrency,
+    input.invoice_date,
+  );
   if (!tasa.ok) return tasa;
 
   // Matching de tres vías ANTES de asentar. La política llega de la empresa.
@@ -739,7 +766,8 @@ export async function registerSupplierInvoice(
         if (prov.supplier_kind === "nacional") {
           const [regla] = await sp<{ tax_rule_id: string; rate: string }[]>`
             select tax_rule_id, rate::text as rate
-              from platform.resolve_tax(${input.invoice_date}::date, ${JURISDICTION}, 'iva',
+              from platform.resolve_tax(${input.company_id}, ${input.invoice_date}::date,
+                                        ${JURISDICTION}, 'iva',
                                         ${prov.taxpayer_type_code},
                                         ${producto.tax_category_code}, 'purchase')`;
           taxRuleId = regla!.tax_rule_id;
@@ -979,7 +1007,8 @@ async function practicarRetencion(
       >`select retention_rule_id, formula_kind, rate::text as rate,
                subtrahend::text as subtrahend, minimum_exempt::text as minimum_exempt,
                legal_source
-          from platform.resolve_retention(${d.fecha}::date, ${JURISDICTION},
+          from platform.resolve_retention(${d.companyId}, ${diaNegocio(d.fecha)}::date,
+                                          ${JURISDICTION},
                                           ${concepto.retention_code}, ${d.conceptCode},
                                           ${d.taxpayerType}, ${d.personType})`,
     );
@@ -1114,7 +1143,13 @@ export async function applyLandedCost(
     });
   }
 
-  const tasa = await tasaA(sql, input.currency, ctx.value.functionalCurrency, input.incurred_on);
+  const tasa = await tasaA(
+    sql,
+    input.company_id,
+    input.currency,
+    ctx.value.functionalCurrency,
+    input.incurred_on,
+  );
   if (!tasa.ok) return tasa;
   const gasto = Money.of(input.amount, input.currency);
   if (!gasto.ok) return err({ code: "VALIDATION_FAILED", message: gasto.error.message });
@@ -1347,7 +1382,13 @@ export async function registerSupplierCreditNote(
     });
   }
 
-  const tasa = await tasaA(sql, input.currency, ctx.value.functionalCurrency, input.note_date);
+  const tasa = await tasaA(
+    sql,
+    input.company_id,
+    input.currency,
+    ctx.value.functionalCurrency,
+    input.note_date,
+  );
   if (!tasa.ok) return tasa;
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
@@ -1475,7 +1516,10 @@ export async function registerSupplierPayment(
   const [factura] = await sql<
     { supplier_id: string; status: string; transaction_currency: string }[]
   >`select supplier_id, status, transaction_currency from public.supplier_invoices
-     where id = ${input.supplier_invoice_id} and company_id = ${input.company_id}`;
+     where id = ${input.supplier_invoice_id} and company_id = ${input.company_id}
+     for update`;
+  // `for update`: dos pagos simultáneos del mismo saldo pasaban ambos el tope
+  // (auditoría 2026-09-11, M-16). El segundo espera y ve el saldo real.
   if (!factura) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   if (factura.status !== "posted") {
     return err({
@@ -1500,7 +1544,13 @@ export async function registerSupplierPayment(
   }
 
   const fecha = input.paid_at ?? new Date().toISOString();
-  const tasa = await tasaA(sql, input.currency, ctx.value.functionalCurrency, fecha);
+  const tasa = await tasaA(
+    sql,
+    input.company_id,
+    input.currency,
+    ctx.value.functionalCurrency,
+    fecha,
+  );
   if (!tasa.ok) return tasa;
 
   const bruto = Money.of(input.gross_amount, input.currency);
@@ -1559,12 +1609,6 @@ export async function registerSupplierPayment(
   // Una nota de crédito no mueve efectivo y va sin cuenta (CHECK de la tabla).
   let cuentaId: string | null;
   if (input.account_id !== undefined) {
-    if (input.instrument === "nota_credito") {
-      return err({
-        code: "VALIDATION_FAILED",
-        message: "Aplicar una nota de crédito no saca dinero de ninguna cuenta: quita la cuenta.",
-      });
-    }
     const [cuenta] = await sql<{ currency: string; name: string; is_active: boolean }[]>`
       select currency, name, is_active from public.company_accounts
        where id = ${input.account_id} and company_id = ${input.company_id}`;
@@ -1709,7 +1753,7 @@ export async function registerSupplierPayment(
     sourceKind: "payment_made",
     sourceEvent: "ap.payment_made",
     sourceId: pago["id"] as string,
-    postingDate: fecha.slice(0, 10),
+    postingDate: diaNegocio(fecha),
     postedBy: actor.userId,
     description: "Pago a proveedor",
     functionalCurrency: ctx.value.functionalCurrency,

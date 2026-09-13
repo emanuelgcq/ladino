@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Banknote,
@@ -14,7 +15,8 @@ import {
   X,
 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
-import { errorDePersona, API_URL } from "../../lib.js";
+import { errorDePersona } from "../../lib.js";
+import { abrirPdf as abrirPdfApi } from "../../pdf.js";
 import { cotizarPos, type CotizacionPos } from "../../pos.js";
 import {
   aNube,
@@ -25,7 +27,6 @@ import {
   type ClientePos,
   type CuentaAbierta,
 } from "../../pos-cuentas.js";
-import { supabase } from "../../lib.js";
 import { mostrarImporte, mostrarCantidad } from "../../money.js";
 import { compararImportes } from "../../components/decimal-compare.js";
 import { Button } from "../../ui/button.js";
@@ -34,6 +35,7 @@ import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
+import { ETIQUETA_FORMA, FORMAS_BASE, MONEDA_FORMA } from "../../components/formas-de-pago.js";
 import { formatearDocumento } from "./comunes.js";
 
 /**
@@ -129,7 +131,18 @@ function cuentaNueva(existentes: CuentaAbierta[]): CuentaAbierta {
   };
 }
 
+/**
+ * La caja se REMONTA al cambiar de empresa: las cuentas abiertas nacen del
+ * disco de LA empresa activa, y sin esta llave las de la empresa A seguían en
+ * pantalla, se escribían en el disco de B y se subían a la nube bajo B
+ * (auditoría 2026-09-11, regla 5 de CLAUDE.md).
+ */
 export function Vender(): React.JSX.Element {
+  const { empresa } = useSesion();
+  return <VenderDeEmpresa key={empresa.id} />;
+}
+
+function VenderDeEmpresa(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [busqueda, setBusqueda] = useState("");
@@ -271,6 +284,8 @@ export function Vender(): React.JSX.Element {
   // El nombre del que quedó debiendo, capturado al vender: la ficha de la
   // cuenta ya murió cuando el diálogo de éxito lo enseña.
   const [deudor, setDeudor] = useState<string | null>(null);
+  // Y su teléfono, para el WhatsApp del comprobante: la venta no lo trae.
+  const [telefonoCliente, setTelefonoCliente] = useState<string | null>(null);
   const qc = useQueryClient();
   const q = useDebounced(busqueda.trim(), 200);
 
@@ -336,7 +351,10 @@ export function Vender(): React.JSX.Element {
 
   function agregar(p: ProductoFila): void {
     if (!p.price_amount) {
-      toast.warning("Ese producto no tiene precio", "Pónselo en Productos antes de venderlo.");
+      toast.warning(
+        "Ese producto no tiene precio",
+        "Se le pone en Administración → Productos antes de venderlo.",
+      );
       return;
     }
     // LA EXISTENCIA MANDA (orden del dueño, 2026-09-08): no se anota más de lo
@@ -419,16 +437,25 @@ export function Vender(): React.JSX.Element {
     if (modoRecibos) buscarRef.current?.focus();
   }, [modoRecibos]);
 
+  // F2 abre Cobrar bajo las MISMAS condiciones que el botón: líneas,
+  // cotización lista (no en vuelo), depósito y cliente resuelto. Antes el
+  // atajo saltaba las tres últimas (auditoría 2026-09-11).
+  const puedeCobrar =
+    activa.lineas.length > 0 &&
+    cotizacion.data !== undefined &&
+    !cotizacion.isFetching &&
+    deposito !== null &&
+    clienteResuelto;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "F2" && activa.lineas.length > 0 && clienteResuelto) {
+      if (e.key === "F2" && puedeCobrar) {
         e.preventDefault();
         setCobrando(true);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activa.lineas.length, clienteResuelto]);
+  }, [puedeCobrar]);
 
   const items = productos.data?.items ?? [];
 
@@ -437,9 +464,9 @@ export function Vender(): React.JSX.Element {
       {modoRecibos && (
         <div className="flex items-center gap-2 rounded-md border border-border bg-surface-muted/50 px-3 py-1.5 text-[0.82rem] text-muted-foreground">
           Estás vendiendo con recibos.{" "}
-          <a href="/empezar" className="text-accent-soft-foreground underline">
+          <Link to="/empezar" className="text-accent-soft-foreground underline">
             Con tu RIF puedes facturar →
-          </a>
+          </Link>
         </div>
       )}
       {/*
@@ -629,6 +656,17 @@ export function Vender(): React.JSX.Element {
             )}
           </div>
           <div className="space-y-2 border-t border-border p-3">
+            {/* Si el servidor no puede cotizar (sin regla de IVA, sin tasa, un
+                producto sin precio), se DICE: antes las líneas quedaban en «…»
+                y Cobrar se apagaba sin explicación (auditoría 2026-09-11). */}
+            {cotizacion.isError && activa.lineas.length > 0 && (
+              <p
+                role="alert"
+                className="rounded-md bg-destructive-soft px-3 py-2 text-[0.85rem] text-destructive-soft-foreground"
+              >
+                No se pudo calcular la cuenta: {errorDePersona(cotizacion.error)}
+              </p>
+            )}
             {cotizacion.data && activa.lineas.length > 0 && (
               <>
                 <div className="flex justify-between text-[0.88rem] text-muted-foreground">
@@ -677,12 +715,18 @@ export function Vender(): React.JSX.Element {
               disabled={
                 activa.lineas.length === 0 ||
                 !cotizacion.data ||
+                // Mientras se recotiza, el total en pantalla es el ANTERIOR
+                // (placeholder): cobrar con él prellenaba el importe viejo y,
+                // con cliente, fiaba la diferencia sin querer.
+                cotizacion.isFetching ||
                 deposito === null ||
                 !clienteResuelto
               }
               onClick={() => setCobrando(true)}
             >
-              Cobrar {activa.lineas.length > 0 && clienteResuelto ? "· F2" : ""}
+              {cotizacion.isFetching && activa.lineas.length > 0
+                ? "Calculando…"
+                : `Cobrar ${activa.lineas.length > 0 && clienteResuelto ? "· F2" : ""}`}
             </Button>
             {activa.lineas.length > 0 && !clienteResuelto && (
               <p className="text-center text-[0.8rem] text-warning-soft-foreground">
@@ -691,7 +735,8 @@ export function Vender(): React.JSX.Element {
             )}
             {deposito === null && (
               <p className="text-center text-[0.8rem] text-warning-soft-foreground">
-                Falta un depósito para descontar la mercancía. Configúralo en Empezar.
+                Falta un depósito para descontar la mercancía: lo configura quien administra el
+                negocio (Empezar o Configuración).
               </p>
             )}
           </div>
@@ -710,12 +755,19 @@ export function Vender(): React.JSX.Element {
               setCobrando(false);
               setVenta(v);
               setDeudor(activa.cliente?.legal_name ?? null);
+              setTelefonoCliente(activa.cliente?.phone ?? null);
               // La cuenta cobrada MUERE: el servidor la borró en la MISMA
               // transacción de la venta (cart_id); aquí solo cae la ficha.
               quitarCuenta(activa.id, false);
               // «Me deben» de Inicio y Mi dinero se refresca al instante: la
-              // venta fiada es deuda desde ya.
+              // venta fiada es deuda desde ya. Y lo que la venta MOVIÓ también:
+              // «Quedan N» del mostrador, existencias y cuentas de dinero
+              // (antes quedaban viejos 30 s — auditoría 2026-09-11).
               void qc.invalidateQueries({ queryKey: ["negocio-resumen", empresa.id] });
+              void qc.invalidateQueries({ queryKey: ["pos-productos", empresa.id] });
+              void qc.invalidateQueries({ queryKey: ["inv-productos", empresa.id] });
+              void qc.invalidateQueries({ queryKey: ["cuentas", empresa.id] });
+              void qc.invalidateQueries({ queryKey: ["negocio-clientes", empresa.id] });
             }}
           />
         )}
@@ -752,9 +804,11 @@ export function Vender(): React.JSX.Element {
           <VentaLista
             venta={venta}
             deudor={deudor}
+            telefono={telefonoCliente}
             onNueva={() => {
               setVenta(null);
               setDeudor(null);
+              setTelefonoCliente(null);
               // La venta nueva empieza como todas: por la cédula. El foco se
               // difiere: al cerrarse, el diálogo restaura el foco al elemento
               // anterior y pisaría este si se pusiera en el mismo tick.
@@ -1114,49 +1168,13 @@ function IdentificarCliente({
   );
 }
 
-const ETIQUETA_FORMA: Record<string, string> = {
-  efectivo_bs: "Efectivo Bs.",
-  efectivo_usd: "Efectivo USD",
-  pago_movil: "Pago móvil",
-  transferencia: "Transferencia",
-  punto_venta: "Punto de venta",
-  tarjeta: "Tarjeta",
-  zelle: "Zelle",
-  usdt: "USDT",
-  cashea: "Cashea",
-  otro: "Otra",
-};
-const MONEDA_FORMA: Record<string, string> = {
-  efectivo_bs: "VES",
-  efectivo_usd: "USD",
-  pago_movil: "VES",
-  transferencia: "VES",
-  punto_venta: "VES",
-  tarjeta: "VES",
-  zelle: "USD",
-  usdt: "USD",
-  cashea: "VES",
-  otro: "VES",
-};
-
-/**
- * Las formas que se OFRECEN SIEMPRE, configuradas o no (decisión del dueño,
- * 2026-09-05): el cobro registra la forma de pago + referencia desde hoy; la
- * cuenta la refina una forma configurada, y sin ella el dinero cae en
- * «Sin asignar» hasta que se conecten las APIs (POS, pago móvil, Cashea…).
- */
-const FORMAS_BASE = [
-  "efectivo_bs",
-  "efectivo_usd",
-  "punto_venta",
-  "pago_movil",
-  "transferencia",
-  "zelle",
-  "usdt",
-  "cashea",
-] as const;
+// ETIQUETA_FORMA, MONEDA_FORMA y FORMAS_BASE viven en components/formas-de-pago.ts:
+// las comparte el diálogo de cobro de documentos, con la misma regla.
 
 interface PagoElegido {
+  /** Clave estable de la fila: con el índice, quitar la primera forma le
+      heredaba estado y consultas a la segunda (auditoría 2026-09-11). */
+  id: string;
   instrument: string;
   currency: string;
   amount: string;
@@ -1191,9 +1209,11 @@ function Cobrar({
   const [pagos, setPagos] = useState<PagoElegido[]>([]);
   // El paso de confirmación del FIADO: la consecuencia dicha antes de emitir.
   const [fiando, setFiando] = useState(false);
-  // El id de VENTA del cliente: nace con la pantalla de cobro y es la llave
-  // de idempotencia — reintentar el botón no emite dos facturas.
-  const saleId = useRef(crypto.randomUUID());
+  // La llave de idempotencia de la venta es el id de la CUENTA que cierra:
+  // cerrar y reabrir «Cobrar» tras una respuesta perdida reintenta con la
+  // MISMA llave (antes nacía con el diálogo y el reintento emitía otra
+  // factura — auditoría 2026-09-11). Tras un rechazo, el servidor acepta un
+  // cuerpo nuevo con la misma llave; tras el éxito, la cuenta ya no existe.
 
   const formas = useQuery({
     queryKey: ["formas-pago", empresa.id],
@@ -1247,6 +1267,7 @@ function Cobrar({
     setPagos((prev) => [
       ...prev,
       {
+        id: crypto.randomUUID(),
         instrument: b.instrument,
         currency: b.currency,
         amount: exacto,
@@ -1262,7 +1283,7 @@ function Cobrar({
     mutationFn: () =>
       llamar<Venta>("/v1/pos/sales", {
         method: "POST",
-        headers: { "Idempotency-Key": saleId.current },
+        headers: { "Idempotency-Key": cartId },
         body: JSON.stringify({
           company_id: empresa.id,
           warehouse_id: deposito,
@@ -1386,7 +1407,7 @@ function Cobrar({
 
           {pagos.map((p, i) => (
             <PagoFila
-              key={i}
+              key={p.id}
               indice={i}
               pago={p}
               cotizacion={cotizacion}
@@ -1533,7 +1554,8 @@ function PagoFila({
       )}
       {igtf.data?.applies === true && igtf.data.amount !== null && (
         <p className="text-[0.88rem] text-warning-soft-foreground tabular-nums">
-          + IGTF 3 %: {mostrarImporte({ amount: igtf.data.amount, currency: pago.currency })}
+          + IGTF por pago en divisas:{" "}
+          {mostrarImporte({ amount: igtf.data.amount, currency: pago.currency })}
           <span className="ml-1 text-faint-foreground">— se cobra además del total</span>
         </p>
       )}
@@ -1541,40 +1563,55 @@ function PagoFila({
   );
 }
 
+/**
+ * El teléfono como lo entiende wa.me: solo dígitos, con el 58 delante.
+ * «0414-1234567» → «584141234567»; lo que no llegue a un número venezolano
+ * completo no se manda (mejor abrir WhatsApp sin destinatario que a uno
+ * equivocado).
+ */
+function telefonoWhatsApp(telefono: string | null): string | null {
+  if (telefono === null) return null;
+  let d = telefono.replace(/\D/g, "");
+  if (d.startsWith("00")) d = d.slice(2);
+  if (d.startsWith("0")) d = `58${d.slice(1)}`;
+  else if (!d.startsWith("58") && d.length === 10) d = `58${d}`;
+  return d.startsWith("58") && d.length === 12 ? d : null;
+}
+
 function VentaLista({
   venta,
   deudor,
+  telefono,
   onNueva,
 }: {
   venta: Venta;
   deudor: string | null;
+  /** El del cliente de la venta, si lo tenía: el WhatsApp sale ya dirigido. */
+  telefono: string | null;
   onNueva: () => void;
 }): React.JSX.Element {
   const { empresa } = useSesion();
   const toast = useToast();
   const esRecibo = venta.document.kind === "receipt";
-  const numero = `${venta.document.series}-${String(venta.document.document_number ?? "").padStart(8, "0")}`;
+  // Sin número asignado no se inventa un «00000000»: se dice.
+  const numero =
+    venta.document.document_number === null
+      ? `${venta.document.series} (sin número)`
+      : `${venta.document.series}-${String(venta.document.document_number).padStart(8, "0")}`;
   // Con saldo, la venta quedó FIADA: el número lo dijo el servidor (funcional).
   const fiada = compararImportes(venta.balance, "0") > 0;
 
-  async function abrirPdf(): Promise<void> {
-    // El PDF exige el Bearer: se baja con fetch y se abre como blob.
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    const r = await fetch(`${API_URL}/v1/documents/${venta.document.id}/pdf`, {
-      headers: { Authorization: `Bearer ${token}`, "X-Company-Id": empresa.id },
-    });
-    if (!r.ok) {
-      toast.error("No se pudo abrir el PDF", "Vuelve a intentar en un momento.");
-      return;
-    }
-    const url = URL.createObjectURL(await r.blob());
-    window.open(url, "_blank", "noopener");
+  function abrirPdf(): void {
+    void abrirPdfApi(`/v1/documents/${venta.document.id}/pdf`, empresa.id, (m) =>
+      toast.error("No se pudo abrir el PDF", m),
+    );
   }
 
   const textoWhatsApp = encodeURIComponent(
     `Tu compra en ${empresa.legal_name}: ${venta.document.kind === "receipt" ? "recibo" : "factura"} ${numero}. ¡Gracias!`,
   );
+  const destinoWhatsApp = telefonoWhatsApp(telefono);
+  const urlWhatsApp = `https://wa.me/${destinoWhatsApp ?? ""}?text=${textoWhatsApp}`;
 
   return (
     <Dialog open onOpenChange={(v) => !v && onNueva()}>
@@ -1627,15 +1664,15 @@ function VentaLista({
             <Button variant="secondary" onClick={() => void abrirPdf()}>
               <Printer /> Imprimir
             </Button>
-            <a
-              href={`https://wa.me/?text=${textoWhatsApp}`}
-              target="_blank"
-              rel="noopener noreferrer"
+            {/* Un botón que abre, no un enlace envolviendo un botón: dos
+                controles anidados eran dos paradas de tabulador. */}
+            <Button
+              variant="secondary"
+              className="w-full"
+              onClick={() => window.open(urlWhatsApp, "_blank", "noopener")}
             >
-              <Button variant="secondary" className="w-full">
-                <MessageCircle /> WhatsApp
-              </Button>
-            </a>
+              <MessageCircle /> WhatsApp
+            </Button>
           </div>
           <Button variant="primary" size="lg" className="h-12 w-full" onClick={onNueva} autoFocus>
             Nueva venta

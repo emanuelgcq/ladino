@@ -1,5 +1,12 @@
 # Roadmap — Ladino
 
+> **Estado al 2026-09-12: Ladino está en producción desde el 2026-09-07** con ventas, compras,
+> inventario valorado, tesorería, contabilidad, libros y declaraciones de IVA, IGTF y puesta a
+> punto fiscal (58 ADR, 52 migraciones). Las fases de abajo son el plan con el que se llegó;
+> lo hecho y lo que queda en vuelo se lee en `HANDOFF.md`, no aquí. Lo que sigue abierto de este
+> roadmap: emisión fiscal con imprenta (autorizada o digital, PA 00071 / PA 102), la app móvil,
+> nómina y el plan comercial en dos niveles (sin RIF / con RIF).
+>
 > **Actualizado 2026-08-15 por cambio regulatorio.** PA SNAT/2024/000121 derogada por
 > PA SNAT/2026/00084 (Gaceta 43.435, 12/08/2026), sin sustituta. Estado completo en
 > `docs/02_COMPLIANCE/REGULATORY_STATUS.md`; consecuencias de diseño en ADR-0027 y ADR-0028.

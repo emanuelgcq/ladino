@@ -10,7 +10,7 @@ import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
 import { Input } from "../../ui/input.js";
 import { useToast } from "../../ui/toast.js";
-import { FormField } from "../../components/forms.js";
+import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
 import { AltaSimple, ImportarExcel } from "./Productos.js";
 import { CrearCuenta } from "./Dinero.js";
 import { porcentajeAFraccion, fraccionAPorcentaje } from "./comunes.js";
@@ -178,6 +178,19 @@ export function Empezar(): React.JSX.Element {
               onCambio={recargar}
               onSeguir={() => setPaso(3)}
             />
+          )}
+          {paso === 3 && fiscal.isError && (
+            <Card role="alert">
+              <CardContent className="py-6 text-center">
+                <p className="font-medium">No se pudo cargar cómo factura tu negocio</p>
+                <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
+                  {errorDePersona(fiscal.error)}
+                </p>
+                <Button variant="secondary" className="mt-3" onClick={() => void fiscal.refetch()}>
+                  Reintentar
+                </Button>
+              </CardContent>
+            </Card>
           )}
           {paso === 3 && facturacion !== null && (
             <PasoFacturas setup={facturacion} hayTalonario={hayTalonario} onCambio={recargar} />
@@ -417,19 +430,20 @@ function PasoTasa({
             <div className="flex flex-wrap items-end gap-2">
               <FormField label="O escríbela tú (Bs. por dólar)">
                 {(p) => (
-                  <Input
-                    {...p}
+                  <MoneyInput
+                    id={p.id}
+                    ariaInvalid={p["aria-invalid"]}
+                    ariaDescribedby={p["aria-describedby"]}
                     value={nueva}
-                    onChange={(e) => setNueva(e.target.value)}
-                    placeholder="0,00"
-                    inputMode="decimal"
+                    onChange={setNueva}
+                    currency="Bs."
                     className="w-40"
                   />
                 )}
               </FormField>
               <Button
                 variant="primary"
-                disabled={nueva.trim() === "" || cargar.isPending}
+                disabled={!importeValido(nueva.trim().replace(",", ".")) || cargar.isPending}
                 onClick={() => cargar.mutate()}
               >
                 Guardar tasa
@@ -465,7 +479,10 @@ function PasoFacturas({
   // tienes máquina fiscal. La persona nunca ve la palabra técnica.
   const [vendeA, setVendeA] = useState<"negocios" | "personas" | "mitad" | null>(null);
   const [maquina, setMaquina] = useState<boolean | null>(null);
-  const [porcentaje, setPorcentaje] = useState("16");
+  // VACÍO a propósito: el porcentaje lo escribe la persona. Un «16» puesto
+  // por Ladino era una alícuota que se aceptaba sin haberla tecleado
+  // (auditoría 2026-09-11); el número vigente va en la AYUDA, con su fuente.
+  const [porcentaje, setPorcentaje] = useState("");
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
   const [serie, setSerie] = useState("A");
@@ -593,8 +610,10 @@ function PasoFacturas({
         (setup.current_regime === "sin_facturacion" && activandoFacturacion) ? (
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <p className="font-medium">¿Tu negocio ya tiene RIF?</p>
-              <div className="flex gap-1.5">
+              <p className="font-medium" id="empezar-rif-titulo">
+                ¿Tu negocio ya tiene RIF?
+              </p>
+              <div className="flex gap-1.5" role="radiogroup" aria-labelledby="empezar-rif-titulo">
                 {(
                   [
                     [true, "Sí"],
@@ -603,6 +622,9 @@ function PasoFacturas({
                 ).map(([valor, etiqueta]) => (
                   <button
                     key={etiqueta}
+                    type="button"
+                    role="radio"
+                    aria-checked={tieneRif === valor}
                     onClick={() => setTieneRif(valor)}
                     className={`rounded-full border px-4 py-1.5 text-[0.88rem] ${
                       tieneRif === valor
@@ -647,10 +669,21 @@ function PasoFacturas({
             )}
 
             {tieneRif === true && (
-              <div className={`space-y-4 ${hayDomicilio ? "" : "pointer-events-none opacity-50"}`}>
+              // `inert`, no `pointer-events-none`: sin domicilio el bloque
+              // queda fuera del teclado y del lector de pantalla también.
+              <div
+                className={`space-y-4 ${hayDomicilio ? "" : "opacity-50"}`}
+                inert={!hayDomicilio}
+              >
                 <div className="space-y-1.5">
-                  <p className="font-medium">¿A quién le vendes principalmente?</p>
-                  <div className="flex flex-wrap gap-1.5">
+                  <p className="font-medium" id="empezar-vende-titulo">
+                    ¿A quién le vendes principalmente?
+                  </p>
+                  <div
+                    className="flex flex-wrap gap-1.5"
+                    role="radiogroup"
+                    aria-labelledby="empezar-vende-titulo"
+                  >
                     {(
                       [
                         ["negocios", "A negocios y empresas"],
@@ -660,6 +693,9 @@ function PasoFacturas({
                     ).map(([clave, etiqueta]) => (
                       <button
                         key={clave}
+                        type="button"
+                        role="radio"
+                        aria-checked={vendeA === clave}
                         onClick={() => setVendeA(clave)}
                         className={`rounded-full border px-3 py-1.5 text-[0.88rem] ${
                           vendeA === clave
@@ -673,8 +709,14 @@ function PasoFacturas({
                   </div>
                 </div>
                 <div className="space-y-1.5">
-                  <p className="font-medium">¿Tienes máquina fiscal?</p>
-                  <div className="flex gap-1.5">
+                  <p className="font-medium" id="empezar-maquina-titulo">
+                    ¿Tienes máquina fiscal?
+                  </p>
+                  <div
+                    className="flex gap-1.5"
+                    role="radiogroup"
+                    aria-labelledby="empezar-maquina-titulo"
+                  >
                     {(
                       [
                         [false, "No"],
@@ -683,6 +725,9 @@ function PasoFacturas({
                     ).map(([valor, etiqueta]) => (
                       <button
                         key={etiqueta}
+                        type="button"
+                        role="radio"
+                        aria-checked={maquina === valor}
                         onClick={() => setMaquina(valor)}
                         className={`rounded-full border px-4 py-1.5 text-[0.88rem] ${
                           maquina === valor
@@ -710,11 +755,11 @@ function PasoFacturas({
                   <div className="rounded-md border border-warning-soft-foreground/40 bg-warning-soft p-3 text-[0.9rem] text-warning-soft-foreground">
                     <p className="font-medium">Un aviso importante</p>
                     <p className="mt-1">
-                      Por tu tipo de negocio, es posible que la ley te exija máquina fiscal (art. 8,
-                      PA 00071: ventas del año pasado sobre 1.500 UT, ventas mayormente a consumidor
-                      final y actividad listada — las tres a la vez; algunas actividades la exigen
-                      sin importar el ingreso). Confírmalo con tu contador — y si te aplica,
-                      avísanos: estamos preparando esa función.
+                      Por tu tipo de negocio, es posible que la ley te exija máquina fiscal (PA
+                      SNAT/2011/00071, art. 8: ventas del año pasado sobre 1.500 UT, ventas
+                      mayormente a consumidor final y actividad listada — las tres a la vez; algunas
+                      actividades la exigen sin importar el ingreso). Confírmalo con tu contador — y
+                      si te aplica, avísanos: estamos preparando esa función.
                     </p>
                   </div>
                 )}
@@ -793,13 +838,17 @@ function PasoFacturas({
                     aparecerá en la auditoría.
                   </p>
                   <div className="flex flex-wrap items-end gap-2">
-                    <FormField label="Porcentaje (%)">
+                    <FormField
+                      label="Porcentaje (%)"
+                      hint="La alícuota general vigente la confirma tu contador (Ley de IVA; hoy 16 %)."
+                    >
                       {(p) => (
                         <Input
                           {...p}
                           value={porcentaje}
                           onChange={(e) => setPorcentaje(e.target.value)}
                           inputMode="decimal"
+                          placeholder="16"
                           className="w-28"
                         />
                       )}

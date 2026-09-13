@@ -1,7 +1,7 @@
-import { createBrowserRouter, Navigate } from "react-router";
+import { createBrowserRouter, Link, Navigate, useRouteError } from "react-router";
 import { AppShell } from "./shell.js";
 import { useSesion } from "./session.js";
-import { rutaInicial } from "./nav.js";
+import { rutaInicial, RUTA_SIN_ACCESO } from "./nav.js";
 import { Configuracion } from "../pages/Configuracion.js";
 import { Clientes } from "../pages/clientes/Clientes.js";
 import { Productos } from "../pages/catalogo/Productos.js";
@@ -54,12 +54,67 @@ function AterrizajePorRol(): React.JSX.Element {
   return <Navigate to={rutaInicial(puede)} replace />;
 }
 
+/** Un rol que no abre ninguna entrada: se dice, en vez de una pantalla en blanco. */
+function SinAcceso(): React.JSX.Element {
+  return (
+    <div className="mx-auto max-w-md p-8 text-center">
+      <h1 className="text-lg font-semibold">Tu usuario todavía no tiene una pantalla asignada</h1>
+      <p className="mt-2 text-muted-foreground">
+        Pídele a quien administra el negocio que te dé un rol con acceso. Tu sesión está bien; lo
+        que falta es el permiso.
+      </p>
+    </div>
+  );
+}
+
+/** URL desconocida: de vuelta a la pantalla del rol, con voz de persona. */
+function NoEncontrado(): React.JSX.Element {
+  const { puede } = useSesion();
+  return (
+    <div className="mx-auto max-w-md p-8 text-center">
+      <h1 className="text-lg font-semibold">Esa dirección no existe en Ladino</h1>
+      <p className="mt-2 text-muted-foreground">Quizá el enlace está viejo o se escribió mal.</p>
+      <Link className="mt-4 inline-block underline" to={rutaInicial(puede)}>
+        Ir a mi pantalla
+      </Link>
+    </div>
+  );
+}
+
+/** Una excepción de render no debe enseñar la página cruda de React Router. */
+function ErrorDePantalla(): React.JSX.Element {
+  const error = useRouteError();
+  const detalle =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : error !== null && typeof error === "object" && "statusText" in error
+          ? String(error.statusText)
+          : "";
+  return (
+    <div className="mx-auto max-w-md p-8 text-center">
+      <h1 className="text-lg font-semibold">Algo se rompió al pintar esta pantalla</h1>
+      <p className="mt-2 text-muted-foreground">
+        Vuelve a cargar la página; si sigue pasando, avísanos con este detalle:
+      </p>
+      <p className="mt-2 break-words font-mono text-[0.8rem] text-muted-foreground">{detalle}</p>
+      <a className="mt-4 inline-block underline" href="/">
+        Volver al inicio
+      </a>
+    </div>
+  );
+}
+
 export const router = createBrowserRouter([
   {
     path: "/",
     element: <AppShell />,
+    errorElement: <ErrorDePantalla />,
     children: [
       { index: true, element: <AterrizajePorRol /> },
+      { path: RUTA_SIN_ACCESO.slice(1), element: <SinAcceso /> },
+      { path: "*", element: <NoEncontrado /> },
       // ── El mundo de la persona ─────────────────────────────────────────
       { path: "inicio", element: <Inicio /> },
       { path: "vender", element: <Vender /> },

@@ -1,4 +1,5 @@
 import type { Context, Next } from "hono";
+import { mensajePersona } from "./errors.js";
 
 /**
  * Plazo máximo por petición. Si el handler no responde a tiempo, el cliente
@@ -35,7 +36,11 @@ export function timeoutMiddleware(ms: number) {
         }),
       );
       return c.json(
-        { code: "GATEWAY_TIMEOUT", message: `La petición superó el plazo de ${ms} ms.` },
+        {
+          code: "GATEWAY_TIMEOUT",
+          message: `La petición superó el plazo de ${ms} ms.`,
+          person_message: mensajePersona("GATEWAY_TIMEOUT"),
+        },
         504,
       );
     }

@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { diaCaracas } from "./_dia-caracas.js";
 
 /**
  * MODO RECIBOS de extremo a extremo (migración 37): el negocio SIN RIF vende
@@ -32,7 +33,7 @@ const DUENO = crypto.randomUUID();
 const CONSUMIDOR = crypto.randomUUID();
 const ROL = crypto.randomUUID();
 const RUN = Date.now().toString(36);
-const HOY = new Date().toISOString().slice(0, 10);
+const HOY = diaCaracas();
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -303,7 +304,7 @@ describe("modo recibos", () => {
                'REGLA DE PRUEBA E2E recibos — no es la norma vigente', 5, 'sale'
          where not exists (
            select 1 from public.tax_rules
-            where jurisdiction = 'VE' and tax_code = 'iva' and taxpayer_type is null
+            where company_id is null and jurisdiction = 'VE' and tax_code = 'iva' and taxpayer_type is null
               and product_tax_category = 'gravado_general' and transaction_type = 'sale'
               and status = 'active')`;
     });

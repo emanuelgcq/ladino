@@ -63,6 +63,14 @@ que gobiernan la emisión fiscal hoy.
 | **PA SNAT/2018/0141** | Máquinas fiscales | fuera de alcance actual de Ladino |
 | **PA 102** | Emisión por medios digitales · imprentas digitales | `SENIAT_PA102_DIGITAL_INVOICING.md` · `EMISION_FACTURAS.md` |
 | **PA SNAT/2026/00080** | Reforma del RIF | ver §4 |
+| **PA SNAT/2025/000054** (vigente 01/08/2025; deroga PA SNAT/2015/0049) | Agentes de retención de IVA: designación, porcentajes 75 % / 100 %, oportunidad y comprobante | `RETENTIONS_SPEC.md` — las reglas se cargan por empresa con esta fuente (ADR-0057) |
+| **PA SNAT/2025/000048** (G.O. 43.140, 02/06/2025) | Unidad Tributaria = Bs. 43 | `IVA_SPEC.md` (umbral de máquina fiscal del art. 8 de la 00071, R-25) |
+| **PA SNAT/2025/000091** (G.O. 43.273 / 43.283) | Calendario de sujetos pasivos especiales 2026 | `PENDIENTES_ASESOR.md` — el calendario de declaraciones NO viene de fábrica (ADR-0052) |
+| **Decreto 4.972** (G.O. Ext. 6.821, 15/07/2024) | IGTF 3 % en divisas · 0 % en bolívares para sujetos pasivos especiales | `IGTF_SPEC.md` · ADR-0052/0053 |
+
+Verificadas el 2026-09-12 con fuentes secundarias (Forvis Mazars, Baker McKenzie, IUSDATA,
+Efecto Cocuyo); el texto primario en Gaceta queda por archivar en `EXPEDIENTE_TECNICO.md`
+(**VALIDAR-TRIBUTARIO**).
 
 **Los artículos que gobiernan el trabajo de Ladino, verificados al 2026-09-02 con fuentes
 primarias** (cada punto con su providencia y artículo):

@@ -136,27 +136,33 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
 
   // Los permisos del usuario EN la empresa activa (ADR-0048): una llamada por
   // elección de empresa; el menú entero se forma con esta lista. Si la
-  // llamada falla, el conjunto queda VACÍO — fallo cerrado: no se enseña lo
-  // que no se pudo confirmar (el servidor rechazaría igual).
+  // llamada falla, NO se deja pasar con un conjunto vacío en silencio (eso
+  // era un menú sin entradas y un «sin acceso» sin explicación): se enseña el
+  // fallo con Reintentar. Sigue siendo fallo cerrado — nada se muestra hasta
+  // confirmar — pero la persona sabe por qué.
+  const [errorPermisos, setErrorPermisos] = useState<string | null>(null);
+  const [intentoPermisos, setIntentoPermisos] = useState(0);
   useEffect(() => {
     const s = sesionRef.current;
     if (s === null || empresaId === null) {
       setPermisos(null);
+      setErrorPermisos(null);
       return;
     }
     let vigente = true;
     setPermisos(null);
+    setErrorPermisos(null);
     void api<{ permissions: string[] }>(s, "/v1/me/permissions", { companyId: empresaId })
       .then((r) => {
         if (vigente) setPermisos(new Set(r.permissions));
       })
-      .catch(() => {
-        if (vigente) setPermisos(new Set());
+      .catch((e: unknown) => {
+        if (vigente) setErrorPermisos(mensajeDe(e));
       });
     return () => {
       vigente = false;
     };
-  }, [userId, empresaId]);
+  }, [userId, empresaId, intentoPermisos]);
 
   const puede = useCallback(
     (permiso: string | readonly string[]): boolean => {
@@ -200,6 +206,26 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     );
   }
   if (empresa !== null && permisos === null) {
+    if (errorPermisos !== null) {
+      return (
+        <PantallaCentrada>
+          <div className="space-y-3 text-center">
+            <p role="alert" className="text-[0.95rem] font-medium text-foreground">
+              No se pudieron cargar tus permisos
+            </p>
+            <p className="text-[0.85rem]">{errorPermisos}</p>
+            <div className="flex justify-center gap-2">
+              <Button variant="primary" size="sm" onClick={() => setIntentoPermisos((n) => n + 1)}>
+                Reintentar
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => void supabase.auth.signOut()}>
+                <LogOut /> Salir
+              </Button>
+            </div>
+          </div>
+        </PantallaCentrada>
+      );
+    }
     return <PantallaCentrada>Cargando permisos…</PantallaCentrada>;
   }
   if (valor === null) {
@@ -293,7 +319,13 @@ function Login(): React.JSX.Element {
         options: { emailRedirectTo: window.location.origin },
       });
       if (r.error) setError(vozDeAuth(r.error.message));
-      else if (r.data.session === null) setCorreoEnviado("verificacion");
+      // Con un correo YA registrado, Supabase responde éxito sin sesión y con
+      // `identities` vacío (no revela si la cuenta existe por correo, pero sí
+      // por aquí): decir «revisa tu correo» sería mandar a esperar un enlace
+      // que nunca llega.
+      else if (r.data.session === null && (r.data.user?.identities?.length ?? 0) === 0) {
+        setError("Ese correo ya tiene cuenta: entra con tu contraseña o recupérala.");
+      } else if (r.data.session === null) setCorreoEnviado("verificacion");
     } else {
       const r = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: window.location.origin,

@@ -1,8 +1,10 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, CircleDashed, FlaskConical, ShieldAlert } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
+import { ConfirmDialog } from "../../components/ConfirmDialog.js";
 import {
   FormField,
   MoneyInput,
@@ -18,8 +20,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Badge } from "../../ui/badge.js";
 import { useToast } from "../../ui/toast.js";
 import { LlamadaApiError } from "../../lib.js";
-import { mostrarImporte } from "../../money.js";
+import { mostrarCantidad, mostrarImporte } from "../../money.js";
+import { mostrarPorcentaje } from "../../porcentaje.js";
 import { MensajeError } from "../ventas/comunes.js";
+import { porcentajeAFraccion } from "../negocio/comunes.js";
+import { fechaLocal, hoyLocal } from "../../fechas.js";
 
 /**
  * PUESTA A PUNTO FISCAL — R-16 resuelto como diseño.
@@ -31,29 +36,50 @@ import { MensajeError } from "../ventas/comunes.js";
  * Aquí cada uno es una casilla con su estado, su acción directa y su sello
  * VALIDAR donde el dato es una afirmación legal que un humano debe confirmar.
  *
- * Honestidad sobre el estado: dos pasos se COMPRUEBAN contra la API (tasa,
- * rango), y dos no tienen endpoint de lectura hoy (alícuota, régimen) — para
- * esos, la pantalla lo dice y ofrece una VERIFICACIÓN REAL: guardar una
- * cotización de prueba y leer la respuesta del motor. Los 409 dejan de parecer
- * avería y se vuelven onboarding.
+ * Los cinco pasos se COMPRUEBAN contra la API: alícuota y régimen salen de
+ * `GET /v1/fiscal/setup` (el mismo que usa /empezar), tasa y rango de sus
+ * listados. La VERIFICACIÓN REAL de abajo —una cotización de prueba— sigue
+ * siendo la prueba de fuego: lee la respuesta del motor, no una casilla.
  */
+
+/** Lo que trae `GET /v1/fiscal/setup` (apps/api/src/routes/fiscal-setup.ts). */
+interface RegimenFiscal {
+  code: string;
+  name: string;
+  description: string;
+  numbering_mode: string;
+  legal_source: string;
+}
+interface SetupFiscal {
+  regimes: RegimenFiscal[];
+  current_regime: string | null;
+  /** La alícuota general VIGENTE (fracción en string) con su fuente, o null. */
+  iva_general: { rate: string; legal_source: string } | null;
+}
+
+/** «BCV oficial vía DolarAPI (2026-09-11T00:00:00-04:00)» → «BCV oficial vía DolarAPI». */
+function fuenteCorta(source: string): string {
+  return source.replace(/\s*\([^)]*\)\s*$/, "");
+}
 function AlertaRangos(): React.JSX.Element | null {
   const { empresa, llamar } = useSesion();
+  // La ruta devuelve el ARRAY directamente (sales.ts): leer `.items` dejaba la
+  // alerta muda para siempre (auditoría 2026-09-11).
   const q = useQuery({
     queryKey: ["rangos-agotandose", empresa.id],
     queryFn: () =>
-      llamar<{
-        items: {
+      llamar<
+        {
           range_id: string;
           kind: string;
           series: string;
           remaining: number;
           total: number;
           pct_remaining: string;
-        }[];
-      }>("/v1/fiscal-number-ranges/exhaustion"),
+        }[]
+      >("/v1/fiscal-number-ranges/exhaustion"),
   });
-  const items = q.data?.items ?? [];
+  const items = q.data ?? [];
   if (items.length === 0) return null;
   return (
     <div className="mb-4 rounded-md border border-warning-soft bg-warning-soft/40 p-3">
@@ -74,13 +100,44 @@ function AlertaRangos(): React.JSX.Element | null {
 }
 
 export function ChecklistFiscal(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
 
+  // La misma clave que /empezar y el POS: una carga aquí se ve allá sin recargar.
+  const setup = useQuery({
+    queryKey: ["empezar-fiscal", empresa.id],
+    queryFn: () => llamar<SetupFiscal>("/v1/fiscal/setup"),
+  });
   const tasas = useQuery({
-    queryKey: ["tasas", "USD-VES"],
+    queryKey: ["tasas", empresa.id, "USD-VES"],
     queryFn: () =>
       llamar<{ rate: string; source: string; rate_date: string }[]>("/v1/exchange-rates"),
   });
+  // La «última» tasa es la que usa el dominio: la de `rate_date` más reciente
+  // y, a igual fecha, la última creada. La lista llega ordenada por
+  // `rate_date desc` y sin `created_at`, así que se toma la primera fila tal
+  // como llega. PENDIENTE (contrato): la API ordenará con desempate por
+  // creación; hasta entonces, dos tasas del mismo día pueden enseñarse en el
+  // orden que Postgres quiera.
+  const ultimaTasa = tasas.data?.[0];
+  // En un `const` local: el estrechamiento de `setup.data` no sobrevive
+  // dentro del callback de `find`, el de una constante sí.
+  const datos = setup.data;
+  const ivaVigente = datos?.iva_general ?? null;
+  const regimenVigente =
+    datos === undefined || datos.current_regime === null
+      ? null
+      : (datos.regimes.find((r) => r.code === datos.current_regime) ?? {
+          code: datos.current_regime,
+          name: datos.current_regime,
+          description: "",
+          numbering_mode: "",
+          legal_source: "",
+        });
+  // Solo desde «sin régimen» o «sin facturación» deja la API asignar aquí; el
+  // resto es un acto del mundo técnico (/admin/facturacion-fiscal).
+  const puedeAsignarRegimen =
+    puede("fiscal.regime.manage") &&
+    (setup.data?.current_regime === null || setup.data?.current_regime === "sin_facturacion");
   const rangos = useQuery({
     queryKey: ["rangos", empresa.id],
     queryFn: () =>
@@ -113,21 +170,61 @@ export function ChecklistFiscal(): React.JSX.Element {
         <Paso
           numero={1}
           titulo="Alícuota de IVA con fuente legal"
-          estado="manual"
+          estado={
+            setup.isPending
+              ? "cargando"
+              : setup.isError
+                ? "error"
+                : ivaVigente !== null
+                  ? "completo"
+                  : "pendiente"
+          }
           codigo409="TAX_RULE_MISSING"
-          resumen="La API aún no expone la lectura de tax_rules: el estado no puede comprobarse aquí. La regla se carga hoy por operación, con su fuente citada (ADR-0038: sin regla no se emite — el sistema no adivina alícuotas)."
+          resumen={
+            setup.isError
+              ? "No se pudo consultar la puesta a punto fiscal."
+              : ivaVigente !== null
+                ? `Alícuota general vigente: ${mostrarPorcentaje(ivaVigente.rate)}. Fuente: ${ivaVigente.legal_source}`
+                : "Sin alícuota general vigente: no se emite (ADR-0038 — el sistema no adivina alícuotas). Se carga en /empezar, o aquí mismo si tienes el permiso."
+          }
           sello="VALIDAR-SENIAT: la alícuota y su vigencia deben venir de la norma, citada en legal_source."
-        />
+          extra={
+            setup.isError ? (
+              <Reintentar error={setup.error} reintentar={() => void setup.refetch()} />
+            ) : ivaVigente === null && !puede("tax.rules.manage") ? (
+              <EnlaceEmpezar />
+            ) : undefined
+          }
+        >
+          {ivaVigente === null && puede("tax.rules.manage") ? <AceptarIva /> : undefined}
+        </Paso>
 
         <Paso
           numero={2}
           titulo="Tasa de cambio BCV"
-          estado={tasas.isPending ? "cargando" : tasaOk ? "completo" : "pendiente"}
+          estado={
+            tasas.isPending
+              ? "cargando"
+              : tasas.isError
+                ? "error"
+                : tasaOk
+                  ? "completo"
+                  : "pendiente"
+          }
           codigo409="EXCHANGE_RATE_MISSING"
           resumen={
-            tasaOk && tasas.data !== undefined && tasas.data[0] !== undefined
-              ? `Última: ${tasas.data[0].rate} (${tasas.data[0].source}, ${tasas.data[0].rate_date})`
-              : "Sin tasa cargada: cualquier operación en divisa fallará."
+            tasas.isError
+              ? "No se pudieron consultar las tasas."
+              : ultimaTasa !== undefined
+                ? `Última: ${mostrarCantidad(ultimaTasa.rate)} Bs/USD · ${fuenteCorta(ultimaTasa.source)} · ${fechaLocal(ultimaTasa.rate_date)}`
+                : "Sin tasa cargada: cualquier operación en divisa fallará."
+          }
+          extra={
+            tasas.isError ? (
+              <Reintentar error={tasas.error} reintentar={() => void tasas.refetch()} />
+            ) : puede("fx.rate.manage") ? (
+              <TraerDelBcv />
+            ) : undefined
           }
         >
           <CargarTasa />
@@ -136,11 +233,36 @@ export function ChecklistFiscal(): React.JSX.Element {
         <Paso
           numero={3}
           titulo="Régimen fiscal de la empresa"
-          estado="manual"
+          estado={
+            setup.isPending
+              ? "cargando"
+              : setup.isError
+                ? "error"
+                : regimenVigente !== null
+                  ? "completo"
+                  : "pendiente"
+          }
           codigo409="FISCAL_NUMBERING_INVALID"
-          resumen="El régimen (formatos libres, máquina fiscal…) decide cómo se numera. Hoy se asigna por operación (company_fiscal_regimes, ADR-0029); no hay endpoint para leerlo ni asignarlo desde aquí."
+          resumen={
+            setup.isError
+              ? "No se pudo consultar la puesta a punto fiscal."
+              : regimenVigente !== null
+                ? `Régimen vigente: ${regimenVigente.name}${regimenVigente.legal_source === "" ? "" : ` · ${regimenVigente.legal_source}`}. El régimen decide cómo se numera (company_fiscal_regimes, ADR-0029).`
+                : "Sin régimen vigente: el régimen (formatos libres, máquina fiscal…) decide cómo se numera. Se asigna en /empezar, o aquí mismo si tienes el permiso."
+          }
           sello="VALIDAR-SENIAT: qué régimen corresponde a la empresa lo confirma su contador."
-        />
+          extra={
+            setup.isError ? (
+              <Reintentar error={setup.error} reintentar={() => void setup.refetch()} />
+            ) : regimenVigente === null && !puedeAsignarRegimen ? (
+              <EnlaceEmpezar />
+            ) : undefined
+          }
+        >
+          {puedeAsignarRegimen && setup.data !== undefined ? (
+            <AsignarRegimen regimenes={setup.data.regimes} />
+          ) : undefined}
+        </Paso>
 
         <Paso
           numero={4}
@@ -190,6 +312,36 @@ export function ChecklistFiscal(): React.JSX.Element {
   );
 }
 
+/** El fallo de una consulta, dicho en voz de persona y con su reintento. */
+function Reintentar({
+  error,
+  reintentar,
+}: {
+  error: unknown;
+  reintentar: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <MensajeError error={error} />
+      <Button variant="secondary" size="sm" onClick={reintentar}>
+        Reintentar
+      </Button>
+    </div>
+  );
+}
+
+/** Quien no tiene el permiso para cargarlo aquí, lo carga (o lo pide) desde el asistente. */
+function EnlaceEmpezar(): React.JSX.Element {
+  return (
+    <p className="text-[0.85rem] text-muted-foreground">
+      Se carga desde el asistente:{" "}
+      <Link to="/empezar" className="text-accent-soft-foreground underline">
+        ir a Empezar →
+      </Link>
+    </p>
+  );
+}
+
 function Paso({
   numero,
   titulo,
@@ -197,14 +349,17 @@ function Paso({
   resumen,
   codigo409,
   sello,
+  extra,
   children,
 }: {
   numero: number;
   titulo: string;
-  estado: "completo" | "pendiente" | "cargando" | "manual";
+  estado: "completo" | "pendiente" | "cargando" | "error";
   resumen: string;
   codigo409: string;
   sello?: string;
+  /** Lo que se enseña SIEMPRE bajo el resumen (un enlace, un reintento, un botón directo). */
+  extra?: React.ReactNode;
   children?: React.ReactNode;
 }): React.JSX.Element {
   const [abierto, setAbierto] = useState(false);
@@ -227,7 +382,7 @@ function Paso({
           </Badge>
           {estado === "completo" && <Badge tone="accent">Completo</Badge>}
           {estado === "pendiente" && <Badge tone="warning">Pendiente</Badge>}
-          {estado === "manual" && <Badge tone="info">Por operación</Badge>}
+          {estado === "error" && <Badge tone="destructive">Sin comprobar</Badge>}
         </div>
       </CardHeader>
       <CardContent>
@@ -237,6 +392,7 @@ function Paso({
             <ShieldAlert className="mt-px size-3.5 shrink-0" /> {sello}
           </p>
         )}
+        {extra !== undefined && <div className="mt-3">{extra}</div>}
         {children !== undefined && (
           <div className="mt-3">
             {abierto ? (
@@ -253,11 +409,197 @@ function Paso({
   );
 }
 
-function CargarTasa(): React.JSX.Element {
-  const { llamar } = useSesion();
+/**
+ * ACEPTAR la alícuota general — el mismo acto y el mismo cuerpo que el
+ * asistente de /empezar (`POST /v1/fiscal/iva-general`, `{ rate }` como
+ * fracción en string). Ladino no la afirma: la escribe y la acepta la persona,
+ * y queda su acta con usuario y fecha. Exige `tax.rules.manage` en servidor.
+ */
+function AceptarIva(): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
   const qc = useQueryClient();
   const toast = useToast();
-  const hoy = new Date().toISOString().slice(0, 10);
+  const [porcentaje, setPorcentaje] = useState("");
+  const [error, setError] = useState<unknown>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  async function aceptar(): Promise<void> {
+    const fraccion = porcentajeAFraccion(porcentaje);
+    if (fraccion === null) return;
+    setError(null);
+    setOcupado(true);
+    try {
+      await llamar("/v1/fiscal/iva-general", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ rate: fraccion }),
+      });
+      toast.success("Alícuota aceptada", "Queda en la auditoría con tu usuario y la fecha.");
+      await qc.invalidateQueries({ queryKey: ["empezar-fiscal", empresa.id] });
+    } catch (e) {
+      setError(e);
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border border-border bg-surface-muted/40 p-3">
+      <p className="text-[0.88rem] text-muted-foreground">
+        El porcentaje lo fija la ley, no Ladino: escríbelo tú y confírmalo con tu contador. Al
+        aceptar queda registrado con tu usuario y la fecha de hoy.
+      </p>
+      <div className="flex flex-wrap items-end gap-2">
+        <FormField label="Porcentaje (%)" required>
+          {(a) => (
+            <Input
+              id={a.id}
+              value={porcentaje}
+              onChange={(e) => setPorcentaje(e.target.value)}
+              inputMode="decimal"
+              className="w-28"
+            />
+          )}
+        </FormField>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={ocupado || porcentajeAFraccion(porcentaje) === null}
+          onClick={() => void aceptar()}
+        >
+          Acepto este porcentaje
+        </Button>
+      </div>
+      {error !== null && <MensajeError error={error} />}
+    </div>
+  );
+}
+
+/**
+ * ASIGNAR el régimen — el mismo cuerpo que /empezar (`POST /v1/fiscal/regime`,
+ * `{ regime_code }`, y `reason` solo si la empresa ya emitió documentos). El
+ * catálogo viene del servidor con su norma citada; aquí no se inventa ninguno.
+ * Exige `fiscal.regime.manage` en servidor.
+ */
+function AsignarRegimen({ regimenes }: { regimenes: RegimenFiscal[] }): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [codigo, setCodigo] = useState<string | null>(null);
+  const [motivo, setMotivo] = useState("");
+  const [error, setError] = useState<unknown>(null);
+  const [ocupado, setOcupado] = useState(false);
+  const elegido = regimenes.find((r) => r.code === codigo) ?? null;
+
+  async function asignar(): Promise<void> {
+    if (codigo === null) return;
+    setError(null);
+    setOcupado(true);
+    try {
+      await llamar("/v1/fiscal/regime", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          regime_code: codigo,
+          ...(motivo.trim() === "" ? {} : { reason: motivo.trim() }),
+        }),
+      });
+      toast.success("Régimen asignado");
+      await qc.invalidateQueries({ queryKey: ["empezar-fiscal", empresa.id] });
+    } catch (e) {
+      setError(e);
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border border-border bg-surface-muted/40 p-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <FormField label="Régimen" required>
+          {(a) => (
+            <SimpleSelect
+              id={a.id}
+              value={codigo}
+              onValueChange={setCodigo}
+              options={regimenes.map((r) => ({ value: r.code, label: r.name }))}
+            />
+          )}
+        </FormField>
+        <FormField
+          label="Motivo (solo si ya emitiste documentos fiscales)"
+          hint="Queda en la auditoría como acta del cambio."
+        >
+          {(a) => <Input id={a.id} value={motivo} onChange={(e) => setMotivo(e.target.value)} />}
+        </FormField>
+      </div>
+      {elegido !== null && (
+        <p className="text-[0.82rem] text-muted-foreground">
+          {elegido.description}
+          {elegido.legal_source === "" ? "" : ` · ${elegido.legal_source}`}
+        </p>
+      )}
+      {error !== null && <MensajeError error={error} />}
+      <Button
+        variant="primary"
+        size="sm"
+        disabled={ocupado || codigo === null}
+        onClick={() => void asignar()}
+      >
+        Asignar el régimen
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * La tasa OFICIAL, traída del adaptador BCV del servidor (`POST
+ * /v1/exchange-rates/bcv`): el mismo día publicado dos veces es UNA fila.
+ * Exige `fx.rate.manage` en servidor; la carga manual de abajo sigue siendo
+ * el fallback sin internet.
+ */
+function TraerDelBcv(): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [error, setError] = useState<unknown>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  async function traer(): Promise<void> {
+    setError(null);
+    setOcupado(true);
+    try {
+      const r = await llamar<{ rate: string; rate_date: string }>("/v1/exchange-rates/bcv", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+      });
+      toast.success(
+        "Tasa del BCV traída",
+        `${mostrarCantidad(r.rate)} Bs/USD del ${fechaLocal(r.rate_date)}`,
+      );
+      await qc.invalidateQueries({ queryKey: ["tasas", empresa.id] });
+    } catch (e) {
+      setError(e);
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <Button variant="secondary" size="sm" disabled={ocupado} onClick={() => void traer()}>
+        {ocupado ? "Consultando al BCV…" : "Traer del BCV"}
+      </Button>
+      {error !== null && <MensajeError error={error} />}
+    </div>
+  );
+}
+
+function CargarTasa(): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const hoy = hoyLocal();
   const [rate, setRate] = useState("");
   const [source, setSource] = useState("BCV");
   const [fecha, setFecha] = useState(hoy);
@@ -280,7 +622,10 @@ function CargarTasa(): React.JSX.Element {
         }),
       });
       toast.success("Tasa cargada");
-      await qc.invalidateQueries({ queryKey: ["tasas", "USD-VES"] });
+      // La clave real es ["tasas", empresa.id, "USD-VES"]: con ["tasas",
+      // "USD-VES"] el prefijo no coincidía y el Paso 2 seguía en «Pendiente»
+      // después de cargar (auditoría 2026-09-11).
+      await qc.invalidateQueries({ queryKey: ["tasas", empresa.id] });
     } catch (e) {
       setError(e);
     } finally {
@@ -543,12 +888,26 @@ function Contingencia({ rangos }: { rangos: RangoContingencia[] }): React.JSX.El
   const [rangoElegido, setRangoElegido] = useState<string | null>(null);
   const [cliente, setCliente] = useState<EntityOption | null>(null);
   const [producto, setProducto] = useState<EntityOption | null>(null);
+  // El depósito se ELIGE: antes se tomaba `almacenes[0]` a ciegas, y en una
+  // empresa con dos depósitos la factura de papel descontaba stock del que
+  // Postgres listara primero.
+  const [deposito, setDeposito] = useState<string | null>(null);
   const [factura, setFactura] = useState({
     cantidad: "1",
     emitida: "",
     papel_numero: "",
     papel_control: "",
   });
+  // Cerrar la falla es irreversible: pasa por confirmación (UX no negociable).
+  const [cerrando, setCerrando] = useState<RangoContingencia | null>(null);
+
+  const depositos = useQuery({
+    queryKey: ["depositos", empresa.id],
+    queryFn: () => llamar<{ id: string; code: string; name: string }[]>("/v1/warehouses"),
+  });
+  // Con un solo depósito no hay nada que elegir: se toma ese.
+  const unicoDeposito = depositos.data?.length === 1 ? (depositos.data[0]?.id ?? null) : null;
+  const depositoElegido = deposito ?? unicoDeposito;
 
   const recargar = () => qc.invalidateQueries({ queryKey: ["contingencias", empresa.id] });
 
@@ -579,12 +938,10 @@ function Contingencia({ rangos }: { rangos: RangoContingencia[] }): React.JSX.El
   }
 
   async function registrarFactura(): Promise<void> {
+    if (depositoElegido === null) return;
     setError(null);
     setOcupado(true);
     try {
-      const almacenes = await llamar<{ id: string }[]>("/v1/warehouses");
-      const deposito = almacenes[0]?.id;
-      if (deposito === undefined) throw new Error("La empresa no tiene almacén configurado.");
       await llamar("/v1/fiscal/contingency-invoices", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
@@ -592,7 +949,7 @@ function Contingencia({ rangos }: { rangos: RangoContingencia[] }): React.JSX.El
           company_id: empresa.id,
           contingency_range_id: rangoElegido,
           customer_id: cliente?.id,
-          warehouse_id: deposito,
+          warehouse_id: depositoElegido,
           issued_at: new Date(factura.emitida).toISOString(),
           lines: [{ product_id: producto?.id, quantity: factura.cantidad.trim() }],
           paper_document_number: factura.papel_numero.trim(),
@@ -611,6 +968,7 @@ function Contingencia({ rangos }: { rangos: RangoContingencia[] }): React.JSX.El
 
   async function cerrar(id: string): Promise<void> {
     setError(null);
+    setOcupado(true);
     try {
       await llamar(`/v1/fiscal/contingency-ranges/${id}/close`, {
         method: "PUT",
@@ -624,11 +982,30 @@ function Contingencia({ rangos }: { rangos: RangoContingencia[] }): React.JSX.El
       await recargar();
     } catch (e) {
       setError(e);
+    } finally {
+      setOcupado(false);
     }
   }
 
   return (
     <div className="space-y-4 rounded-md border border-border bg-surface-muted/40 p-3">
+      <ConfirmDialog
+        open={cerrando !== null}
+        onOpenChange={(v) => {
+          if (!v) setCerrando(null);
+        }}
+        title="Cerrar la falla"
+        confirmLabel="Cerrar la falla"
+        destructive
+        onConfirm={async () => {
+          if (cerrando !== null) await cerrar(cerrando.id);
+        }}
+      >
+        Se cierra el período de contingencia del talonario{" "}
+        <span className="font-mono">{cerrando?.series}</span> con la hora de ahora. Después de
+        cerrarlo no se puede registrar ninguna factura de papel más contra él; las que falten quedan
+        fuera y no hay vuelta atrás.
+      </ConfirmDialog>
       {rangos.length > 0 && (
         <ul className="space-y-1 text-sm">
           {rangos.map((r) => (
@@ -638,8 +1015,8 @@ function Contingencia({ rangos }: { rangos: RangoContingencia[] }): React.JSX.El
                 {r.range_from}–{r.range_to} · quedan {r.remaining} · {r.reason}
               </span>
               {r.failure_ended_at === null ? (
-                <Button variant="ghost" size="sm" onClick={() => void cerrar(r.id)}>
-                  Cerrar la falla
+                <Button variant="ghost" size="sm" disabled={ocupado} onClick={() => setCerrando(r)}>
+                  Cerrar la falla…
                 </Button>
               ) : (
                 <Badge tone="outline">cerrada</Badge>
@@ -781,6 +1158,23 @@ function Contingencia({ rangos }: { rangos: RangoContingencia[] }): React.JSX.El
                 />
               )}
             </FormField>
+            <FormField label="Depósito" required hint="De dónde sale la mercancía de esa factura.">
+              {(a) => (
+                <SimpleSelect
+                  id={a.id}
+                  value={depositoElegido}
+                  onValueChange={setDeposito}
+                  disabled={depositos.isPending}
+                  placeholder={
+                    depositos.data?.length === 0 ? "La empresa no tiene depósito" : "Elige…"
+                  }
+                  options={(depositos.data ?? []).map((d) => ({
+                    value: d.id,
+                    label: `${d.code} · ${d.name}`,
+                  }))}
+                />
+              )}
+            </FormField>
             <FormField label="Cantidad" required>
               {(a) => (
                 <Input
@@ -833,6 +1227,7 @@ function Contingencia({ rangos }: { rangos: RangoContingencia[] }): React.JSX.El
               rangoElegido === null ||
               cliente === null ||
               producto === null ||
+              depositoElegido === null ||
               factura.emitida === "" ||
               factura.papel_numero.trim() === "" ||
               factura.papel_control.trim() === ""

@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@ladino/core";
+import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
 import {
   currencyDefinition,
@@ -10,6 +11,7 @@ import {
   type Decimal,
   type RoundingMode,
   type RoundingPolicy,
+  type Scale,
 } from "@ladino/money";
 import { listedPriceOf, resolvePrice } from "@ladino/pricing";
 import {
@@ -72,8 +74,57 @@ export type SalesError =
   | { code: "APPEND_ONLY_VIOLATION"; message: string }
   | { code: "REGIME_KIND_NOT_ALLOWED"; message: string };
 
-/** Política de redondeo del documento. Se persiste con cada línea (ADR-0024). */
-const DOC_POLICY: RoundingPolicy = { id: "sales:document:8:HALF_UP", scale: 8, mode: "HALF_UP" };
+/**
+ * Redondeo de la VALORACIÓN (cobros y diferencial cambiario): la escala de
+ * `numeric(24,8)`. No es lo que ve el cliente en el documento — para eso está
+ * `politicaDelDocumento` — sino lo que la contabilidad compara al céntimo de
+ * ocho decimales entre caja, deuda saldada y diferencial (ADR-0058 §Lo que no
+ * cambia).
+ */
+const VALORACION_POLICY: RoundingPolicy = {
+  id: "sales:valuation:8:HALF_UP",
+  scale: 8,
+  mode: "HALF_UP",
+};
+
+/**
+ * El precio unitario NO se redondea a la moneda: un precio de lista puede
+ * llevar tres decimales (combustible, granel) y es la base × cantidad lo que
+ * se cobra. Esta política solo interviene si la lista está en otra moneda que
+ * el documento (hoy nunca: identidad).
+ */
+const PRECIO_POLICY: RoundingPolicy = { id: "sales:price:8:HALF_UP", scale: 8, mode: "HALF_UP" };
+
+/**
+ * Modo de redondeo del documento de venta (ADR-0058). Con nombre propio, como
+ * `MODO_IGTF`: el día que el contador confirme el modo, el cambio es UNA línea,
+ * y viaja en el `rounding_policy_id` de cada documento y cada línea.
+ *
+ * VALIDAR-TRIBUTARIO: `HALF_UP` es el modo que ya usaba todo el pipeline;
+ * MONEY_AND_ROUNDING_SPEC §6.3 deja el modo al asesor. La ESCALA no está en
+ * duda: son las minor units ISO-4217 de la moneda del documento.
+ */
+const MODO_DOCUMENTO: RoundingMode = "HALF_UP";
+
+/** Minor units ISO-4217 de una moneda del registro; 8 si no está (Money.of la rechazará). */
+export function minorUnitsOf(currency: string): Scale {
+  const code = parseCurrency(currency);
+  return code.ok ? currencyDefinition(code.value).minorUnits : 8;
+}
+
+/**
+ * La política del documento EN su moneda: base y impuesto de cada línea, y por
+ * suma el pie, a lo que esa moneda sabe cobrar (`sales:document:2:HALF_UP` para
+ * VES y USD). Se persiste en `documents` y en `document_lines` (ADR-0024).
+ */
+function politicaDelDocumento(currency: string): RoundingPolicy {
+  const escala = minorUnitsOf(currency);
+  return {
+    id: `sales:document:${String(escala)}:${MODO_DOCUMENTO}`,
+    scale: escala,
+    mode: MODO_DOCUMENTO,
+  };
+}
 
 /**
  * Modo de redondeo de la percepción de IGTF (ADR-0053).
@@ -260,14 +311,22 @@ interface LineaCalculada {
 }
 
 /**
- * A funcional: importe × tasa, redondeado a la escala del documento (8, HALF_UP).
+ * A funcional: importe × tasa, redondeado a las minor units de la moneda
+ * FUNCIONAL (ADR-0058): el bolívar contable tiene dos decimales, igual que el
+ * del documento. El pie funcional es la suma de líneas ya redondeadas y el
+ * impuesto funcional se deriva por resta, así que `documents_amounts_chk`
+ * cuadra por construcción.
  *
  * La conversión se hace UNA vez por importe y se persiste; no se recalcula al
  * leer. Un documento que se reinterpreta con la tasa de hoy cada vez que se
  * abre no es un documento, es una estimación.
  */
 function aFuncional(m: Money, tasa: Decimal, funcional: string): Result<Money, SalesError> {
-  const convertido = Money.of(m.multiply(tasa).amount.toDecimalPlaces(8, 4).toFixed(8), funcional);
+  const escala = minorUnitsOf(funcional);
+  const convertido = Money.of(
+    m.multiply(tasa).amount.toDecimalPlaces(escala, 4).toFixed(escala),
+    funcional,
+  );
   if (!convertido.ok) return err({ code: "VALIDATION_FAILED", message: convertido.error.message });
   return ok(convertido.value);
 }
@@ -312,12 +371,9 @@ async function calcularLineas(
   let rateSource = "identidad";
   if (lista.currency_code !== input.functionalCurrency) {
     const [tasa] = await sql<{ rate: string | null; source: string | null }[]>`
-      select r.rate::text as rate, r.source
-        from public.exchange_rates r
-       where r.from_currency = ${lista.currency_code}
-         and r.to_currency = ${input.functionalCurrency}
-         and r.rate_date <= ${input.fecha}::date
-       order by r.rate_date desc, r.created_at desc limit 1`;
+      select f.rate::text as rate, f.source
+        from platform.rate_for(${input.companyId}, ${lista.currency_code},
+                               ${input.functionalCurrency}, ${diaNegocio(input.fecha)}::date) f`;
     if (!tasa?.rate) {
       return err({
         code: "EXCHANGE_RATE_MISSING",
@@ -327,6 +383,9 @@ async function calcularLineas(
     fxRate = parseDecimal(tasa.rate);
     rateSource = tasa.source ?? "manual";
   }
+  // La política del documento EN su moneda (ADR-0058): base e impuesto de cada
+  // línea a las minor units; el pie, por suma.
+  const politica = politicaDelDocumento(lista.currency_code);
   if (!fxRate.ok) return err({ code: "VALIDATION_FAILED", message: fxRate.error.message });
   const tasaDecimal = fxRate.value;
 
@@ -372,7 +431,8 @@ async function calcularLineas(
         (sp) => sp<{ cat: string; tax_rule_id: string; rate: string }[]>`
           select u.cat, t.tax_rule_id, t.rate::text as rate
             from unnest(${categorias}::text[]) as u(cat),
-                 lateral platform.resolve_tax(${input.fecha}::date, ${JURISDICTION}, ${TAX_CODE},
+                 lateral platform.resolve_tax(${input.companyId}, ${diaNegocio(input.fecha)}::date,
+                                              ${JURISDICTION}, ${TAX_CODE},
                                               ${contraparte.taxpayer_type_code}, u.cat) t`,
       );
       for (const r of reglas) alicuotas.set(r.cat, r);
@@ -419,7 +479,7 @@ async function calcularLineas(
       quantity: cantidad.value,
       documentCurrency: lista.currency_code,
       fxRate: identidad.value,
-      roundingPolicy: DOC_POLICY,
+      roundingPolicy: PRECIO_POLICY,
     });
     if (!resuelto.ok) {
       return err({
@@ -449,8 +509,8 @@ async function calcularLineas(
       quantity: cantidad.value,
       unitPrice: resuelto.value.unitPriceDocumentCurrency,
       taxRate: taxRate.value,
-      basePolicy: DOC_POLICY,
-      taxPolicy: DOC_POLICY,
+      basePolicy: politica,
+      taxPolicy: politica,
     });
     if (!calc.ok) return err({ code: "VALIDATION_FAILED", message: calc.error.message });
 
@@ -647,7 +707,8 @@ async function insertarDocumento(
             ${d.sourceDocumentId},
             ${d.transactionCurrency}, ${ctx.functionalCurrency}, ${d.fxRate.toFixed()},
             ${d.rateSource}, now(),
-            ${DOC_POLICY.id}, ${totales.value.total.toAmountString()}, ${totFunc.toFixed(8)},
+            ${politicaDelDocumento(d.transactionCurrency).id},
+            ${totales.value.total.toAmountString()}, ${totFunc.toFixed(8)},
             ${subFunc.toFixed(8)}, ${taxFunc.toFixed(8)}, ${totFunc.toFixed(8)}, ${d.notes},
             ${contraparte.name}, ${contraparte.tax_id}, ${contraparte.address},
             ${emisor!.name}, ${emisor!.tax_id}, ${emisor!.address},
@@ -718,7 +779,8 @@ async function insertarDocumento(
            x.line_total_transaction, x.line_total_functional,
            x.amount_transaction_currency, ${d.transactionCurrency}, ${d.fxRate.toFixed()},
            x.functional_amount,
-           ${ctx.functionalCurrency}, ${d.rateSource}, now(), ${DOC_POLICY.id}, x.cost_snapshot,
+           ${ctx.functionalCurrency}, ${d.rateSource}, now(),
+           ${politicaDelDocumento(d.transactionCurrency).id}, x.cost_snapshot,
            -- El tratamiento se deriva con la función de la base y NO aquí
            -- (una segunda definición en TypeScript es cómo dos libros
            -- clasifican distinto la misma línea) — salvo el RECIBO
@@ -887,7 +949,10 @@ export async function confirmOrder(
 
   const [doc] = await sql<{ id: string; status: string; kind: string }[]>`
     select id, status, kind from public.documents
-     where id = ${documentId} and company_id = ${input.company_id}`;
+     where id = ${documentId} and company_id = ${input.company_id}
+     for update`;
+  // `for update`: dos confirmaciones simultáneas del mismo pedido reservaban
+  // dos veces (auditoría 2026-09-11, M-16). La segunda espera y ve 'confirmed'.
   if (!doc) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   if (doc.kind !== "order") {
     return err({ code: "VALIDATION_FAILED", message: "Solo un pedido se confirma." });
@@ -913,7 +978,13 @@ export async function confirmOrder(
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   for (const l of lineas) {
     // El disponible descuenta lo YA reservado por otros pedidos: reservar dos
-    // veces la misma unidad es exactamente lo que esta tabla evita.
+    // veces la misma unidad es exactamente lo que esta tabla evita. Y la
+    // posición se BLOQUEA antes de leerla: dos pedidos distintos sobre el mismo
+    // producto se serializan, y el segundo calcula sobre lo que reservó el
+    // primero (M-16).
+    await sql`
+      select 1 from platform.lock_stock_position(
+        ${input.company_id}, ${input.warehouse_id}, ${l.product_id}, null)`;
     const [disp] = await sql<{ available: string }[]>`
       select available::text from platform.available_stock(
         ${input.company_id}, ${input.warehouse_id}, ${l.product_id}, null)`;
@@ -1121,7 +1192,7 @@ async function emitirVenta(
       sourceKind: kind === "receipt" ? "sales_receipt" : "sales_invoice",
       sourceEvent: kind === "receipt" ? "sales.receipt.issued" : "fiscal.invoice.issued",
       sourceId: doc.value.id,
-      postingDate: fecha.slice(0, 10),
+      postingDate: diaNegocio(fecha),
       postedBy: actor.userId,
       description: `${kind === "receipt" ? "Recibo" : "Factura"} ${doc.value.series}-${doc.value.document_number ?? ""}`,
       functionalCurrency: ctx.value.functionalCurrency,
@@ -1260,7 +1331,10 @@ export async function registerPayment(
     }[]
   >`select id, status, total_amount::text as total_amount, transaction_currency,
            fx_rate::text as fx_rate, functional_currency, customer_id
-      from public.documents where id = ${input.document_id} and company_id = ${input.company_id}`;
+      from public.documents where id = ${input.document_id} and company_id = ${input.company_id}
+      for update`;
+  // `for update`: dos cobros simultáneos del mismo total pasaban ambos el
+  // tope (auditoría 2026-09-11, A-26). El segundo espera y ve el saldo real.
   if (!doc) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   if (doc.status !== "issued") {
     return err({
@@ -1274,10 +1348,9 @@ export async function registerPayment(
   let fuenteCobro = "identidad";
   if (input.currency !== ctx.value.functionalCurrency) {
     const [t] = await sql<{ rate: string | null; source: string | null }[]>`
-      select r.rate::text as rate, r.source from public.exchange_rates r
-       where r.from_currency = ${input.currency} and r.to_currency = ${ctx.value.functionalCurrency}
-         and r.rate_date <= ${fecha}::date
-       order by r.rate_date desc, r.created_at desc limit 1`;
+      select f.rate::text as rate, f.source
+        from platform.rate_for(${input.company_id}, ${input.currency},
+                               ${ctx.value.functionalCurrency}, ${diaNegocio(fecha)}::date) f`;
     if (!t?.rate) {
       return err({
         code: "EXCHANGE_RATE_MISSING",
@@ -1304,6 +1377,52 @@ export async function registerPayment(
   // El saldo se CALCULA, nunca se lee de una columna.
   const [saldoAntes] = await sql<{ saldo: string }[]>`
     select platform.document_balance(${input.company_id}, ${input.document_id})::text as saldo`;
+
+  // TOPE: un cobro no supera lo pendiente (A-26). Se compara en la moneda que
+  // DECIDE el saldo (ADR-0047): la del documento si el cobro va en ella, la
+  // funcional si no. El exceso no se guarda como cobro: para eso está el
+  // saldo a favor (nota de crédito) — y la caja (quickSale) da vuelto, no
+  // pasa por aquí. Tolerancia: medio céntimo de la moneda que decide (R-02).
+  if (input.instrument !== "saldo_a_favor") {
+    const docEnFuncional = doc.transaction_currency === ctx.value.functionalCurrency;
+    // Qué se compara con qué: si el documento vive en la funcional, el saldo
+    // funcional contra el cobro funcional; si vive en divisa, el saldo EN LA
+    // DIVISA contra el cobro llevado a esa divisa (tal cual si vino en ella;
+    // a la tasa doc→funcional del día si vino en bolívares — la misma con la
+    // que abajo se valora la porción saldada). Sin tasa, el cap no decide:
+    // el camino de abajo rechazará con EXCHANGE_RATE_MISSING.
+    let pendiente: string | undefined;
+    let cobrado: string | undefined;
+    let moneda = ctx.value.functionalCurrency;
+    if (docEnFuncional) {
+      pendiente = saldoAntes?.saldo;
+      cobrado = funcionalRedondeado.value.amount.toFixed();
+    } else {
+      moneda = doc.transaction_currency;
+      const [tx] = await sql<{ saldo: string }[]>`
+        select platform.document_balance_transaction(
+                 ${input.company_id}, ${input.document_id})::text as saldo`;
+      pendiente = tx?.saldo;
+      if (input.currency === doc.transaction_currency) {
+        cobrado = importe.value.amount.toFixed();
+      } else {
+        const [conv] = await sql<{ v: string | null }[]>`
+          select round(${funcionalRedondeado.value.amount.toFixed()}::numeric
+                       / platform.rate_at(${input.company_id}, ${doc.transaction_currency},
+                                          ${doc.functional_currency},
+                                          ${diaNegocio(fecha)}::date), 8)::text as v`;
+        cobrado = conv?.v ?? undefined;
+      }
+    }
+    const pend = pendiente === undefined ? null : parseDecimal(pendiente);
+    const cob = cobrado === undefined ? null : parseDecimal(cobrado);
+    if (pend?.ok && cob?.ok && cob.value.minus(pend.value).greaterThan("0.005")) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `El cobro supera lo pendiente: quedan ${pend.value.toDecimalPlaces(2, 4).toFixed(2)} ${moneda} por cobrar. Ajusta el importe; si el cliente pagó de más, regístralo como saldo a favor con una nota de crédito.`,
+      });
+    }
+  }
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
@@ -1495,7 +1614,7 @@ export async function registerPayment(
         functionalCurrency: ctx.value.functionalCurrency,
         rateAtIssue: tasaEmision.value,
         rateAtPayment: tasaCobroDec.value,
-        policy: DOC_POLICY,
+        policy: VALORACION_POLICY,
       });
       if (!dif.ok) return err({ code: "VALIDATION_FAILED", message: dif.error.message });
       if (!dif.value.difference.isZero()) {
@@ -1509,7 +1628,7 @@ export async function registerPayment(
                   ${dif.value.functionalAtIssue.toAmountString()},
                   ${dif.value.functionalAtPayment.toAmountString()},
                   ${dif.value.difference.toAmountString()},
-                  ${tasaEmision.value.toFixed()}, ${tasaCobroDec.value.toFixed()}, ${fecha}::date)
+                  ${tasaEmision.value.toFixed()}, ${tasaCobroDec.value.toFixed()}, ${diaNegocio(fecha)}::date)
           returning id, document_id, payment_id, amount_transaction::text as amount_transaction,
                     transaction_currency, functional_at_issue::text as functional_at_issue,
                     functional_at_payment::text as functional_at_payment,
@@ -1524,8 +1643,9 @@ export async function registerPayment(
       // recalculado, para que el asiento (caja = deuda saldada + diferencial)
       // cuadre al céntimo con lo cobrado.
       const [tasaDocHoy] = await sql<{ rate: string | null }[]>`
-        select platform.rate_at(${doc.transaction_currency}, ${doc.functional_currency},
-                                ${fecha}::date)::text as rate`;
+        select platform.rate_at(${input.company_id}, ${doc.transaction_currency},
+                                          ${doc.functional_currency},
+                                ${diaNegocio(fecha)}::date)::text as rate`;
       if (!tasaDocHoy?.rate) {
         return err({
           code: "EXCHANGE_RATE_MISSING",
@@ -1551,7 +1671,7 @@ export async function registerPayment(
           values (${ctx.value.tenantId}, ${input.company_id}, ${input.document_id},
                   ${pago["id"] as string}, ${saldadoTx.toFixed(8)}, ${doc.transaction_currency},
                   ${alEmitir.toFixed(8)}, ${alPago.toFixed(8)}, ${diferencia.toFixed(8)},
-                  ${tasaEmision.value.toFixed()}, ${tasaDoc.value.toFixed()}, ${fecha}::date)
+                  ${tasaEmision.value.toFixed()}, ${tasaDoc.value.toFixed()}, ${diaNegocio(fecha)}::date)
           returning id, document_id, payment_id, amount_transaction::text as amount_transaction,
                     transaction_currency, functional_at_issue::text as functional_at_issue,
                     functional_at_payment::text as functional_at_payment,
@@ -1631,7 +1751,7 @@ export async function registerPayment(
     sourceKind: "payment_received",
     sourceEvent: eventoCobro,
     sourceId: pago["id"] as string,
-    postingDate: fecha.slice(0, 10),
+    postingDate: diaNegocio(fecha),
     postedBy: actor.userId,
     description: `Cobro de la factura ${docActual!.series}-${docActual!.document_number ?? ""}`,
     functionalCurrency: ctx.value.functionalCurrency,
@@ -1673,7 +1793,7 @@ export async function registerPayment(
           on i.company_id = c.id and i.instrument = ${input.instrument}
         left join lateral (
           select rate, legal_source from public.igtf_rules
-           where effective_from <= ${fecha}::date
+           where effective_from <= ${diaNegocio(fecha)}::date
            order by effective_from desc limit 1
         ) r on true
        where c.id = ${input.company_id}`;
@@ -1725,7 +1845,7 @@ export async function registerPayment(
         sourceKind: "igtf_perception",
         sourceEvent: "igtf.perception_recorded",
         sourceId: percepcion["id"] as string,
-        postingDate: fecha.slice(0, 10),
+        postingDate: diaNegocio(fecha),
         postedBy: actor.userId,
         description: `IGTF percibido en el cobro de ${docActual!.series}-${docActual!.document_number ?? ""}`,
         functionalCurrency: ctx.value.functionalCurrency,
@@ -1873,7 +1993,10 @@ async function origenParaNota(
     }[]
   >`
     select customer_id, price_list_id, total_amount::text as total_amount, kind, status
-      from public.documents where id = ${sourceDocumentId} and company_id = ${companyId}`;
+      from public.documents where id = ${sourceDocumentId} and company_id = ${companyId}
+      for update`;
+  // `for update` sobre el origen: dos notas simultáneas contra la misma
+  // factura pasaban ambas el tope de dinero (auditoría 2026-09-11, M-16).
   if (!origen) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   if (origen.kind !== "invoice" || !["issued", "paid"].includes(origen.status)) {
     return err({
@@ -1998,7 +2121,7 @@ export async function createDirectCreditNote(
     sourceKind: "sales_credit_note",
     sourceEvent: "fiscal.credit_note.issued",
     sourceId: nc.value.id,
-    postingDate: fecha.slice(0, 10),
+    postingDate: diaNegocio(fecha),
     postedBy: actor.userId,
     description: `Nota de crédito ${nc.value.series}-${nc.value.document_number ?? ""}`,
     functionalCurrency: ctx.value.functionalCurrency,
@@ -2072,7 +2195,7 @@ export async function createDebitNote(
     sourceKind: "sales_debit_note",
     sourceEvent: "fiscal.debit_note.issued",
     sourceId: nd.value.id,
-    postingDate: fecha.slice(0, 10),
+    postingDate: diaNegocio(fecha),
     postedBy: actor.userId,
     description: `Nota de débito ${nd.value.series}-${nd.value.document_number ?? ""}`,
     functionalCurrency: ctx.value.functionalCurrency,
@@ -2214,7 +2337,7 @@ export async function confirmReturn(
     sourceKind: "sales_credit_note",
     sourceEvent: "fiscal.credit_note.issued",
     sourceId: nc.value.id,
-    postingDate: fecha.slice(0, 10),
+    postingDate: diaNegocio(fecha),
     postedBy: actor.userId,
     description: `Nota de crédito ${nc.value.series}-${nc.value.document_number ?? ""}`,
     functionalCurrency: ctx.value.functionalCurrency,
@@ -2312,7 +2435,8 @@ async function createInvoiceLike(
     try {
       const [regla] = await sql<{ tax_rule_id: string; rate: string }[]>`
         select tax_rule_id, rate::text as rate
-          from platform.resolve_tax(${d.fecha}::date, ${JURISDICTION}, ${TAX_CODE},
+          from platform.resolve_tax(${d.companyId}, ${diaNegocio(d.fecha)}::date,
+                                    ${JURISDICTION}, ${TAX_CODE},
                                     ${cliente!.taxpayer_type_code}, ${producto!.tax_category_code})`;
       taxRuleId = regla!.tax_rule_id;
       tasa = parseDecimal(regla!.rate);
@@ -2326,8 +2450,8 @@ async function createInvoiceLike(
       quantity: cantidad.value,
       unitPrice: precio.value,
       taxRate: tasa.value,
-      basePolicy: DOC_POLICY,
-      taxPolicy: DOC_POLICY,
+      basePolicy: politicaDelDocumento(origen.transaction_currency),
+      taxPolicy: politicaDelDocumento(origen.transaction_currency),
     });
     if (!calc.ok) return err({ code: "VALIDATION_FAILED", message: calc.error.message });
     calculadas.push({
@@ -2598,10 +2722,9 @@ export async function quickSale(
     let tasa = parseDecimal("1");
     if (p.currency !== documento.functional_currency) {
       const [t] = await sql<{ rate: string | null }[]>`
-        select r.rate::text as rate from public.exchange_rates r
-         where r.from_currency = ${p.currency} and r.to_currency = ${documento.functional_currency}
-           and r.rate_date <= current_date
-         order by r.rate_date desc, r.created_at desc limit 1`;
+        select f.rate::text as rate
+          from platform.rate_for(${input.company_id}, ${p.currency},
+                                 ${documento.functional_currency}, (now() at time zone 'America/Caracas')::date) f`;
       if (!t?.rate) {
         return err({
           code: "EXCHANGE_RATE_MISSING",
@@ -2622,8 +2745,15 @@ export async function quickSale(
         });
       }
       aplicado = pendienteEnMoneda;
+      // El vuelto se ENTREGA: va a lo que esa moneda sabe devolver (ADR-0058).
+      // Lo aplicado al documento sigue exacto; el residuo (< 1 minor unit)
+      // es la diferencia de redondeo de caja de MONEY_AND_ROUNDING_SPEC §6.4,
+      // pendiente de su asiento propio (VALIDAR-CONTABLE).
       vuelto = {
-        amount: entregado.value.minus(pendienteEnMoneda).toFixed(8),
+        amount: entregado.value
+          .minus(pendienteEnMoneda)
+          .toDecimalPlaces(minorUnitsOf(p.currency), 4)
+          .toFixed(8),
         currency: p.currency,
       };
     }

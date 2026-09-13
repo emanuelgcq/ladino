@@ -239,3 +239,31 @@
     }
   }
 }
+
+/*
+ * IMPRIMIR (Declarar IVA → «Imprimir o guardar en PDF»): al papel va SOLO el
+ * contenido. Sin tocar el shell se seleccionan por elemento y rol: la barra
+ * lateral, la barra superior, la navegación, las pestañas y todos los botones
+ * desaparecen, y `main` ocupa el ancho entero. Lo que se imprime sigue
+ * llevando su rótulo «NO OFICIAL» porque el rótulo es contenido, no cromo.
+ */
+@media print {
+  aside,
+  nav,
+  header,
+  [role="tablist"],
+  button {
+    display: none !important;
+  }
+  main {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+}

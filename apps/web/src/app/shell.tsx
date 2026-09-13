@@ -37,19 +37,31 @@ const CLAVE_SIDEBAR = "ladino.sidebar";
 const CLAVE_TODOS = "ladino.modulos.todos";
 const CLAVE_ADMIN_ABIERTO = "ladino.admin.abierto";
 
-export function mostrarTodosLosModulos(): boolean {
+/**
+ * localStorage puede LANZAR (modo privado de Safari, «bloquear datos de
+ * sitios», iframes de terceros): cada lectura y escritura va protegida, y sin
+ * persistencia la app arranca con el valor por omisión en vez de en blanco.
+ */
+function leerBandera(clave: string): boolean {
   try {
-    return localStorage.getItem(CLAVE_TODOS) === "1";
+    return localStorage.getItem(clave) === "1";
   } catch {
     return false;
   }
 }
-export function setMostrarTodos(v: boolean): void {
+function guardarBandera(clave: string, v: boolean): void {
   try {
-    localStorage.setItem(CLAVE_TODOS, v ? "1" : "0");
+    localStorage.setItem(clave, v ? "1" : "0");
   } catch {
     /* sin persistencia */
   }
+}
+
+export function mostrarTodosLosModulos(): boolean {
+  return leerBandera(CLAVE_TODOS);
+}
+export function setMostrarTodos(v: boolean): void {
+  guardarBandera(CLAVE_TODOS, v);
 }
 
 /**
@@ -93,11 +105,9 @@ function useEmpezarPendiente(): boolean {
 }
 
 export function AppShell(): React.JSX.Element {
-  const [colapsada, setColapsada] = useState(() => localStorage.getItem(CLAVE_SIDEBAR) === "1");
+  const [colapsada, setColapsada] = useState(() => leerBandera(CLAVE_SIDEBAR));
   const [paleta, setPaleta] = useState(false);
-  const [adminAbierto, setAdminAbierto] = useState(
-    () => localStorage.getItem(CLAVE_ADMIN_ABIERTO) === "1",
-  );
+  const [adminAbierto, setAdminAbierto] = useState(() => leerBandera(CLAVE_ADMIN_ABIERTO));
   const activos = useModulosActivos();
   const { puede } = useSesion();
   const empezar = useEmpezarPendiente();
@@ -106,12 +116,15 @@ export function AppShell(): React.JSX.Element {
   const enAdmin = location.pathname.startsWith("/admin");
 
   useEffect(() => setTodos(mostrarTodosLosModulos()), [location.pathname]);
+  useEffect(() => guardarBandera(CLAVE_SIDEBAR, colapsada), [colapsada]);
+  useEffect(() => guardarBandera(CLAVE_ADMIN_ABIERTO, adminAbierto), [adminAbierto]);
+
+  // El título de la pestaña sigue a la miga: con seis pestañas de Ladino
+  // abiertas, «Ladino · Inventario» se distingue de «Ladino · Vender».
   useEffect(() => {
-    localStorage.setItem(CLAVE_SIDEBAR, colapsada ? "1" : "0");
-  }, [colapsada]);
-  useEffect(() => {
-    localStorage.setItem(CLAVE_ADMIN_ABIERTO, adminAbierto ? "1" : "0");
-  }, [adminAbierto]);
+    const miga = migaDe(location.pathname);
+    document.title = miga === null ? "Ladino" : `Ladino · ${miga}`;
+  }, [location.pathname]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -300,6 +313,7 @@ function TopBar({ onBuscar }: { onBuscar: () => void }): React.JSX.Element {
         size="sm"
         onClick={onBuscar}
         className="w-56 justify-start text-muted-foreground max-md:w-auto"
+        aria-label="Buscar o ir a una pantalla (Ctrl K)"
       >
         <Search />
         <span className="max-md:hidden">Buscar o ir a…</span>
@@ -357,6 +371,7 @@ function CompanySwitcher(): React.JSX.Element {
             <input
               className="h-7 w-full rounded-sm border border-border bg-surface px-2 text-[0.85rem] outline-none focus:border-accent"
               placeholder="Buscar empresa…"
+              aria-label="Buscar empresa"
               value={filtro}
               onChange={(e) => setFiltro(e.target.value)}
             />
@@ -395,6 +410,19 @@ function ThemeToggle(): React.JSX.Element {
       {oscuro ? <Sun /> : <Moon />}
     </Button>
   );
+}
+
+/**
+ * La miga más larga de CRUMBS que cubre la ruta: `/admin/ventas/<uuid>` es
+ * «Ventas», `/admin/ventas/nueva` es «Nueva factura». Sin miga, null.
+ */
+function migaDe(pathname: string): string | null {
+  const partes = pathname.split("/").filter(Boolean);
+  for (let i = partes.length; i > 0; i--) {
+    const miga = CRUMBS["/" + partes.slice(0, i).join("/")];
+    if (miga !== undefined) return miga;
+  }
+  return null;
 }
 
 /** Migas SOLO en /admin: el mundo de la persona no necesita ruta de regreso. */

@@ -22,11 +22,17 @@ export interface CompanyScope {
   readonly companyStatus: "onboarding" | "active" | "suspended";
 }
 
+/**
+ * `permission` admite UN permiso o una lista: con la lista basta CUALQUIERA
+ * (bool_or). Es lo que hace que un catálogo de solo lectura (formas de pago,
+ * estado del IGTF) lo vean todos los roles que lo necesitan para operar, sin
+ * regalar el permiso que gobierna el dinero (auditoría 2026-09-11, A-08/A-09).
+ */
 export async function companyScope(
   sql: TransactionSql,
   userId: string,
   companyId: string,
-  permission: string,
+  permission: string | readonly string[],
 ): Promise<Result<CompanyScope, CompanyScopeError>> {
   const [co] = await sql<{ tenant_id: string; status: CompanyScope["companyStatus"] }[]>`
     select c.tenant_id, c.status
@@ -39,12 +45,14 @@ export async function companyScope(
     return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   }
 
+  const permisos = typeof permission === "string" ? [permission] : [...permission];
   const [permiso] = await sql<{ autorizado: boolean }[]>`
-    select platform.ladino_user_has_permission(${userId}, ${permission}, ${companyId}) as autorizado`;
+    select bool_or(platform.ladino_user_has_permission(${userId}, p, ${companyId})) as autorizado
+      from unnest(${permisos}::text[]) as p`;
   if (!permiso?.autorizado) {
     return err({
       code: "PERMISSION_REQUIRED",
-      message: `La operación exige el permiso ${permission} sobre esta empresa.`,
+      message: `La operación exige el permiso ${permisos.join(" o ")} sobre esta empresa.`,
     });
   }
 
