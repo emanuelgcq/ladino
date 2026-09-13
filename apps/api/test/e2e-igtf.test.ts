@@ -443,6 +443,199 @@ describe("IGTF — ADR-0053: se percibe lo que la moneda sabe cobrar", () => {
   });
 });
 
+describe("LA CAJA (ADR-0059): IGTF dentro de lo recibido, vuelto y formas mezcladas", () => {
+  // Una tasa PROPIA de esta empresa (ADR-0057): gana a la de la plataforma que
+  // otros ficheros reescriben, y las cifras de la caja dejan de depender de ellos.
+  // Producto: 1.000 Bs + IVA 16 % = 1.160 Bs; a 40 Bs/USD son 29,00 USD, y su
+  // IGTF 0,87 USD — lo necesario para cerrar en divisa, 29,87.
+  const TOTAL = "1160.00000000";
+  const venta = (payments: unknown[]) =>
+    pedir("POST", "/v1/pos/sales", {
+      company_id: COMPANY,
+      customer_id: CLIENTE,
+      warehouse_id: W1,
+      lines: [{ product_id: PRODUCTO, quantity: "1" }],
+      payments,
+    });
+  const tender = (payments: unknown[]) =>
+    pedir("POST", "/v1/pos/tender", {
+      company_id: COMPANY,
+      total: TOTAL,
+      payments,
+      offer: [
+        { instrument: "efectivo_bs", currency: "VES" },
+        { instrument: "efectivo_usd", currency: "USD" },
+        { instrument: "zelle", currency: "USD" },
+      ],
+    });
+  interface Previa {
+    complete: boolean;
+    remaining_functional: string;
+    change: { amount: string; currency: string } | null;
+    rows: {
+      applied: string | null;
+      igtf: string | null;
+      change: string | null;
+      error: string | null;
+    }[];
+    suggestions: { instrument: string; amount: string | null; igtf: string | null }[];
+  }
+  interface Vendida {
+    change: { amount: string; currency: string } | null;
+    balance: string;
+    document_status: string;
+    igtf: { functional_amount: string } | null;
+    payments: {
+      payment: { amount: string; currency: string; instrument: string };
+      igtf: { amount: string } | null;
+    }[];
+  }
+  const saldoDe = async (cuenta: string): Promise<string> => {
+    const [r] = await sql<{ b: string }[]>`
+      select coalesce((select balance from public.company_account_balances
+                        where account_id = ${cuenta}), 0)::text as b`;
+    return r!.b;
+  };
+
+  beforeAll(async () => {
+    await sql.begin(async (tx) => {
+      await tx`select set_config('ladino.actor_id', ${DUENO}, true)`;
+      await tx`insert into public.exchange_rates
+                 (tenant_id, company_id, from_currency, to_currency, rate, rate_date,
+                  rate_timestamp, source)
+               values (${TENANT}, ${COMPANY}, 'USD', 'VES', 40, ${HOY}::date, now(), 'e2e-caja')
+               on conflict on constraint exchange_rates_day_key do nothing`;
+    });
+  });
+
+  it("la vista previa dice cuánto pedir en cada forma: en divisa, IGTF incluido", async () => {
+    const r = await tender([]);
+    expect(r.status, await r.clone().text()).toBe(200);
+    const p = (await r.json()) as Previa;
+    const de = (i: string) => p.suggestions.find((s) => s.instrument === i)!;
+    expect(de("efectivo_bs").amount).toBe("1160.00000000");
+    expect(de("efectivo_bs").igtf).toBeNull();
+    expect(de("efectivo_usd").amount).toBe("29.87000000");
+    expect(de("efectivo_usd").igtf).toBe("0.87000000");
+    expect(p.complete).toBe(false);
+  });
+
+  it("50 USD en efectivo: la venta recibe 29, el fisco 0,87 y el vuelto es 20,13 — no 21", async () => {
+    const previa = (await (
+      await tender([{ instrument: "efectivo_usd", currency: "USD", amount: "50" }])
+    ).json()) as Previa;
+    expect(previa.complete).toBe(true);
+    expect(previa.rows[0]!.applied).toBe("29.00000000");
+    expect(previa.rows[0]!.igtf).toBe("0.87000000");
+    expect(previa.change).toEqual({ amount: "20.13000000", currency: "USD" });
+
+    const r = await venta([{ instrument: "efectivo_usd", currency: "USD", amount: "50" }]);
+    expect(r.status, await r.clone().text()).toBe(201);
+    const v = (await r.json()) as Vendida;
+    // La venta dice LO MISMO que la vista previa: un solo cálculo.
+    expect(v.change).toEqual({ amount: "20.13000000", currency: "USD" });
+    expect(v.document_status).toBe("paid");
+    expect(v.payments[0]!.payment.amount).toBe("29.00000000");
+    expect(v.payments[0]!.igtf!.amount).toBe("0.87000000");
+    expect(v.igtf!.functional_amount).toBe("34.80000000");
+  });
+
+  it("el IGTF cobrado entra a la caja: el saldo sube 29,87, no 29 (migración 53)", async () => {
+    const primera = await venta([{ instrument: "efectivo_usd", currency: "USD", amount: "29.87" }]);
+    expect(primera.status, await primera.clone().text()).toBe(201);
+    const docPrimera = ((await primera.json()) as { document: { id: string } }).document.id;
+    const [pago] = await sql<{ account_id: string | null }[]>`
+      select account_id from public.payments where document_id = ${docPrimera} limit 1`;
+    // El efectivo cae en una cuenta (la configurada o «Sin asignar»): sin cuenta
+    // no habría saldo que mirar, y eso ya sería el defecto.
+    expect(pago!.account_id).not.toBeNull();
+    const cuenta = pago!.account_id!;
+    const antes = await saldoDe(cuenta);
+    const r = await venta([{ instrument: "efectivo_usd", currency: "USD", amount: "29.87" }]);
+    expect(r.status).toBe(201);
+    expect(((await r.json()) as Vendida).change).toBeNull();
+    const despues = await saldoDe(cuenta);
+    const [d] = await sql<{ delta: string; recomputo: string }[]>`
+      select (${despues}::numeric - ${antes}::numeric)::text as delta,
+             platform.recompute_account_balance(${cuenta})::text as recomputo`;
+    expect(d!.delta).toBe("29.87000000");
+    expect(d!.recomputo).toBe(despues);
+  });
+
+  it("Zelle exacto con IGTF cierra; Zelle de más se rechaza porque no da vuelto", async () => {
+    const exacto = await venta([{ instrument: "zelle", currency: "USD", amount: "29.87" }]);
+    expect(exacto.status, await exacto.clone().text()).toBe(201);
+    expect(((await exacto.json()) as Vendida).document_status).toBe("paid");
+
+    const demas = await venta([{ instrument: "zelle", currency: "USD", amount: "30.00" }]);
+    expect(demas.status).toBe(422);
+    const cuerpo = (await demas.json()) as { message: string };
+    expect(cuerpo.message).toMatch(/no da vuelto/);
+    expect(cuerpo.message).toMatch(/29\.87 USD con IGTF/);
+  });
+
+  it("menos de un céntimo por debajo cierra: no existe moneda de medio céntimo", async () => {
+    const r = await venta([{ instrument: "zelle", currency: "USD", amount: "29.865" }]);
+    expect(r.status, await r.clone().text()).toBe(201);
+    expect(((await r.json()) as Vendida).document_status).toBe("paid");
+  });
+
+  it("mezclado: 580 Bs por pago móvil y 20 USD en efectivo — IGTF solo sobre la parte en divisa", async () => {
+    const pagos = [
+      { instrument: "pago_movil", currency: "VES", amount: "580" },
+      { instrument: "efectivo_usd", currency: "USD", amount: "20" },
+    ];
+    const previa = (await (await tender(pagos)).json()) as Previa;
+    expect(previa.rows[0]!.igtf).toBeNull();
+    expect(previa.rows[1]!.applied).toBe("14.50000000");
+    expect(previa.rows[1]!.igtf).toBe("0.44000000");
+    expect(previa.change).toEqual({ amount: "5.06000000", currency: "USD" });
+
+    const r = await venta(pagos);
+    expect(r.status, await r.clone().text()).toBe(201);
+    const v = (await r.json()) as Vendida;
+    expect(v.change).toEqual({ amount: "5.06000000", currency: "USD" });
+    expect(v.payments.map((p) => p.igtf?.amount ?? null)).toEqual([null, "0.44000000"]);
+  });
+
+  it("lo que le falta al segundo pago se sugiere en su moneda, con su IGTF", async () => {
+    const previa = (await (
+      await tender([{ instrument: "pago_movil", currency: "VES", amount: "580" }])
+    ).json()) as Previa;
+    expect(previa.remaining_functional).toBe("580.00000000");
+    const usd = previa.suggestions.find((s) => s.instrument === "efectivo_usd")!;
+    expect(usd.amount).toBe("14.94000000");
+    expect(usd.igtf).toBe("0.44000000");
+  });
+
+  it("un abono parcial en divisa reparte lo recibido: 10,30 USD son 10 a la deuda y 0,30 de IGTF", async () => {
+    const r = await venta([{ instrument: "zelle", currency: "USD", amount: "10.30" }]);
+    expect(r.status, await r.clone().text()).toBe(201);
+    const v = (await r.json()) as Vendida;
+    expect(v.payments[0]!.payment.amount).toBe("10.00000000");
+    expect(v.payments[0]!.igtf!.amount).toBe("0.30000000");
+    expect(v.document_status).toBe("issued");
+    expect(v.balance).toBe("760.00000000");
+  });
+
+  it("hasta cuatro formas de pago; la quinta no", async () => {
+    const cuatro = [
+      { instrument: "efectivo_bs", currency: "VES", amount: "100" },
+      { instrument: "pago_movil", currency: "VES", amount: "100" },
+      { instrument: "punto_venta", currency: "VES", amount: "100" },
+      { instrument: "efectivo_bs", currency: "VES", amount: "860" },
+    ];
+    const ok4 = await venta(cuatro);
+    expect(ok4.status, await ok4.clone().text()).toBe(201);
+    expect(((await ok4.json()) as Vendida).document_status).toBe("paid");
+    const cinco = await venta([
+      ...cuatro,
+      { instrument: "efectivo_bs", currency: "VES", amount: "1" },
+    ]);
+    expect(cinco.status).toBe(422);
+  });
+});
+
 describe("IGTF — los bordes", () => {
   it("anular DESPUÉS de percibir deja la percepción pendiente de reintegro, no la borra", async () => {
     // El total a enterar ANTES: lo que ya había percibido el bloque anterior.

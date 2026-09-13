@@ -1,3 +1,47 @@
+# Handoff — 2026-09-13 (20ª entrega) — base a Virginia y la caja rehecha
+
+## Estado
+
+- **Supabase migrado de Oregón a Virginia** (`jwaszxsxzudekduwbgzu`, us-east-1). Datos copiados
+  en una transacción y verificados (99 tablas con conteos idénticos, invariantes en cero). El VPS
+  ya apunta al proyecto nuevo (`api.env`, `worker.env`, `.env`). El proyecto viejo
+  (`udacvwnhwpsdzbouhqhl`) queda como respaldo: **pausarlo en unos días**.
+- Latencia medida tras el corte: una petición sin sesión bajó de 1,0–1,7 s a 0,39 s; las
+  lecturas con sesión rondan 0,33–0,68 s.
+- **Migraciones: 53 en el repo y 53 en producción** (la 53 aplicada el 2026-09-13).
+
+## Hecho en esta sesión
+
+| Qué | Dónde |
+|---|---|
+| Carrito y cobro duales USD/Bs; «¡Venta lista!» sin WhatsApp | commit `8756c91` |
+| Migración de Supabase a Virginia (esquema por las 52 migraciones, datos por `pg_dump --data-only` en una transacción, roles `ladino_api`/`ladino_worker` con contraseña nueva, Auth básico copiado) | scripts en la sesión |
+| **ADR-0059 — la caja**: lo tecleado es lo ENTREGADO; un solo cálculo (`pasoDeCobro`) para la vista previa `POST /v1/pos/tender` y la venta; IGTF dentro de lo recibido; tolerancia de una unidad mínima; vuelto solo en efectivo y hacia abajo; sugerencia por forma de pago con IGTF; hasta 4 formas | `packages/domain/src/sales.ts`, `apps/api/src/routes/sales.ts` |
+| **Migración 53 — el IGTF cobrado entra al saldo de caja** (antes el cierre salía descuadrado siempre) | `supabase/migrations/20260913120000_*`, pgTAP 053 |
+| Diálogo de cobro rediseñado: resumen total/recibido/falta-o-vuelto, cada forma con su abono, IGTF y vuelto del servidor, formas con el monto sugerido, pie fijo, dentro de la pantalla | `apps/web/src/pages/negocio/Vender.tsx`, `apps/web/src/pos.ts` |
+| La pantalla final decidía «queda debiendo Bs 0,0000002» por el residuo de 8 decimales; ahora decide por el estado de la factura | `Vender.tsx` |
+
+## Pendiente (dueño)
+
+- **SMTP de Resend en el proyecto nuevo** (Authentication → SMTP): sin él no salen correos de
+  confirmación ni de recuperar contraseña.
+- **Rotar los tokens `sbp_`** de las dos cuentas de Supabase que pasaron por el chat.
+- **Pausar el proyecto viejo** tras unos días sin incidencias; su contraseña `postgres` y su
+  clave `sb_secret` de Storage se vieron en una captura.
+- **«Contabilizar los pendientes»**: 1.527 hechos en cola.
+- Decidir **PLAN_DOS_PLANES.md** y **PLAN_RENDIMIENTO.md** (A ya hecho: la base está en Virginia).
+- Listas de precios de «Ladino» están en Bs aunque los precios se cargan en USD: crear lista USD
+  de caja o convertir.
+
+## Pendiente (técnico)
+
+- **Vuelto en otra moneda** (paga USD, vuelto en Bs): no soportado; exige movimiento entre cajas
+  con asiento. VALIDAR-OPERACIÓN.
+- **Diferencia de redondeo de caja** (spec §6.4): el residuo < 1 céntimo del vuelto hacia abajo o
+  de la tolerancia queda en caja sin asiento propio. VALIDAR-CONTABLE.
+- `CobrarDocumento` (cobro de facturas desde Clientes) todavía usa el camino viejo del IGTF por
+  encima del monto; alinear con ADR-0059.
+
 # Handoff — 2026-09-12 (19ª entrega) — la auditoría, cerrada
 
 > **Si eres Claude en una máquina nueva, lee en este orden:** la memoria

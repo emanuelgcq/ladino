@@ -98,6 +98,8 @@ export {
   PosQuoteResponse,
   QuickSalePaymentInput,
   QuickSaleRequest,
+  PosTenderRequest,
+  PosTenderResponse,
   QuickSaleResponse,
   CreateDirectCreditNoteRequest,
   DirectCreditNoteResponse,

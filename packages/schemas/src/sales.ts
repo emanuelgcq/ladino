@@ -440,8 +440,8 @@ export const QuickSaleRequest = z
     series: serie.optional(),
     price_list_id: uuid.optional(),
     lines: z.array(DocumentLineRequest).min(1).max(200),
-    /** Hasta DOS formas de pago (decisión de la fase: más es otra pantalla). */
-    payments: z.array(QuickSalePaymentInput).max(2).optional(),
+    /** Hasta CUATRO formas de pago (una caja real: Bs, pago móvil, USD, Zelle). */
+    payments: z.array(QuickSalePaymentInput).max(4).optional(),
     /** La cuenta abierta que esta venta CIERRA: se borra en la MISMA
      *  transacción (migración 44 — un carrito solo muere al cobrarse). */
     cart_id: uuid.optional(),
@@ -506,6 +506,83 @@ export const QuickSaleResponse = z
   })
   .strict();
 export type QuickSaleResponse = z.infer<typeof QuickSaleResponse>;
+
+/**
+ * La VISTA PREVIA del cobro (ADR-0059): lo que haría la venta con estas formas
+ * de pago, sin escribir. `total` es el total funcional que ya cotizó el
+ * servidor; `offer` son las formas que la caja ofrece, para decir cuánto
+ * pedir en cada una (IGTF incluido) para cerrar.
+ */
+export const PosTenderRequest = z
+  .object({
+    company_id: uuid,
+    total: amount,
+    payments: z
+      .array(
+        z
+          .object({
+            instrument: PaymentInstrument.exclude(["saldo_a_favor", "retencion_iva"]),
+            currency: z.string().regex(/^[A-Z]{3}$/),
+            amount: z.string().regex(/^\d{1,16}(\.\d{1,8})?$/),
+          })
+          .strict(),
+      )
+      .max(4),
+    offer: z
+      .array(
+        z
+          .object({
+            instrument: PaymentInstrument.exclude(["saldo_a_favor", "retencion_iva"]),
+            currency: z.string().regex(/^[A-Z]{3}$/),
+          })
+          .strict(),
+      )
+      .max(16),
+  })
+  .strict();
+export type PosTenderRequest = z.infer<typeof PosTenderRequest>;
+
+export const PosTenderResponse = z
+  .object({
+    functional_currency: z.string(),
+    total: z.string(),
+    paid_functional: z.string(),
+    remaining_functional: z.string(),
+    /** true = con estas formas la venta queda pagada. */
+    complete: z.boolean(),
+    change: z.object({ amount: z.string(), currency: z.string() }).strict().nullable(),
+    rows: z.array(
+      z
+        .object({
+          instrument: z.string(),
+          currency: z.string(),
+          tendered: z.string(),
+          /** Lo que abona al documento, en la moneda del pago. */
+          applied: z.string().nullable(),
+          applied_functional: z.string().nullable(),
+          /** El IGTF que va DENTRO de lo entregado. */
+          igtf: z.string().nullable(),
+          change: z.string().nullable(),
+          covers: z.boolean(),
+          error: z.string().nullable(),
+        })
+        .strict(),
+    ),
+    suggestions: z.array(
+      z
+        .object({
+          instrument: z.string(),
+          currency: z.string(),
+          /** Cuánto pedir en esta forma para cerrar, IGTF incluido. */
+          amount: z.string().nullable(),
+          igtf: z.string().nullable(),
+          error: z.string().nullable(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type PosTenderResponse = z.infer<typeof PosTenderResponse>;
 
 /** El vuelto en vivo, antes de confirmar: puro cálculo del servidor. */
 export const PosChangeResponse = z

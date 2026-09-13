@@ -64,6 +64,7 @@ Usa la skill `adr` de Claude Code.
 | [0056](adr/ADR-0056-la-reserva-de-idempotencia-se-mide-desde-su-reclamacion.md) | El reaper libera reservas huérfanas por `claimed_at`, no por `created_at`; la misma llave en otro endpoint es `IDEMPOTENCY_KEY_REUSED` (migración 49) | Aceptado | NO |
 | [0057](adr/ADR-0057-lo-manual-es-de-cada-empresa-lo-oficial-de-la-plataforma.md) | Tasas manuales, alícuotas aceptadas y reglas de retención llevan empresa; `NULL` = plataforma (BCV, sistema); lo propio gana a lo oficial; firmas sin empresa eliminadas; la RLS decide quién escribe qué (migración 52) | Aceptado | SÍ |
 | [0058](adr/ADR-0058-el-documento-de-venta-se-redondea-a-la-moneda.md) | Base e impuesto de cada línea a las minor units de la moneda del documento (`sales:document:2:HALF_UP`); conversión funcional a las de la funcional; vuelto entregable; valoración de cobros y diferencial siguen a ocho decimales | Aceptado | SÍ |
+| [0059](adr/ADR-0059-la-caja-cobra-con-el-igtf-dentro-de-lo-recibido.md) | Lo tecleado en caja es lo ENTREGADO: un solo cálculo (vista previa y venta) reparte venta, IGTF y vuelto; tolerancia de una unidad mínima; vuelto solo en efectivo y hacia abajo; el IGTF cobrado entra al saldo de caja (migración 53); hasta cuatro formas | Aceptado | NO |
 
 ## Decisiones aún abiertas
 

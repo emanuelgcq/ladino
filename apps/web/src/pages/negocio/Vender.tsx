@@ -16,7 +16,13 @@ import {
 import { useSesion } from "../../app/session.js";
 import { errorDePersona } from "../../lib.js";
 import { abrirPdf as abrirPdfApi } from "../../pdf.js";
-import { cotizarPos, type CotizacionPos } from "../../pos.js";
+import {
+  cotizarPos,
+  previsualizarCobro,
+  type CotizacionPos,
+  type FilaCobro,
+  type SugerenciaCobro,
+} from "../../pos.js";
 import {
   aNube,
   crearSincronizador,
@@ -1225,9 +1231,7 @@ function Cobrar({
   const [fiando, setFiando] = useState(false);
   // La llave de idempotencia de la venta es el id de la CUENTA que cierra:
   // cerrar y reabrir «Cobrar» tras una respuesta perdida reintenta con la
-  // MISMA llave (antes nacía con el diálogo y el reintento emitía otra
-  // factura — auditoría 2026-09-11). Tras un rechazo, el servidor acepta un
-  // cuerpo nuevo con la misma llave; tras el éxito, la cuenta ya no existe.
+  // MISMA llave (auditoría 2026-09-11).
 
   const formas = useQuery({
     queryKey: ["formas-pago", empresa.id],
@@ -1265,31 +1269,88 @@ function Cobrar({
     return base;
   }, [formas.data]);
 
-  const sinCeros = (v: string): string => v.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
-  const exactoEn = (currency: string): string | null => {
-    if (currency === cotizacion.currency) return sinCeros(cotizacion.total);
-    if (currency === cotizacion.functional_currency) return sinCeros(cotizacion.functional_total);
-    return null;
+  // ── La vista previa del SERVIDOR (ADR-0059): cuánto abona cada forma, su
+  // IGTF, el vuelto, lo que falta y cuánto pedir en cada forma para cerrar.
+  // Es el MISMO cálculo que hará la venta; la pantalla no suma dinero.
+  const limpio = (v: string): string => v.trim().replace(",", ".");
+  const conMonto = pagos
+    .map((p, i) => ({ p, i, monto: limpio(p.amount) }))
+    .filter((x) => importeValido(x.monto) && compararImportes(x.monto, "0") > 0);
+  const pedido = JSON.stringify(
+    conMonto.map((x) => ({ instrument: x.p.instrument, currency: x.p.currency, amount: x.monto })),
+  );
+  const pedidoEstable = useDebounced(pedido, 250);
+  const ofertas = useMemo(() => {
+    const vistos = new Set<string>();
+    const lista: { instrument: string; currency: string }[] = [];
+    for (const b of botones) {
+      const k = `${b.instrument}|${b.currency}`;
+      if (!vistos.has(k)) {
+        vistos.add(k);
+        lista.push({ instrument: b.instrument, currency: b.currency });
+      }
+    }
+    return lista;
+  }, [botones]);
+  const previa = useQuery({
+    queryKey: ["pos-cobro", empresa.id, cotizacion.functional_total, pedidoEstable, ofertas],
+    enabled: ofertas.length > 0,
+    placeholderData: (anterior) => anterior,
+    queryFn: () =>
+      previsualizarCobro(llamar, {
+        company_id: empresa.id,
+        total: cotizacion.functional_total,
+        payments: JSON.parse(pedidoEstable) as {
+          instrument: string;
+          currency: string;
+          amount: string;
+        }[],
+        offer: ofertas,
+      }),
+  });
+  const estado = previa.data;
+  // La vista previa CORRESPONDE a lo que hay en pantalla: sin esto, un Enter
+  // rápido cobraba con los números de la tecla anterior.
+  const alDia = estado !== undefined && pedidoEstable === pedido && !previa.isFetching;
+  const filaDe = (i: number): FilaCobro | null => {
+    const pos = conMonto.findIndex((x) => x.i === i);
+    return pos < 0 || estado === undefined ? null : (estado.filas[pos] ?? null);
   };
+  const hayError = estado?.filas.some((f) => f.error !== null) ?? false;
+  const completo = estado?.completo === true;
+  const todosConMonto = pagos.length > 0 && conMonto.length === pagos.length;
+  const listo = alDia && todosConMonto && !hayError && completo;
+  const puedeFiar =
+    clienteNombre !== null &&
+    alDia &&
+    !hayError &&
+    !completo &&
+    lineas.length > 0 &&
+    conMonto.length === pagos.length;
+  const funcional = cotizacion.functional_currency;
+
+  const sugerenciaDe = (instrument: string, currency: string): SugerenciaCobro | null =>
+    estado?.sugerencias.find((s) => s.instrument === instrument && s.currency === currency) ?? null;
+  const sinCeros = (v: string): string => v.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
 
   function elegirForma(b: (typeof botones)[number]): void {
-    if (pagos.length >= 2) {
-      toast.warning("Máximo dos formas de pago", "Quita una para agregar otra.");
+    if (pagos.length >= 4) {
+      toast.warning("Máximo cuatro formas de pago", "Quita una para agregar otra.");
       return;
     }
     const indice = pagos.length;
-    const exacto = indice === 0 ? (exactoEn(b.currency) ?? "") : "";
+    const sugerida = sugerenciaDe(b.instrument, b.currency)?.monto ?? null;
     setPagos((prev) => [
       ...prev,
       {
         id: crypto.randomUUID(),
         instrument: b.instrument,
         currency: b.currency,
-        amount: exacto,
+        amount: sugerida === null ? "" : sinCeros(sugerida),
         ...(b.account_id === undefined ? {} : { account_id: b.account_id }),
       },
     ]);
-    // El foco cae en el monto recién puesto: con el exacto prellenado, el
+    // El foco cae en el monto recién puesto: con lo que falta prellenado, el
     // siguiente Enter ya cobra — el flujo de teclado completo sin ratón.
     requestAnimationFrame(() => document.getElementById(`pos-pago-${indice}`)?.focus());
   }
@@ -1308,7 +1369,7 @@ function Cobrar({
           payments: pagos.map((p) => ({
             instrument: p.instrument,
             currency: p.currency,
-            amount: p.amount.trim().replace(",", "."),
+            amount: limpio(p.amount),
             ...(p.reference === undefined || p.reference.trim() === ""
               ? {}
               : { reference: p.reference.trim() }),
@@ -1320,13 +1381,6 @@ function Cobrar({
     onError: (e) => toast.error("No se pudo cobrar", errorDePersona(e)),
   });
 
-  const pagosValidos = pagos.every((p) => importeValido(p.amount.trim().replace(",", ".")));
-  const listo = pagos.length > 0 && pagosValidos;
-  // FIAR: solo con cliente identificado (el dominio lo respalda: una venta de
-  // mostrador con saldo se rechaza). Con pagos puestos, fía EL RESTO — el
-  // dominio ya deja el saldo pendiente cuando lo pagado no alcanza.
-  const puedeFiar = clienteNombre !== null && pagosValidos && lineas.length > 0;
-
   if (fiando) {
     return (
       <Dialog open onOpenChange={(v) => !v && setFiando(false)}>
@@ -1336,14 +1390,17 @@ function Cobrar({
             <p className="text-[0.95rem]">
               Se registra la venta por{" "}
               <span className="font-semibold tabular-nums">
-                {mostrarImporte({
-                  amount: cotizacion.functional_total,
-                  currency: cotizacion.functional_currency,
-                })}
+                {mostrarImporte({ amount: cotizacion.functional_total, currency: funcional })}
               </span>{" "}
               y <span className="font-semibold">{clienteNombre}</span> queda debiendo{" "}
-              {pagos.length === 0 ? "el total" : "el resto (lo pagado se abona ahora)"}. Lo cobras
-              después desde Clientes o Mi dinero.
+              <span className="font-semibold tabular-nums">
+                {mostrarImporte({
+                  amount: estado?.falta ?? cotizacion.functional_total,
+                  currency: funcional,
+                })}
+              </span>
+              {pagos.length === 0 ? "" : " (lo recibido se abona ahora)"}. Lo cobras después desde
+              Clientes o Mi dinero.
             </p>
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" onClick={() => setFiando(false)}>
@@ -1366,13 +1423,14 @@ function Cobrar({
 
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
-      <DialogContent className="max-w-md">
-        <DialogTitle>Cobrar</DialogTitle>
+      <DialogContent className="flex max-h-[92vh] max-w-lg flex-col gap-0 p-0">
+        <div className="border-b border-border px-5 py-3">
+          <DialogTitle>Cobrar</DialogTitle>
+        </div>
         <div
-          className="space-y-4 pt-1"
+          className="flex-1 space-y-4 overflow-y-auto px-5 py-4"
           onKeyDown={(e) => {
-            // Enter fuera de un botón = confirmar, si ya se puede. Los botones
-            // conservan su Enter propio (elegir forma, quitar, etc.).
+            // Enter fuera de un botón = confirmar, si ya se puede.
             if (
               e.key === "Enter" &&
               !(e.target instanceof HTMLButtonElement) &&
@@ -1384,46 +1442,67 @@ function Cobrar({
             }
           }}
         >
-          <div className="rounded-lg bg-surface-muted p-3 text-center">
-            <p className="text-[0.85rem] text-muted-foreground">Total a cobrar</p>
-            <p className="text-3xl font-semibold tabular-nums">
-              {mostrarImporte({
-                amount: cotizacion.functional_total,
-                currency: cotizacion.functional_currency,
-              })}
-            </p>
-            {/* DUAL: el ancla (USD) del servidor, también con la lista en Bs. */}
-            {cotizacion.anchor_total !== null &&
-              cotizacion.anchor_currency !== cotizacion.functional_currency && (
-                <p className="text-[0.85rem] text-muted-foreground tabular-nums">
-                  ={" "}
+          {/* EL RESUMEN DE CAJA: total, recibido y lo que falta o el vuelto. */}
+          <div className="grid grid-cols-3 gap-2 rounded-lg bg-surface-muted p-3 text-center">
+            <div>
+              <p className="text-[0.78rem] text-muted-foreground">Total</p>
+              <p className="text-[1.15rem] font-semibold tabular-nums">
+                {mostrarImporte({ amount: cotizacion.functional_total, currency: funcional })}
+              </p>
+              {cotizacion.anchor_total !== null && cotizacion.anchor_currency !== funcional && (
+                <p className="text-[0.78rem] text-muted-foreground tabular-nums">
                   {mostrarImporte({
                     amount: cotizacion.anchor_total,
                     currency: cotizacion.anchor_currency,
                   })}
                 </p>
               )}
+            </div>
+            <div>
+              <p className="text-[0.78rem] text-muted-foreground">Recibido</p>
+              <p className="text-[1.15rem] font-semibold tabular-nums">
+                {mostrarImporte({ amount: estado?.pagado ?? "0", currency: funcional })}
+              </p>
+            </div>
+            <div>
+              {estado?.vuelto ? (
+                <>
+                  <p className="text-[0.78rem] text-success-soft-foreground">Vuelto</p>
+                  <p className="text-[1.15rem] font-semibold text-success-soft-foreground tabular-nums">
+                    {mostrarImporte({
+                      amount: estado.vuelto.amount,
+                      currency: estado.vuelto.currency,
+                    })}
+                  </p>
+                </>
+              ) : completo ? (
+                <>
+                  <p className="text-[0.78rem] text-success-soft-foreground">Estado</p>
+                  <p className="text-[1.15rem] font-semibold text-success-soft-foreground">
+                    Completo
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-[0.78rem] text-warning-soft-foreground">Falta</p>
+                  <p className="text-[1.15rem] font-semibold text-warning-soft-foreground tabular-nums">
+                    {mostrarImporte({
+                      amount: estado?.falta ?? cotizacion.functional_total,
+                      currency: funcional,
+                    })}
+                  </p>
+                </>
+              )}
+            </div>
           </div>
 
-          {pagos.length < 2 && (
-            <div>
-              <p className="pb-1.5 text-[0.88rem] font-medium">
-                {pagos.length === 0 ? "¿Cómo te pagan?" : "¿Y el resto?"}
-              </p>
-              <div className="grid grid-cols-2 gap-1.5">
-                {botones.map((b) => (
-                  <Button
-                    key={b.clave}
-                    variant="secondary"
-                    className="h-11 justify-start"
-                    onClick={() => elegirForma(b)}
-                  >
-                    {b.instrument.startsWith("efectivo") ? <Banknote /> : <CreditCard />}
-                    <span className="truncate">{b.etiqueta}</span>
-                  </Button>
-                ))}
-              </div>
-            </div>
+          {previa.isError && (
+            <p
+              role="alert"
+              className="rounded-md bg-destructive-soft px-3 py-2 text-[0.85rem] text-destructive-soft-foreground"
+            >
+              No se pudo calcular el cobro: {errorDePersona(previa.error)}
+            </p>
           )}
 
           {pagos.map((p, i) => (
@@ -1431,7 +1510,8 @@ function Cobrar({
               key={p.id}
               indice={i}
               pago={p}
-              cotizacion={cotizacion}
+              fila={filaDe(i)}
+              funcional={funcional}
               onCambiar={(amount) =>
                 setPagos((prev) => prev.map((x, j) => (j === i ? { ...x, amount } : x)))
               }
@@ -1442,6 +1522,40 @@ function Cobrar({
             />
           ))}
 
+          {!completo && pagos.length < 4 && (
+            <div>
+              <p className="pb-1.5 text-[0.88rem] font-medium">
+                {pagos.length === 0 ? "¿Cómo te pagan?" : "Agregar otra forma de pago"}
+              </p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {botones.map((b) => {
+                  const s = sugerenciaDe(b.instrument, b.currency);
+                  return (
+                    <Button
+                      key={b.clave}
+                      variant="secondary"
+                      className="h-auto min-h-11 flex-col items-start gap-0 py-1.5"
+                      onClick={() => elegirForma(b)}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        {b.instrument.startsWith("efectivo") ? <Banknote /> : <CreditCard />}
+                        <span className="truncate">{b.etiqueta}</span>
+                      </span>
+                      {s?.monto != null && (
+                        <span className="pl-6 text-[0.75rem] font-normal text-muted-foreground tabular-nums">
+                          {mostrarImporte({ amount: s.monto, currency: b.currency })}
+                          {s.igtf !== null ? " con IGTF" : ""}
+                        </span>
+                      )}
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-2 border-t border-border px-5 py-3">
           <Button
             variant="primary"
             size="lg"
@@ -1449,23 +1563,25 @@ function Cobrar({
             disabled={!listo || vender.isPending}
             onClick={() => vender.mutate()}
           >
-            {vender.isPending ? "Cobrando…" : "Confirmar venta"}
+            {vender.isPending
+              ? "Cobrando…"
+              : completo || pagos.length === 0
+                ? `Cobrar ${mostrarImporte({ amount: cotizacion.functional_total, currency: funcional })}`
+                : `Falta ${mostrarImporte({ amount: estado?.falta ?? "0", currency: funcional })}`}
           </Button>
-
-          {/* FIAR: el botón secundario — la puerta que faltaba (el backend ya
-              sabía). Con consumidor final va deshabilitado y se dice por qué. */}
-          <Button
-            variant="secondary"
-            className="w-full"
-            disabled={!puedeFiar || vender.isPending}
-            title={clienteNombre === null ? "Para fiar, identifica al cliente" : undefined}
-            onClick={() => setFiando(true)}
-          >
-            {pagos.length === 0 ? "Fiar" : "Fiar el resto"}
-          </Button>
-          {clienteNombre === null && (
+          {!completo && clienteNombre !== null && (
+            <Button
+              variant="secondary"
+              className="w-full"
+              disabled={!puedeFiar || vender.isPending}
+              onClick={() => setFiando(true)}
+            >
+              {pagos.length === 0 ? "Fiar todo" : "Fiar lo que falta"}
+            </Button>
+          )}
+          {!completo && clienteNombre === null && (
             <p className="text-center text-[0.78rem] text-muted-foreground">
-              Para fiar, identifica al cliente.
+              Sin cliente identificado la venta se cobra completa. Para fiar, identifica al cliente.
             </p>
           )}
         </div>
@@ -1477,78 +1593,45 @@ function Cobrar({
 function PagoFila({
   indice,
   pago,
-  cotizacion,
+  fila,
+  funcional,
   onCambiar,
   onReferencia,
   onQuitar,
 }: {
   indice: number;
   pago: PagoElegido;
-  cotizacion: CotizacionPos;
+  /** Lo que el servidor calculó para esta forma; null mientras no hay monto. */
+  fila: FilaCobro | null;
+  funcional: string;
   onCambiar: (v: string) => void;
   onReferencia: (v: string) => void;
   onQuitar: () => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
-  const limpio = pago.amount.trim().replace(",", ".");
   const esEfectivo = pago.instrument.startsWith("efectivo");
-  const debounced = useDebounced(limpio, 350);
-
-  // El vuelto EN VIVO, del servidor: solo efectivo da vuelto.
-  const totalReferencia =
-    pago.currency === cotizacion.functional_currency
-      ? cotizacion.functional_total
-      : cotizacion.currency === pago.currency
-        ? cotizacion.total
-        : cotizacion.functional_total;
-  const vuelto = useQuery({
-    queryKey: ["pos-change", empresa.id, debounced, pago.currency],
-    enabled: esEfectivo && importeValido(debounced) && debounced === limpio,
-    staleTime: 30_000,
-    queryFn: () =>
-      llamar<{ change: string; change_currency: string }>(
-        `/v1/pos/change?total=${totalReferencia}&currency=${pago.currency === cotizacion.functional_currency ? cotizacion.functional_currency : cotizacion.currency}&tendered=${debounced}&tendered_currency=${pago.currency}`,
-      ),
-  });
-
-  const cambio = vuelto.data ? compararImportes(vuelto.data.change, "0") : null;
-
-  /**
-   * El «+ IGTF 3 %» EN VIVO, misma familia que el vuelto y por la misma razón:
-   * lo calcula el SERVIDOR con las mismas condiciones que aplicará el cobro.
-   * Un aviso calculado aquí acabaría difiriendo del cargo real el día que
-   * cambie la regla o la configuración de la empresa.
-   */
-  const igtf = useQuery({
-    queryKey: ["pos-igtf", empresa.id, debounced, pago.currency, pago.instrument],
-    enabled: importeValido(debounced) && debounced === limpio,
-    staleTime: 30_000,
-    queryFn: () =>
-      llamar<{ applies: boolean; amount: string | null }>(
-        `/v1/pos/igtf?amount=${debounced}&currency=${pago.currency}&instrument=${pago.instrument}`,
-      ),
-  });
-
   return (
-    <div className="space-y-1 rounded-md border border-border p-2.5">
+    <div className="space-y-1.5 rounded-md border border-border p-2.5">
       <div className="flex items-center justify-between">
-        <span className="text-[0.88rem] font-medium">
+        <span className="flex items-center gap-1.5 text-[0.9rem] font-medium">
+          {esEfectivo ? <Banknote className="size-4" /> : <CreditCard className="size-4" />}
           {ETIQUETA_FORMA[pago.instrument] ?? pago.instrument}
         </span>
         <Button variant="ghost" size="iconSm" aria-label="Quitar esta forma" onClick={onQuitar}>
           <X />
         </Button>
       </div>
+      <label className="block text-[0.78rem] text-muted-foreground" htmlFor={`pos-pago-${indice}`}>
+        {esEfectivo ? "Lo que te entregan" : "Monto recibido"}
+      </label>
       <MoneyInput
         id={`pos-pago-${indice}`}
         value={pago.amount}
         onChange={onCambiar}
         currency={pago.currency === "VES" ? "Bs." : pago.currency}
-        ariaDescribedby={undefined}
-        ariaInvalid={undefined}
+        ariaDescribedby={`pos-pago-${indice}-detalle`}
+        ariaInvalid={fila?.error != null ? true : undefined}
       />
-      {/* Todo lo que no es efectivo trae un comprobante: la referencia
-          acompaña al pago desde hoy, la API del método llegará después. */}
+      {/* Todo lo que no es efectivo trae un comprobante. */}
       {!esEfectivo && (
         <Input
           aria-label="Referencia del pago"
@@ -1558,28 +1641,30 @@ function PagoFila({
           onChange={(e) => onReferencia(e.target.value)}
         />
       )}
-      {esEfectivo && cambio !== null && cambio > 0 && (
-        <p className="text-[0.88rem] text-success-soft-foreground tabular-nums">
-          Vuelto:{" "}
-          {mostrarImporte({ amount: vuelto.data!.change, currency: vuelto.data!.change_currency })}
-        </p>
-      )}
-      {esEfectivo && cambio !== null && cambio < 0 && (
-        <p className="text-[0.88rem] text-muted-foreground tabular-nums">
-          Falta:{" "}
-          {mostrarImporte({
-            amount: vuelto.data!.change.replace("-", ""),
-            currency: vuelto.data!.change_currency,
-          })}
-        </p>
-      )}
-      {igtf.data?.applies === true && igtf.data.amount !== null && (
-        <p className="text-[0.88rem] text-warning-soft-foreground tabular-nums">
-          + IGTF por pago en divisas:{" "}
-          {mostrarImporte({ amount: igtf.data.amount, currency: pago.currency })}
-          <span className="ml-1 text-faint-foreground">— se cobra además del total</span>
-        </p>
-      )}
+      <div id={`pos-pago-${indice}-detalle`} className="space-y-0.5 text-[0.84rem] tabular-nums">
+        {fila?.error != null ? (
+          <p role="alert" className="text-destructive-soft-foreground">
+            {fila.error}
+          </p>
+        ) : fila !== null ? (
+          <>
+            <p className="text-muted-foreground">
+              Abona a la venta{" "}
+              {mostrarImporte({ amount: fila.abonoFuncional ?? "0", currency: funcional })}
+            </p>
+            {fila.igtf !== null && (
+              <p className="text-warning-soft-foreground">
+                Incluye IGTF {mostrarImporte({ amount: fila.igtf, currency: pago.currency })}
+              </p>
+            )}
+            {fila.vuelto !== null && (
+              <p className="font-medium text-success-soft-foreground">
+                Vuelto {mostrarImporte({ amount: fila.vuelto, currency: pago.currency })}
+              </p>
+            )}
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -1601,8 +1686,11 @@ function VentaLista({
     venta.document.document_number === null
       ? `${venta.document.series} (sin número)`
       : `${venta.document.series}-${String(venta.document.document_number).padStart(8, "0")}`;
-  // Con saldo, la venta quedó FIADA: el número lo dijo el servidor (funcional).
-  const fiada = compararImportes(venta.balance, "0") > 0;
+  // FIADA la decide el ESTADO que puso el servidor, no el saldo de ocho
+  // decimales: con la regla del último centavo (R-02) una factura pagada puede
+  // guardar un residuo de 0,0000002 que nadie debe, y la pantalla decía
+  // «queda debiendo Bs. 0,0000002» (QA de caja, 2026-09-13).
+  const fiada = venta.document_status !== "paid";
 
   function abrirPdf(): void {
     void abrirPdfApi(`/v1/documents/${venta.document.id}/pdf`, empresa.id, (m) =>

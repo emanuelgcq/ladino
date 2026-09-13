@@ -35,6 +35,8 @@ import type {
   PosQuoteResponse,
   QuickSaleRequest,
   QuickSaleResponse,
+  PosTenderRequest,
+  PosTenderResponse,
   CreateDirectCreditNoteRequest,
   DirectCreditNoteResponse,
   CreateDebitNoteRequest,
@@ -189,6 +191,377 @@ export function avisoIgtf(
   }
   const r = percibirIgtf(b.value, t.value, moneda);
   return r.ok ? ok(r.value.monto.toFixed(8)) : r;
+}
+
+// ── LA CAJA: un solo cálculo de cobro (orden del dueño, 2026-09-13, ADR-0059) ─
+//
+// Lo que la cajera teclea es lo ENTREGADO por el cliente. Si esa forma de pago
+// causa IGTF, el IGTF va DENTRO de lo entregado: de 23,37 USD por una cuenta
+// de 22,69, la venta recibe 22,69 y el fisco 0,68 — y el vuelto sale de lo
+// que sobre DESPUÉS de los dos. La vista previa del diálogo (`/v1/pos/tender`)
+// y la venta (`quickSale`) llaman a `pasoDeCobro`: la pantalla no puede
+// decir un número y el cobro escribir otro.
+
+/** Formas de pago que dan vuelto: solo el efectivo. Una tarjeta no da cambio. */
+const CON_VUELTO = new Set(["efectivo_bs", "efectivo_usd"]);
+
+/** Las condiciones de UN pago: la tasa a funcional y, si lo causa, el IGTF. */
+export interface CondicionDePago {
+  /** Moneda del pago → funcional, la del día de la empresa (1 en funcional). */
+  readonly tasa: Decimal;
+  /** Tasa del IGTF (p. ej. 0,03) si ESTE pago lo causa; null si no. */
+  readonly igtf: Decimal | null;
+  readonly igtfFuente: string | null;
+}
+
+export interface PasoDeCobro {
+  /** Lo que abona al documento, en la moneda del pago (8 decimales). */
+  readonly aplicado: Decimal;
+  /** Lo que baja la deuda, en moneda funcional. */
+  readonly aplicadoFuncional: Decimal;
+  /** El IGTF que se percibe ADEMÁS, en la moneda del pago. */
+  readonly igtf: Decimal;
+  /** El vuelto entregable, en la moneda del pago. */
+  readonly vuelto: Decimal;
+  /** true = con este pago la venta queda pagada. */
+  readonly cubre: boolean;
+}
+
+function decimalDe(v: string): Decimal {
+  const d = parseDecimal(v);
+  if (!d.ok) throw new Error(`decimal inválido: ${v}`);
+  return d.value;
+}
+
+/** Una unidad mínima de la moneda (0,01 en VES y USD): la tolerancia de caja. */
+function unidadMinima(moneda: string): Decimal {
+  const escala = minorUnitsOf(moneda);
+  return escala === 0 ? decimalDe("1") : decimalDe(`0.${"0".repeat(escala - 1)}1`);
+}
+
+function igtfSobre(base: Decimal, cond: CondicionDePago, moneda: string): Decimal {
+  if (cond.igtf === null || base.lessThanOrEqualTo(0)) return decimalDe("0");
+  const r = percibirIgtf(base, cond.igtf, moneda);
+  if (!r.ok) throw new Error(r.error.message);
+  return r.value.monto;
+}
+
+/**
+ * UN pago aplicado a lo pendiente. Reglas de caja:
+ *
+ *   1. Lo necesario para cerrar = pendiente en la moneda del pago + su IGTF.
+ *   2. Si lo entregado llega a lo necesario (con tolerancia de UNA unidad
+ *      mínima: 22,68 cierra una cuenta de 22,6848 USD, porque no existe
+ *      moneda de medio céntimo), el documento queda pagado y lo que sobre es
+ *      vuelto — solo en efectivo, redondeado HACIA ABAJO: la caja jamás
+ *      devuelve más de lo que recibió. Sin efectivo, sobrar es un error.
+ *   3. Si no llega, abona: lo entregado se reparte en base + IGTF de modo que
+ *      base + IGTF(base) = entregado.
+ */
+export function pasoDeCobro(p: {
+  pendienteFuncional: Decimal;
+  entregado: Decimal;
+  moneda: string;
+  instrumento: string;
+  cond: CondicionDePago;
+}): Result<PasoDeCobro, SalesError> {
+  const cero = decimalDe("0");
+  if (!p.entregado.greaterThan(0)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "El monto de cada forma de pago tiene que ser mayor que cero.",
+    });
+  }
+  const u = unidadMinima(p.moneda);
+  const escala = minorUnitsOf(p.moneda);
+  const pendMon = p.pendienteFuncional.dividedBy(p.cond.tasa).toDecimalPlaces(8, 4);
+  const igtfTotal = igtfSobre(pendMon, p.cond, p.moneda);
+  const necesario = pendMon.plus(igtfTotal);
+  const dif = p.entregado.minus(necesario);
+
+  if (dif.greaterThan(u.negated())) {
+    let vuelto = cero;
+    if (dif.greaterThanOrEqualTo(u)) {
+      if (!CON_VUELTO.has(p.instrumento)) {
+        return err({
+          code: "VALIDATION_FAILED",
+          message: `Lo recibido (${p.entregado.toDecimalPlaces(escala, 4).toFixed(escala)} ${p.moneda}) supera lo que falta (${necesario.toDecimalPlaces(escala, 2).toFixed(escala)} ${p.moneda}${p.cond.igtf === null ? "" : " con IGTF"}) y esta forma de pago no da vuelto. Ajusta el monto.`,
+        });
+      }
+      vuelto = dif.toDecimalPlaces(escala, 1);
+    }
+    return ok({
+      aplicado: pendMon,
+      aplicadoFuncional: p.pendienteFuncional,
+      igtf: igtfTotal,
+      vuelto,
+      cubre: true,
+    });
+  }
+
+  let aplicado = p.entregado;
+  let igtf = cero;
+  if (p.cond.igtf !== null) {
+    const r = p.cond.igtf;
+    const parte = p.entregado.times(r).dividedBy(r.plus(1)).toDecimalPlaces(escala, 4);
+    let hallado = false;
+    for (const ajuste of ["0", "-1", "1"]) {
+      const candidato = parte.plus(u.times(decimalDe(ajuste)));
+      const base = p.entregado.minus(candidato);
+      if (base.greaterThan(0) && igtfSobre(base, p.cond, p.moneda).equals(candidato)) {
+        aplicado = base;
+        igtf = candidato;
+        hallado = true;
+        break;
+      }
+    }
+    if (!hallado) {
+      aplicado = p.entregado.minus(parte);
+      igtf = igtfSobre(aplicado, p.cond, p.moneda);
+    }
+  }
+  if (!aplicado.greaterThan(0)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "El monto no alcanza ni para el IGTF de esa forma de pago.",
+    });
+  }
+  return ok({
+    aplicado,
+    aplicadoFuncional: aplicado.times(p.cond.tasa).toDecimalPlaces(8, 4),
+    igtf,
+    vuelto: cero,
+    cubre: false,
+  });
+}
+
+/** Cuánto pedir en esa forma de pago para cerrar lo pendiente, IGTF incluido,
+ *  redondeado al céntimo más cercano: queda siempre dentro de la tolerancia
+ *  de una unidad mínima, así que pagar lo sugerido cierra la venta. */
+function montoParaCerrar(
+  pendienteFuncional: Decimal,
+  moneda: string,
+  cond: CondicionDePago,
+): { monto: Decimal; igtf: Decimal } {
+  const escala = minorUnitsOf(moneda);
+  const pendMon = pendienteFuncional.dividedBy(cond.tasa).toDecimalPlaces(8, 4);
+  const igtf = igtfSobre(pendMon, cond, moneda);
+  return { monto: pendMon.plus(igtf).toDecimalPlaces(escala, 4), igtf };
+}
+
+/**
+ * Las condiciones de UN pago con los datos de la base: la tasa del día de la
+ * empresa y la regla de IGTF (activa, en divisa, instrumento que causa, regla
+ * vigente). La MISMA consulta que usa `registerPayment` para percibir.
+ */
+async function condicionDePago(
+  sql: TransactionSql,
+  companyId: string,
+  instrumento: string,
+  moneda: string,
+  funcional: string,
+  fecha: string,
+): Promise<Result<CondicionDePago, SalesError>> {
+  let tasa = decimalDe("1");
+  if (moneda !== funcional) {
+    const [t] = await sql<{ rate: string | null }[]>`
+      select f.rate::text as rate
+        from platform.rate_for(${companyId}, ${moneda}, ${funcional}, ${diaNegocio(fecha)}::date) f`;
+    if (!t?.rate) {
+      return err({
+        code: "EXCHANGE_RATE_MISSING",
+        message: `No hay tasa de ${moneda} a ${funcional} para cobrar en esa moneda.`,
+      });
+    }
+    tasa = decimalDe(t.rate);
+  }
+  const regla = await reglaIgtf(sql, companyId, instrumento, moneda, funcional, fecha);
+  return ok({ tasa, igtf: regla?.tasa ?? null, igtfFuente: regla?.fuente ?? null });
+}
+
+/** La regla de IGTF que causa ESTE pago, o null. Una sola definición. */
+async function reglaIgtf(
+  sql: TransactionSql,
+  companyId: string,
+  instrumento: string,
+  moneda: string,
+  funcional: string,
+  fecha: string,
+): Promise<{ tasa: Decimal; tasaTexto: string; fuente: string | null } | null> {
+  if (moneda === funcional || instrumento === "saldo_a_favor" || instrumento === "retencion_iva") {
+    return null;
+  }
+  const [gate] = await sql<
+    { enabled: boolean; causes: boolean; rate: string | null; source: string | null }[]
+  >`select (c.igtf_enabled_at is not null and c.igtf_enabled_at <= ${fecha}::timestamptz)
+           as enabled,
+           coalesce(i.causes, false) as causes,
+           r.rate::text as rate, r.legal_source as source
+      from public.companies c
+      left join public.igtf_company_instruments i
+        on i.company_id = c.id and i.instrument = ${instrumento}
+      left join lateral (
+        select rate, legal_source from public.igtf_rules
+         where effective_from <= ${diaNegocio(fecha)}::date
+         order by effective_from desc limit 1
+      ) r on true
+     where c.id = ${companyId}`;
+  if (gate?.enabled !== true || !gate.causes || gate.rate === null) return null;
+  return { tasa: decimalDe(gate.rate), tasaTexto: gate.rate, fuente: gate.source };
+}
+
+/**
+ * La VISTA PREVIA del cobro (`POST /v1/pos/tender`): sin escribir nada, lo que
+ * haría la venta con estas formas de pago — cuánto abona cada una, su IGTF,
+ * el vuelto, lo que falta y cuánto pedir en cada forma para cerrar.
+ */
+export async function previsualizarCobro(
+  uow: UnitOfWork,
+  input: PosTenderRequest,
+): Promise<Result<PosTenderResponse, SalesError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Cobrar exige un usuario real." });
+  }
+  const fecha = new Date().toISOString();
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "sales.payment.register", fecha);
+  if (!ctx.ok) return ctx;
+  const funcional = ctx.value.functionalCurrency;
+  const total = parseDecimal(input.total);
+  if (!total.ok) return err({ code: "VALIDATION_FAILED", message: "Total no interpretable." });
+
+  const cache = new Map<string, Result<CondicionDePago, SalesError>>();
+  const cond = async (instrumento: string, moneda: string) => {
+    const k = `${instrumento}|${moneda}`;
+    let c = cache.get(k);
+    if (c === undefined) {
+      c = await condicionDePago(sql, input.company_id, instrumento, moneda, funcional, fecha);
+      cache.set(k, c);
+    }
+    return c;
+  };
+  const texto = (d: Decimal) => d.toFixed(8);
+
+  let pendiente = total.value;
+  let vuelto: { amount: string; currency: string } | null = null;
+  const rows: PosTenderResponse["rows"] = [];
+  for (const p of input.payments) {
+    const base = { instrument: p.instrument, currency: p.currency, tendered: p.amount };
+    const entregado = parseDecimal(p.amount);
+    if (!entregado.ok) {
+      rows.push({
+        ...base,
+        applied: null,
+        applied_functional: null,
+        igtf: null,
+        change: null,
+        covers: false,
+        error: "Monto no interpretable.",
+      });
+      continue;
+    }
+    if (!pendiente.greaterThan(0)) {
+      rows.push({
+        ...base,
+        applied: null,
+        applied_functional: null,
+        igtf: null,
+        change: null,
+        covers: false,
+        error: "La venta ya queda pagada con las formas anteriores: sobra esta.",
+      });
+      continue;
+    }
+    const c = await cond(p.instrument, p.currency);
+    if (!c.ok) {
+      rows.push({
+        ...base,
+        applied: null,
+        applied_functional: null,
+        igtf: null,
+        change: null,
+        covers: false,
+        error: c.error.message,
+      });
+      continue;
+    }
+    const paso = pasoDeCobro({
+      pendienteFuncional: pendiente,
+      entregado: entregado.value,
+      moneda: p.currency,
+      instrumento: p.instrument,
+      cond: c.value,
+    });
+    if (!paso.ok) {
+      rows.push({
+        ...base,
+        applied: null,
+        applied_functional: null,
+        igtf: null,
+        change: null,
+        covers: false,
+        error: paso.error.message,
+      });
+      continue;
+    }
+    const v = paso.value;
+    rows.push({
+      ...base,
+      applied: texto(v.aplicado),
+      applied_functional: texto(v.aplicadoFuncional),
+      igtf: v.igtf.isZero() ? null : texto(v.igtf),
+      change: v.vuelto.isZero() ? null : texto(v.vuelto),
+      covers: v.cubre,
+      error: null,
+    });
+    if (!v.vuelto.isZero()) vuelto = { amount: texto(v.vuelto), currency: p.currency };
+    pendiente = v.cubre ? decimalDe("0") : pendiente.minus(v.aplicadoFuncional);
+  }
+  if (pendiente.isNegative()) pendiente = decimalDe("0");
+
+  const suggestions: PosTenderResponse["suggestions"] = [];
+  for (const o of input.offer) {
+    if (!pendiente.greaterThan(0)) {
+      suggestions.push({
+        instrument: o.instrument,
+        currency: o.currency,
+        amount: null,
+        igtf: null,
+        error: null,
+      });
+      continue;
+    }
+    const c = await cond(o.instrument, o.currency);
+    if (!c.ok) {
+      suggestions.push({
+        instrument: o.instrument,
+        currency: o.currency,
+        amount: null,
+        igtf: null,
+        error: c.error.message,
+      });
+      continue;
+    }
+    const m = montoParaCerrar(pendiente, o.currency, c.value);
+    suggestions.push({
+      instrument: o.instrument,
+      currency: o.currency,
+      amount: texto(m.monto),
+      igtf: m.igtf.isZero() ? null : texto(m.igtf),
+      error: null,
+    });
+  }
+
+  return ok({
+    functional_currency: funcional,
+    total: texto(total.value),
+    paid_functional: texto(total.value.minus(pendiente)),
+    remaining_functional: texto(pendiente),
+    complete: !pendiente.greaterThan(0),
+    change: vuelto,
+    rows,
+    suggestions,
+  });
 }
 
 /** La política de la percepción EN esa moneda: la escala la manda ISO-4217. */
@@ -1782,22 +2155,16 @@ export async function registerPayment(
     input.instrument !== "saldo_a_favor" &&
     input.instrument !== "retencion_iva"
   ) {
-    const [gate] = await sql<
-      { enabled: boolean; causes: boolean; rate: string | null; source: string | null }[]
-    >`select (c.igtf_enabled_at is not null and c.igtf_enabled_at <= ${fecha}::timestamptz)
-             as enabled,
-             coalesce(i.causes, false) as causes,
-             r.rate::text as rate, r.legal_source as source
-        from public.companies c
-        left join public.igtf_company_instruments i
-          on i.company_id = c.id and i.instrument = ${input.instrument}
-        left join lateral (
-          select rate, legal_source from public.igtf_rules
-           where effective_from <= ${diaNegocio(fecha)}::date
-           order by effective_from desc limit 1
-        ) r on true
-       where c.id = ${input.company_id}`;
-    if (gate?.enabled === true && gate.causes && gate.rate !== null) {
+    const regla = await reglaIgtf(
+      sql,
+      input.company_id,
+      input.instrument,
+      input.currency,
+      ctx.value.functionalCurrency,
+      fecha,
+    );
+    const gate = regla === null ? null : { rate: regla.tasaTexto, source: regla.fuente };
+    if (gate !== null) {
       const tasaIgtf = parseDecimal(gate.rate);
       if (!tasaIgtf.ok) {
         return err({ code: "VALIDATION_FAILED", message: "Tasa de IGTF no interpretable." });
@@ -2673,9 +3040,6 @@ export async function quotePos(
   });
 }
 
-/** Efectivo: los únicos instrumentos con vuelto. Una tarjeta no da cambio. */
-const CON_VUELTO = new Set(["efectivo_bs", "efectivo_usd"]);
-
 /**
  * La VENTA RÁPIDA: emite la factura (numeración, kardex, asiento — todo el
  * camino real de `createInvoice`) y registra los cobros, con el vuelto
@@ -2760,50 +3124,36 @@ export async function quickSale(
       });
     }
 
-    let tasa = parseDecimal("1");
-    if (p.currency !== documento.functional_currency) {
-      const [t] = await sql<{ rate: string | null }[]>`
-        select f.rate::text as rate
-          from platform.rate_for(${input.company_id}, ${p.currency},
-                                 ${documento.functional_currency}, (now() at time zone 'America/Caracas')::date) f`;
-      if (!t?.rate) {
-        return err({
-          code: "EXCHANGE_RATE_MISSING",
-          message: `No hay tasa de ${p.currency} a ${documento.functional_currency} para cobrar en esa moneda.`,
-        });
-      }
-      tasa = parseDecimal(t.rate);
-    }
-    if (!tasa.ok) return err({ code: "VALIDATION_FAILED", message: "Tasa no interpretable." });
-
-    const pendienteEnMoneda = pendiente.value.dividedBy(tasa.value).toDecimalPlaces(8, 4);
-    let aplicado = entregado.value;
-    if (entregado.value.greaterThan(pendienteEnMoneda)) {
-      if (!CON_VUELTO.has(p.instrument)) {
-        return err({
-          code: "VALIDATION_FAILED",
-          message: `El pago supera lo pendiente (${pendienteEnMoneda.toFixed()} ${p.currency}) y ${p.instrument} no da vuelto: ajusta el monto.`,
-        });
-      }
-      aplicado = pendienteEnMoneda;
-      // El vuelto se ENTREGA: va a lo que esa moneda sabe devolver (ADR-0058).
-      // Lo aplicado al documento sigue exacto; el residuo (< 1 minor unit)
-      // es la diferencia de redondeo de caja de MONEY_AND_ROUNDING_SPEC §6.4,
-      // pendiente de su asiento propio (VALIDAR-CONTABLE).
-      vuelto = {
-        amount: entregado.value
-          .minus(pendienteEnMoneda)
-          .toDecimalPlaces(minorUnitsOf(p.currency), 4)
-          .toFixed(8),
-        currency: p.currency,
-      };
+    // EL MISMO cálculo que la vista previa (ADR-0059): IGTF dentro de lo
+    // entregado, tolerancia de una unidad mínima, vuelto hacia abajo.
+    const condicion = await condicionDePago(
+      sql,
+      input.company_id,
+      p.instrument,
+      p.currency,
+      documento.functional_currency,
+      new Date().toISOString(),
+    );
+    if (!condicion.ok) return condicion;
+    const paso = pasoDeCobro({
+      pendienteFuncional: pendiente.value,
+      entregado: entregado.value,
+      moneda: p.currency,
+      instrumento: p.instrument,
+      cond: condicion.value,
+    });
+    if (!paso.ok) return paso;
+    if (!paso.value.vuelto.isZero()) {
+      // El residuo (< 1 unidad mínima) queda en caja: MONEY_AND_ROUNDING_SPEC
+      // §6.4, pendiente de su asiento propio (VALIDAR-CONTABLE, ADR-0058).
+      vuelto = { amount: paso.value.vuelto.toFixed(8), currency: p.currency };
     }
 
     const cobrado = await registerPayment(uow, {
       company_id: input.company_id,
       document_id: documento.id,
       currency: p.currency,
-      amount: aplicado.toFixed(8),
+      amount: paso.value.aplicado.toFixed(8),
       instrument: p.instrument,
       ...(p.reference === undefined ? {} : { reference: p.reference }),
       ...(p.account_id === undefined ? {} : { account_id: p.account_id }),

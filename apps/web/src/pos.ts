@@ -98,3 +98,90 @@ export async function cotizarPos(
     ),
   };
 }
+
+/** Una forma de pago según la vista previa del cobro (ADR-0059). */
+export interface FilaCobro {
+  readonly instrument: string;
+  readonly currency: string;
+  /** Lo que abona a la venta, en la moneda de la forma. */
+  readonly abono: string | null;
+  readonly abonoFuncional: string | null;
+  /** El IGTF que va DENTRO de lo recibido. */
+  readonly igtf: string | null;
+  readonly vuelto: string | null;
+  readonly cubre: boolean;
+  readonly error: string | null;
+}
+
+/** Cuánto pedir en una forma de pago para cerrar lo que falta, IGTF incluido. */
+export interface SugerenciaCobro {
+  readonly instrument: string;
+  readonly currency: string;
+  readonly monto: string | null;
+  readonly igtf: string | null;
+}
+
+export interface CobroPrevisto {
+  readonly pagado: string;
+  readonly falta: string;
+  readonly completo: boolean;
+  readonly vuelto: { readonly amount: string; readonly currency: string } | null;
+  readonly filas: readonly FilaCobro[];
+  readonly sugerencias: readonly SugerenciaCobro[];
+}
+
+/** La vista previa del cobro: el MISMO cálculo que hará la venta, sin escribir. */
+export async function previsualizarCobro(
+  llamar: Llamar,
+  req: {
+    company_id: string;
+    total: string;
+    payments: { instrument: string; currency: string; amount: string }[];
+    offer: { instrument: string; currency: string }[];
+  },
+): Promise<CobroPrevisto> {
+  const r = await llamar<{
+    paid_functional: string;
+    remaining_functional: string;
+    complete: boolean;
+    change: { amount: string; currency: string } | null;
+    rows: {
+      instrument: string;
+      currency: string;
+      applied: string | null;
+      applied_functional: string | null;
+      igtf: string | null;
+      change: string | null;
+      covers: boolean;
+      error: string | null;
+    }[];
+    suggestions: {
+      instrument: string;
+      currency: string;
+      amount: string | null;
+      igtf: string | null;
+    }[];
+  }>("/v1/pos/tender", { method: "POST", body: JSON.stringify(req) });
+  return {
+    pagado: r.paid_functional,
+    falta: r.remaining_functional,
+    completo: r.complete,
+    vuelto: r.change,
+    filas: r.rows.map((f) => ({
+      instrument: f.instrument,
+      currency: f.currency,
+      abono: f.applied,
+      abonoFuncional: f.applied_functional,
+      igtf: f.igtf,
+      vuelto: f.change,
+      cubre: f.covers,
+      error: f.error,
+    })),
+    sugerencias: r.suggestions.map((s) => ({
+      instrument: s.instrument,
+      currency: s.currency,
+      monto: s.amount,
+      igtf: s.igtf,
+    })),
+  };
+}

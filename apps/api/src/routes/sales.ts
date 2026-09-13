@@ -16,6 +16,7 @@ import {
   CreateReturnRequest,
   CreateFiscalRangeRequest,
   CreateExchangeRateRequest,
+  PosTenderRequest,
 } from "@ladino/schemas";
 import {
   createQuote,
@@ -36,6 +37,7 @@ import {
   createDebitNote,
   avisoIgtf,
   minorUnitsOf,
+  previsualizarCobro,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -278,6 +280,21 @@ export function salesRoutes(
     coherente(companyId, parsed.data.company_id);
     const { actor } = c.get("ladino.auth");
     const r = await withTransaction(sql, actor, (uow) => quotePos(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
+
+  /**
+   * La vista previa del cobro (ADR-0059): el MISMO cálculo que la venta, sin
+   * escribir. Sin idempotencia: no crea nada.
+   */
+  app.post("/v1/pos/tender", async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = PosTenderRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => previsualizarCobro(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 200);
   });

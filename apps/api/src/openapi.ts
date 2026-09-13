@@ -72,6 +72,8 @@ import {
   RegisterPaymentResponse,
   PosQuoteRequest,
   PosQuoteResponse,
+  PosTenderRequest,
+  PosTenderResponse,
   QuickSaleRequest,
   QuickSaleResponse,
   PosChangeResponse,
@@ -1725,6 +1727,27 @@ export function buildOpenApiDocument(): object {
   // ── El punto de venta (Fase C) ─────────────────────────────────────────────
   const posQuote = registry.register("PosQuoteRequest", PosQuoteRequest);
   const posQuoteResp = registry.register("PosQuoteResponse", PosQuoteResponse);
+  const posTender = registry.register("PosTenderRequest", PosTenderRequest);
+  const posTenderResp = registry.register("PosTenderResponse", PosTenderResponse);
+  registry.registerPath({
+    method: "post",
+    path: "/v1/pos/tender",
+    summary: "Vista previa del cobro: abono, IGTF, vuelto y lo que falta (sin escribir)",
+    description:
+      "El MISMO cálculo que la venta rápida (ADR-0059): lo tecleado es lo ENTREGADO y, si la " +
+      "forma de pago causa IGTF, el IGTF va dentro. Tolerancia de una unidad mínima; el vuelto " +
+      "solo en efectivo y redondeado hacia abajo. `offer` devuelve cuánto pedir en cada forma " +
+      "para cerrar, IGTF incluido.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: posTender } } },
+    },
+    responses: {
+      200: okJson(posTenderResp, "El cobro previsto."),
+      ...erroresComunes,
+    },
+  });
   const ventaRapida = registry.register("QuickSaleRequest", QuickSaleRequest);
   const ventaRapidaResp = registry.register("QuickSaleResponse", QuickSaleResponse);
   const vueltoResp = registry.register("PosChangeResponse", PosChangeResponse);

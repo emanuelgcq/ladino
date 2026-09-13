@@ -185,13 +185,15 @@ select is(
 
 insert into public.company_accounts (id, tenant_id, company_id, name, currency, kind)
 values ('aaaa0046-0000-4000-8000-00000000ca01', 'aaaa0046-0000-4000-8000-00000000000a',
-        'aaaa0046-0000-4000-8000-0000000000a1', 'Caja 46', 'VES', 'cash');
+        'aaaa0046-0000-4000-8000-0000000000a1', 'Caja USD 46', 'USD', 'cash');
+-- La percepción va en la MONEDA de su pago y de su cuenta (migración 53 lo exige:
+-- el IGTF cobrado entra al saldo de ESA caja).
 insert into public.payments
   (id, tenant_id, company_id, document_id, paid_at, currency, amount, fx_rate, rate_source,
    rate_timestamp, functional_amount, instrument, account_id)
 values ('aaaa0046-0000-4000-8000-00000000e001', 'aaaa0046-0000-4000-8000-00000000000a',
         'aaaa0046-0000-4000-8000-0000000000a1', 'aaaa0046-0000-4000-8000-00000000f001',
-        now(), 'VES', 50, 1, 'identidad', now(), 50, 'efectivo_bs',
+        now(), 'USD', 50, 50, 'BCV test', now(), 2500, 'efectivo_usd',
         'aaaa0046-0000-4000-8000-00000000ca01');
 
 -- Y el shape nuevo del instrumento retencion_iva: sin cuenta y CON comprobante.

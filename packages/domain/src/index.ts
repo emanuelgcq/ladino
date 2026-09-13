@@ -56,6 +56,8 @@ export {
   confirmReturn,
   quotePos,
   quickSale,
+  previsualizarCobro,
+  pasoDeCobro,
   percibirIgtf,
   avisoIgtf,
   type SalesError,
