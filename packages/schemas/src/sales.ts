@@ -372,6 +372,9 @@ export const PosQuoteLine = z
     /** ADR-0047: el mismo lado funcional (Bs) que congelará el documento, por línea. */
     functional_unit_price: z.string(),
     functional_total: z.string(),
+    /** El ancla (USD) por línea, del servidor; null sin tasa del día. */
+    anchor_unit_price: z.string().nullable(),
+    anchor_total: z.string().nullable(),
   })
   .strict();
 export type PosQuoteLine = z.infer<typeof PosQuoteLine>;
@@ -392,6 +395,14 @@ export const PosQuoteResponse = z
     functional_tax_amount: z.string(),
     functional_total: z.string(),
     functional_currency: z.string(),
+    /**
+     * ADR-0047: el total en el ANCLA (USD) para el carrito, calculado por el
+     * servidor a la tasa del día de la empresa y a las minor units del dólar.
+     * Presentación, no se persiste; `null` cuando no hay tasa del día.
+     */
+    anchor_currency: z.string(),
+    anchor_total: z.string().nullable(),
+    anchor_rate: z.string().nullable(),
   })
   .strict();
 export type PosQuoteResponse = z.infer<typeof PosQuoteResponse>;

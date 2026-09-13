@@ -4,7 +4,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Banknote,
   CreditCard,
-  MessageCircle,
   Minus,
   Plus,
   Printer,
@@ -284,8 +283,6 @@ function VenderDeEmpresa(): React.JSX.Element {
   // El nombre del que quedó debiendo, capturado al vender: la ficha de la
   // cuenta ya murió cuando el diálogo de éxito lo enseña.
   const [deudor, setDeudor] = useState<string | null>(null);
-  // Y su teléfono, para el WhatsApp del comprobante: la venta no lo trae.
-  const [telefonoCliente, setTelefonoCliente] = useState<string | null>(null);
   const qc = useQueryClient();
   const q = useDebounced(busqueda.trim(), 200);
 
@@ -611,10 +608,12 @@ function VenderDeEmpresa(): React.JSX.Element {
                           {l.nombre !== "" ? l.nombre : (cot?.description ?? "…")}
                         </p>
                         <p className="text-[0.8rem] text-muted-foreground tabular-nums">
+                          {/* DUAL siempre: el ancla (USD) del servidor y el Bs que
+                              congelará el documento. */}
                           {cot
                             ? `${
-                                cotizacion.data!.currency !== cotizacion.data!.functional_currency
-                                  ? `${mostrarImporte({ amount: cot.unit_price, currency: cotizacion.data!.currency })} · `
+                                cot.precio_usd !== null
+                                  ? `${mostrarImporte({ amount: cot.precio_usd, currency: cotizacion.data!.anchor_currency })} · `
                                   : ""
                               }${mostrarImporte({ amount: cot.precio_bs, currency: cotizacion.data!.functional_currency })} c/u`
                             : "…"}
@@ -641,13 +640,23 @@ function VenderDeEmpresa(): React.JSX.Element {
                           <Plus />
                         </Button>
                       </div>
-                      <span className="w-20 text-right text-[0.92rem] font-medium tabular-nums">
-                        {cot
-                          ? mostrarImporte({
-                              amount: cot.total_bs,
-                              currency: cotizacion.data!.functional_currency,
-                            })
-                          : "…"}
+                      <span className="w-24 text-right tabular-nums">
+                        <span className="block text-[0.92rem] font-medium">
+                          {cot
+                            ? mostrarImporte({
+                                amount: cot.total_bs,
+                                currency: cotizacion.data!.functional_currency,
+                              })
+                            : "…"}
+                        </span>
+                        {cot?.total_usd != null && (
+                          <span className="block text-[0.75rem] text-muted-foreground">
+                            {mostrarImporte({
+                              amount: cot.total_usd,
+                              currency: cotizacion.data!.anchor_currency,
+                            })}
+                          </span>
+                        )}
                       </span>
                     </li>
                   );
@@ -696,16 +705,24 @@ function VenderDeEmpresa(): React.JSX.Element {
                     })}
                   </span>
                 </div>
-                {cotizacion.data.currency !== cotizacion.data.functional_currency && (
+                {/* El ancla en USD SIEMPRE, también con la lista en Bs (orden del
+                    dueño, 2026-09-13): la factura habla en Bs, el carrito en las dos. */}
+                {cotizacion.data.anchor_total !== null &&
+                cotizacion.data.anchor_currency !== cotizacion.data.functional_currency ? (
                   <p className="text-right text-[0.82rem] text-muted-foreground tabular-nums">
                     ={" "}
                     {mostrarImporte({
-                      amount: cotizacion.data.total,
-                      currency: cotizacion.data.currency,
+                      amount: cotizacion.data.anchor_total,
+                      currency: cotizacion.data.anchor_currency,
                     })}{" "}
-                    a la tasa de hoy ({mostrarCantidad(cotizacion.data.tasa)})
+                    a la tasa de hoy (
+                    {mostrarCantidad(cotizacion.data.anchor_rate ?? cotizacion.data.tasa)})
                   </p>
-                )}
+                ) : cotizacion.data.anchor_total === null ? (
+                  <p className="text-right text-[0.82rem] text-muted-foreground">
+                    Sin tasa del día: no hay equivalente en {cotizacion.data.anchor_currency}.
+                  </p>
+                ) : null}
               </>
             )}
             <Button
@@ -755,7 +772,6 @@ function VenderDeEmpresa(): React.JSX.Element {
               setCobrando(false);
               setVenta(v);
               setDeudor(activa.cliente?.legal_name ?? null);
-              setTelefonoCliente(activa.cliente?.phone ?? null);
               // La cuenta cobrada MUERE: el servidor la borró en la MISMA
               // transacción de la venta (cart_id); aquí solo cae la ficha.
               quitarCuenta(activa.id, false);
@@ -804,11 +820,9 @@ function VenderDeEmpresa(): React.JSX.Element {
           <VentaLista
             venta={venta}
             deudor={deudor}
-            telefono={telefonoCliente}
             onNueva={() => {
               setVenta(null);
               setDeudor(null);
-              setTelefonoCliente(null);
               // La venta nueva empieza como todas: por la cédula. El foco se
               // difiere: al cerrarse, el diálogo restaura el foco al elemento
               // anterior y pisaría este si se pusiera en el mismo tick.
@@ -1251,9 +1265,10 @@ function Cobrar({
     return base;
   }, [formas.data]);
 
+  const sinCeros = (v: string): string => v.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
   const exactoEn = (currency: string): string | null => {
-    if (currency === cotizacion.currency) return cotizacion.total;
-    if (currency === cotizacion.functional_currency) return cotizacion.functional_total;
+    if (currency === cotizacion.currency) return sinCeros(cotizacion.total);
+    if (currency === cotizacion.functional_currency) return sinCeros(cotizacion.functional_total);
     return null;
   };
 
@@ -1377,11 +1392,17 @@ function Cobrar({
                 currency: cotizacion.functional_currency,
               })}
             </p>
-            {cotizacion.currency !== cotizacion.functional_currency && (
-              <p className="text-[0.85rem] text-muted-foreground tabular-nums">
-                = {mostrarImporte({ amount: cotizacion.total, currency: cotizacion.currency })}
-              </p>
-            )}
+            {/* DUAL: el ancla (USD) del servidor, también con la lista en Bs. */}
+            {cotizacion.anchor_total !== null &&
+              cotizacion.anchor_currency !== cotizacion.functional_currency && (
+                <p className="text-[0.85rem] text-muted-foreground tabular-nums">
+                  ={" "}
+                  {mostrarImporte({
+                    amount: cotizacion.anchor_total,
+                    currency: cotizacion.anchor_currency,
+                  })}
+                </p>
+              )}
           </div>
 
           {pagos.length < 2 && (
@@ -1563,31 +1584,13 @@ function PagoFila({
   );
 }
 
-/**
- * El teléfono como lo entiende wa.me: solo dígitos, con el 58 delante.
- * «0414-1234567» → «584141234567»; lo que no llegue a un número venezolano
- * completo no se manda (mejor abrir WhatsApp sin destinatario que a uno
- * equivocado).
- */
-function telefonoWhatsApp(telefono: string | null): string | null {
-  if (telefono === null) return null;
-  let d = telefono.replace(/\D/g, "");
-  if (d.startsWith("00")) d = d.slice(2);
-  if (d.startsWith("0")) d = `58${d.slice(1)}`;
-  else if (!d.startsWith("58") && d.length === 10) d = `58${d}`;
-  return d.startsWith("58") && d.length === 12 ? d : null;
-}
-
 function VentaLista({
   venta,
   deudor,
-  telefono,
   onNueva,
 }: {
   venta: Venta;
   deudor: string | null;
-  /** El del cliente de la venta, si lo tenía: el WhatsApp sale ya dirigido. */
-  telefono: string | null;
   onNueva: () => void;
 }): React.JSX.Element {
   const { empresa } = useSesion();
@@ -1606,12 +1609,6 @@ function VentaLista({
       toast.error("No se pudo abrir el PDF", m),
     );
   }
-
-  const textoWhatsApp = encodeURIComponent(
-    `Tu compra en ${empresa.legal_name}: ${venta.document.kind === "receipt" ? "recibo" : "factura"} ${numero}. ¡Gracias!`,
-  );
-  const destinoWhatsApp = telefonoWhatsApp(telefono);
-  const urlWhatsApp = `https://wa.me/${destinoWhatsApp ?? ""}?text=${textoWhatsApp}`;
 
   return (
     <Dialog open onOpenChange={(v) => !v && onNueva()}>
@@ -1660,20 +1657,9 @@ function VentaLista({
               </p>
             </div>
           )}
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="secondary" onClick={() => void abrirPdf()}>
-              <Printer /> Imprimir
-            </Button>
-            {/* Un botón que abre, no un enlace envolviendo un botón: dos
-                controles anidados eran dos paradas de tabulador. */}
-            <Button
-              variant="secondary"
-              className="w-full"
-              onClick={() => window.open(urlWhatsApp, "_blank", "noopener")}
-            >
-              <MessageCircle /> WhatsApp
-            </Button>
-          </div>
+          <Button variant="secondary" className="w-full" onClick={() => void abrirPdf()}>
+            <Printer /> Imprimir
+          </Button>
           <Button variant="primary" size="lg" className="h-12 w-full" onClick={onNueva} autoFocus>
             Nueva venta
           </Button>

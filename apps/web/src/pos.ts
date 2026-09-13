@@ -17,6 +17,9 @@ export interface LineaCotizada {
   /** ADR-0047: el mismo lado en Bs que congelará el documento, por línea. */
   readonly precio_bs: string;
   readonly total_bs: string;
+  /** El ancla (USD) por línea, del servidor; null sin tasa del día. */
+  readonly precio_usd: string | null;
+  readonly total_usd: string | null;
 }
 
 export interface CotizacionPos {
@@ -35,6 +38,10 @@ export interface CotizacionPos {
   readonly impuesto_bs: string;
   readonly functional_total: string;
   readonly functional_currency: string;
+  /** El total en el ancla (USD), del servidor; null si no hay tasa del día. */
+  readonly anchor_currency: string;
+  readonly anchor_total: string | null;
+  readonly anchor_rate: string | null;
 }
 
 type Llamar = <T>(path: string, init?: RequestInit) => Promise<T>;
@@ -53,9 +60,14 @@ export async function cotizarPos(
       rate_source: string;
       functional_subtotal: string;
       functional_tax_amount: string;
-      lines: readonly (Omit<LineaCotizada, "precio_bs" | "total_bs"> & {
+      lines: readonly (Omit<
+        LineaCotizada,
+        "precio_bs" | "total_bs" | "precio_usd" | "total_usd"
+      > & {
         functional_unit_price: string;
         functional_total: string;
+        anchor_unit_price: string | null;
+        anchor_total: string | null;
       })[];
     }
   >("/v1/pos/quote", {
@@ -75,10 +87,14 @@ export async function cotizarPos(
     tasa: fx_rate,
     subtotal_bs: functional_subtotal,
     impuesto_bs: functional_tax_amount,
-    lines: lines.map(({ functional_unit_price, functional_total, ...l }) => ({
-      ...l,
-      precio_bs: functional_unit_price,
-      total_bs: functional_total,
-    })),
+    lines: lines.map(
+      ({ functional_unit_price, functional_total, anchor_unit_price, anchor_total, ...l }) => ({
+        ...l,
+        precio_bs: functional_unit_price,
+        total_bs: functional_total,
+        precio_usd: anchor_unit_price,
+        total_usd: anchor_total,
+      }),
+    ),
   };
 }

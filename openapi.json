@@ -5778,6 +5778,14 @@
                 },
                 "functional_total": {
                   "type": "string"
+                },
+                "anchor_unit_price": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "anchor_total": {
+                  "type": "string",
+                  "nullable": true
                 }
               },
               "required": [
@@ -5790,7 +5798,9 @@
                 "tax_amount",
                 "total",
                 "functional_unit_price",
-                "functional_total"
+                "functional_total",
+                "anchor_unit_price",
+                "anchor_total"
               ],
               "additionalProperties": false
             }
@@ -5815,6 +5825,17 @@
           },
           "functional_currency": {
             "type": "string"
+          },
+          "anchor_currency": {
+            "type": "string"
+          },
+          "anchor_total": {
+            "type": "string",
+            "nullable": true
+          },
+          "anchor_rate": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -5830,7 +5851,10 @@
           "functional_subtotal",
           "functional_tax_amount",
           "functional_total",
-          "functional_currency"
+          "functional_currency",
+          "anchor_currency",
+          "anchor_total",
+          "anchor_rate"
         ],
         "additionalProperties": false
       },

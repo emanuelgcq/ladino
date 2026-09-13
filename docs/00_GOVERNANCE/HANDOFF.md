@@ -92,7 +92,7 @@ desplegado.**
 ## Estado del repo
 
 - Rama `main`; esta entrega va en el commit siguiente a `3928d12`.
-- Migraciones: **52 en el repo**, **46 aplicadas en producción** (47–52 pendientes).
+- Migraciones: **52 en el repo y 52 en producción** (47–52 aplicadas el 2026-09-12 por la Management API con el paquete transaccional `produccion-migraciones-47-52.sql`, validado antes en local). Cola contable de producción: 1.527 pendientes al aplicar.
 - `pnpm run verify` **verde** (2026-09-12, con `TURBO_CONCURRENCY=1` y `db:reset`
   previo): `VERIFY EXIT=0`, 635 líneas de tarea, pgTAP 49 ficheros / 1.115 tests
   (`All tests successful`), vitest domain 49 · api 277 · web 20 · worker 19.

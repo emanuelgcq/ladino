@@ -2604,6 +2604,42 @@ export async function quotePos(
   if (!subtotalFuncional.ok) return subtotalFuncional;
   const impuestoFuncional = totalFuncional.value.amount.minus(subtotalFuncional.value.amount);
 
+  // ADR-0047: el carrito enseña también el ANCLA (USD) aunque la lista esté en
+  // Bs; la factura, en cambio, habla en bolívares. Lo calcula el servidor con
+  // la tasa del día de la empresa (ADR-0057) y a lo que el dólar sabe cobrar:
+  // es presentación, no se persiste. Sin tasa: null, y la pantalla lo dice.
+  const ANCLA = "USD";
+  let anchorTotal: string | null = null;
+  let anchorRate: string | null = null;
+  if (calculadas.value.transactionCurrency === ANCLA) {
+    anchorTotal = totales.value.total.toAmountString();
+    anchorRate = calculadas.value.fxRate.toFixed(8);
+  } else if (ctx.value.functionalCurrency === ANCLA) {
+    anchorTotal = totalFuncional.value.toAmountString();
+    anchorRate = "1.00000000";
+  } else {
+    const [t] = await sql<{ v: string | null; rate: string | null }[]>`
+      select round(${totalFuncional.value.toAmountString()}::numeric / f.rate,
+                   ${minorUnitsOf(ANCLA)})::numeric(24,8)::text as v,
+             f.rate::text as rate
+        from platform.rate_for(${input.company_id}, ${ANCLA}, ${ctx.value.functionalCurrency},
+                               ${diaNegocio(fecha)}::date) f`;
+    anchorTotal = t?.v ?? null;
+    anchorRate = t?.rate ?? null;
+  }
+  // El mismo ancla por línea (presentación): funcional ÷ tasa, a lo que el
+  // dólar sabe cobrar. Con la lista en USD, es el propio precio de lista.
+  const tasaAncla = anchorRate === null ? null : parseDecimal(anchorRate);
+  const enAncla = (m: Money, funcional: Money): string | null => {
+    if (calculadas.value.transactionCurrency === ANCLA) return m.toAmountString();
+    if (ctx.value.functionalCurrency === ANCLA) return funcional.toAmountString();
+    if (tasaAncla === null || !tasaAncla.ok || tasaAncla.value.isZero()) return null;
+    return funcional.amount
+      .dividedBy(tasaAncla.value)
+      .toDecimalPlaces(minorUnitsOf(ANCLA), 4)
+      .toFixed(8);
+  };
+
   return ok({
     customer_id: cliente.value,
     price_list_id: lista.value,
@@ -2621,6 +2657,8 @@ export async function quotePos(
       total: l.calc.total.toAmountString(),
       functional_unit_price: unitFunc.ok ? unitFunc.value.toAmountString() : "0",
       functional_total: totFunc.ok ? totFunc.value.toAmountString() : "0",
+      anchor_unit_price: unitFunc.ok ? enAncla(l.calc.unitPrice, unitFunc.value) : null,
+      anchor_total: totFunc.ok ? enAncla(l.calc.total, totFunc.value) : null,
     })),
     subtotal: totales.value.subtotal.toAmountString(),
     tax_amount: totales.value.taxAmount.toAmountString(),
@@ -2629,6 +2667,9 @@ export async function quotePos(
     functional_tax_amount: impuestoFuncional.toFixed(8),
     functional_total: totalFuncional.value.toAmountString(),
     functional_currency: ctx.value.functionalCurrency,
+    anchor_currency: ANCLA,
+    anchor_total: anchorTotal,
+    anchor_rate: anchorRate,
   });
 }
 

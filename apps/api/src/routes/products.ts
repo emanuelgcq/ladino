@@ -140,12 +140,20 @@ export function productsRoutes(
         ? tx`left join lateral (
               select i.amount::text as price_amount, l.currency_code as price_currency,
                      l.id as price_list_id,
-                     case when l.currency_code = c.functional_currency_code then null
+                     -- Lista en divisa → equivalente en Bs; lista en Bs →
+                     -- equivalente en el ANCLA (USD): la cuadrícula es dual
+                     -- siempre (orden del dueño, 2026-09-13).
+                     case when l.currency_code = c.functional_currency_code
+                          then round(i.amount / nullif(platform.rate_at(c.id, 'USD',
+                                       c.functional_currency_code,
+                                       (now() at time zone 'America/Caracas')::date), 0), 2)
+                               ::numeric(24,8)::text
                           else round(i.amount * platform.rate_at(c.id, l.currency_code,
                                        c.functional_currency_code,
-                                       (now() at time zone 'America/Caracas')::date), 8)::text
+                                       (now() at time zone 'America/Caracas')::date), 2)::numeric(24,8)::text
                      end as price_equivalent_amount,
-                     case when l.currency_code = c.functional_currency_code then null
+                     case when l.currency_code = c.functional_currency_code
+                          then case when c.functional_currency_code = 'USD' then null else 'USD' end
                           else c.functional_currency_code
                      end as price_equivalent_currency
                 from public.price_list_items i
