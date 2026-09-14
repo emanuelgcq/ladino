@@ -98,6 +98,30 @@ export async function onboardBusiness(
   if (!empresa.ok) return empresa;
   const companyId = empresa.value.id;
 
+  // ── 2-ter. SIN RIF, LA EMPRESA NACE VENDIENDO CON RECIBOS ─────────────────
+  // (plan «Ladino sin RIF», A2). Antes nacía SIN régimen y la caja respondía 409
+  // hasta que alguien pasara por /empezar a declarar lo que el registro ya había
+  // preguntado. La declaración del registro es la misma que la de /empezar, y
+  // deja su ACTA (R-27): si el negocio SÍ tenía RIF y dijo que no, lo firmó el
+  // dueño con su usuario y su fecha, y el camino a facturar sigue abierto en
+  // /empezar (la única transición de régimen que existe es salir de recibos).
+  if (!conRif) {
+    await sql`
+      insert into public.company_fiscal_regimes (tenant_id, company_id, regime_code, effective_from)
+      values (${tenantId}, ${companyId}, 'sin_facturacion', now())`;
+    await sql`
+      insert into public.audit_events
+        (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+         actor_type, occurred_at, rules_version, payload)
+      values (${tenantId}, ${companyId}, 'company', ${companyId}, 'fiscal.regime.assigned',
+              'user', now(), ${RULES_VERSION},
+              ${sql.json({
+                to: "sin_facturacion",
+                origin: "onboarding",
+                declaration: "El dueño declaró en el registro que el negocio no tiene RIF.",
+              })})`;
+  }
+
   // ── 2-bis. «Ahora tú»: la ficha del responsable (users_profile) ───────────
   if (input.owner_full_name !== undefined) {
     await sql`

@@ -9,6 +9,7 @@ import type {
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
+import { exigeEmpresaQueFactura } from "./modo-venta.js";
 
 /**
  * IGTF — activación y configuración por empresa (migración 46).
@@ -18,7 +19,10 @@ import { companyScope, type CompanyScopeError } from "./company-scope.js";
  * instrumento causa (DATO editable), y la clasificación fiscal de la empresa
  * (H-6). Todo con permiso de settings: es configuración, no un hecho fiscal.
  */
-export type IgtfError = CompanyScopeError | { code: "VALIDATION_FAILED"; message: string };
+export type IgtfError =
+  | CompanyScopeError
+  | { code: "VALIDATION_FAILED"; message: string }
+  | { code: "REGIME_KIND_NOT_ALLOWED"; message: string };
 
 /** El default conservador que se siembra al ACTIVAR (H-8): las divisas
  *  obvias causan; el resto no, y `otro` tampoco — puede ser un pago en
@@ -95,6 +99,9 @@ export async function enableIgtf(
   if (scope.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
   }
+
+  const factura = await exigeEmpresaQueFactura(sql, input.company_id, "Percibir IGTF");
+  if (!factura.ok) return factura;
 
   const [empresa] = await sql<{ taxpayer_type_code: string | null; enabled: boolean }[]>`
     select taxpayer_type_code, igtf_enabled_at is not null as enabled
@@ -179,6 +186,16 @@ export async function setCompanyTaxpayerType(
   if (!scope.ok) return scope;
   if (scope.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
+  }
+  // Marcarse sujeto pasivo ESPECIAL es de quien factura (A7). Las demás
+  // clasificaciones no abren nada fiscal y se aceptan en cualquier modo.
+  if (input.taxpayer_type_code === "especial") {
+    const factura = await exigeEmpresaQueFactura(
+      sql,
+      input.company_id,
+      "Marcarse contribuyente especial",
+    );
+    if (!factura.ok) return factura;
   }
   const [antes] = await sql<{ taxpayer_type_code: string | null; enabled: boolean }[]>`
     select taxpayer_type_code, igtf_enabled_at is not null as enabled

@@ -11,7 +11,10 @@ const cifra = z.string();
 export const NegocioResumenResponse = z
   .object({
     functional_currency: z.string(),
-    /** Vendido (facturas emitidas/pagadas), en moneda funcional. */
+    /**
+     * Vendido: facturas + recibos + notas de débito − notas de crédito,
+     * emitidas o pagadas (nunca anuladas), en moneda funcional.
+     */
     vendido_hoy: cifra,
     vendido_mes: cifra,
     /** Margen: base vendida menos costo congelado de las líneas que lo tienen. */
@@ -35,10 +38,17 @@ export const NegocioResumenResponse = z
         source: z.string(),
         /** true si la fecha de la tasa es HOY (día de Venezuela). */
         es_de_hoy: z.boolean(),
+        /**
+         * Días desde la fecha de la tasa hasta hoy (día de Venezuela). El
+         * cálculo usa la última tasa disponible SIN límite de antigüedad; esto
+         * es lo que la pantalla enseña para que nadie venda con una tasa vieja
+         * sin saberlo (B12: visible, sin regla dura todavía).
+         */
+        dias_de_antiguedad: z.number().int(),
       })
       .strict()
       .nullable(),
-    /** Las últimas ventas, para la lista de Inicio. */
+    /** Las últimas ventas (facturas y recibos), para la lista de Inicio. */
     ultimas_ventas: z.array(
       z
         .object({

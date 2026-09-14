@@ -140,6 +140,16 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
     }
     const { doc, lineas } = datos;
 
+    // Un recibo NO FISCAL no tiene «copia» fiscal (A6): la leyenda «SIN DERECHO A
+    // CRÉDITO FISCAL» de PA 00071 art. 13.13 es de la factura. La pantalla ya no
+    // ofrecía el botón; la API tampoco lo sirve.
+    if (esCopia && doc["kind"] === "receipt") {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Un recibo no fiscal no tiene copia fiscal: descarga el recibo.",
+      });
+    }
+
     // El LOGO: presentación pura, FUERA del snapshot del emisor (LAD68
     // intacto — la ley congela nombre/RIF/domicilio; el logo vive y puede
     // cambiar). pdfkit no lee webp: se incrusta la variante logo-pdf.png
@@ -307,6 +317,9 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
     // deuda ANCLADA (ADR-0047): lo que se fía se debe en esta moneda.
     if (moneda !== funcional) {
       pdf.moveDown(0.2);
+      // La cita de PA 00071 art. 13.14 es de la FACTURA (A6): el recibo no
+      // fiscal muestra la tasa con su fuente, sin invocar una norma que no le aplica.
+      const cita = esRecibo ? "" : " (art. 13.14, PA 00071)";
       pdf
         .font("Helvetica")
         .fontSize(9)
@@ -318,7 +331,7 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
           { width: 284, align: "right" },
         )
         .text(
-          `Tipo de cambio: ${vestirCantidad(String(doc["fx_rate"]))} ${funcional}/${moneda} — ${String(doc["rate_source"])} (art. 13.14, PA 00071)`,
+          `Tipo de cambio: ${vestirCantidad(String(doc["fx_rate"]))} ${funcional}/${moneda} — ${String(doc["rate_source"])}${cita}`,
           280,
           pdf.y,
           { width: 284, align: "right" },

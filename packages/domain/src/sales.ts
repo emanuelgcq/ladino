@@ -48,6 +48,7 @@ import { issueStockBatch, receiveStock } from "./inventory.js";
 import { resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 import { reverseJournalEntry } from "./accounting.js";
+import { modoDeVenta } from "./modo-venta.js";
 
 /**
  * Casos de uso de VENTAS — RIGOR MÁXIMO. Aquí convergen dinero, fiscal,
@@ -603,21 +604,7 @@ interface Contexto {
   readonly salesMode: SalesMode;
 }
 
-/**
- * EL MODO DE VENTA de una empresa a una fecha (migración 54). No se deduce aquí:
- * lo contesta `platform.sales_mode_at`, que replica la lógica del trigger de
- * emisión y que el pgTAP 054 compara contra el trigger régimen por régimen. Dominio,
- * API y web leen esta misma respuesta.
- */
-export async function modoDeVenta(
-  sql: TransactionSql,
-  companyId: string,
-  fecha: string,
-): Promise<SalesMode> {
-  const [fila] = await sql<{ modo: SalesMode }[]>`
-    select platform.sales_mode_at(${companyId}, ${fecha}) as modo`;
-  return fila?.modo ?? "ninguno";
-}
+export { modoDeVenta } from "./modo-venta.js";
 
 function traducir(e: unknown): SalesError | null {
   const code = (e as { code?: string }).code;
@@ -766,8 +753,15 @@ async function calcularLineas(
   }
 
   // La tasa. Si la lista ya está en moneda funcional, la identidad; si no, la
-  // vigente A LA FECHA del documento, con su fuente. Sin tasa NO se emite: no
-  // se inventa una, ni se usa la de otro día.
+  // que `rate_for` resuelve para la fecha del documento, con su fuente. Sin
+  // ninguna tasa NO se emite: no se inventa una.
+  //
+  // OJO (corregido 2026-09-14, B12): este comentario decía «ni se usa la de otro
+  // día», y era falso. `rate_for` devuelve la ÚLTIMA tasa con fecha menor o igual,
+  // SIN límite de antigüedad: si la fuente falla días, se vende con la tasa del
+  // último día que la hubo. El documento congela esa tasa y su fuente (se sabe
+  // cuál se usó), y el resumen del negocio expone su antigüedad para que la
+  // pantalla lo diga. La regla dura de tasa vieja está fuera de alcance.
   let fxRate = parseDecimal("1");
   let rateSource = "identidad";
   if (lista.currency_code !== input.functionalCurrency) {
@@ -1157,8 +1151,12 @@ async function insertarDocumento(
       amount_transaction_currency: l.calc.total.toAmountString(),
       functional_amount: f.tot.value.toAmountString(),
       cost_snapshot: l.costSnapshot,
-      tax_category_snapshot: l.taxCategory,
-      operation_type: l.operationType,
+      // EL RECIBO NO TIENE CLASIFICACIÓN FISCAL (plan «Ladino sin RIF», A5): se
+      // congela 'no_fiscal' explícito —no NULL, que ya significa «anterior a la
+      // migración 27»— y sin tipo de operación. Antes quedaba la categoría del
+      // producto (p. ej. gravado_general) y 'interna', que un libro podría leer.
+      tax_category_snapshot: d.kind === "receipt" ? "no_fiscal" : l.taxCategory,
+      operation_type: d.kind === "receipt" ? null : l.operationType,
     });
   }
 
@@ -1292,7 +1290,10 @@ async function crearBorrador(
     lines: input.lines,
     fecha,
     functionalCurrency: ctx.value.functionalCurrency,
-    conImpuesto: true,
+    // En modo recibos no existe el IVA (plan «Ladino sin RIF», A3): la
+    // cotización y el pedido salen como la caja, sin buscar regla alguna.
+    // Antes era `true` fijo y daba 409 TAX_RULE_MISSING a quien no tiene IVA.
+    conImpuesto: !esModoRecibos(ctx.value),
   });
   if (!calculadas.ok) return calculadas;
 
@@ -1597,11 +1598,17 @@ async function emitirVenta(
       postedBy: actor.userId,
       description: `${kind === "receipt" ? "Recibo" : "Factura"} ${doc.value.series}-${doc.value.document_number ?? ""}`,
       functionalCurrency: ctx.value.functionalCurrency,
-      amounts: {
-        subtotal: doc.value.subtotal_amount,
-        tax_amount: doc.value.tax_amount,
-        total: doc.value.total_amount,
-      },
+      // Al recibo NO se le pasa impuesto (A5): no existe en su mundo, y su
+      // plantilla (sales_receipt) no lo usa. El cero que el esquema obliga en la
+      // fila no viaja a la contabilidad.
+      amounts:
+        kind === "receipt"
+          ? { subtotal: doc.value.subtotal_amount, total: doc.value.total_amount }
+          : {
+              subtotal: doc.value.subtotal_amount,
+              tax_amount: doc.value.tax_amount,
+              total: doc.value.total_amount,
+            },
       backlink: { table: "documents", id: doc.value.id },
     });
     if (!contable.ok) {

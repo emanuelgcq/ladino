@@ -5202,13 +5202,17 @@
               },
               "es_de_hoy": {
                 "type": "boolean"
+              },
+              "dias_de_antiguedad": {
+                "type": "integer"
               }
             },
             "required": [
               "rate",
               "rate_date",
               "source",
-              "es_de_hoy"
+              "es_de_hoy",
+              "dias_de_antiguedad"
             ],
             "additionalProperties": false
           },

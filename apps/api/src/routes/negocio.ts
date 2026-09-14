@@ -49,6 +49,18 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
       // Vendido y ganado, HOY y MES, con el margen desde el costo CONGELADO de
       // cada línea (cost_snapshot: el costo del kardex al emitir, nunca el de
       // hoy). Las líneas sin costo se CUENTAN y la pantalla lo dice.
+      //
+      // «LO VENDIDO», UNA SOLA DEFINICIÓN (plan «Ladino sin RIF», A1): facturas
+      // + recibos + notas de débito − notas de crédito (la devolución emite su
+      // nota de crédito, así que ya resta por ahí). Nunca las anuladas. Antes
+      // solo contaba facturas y un negocio que vende con recibos veía Bs 0,00
+      // todo el día mientras «me deben» sí subía.
+      //   · margen de factura y recibo: base − costo congelado × cantidad;
+      //   · nota de débito: corrige precio, no mueve mercancía → toda su base
+      //     es margen;
+      //   · nota de crédito: resta su base; si viene de una DEVOLUCIÓN confirmada,
+      //     devuelve también el costo de lo que reingresó (al costo original de
+      //     la línea vendida), porque esa mercancía ya no se vendió.
       const [ventas] = await tx<
         {
           vendido_hoy: string;
@@ -62,16 +74,34 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
           select (now() at time zone 'America/Caracas')::date as hoy,
                  date_trunc('month', (now() at time zone 'America/Caracas')::date)::date as mes
         ),
-        lineas as (
-          select (d.issued_at at time zone 'America/Caracas')::date as dia,
-                 l.line_total_functional as total,
-                 case when l.cost_snapshot is null then null
-                      else l.line_subtotal_functional - l.cost_snapshot * l.quantity end as margen
+        docs as (
+          select d.id, d.kind, (d.issued_at at time zone 'America/Caracas')::date as dia
             from public.documents d
-            join public.document_lines l on l.document_id = d.id
-           where d.company_id = ${companyId} and d.kind = 'invoice'
+           where d.company_id = ${companyId}
+             and d.kind in ('invoice', 'receipt', 'debit_note', 'credit_note')
              and d.status in ('issued', 'paid')
              and d.issued_at >= (select mes from ventana)::timestamptz - interval '1 day'
+        ),
+        lineas as (
+          select d.dia,
+                 case when d.kind = 'credit_note' then -l.line_total_functional
+                      else l.line_total_functional end as total,
+                 case
+                   when d.kind = 'debit_note' then l.line_subtotal_functional
+                   when d.kind = 'credit_note' then -l.line_subtotal_functional
+                   when l.cost_snapshot is null then null
+                   else l.line_subtotal_functional - l.cost_snapshot * l.quantity
+                 end as margen
+            from docs d
+            join public.document_lines l on l.document_id = d.id
+          union all
+          select d.dia, 0 as total, sum(rl.quantity * coalesce(ol.cost_snapshot, 0)) as margen
+            from docs d
+            join public.returns r on r.credit_note_id = d.id and r.status = 'confirmed'
+            join public.return_lines rl on rl.return_id = r.id
+            join public.document_lines ol on ol.id = rl.source_line_id
+           where d.kind = 'credit_note'
+           group by d.id, d.dia
         )
         select
           coalesce(sum(total) filter (where dia = (select hoy from ventana)), 0)::text as vendido_hoy,
@@ -116,10 +146,18 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
         select count(*)::int as n from platform.low_stock_products(${companyId})`;
 
       const [tasa] = await tx<
-        { rate: string; rate_date: string; source: string; es_de_hoy: boolean }[]
+        {
+          rate: string;
+          rate_date: string;
+          source: string;
+          es_de_hoy: boolean;
+          dias_de_antiguedad: number;
+        }[]
       >`
         select f.rate::text as rate, f.rate_date::text as rate_date, f.source,
-               f.rate_date = (now() at time zone 'America/Caracas')::date as es_de_hoy
+               f.rate_date = (now() at time zone 'America/Caracas')::date as es_de_hoy,
+               ((now() at time zone 'America/Caracas')::date - f.rate_date)::int
+                 as dias_de_antiguedad
           from platform.rate_for(${companyId}, 'USD', ${funcional}, (now() at time zone 'America/Caracas')::date + 1) f`;
 
       const ultimas = await tx<Record<string, unknown>[]>`
@@ -129,7 +167,7 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
                d.functional_amount::text as total_functional, d.status
           from public.documents d
           join public.customers cu on cu.id = d.customer_id
-         where d.company_id = ${companyId} and d.kind = 'invoice'
+         where d.company_id = ${companyId} and d.kind in ('invoice', 'receipt')
            and d.status in ('issued', 'paid', 'annulled')
          order by d.issued_at desc nulls last
          limit 8`;

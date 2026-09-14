@@ -56,7 +56,6 @@ export {
   confirmReturn,
   quotePos,
   quickSale,
-  modoDeVenta,
   previsualizarCobro,
   pasoDeCobro,
   percibirIgtf,
@@ -167,3 +166,4 @@ export {
   type MembersError,
 } from "./members.js";
 export { diaNegocio, ZONA_NEGOCIO } from "./dia-negocio.js";
+export { modoDeVenta, exigeEmpresaQueFactura } from "./modo-venta.js";

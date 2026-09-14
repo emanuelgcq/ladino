@@ -139,6 +139,22 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
                     ...(parsed.data.reason === undefined ? {} : { reason: parsed.data.reason }),
                   })})`;
       }
+      // La PRIMERA asignación también deja acta (R-27 lo daba por hecho y no
+      // ocurría: solo se auditaba la subida desde recibos). Quien declara que
+      // vende con recibos, o cómo factura, lo firma.
+      if (!ya) {
+        await tx`
+          insert into public.audit_events
+            (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+             actor_type, occurred_at, rules_version, payload)
+          values (${empresa!.tenant_id}, ${companyId}, 'company', ${companyId},
+                  'fiscal.regime.assigned', 'user', now(), ${RULES_VERSION},
+                  ${tx.json({
+                    to: parsed.data.regime_code,
+                    origin: "empezar",
+                    ...(parsed.data.reason === undefined ? {} : { reason: parsed.data.reason }),
+                  })})`;
+      }
       // `effective_from` es timestamptz: rige desde ESTE instante. La empresa
       // recién asistida no tiene documentos anteriores que quedarse sin régimen.
       const [fila] = await tx<{ regime_code: string }[]>`

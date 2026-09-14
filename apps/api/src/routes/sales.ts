@@ -38,6 +38,7 @@ import {
   avisoIgtf,
   minorUnitsOf,
   previsualizarCobro,
+  exigeEmpresaQueFactura,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -730,6 +731,14 @@ export function salesRoutes(
           message: "Cargar un rango autorizado exige el permiso fiscal.range.manage.",
         });
       }
+      // Los talonarios de la imprenta son de quien factura (A7): la regla vive
+      // en el dominio, aquí solo se invoca.
+      const factura = await exigeEmpresaQueFactura(
+        tx,
+        companyId,
+        "Cargar un talonario de la imprenta",
+      );
+      if (!factura.ok) throw new DominioError(factura.error);
       const [tenant] = await tx<{ tenant_id: string }[]>`
         select tenant_id from public.companies where id = ${companyId}`;
       const [r] = await tx<Record<string, unknown>[]>`
