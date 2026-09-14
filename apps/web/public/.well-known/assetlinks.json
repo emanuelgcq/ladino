@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.ladinosystem.app",
+      "sha256_cert_fingerprints": [
+        "3A:99:AE:E9:51:25:4A:CD:99:4D:9C:13:72:F8:F4:11:91:0F:3E:D3:5E:E2:4E:6F:61:3F:8F:4F:41:C1:55:6A"
+      ]
+    }
+  }
+]

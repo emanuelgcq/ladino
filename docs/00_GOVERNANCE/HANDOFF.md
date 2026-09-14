@@ -44,6 +44,26 @@ controla tras recargar, `Page.getInstallabilityErrors` vacío, manifest sin erro
 - App instalable (build de producción): worker activo, instalable sin errores, abre sin red, ninguna respuesta de API en caché.
 - **Producción (solo lectura)**: 53 migraciones; stock, caja, cobertura contable, comprobación y asientos cuadrados en **0** en las 4 empresas; outbox 7.625 publicados sin reintentos; cola contable 1.527 pendientes (acción del dueño).
 
+### App Android (.apk / .aab) — TWA
+
+- **Qué es**: una Trusted Web Activity (Bubblewrap 1.25.0 como generador) que abre
+  `https://app.ladinosystem.com/` a pantalla completa. Misma web, misma cámara; no se
+  recompila por cada deploy de la web — solo si cambia el ícono, el nombre o el paquete.
+- **Versiones (lo último estable a 2026-09-14)**: AGP 9.4.0, Gradle 9.7.1, compileSdk/targetSdk 37
+  (Play exige ≥ 36 desde 2026-08-31), build-tools 37.0.0, cmdline-tools 23.0, JDK 25 LTS,
+  androidbrowserhelper 2.7.3, minSdk 24. Ajustes a la plantilla por AGP 9: `buildFeatures.resValues`,
+  `lint {}`, `mavenCentral` en vez de `jcenter`, Java 17.
+- **Paquete**: `com.ladinosystem.app`, versión 1.0.0 (code 1).
+- **Salida**: `Documents/Ladino-app/Ladino-1.0.0.apk` (instalación directa) y `.aab` (Play Store).
+- **Proyecto**: `C:	oolsandroidladino-twa` (fuera del repo, pendiente decidir si entra como
+  `apps/android`). Compila con `gradlew assembleRelease bundleRelease` y las variables
+  `LADINO_KEYSTORE` / `LADINO_KEYSTORE_PASSWORD`.
+- **Llave de subida**: `Documents/ladino-android-llaves/` (`ladino-upload.jks` + contraseña). **Fuera del
+  repo; respaldarla**: sin ella no se publica una actualización. SHA-256
+  `3A:99:AE:…:55:6A`, publicado en `apps/web/public/.well-known/assetlinks.json`.
+- **Si se sube a Play**: Play firma con SU llave; hay que agregar el SHA-256 de «App signing key» (Play
+  Console → Integridad de la app) a `assetlinks.json`, o la app mostrará la barra del navegador.
+
 ## Deploy
 
 Solo el contenedor web: `cd /opt/apps/ladino && git pull && docker compose up -d --build web`.
