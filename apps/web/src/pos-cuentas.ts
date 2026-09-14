@@ -202,7 +202,7 @@ export function aNube(cuenta: CuentaAbierta): CuentaNube {
     id: cuenta.id,
     label: etiqueta === "" ? cuenta.etiqueta : etiqueta,
     customer_id: cuenta.cliente?.id ?? null,
-    lines: cuenta.lineas.map((l) => ({ product_id: l.product_id, qty: String(l.qty) })),
+    lines: cuenta.lineas.map((l) => ({ product_id: l.product_id, qty: cantidadTexto(l.qty) })),
   };
 }
 
@@ -213,4 +213,23 @@ export function siguienteEtiqueta(cuentas: CuentaAbierta[]): string {
     const candidata = `Cuenta ${String(n)}`;
     if (!usadas.has(candidata)) return candidata;
   }
+}
+
+/**
+ * LA CANTIDAD COMO TEXTO DECIMAL (plan «Ladino sin RIF», A13). La caja ya vende
+ * medio kilo: la cantidad deja de ser siempre entera. `String(0.0000001)` da
+ * «1e-7», que la API rechaza, y sumar decimales en coma flotante deja colas. Se
+ * redondea a los 8 decimales que acepta la API y se quitan los ceros de más.
+ * Es CANTIDAD, no dinero: el importe lo sigue calculando el servidor.
+ */
+export function cantidadTexto(n: number): string {
+  const t = n.toFixed(8);
+  return t.includes(".") ? t.replace(/0+$/, "").replace(/\.$/, "") : t;
+}
+
+/** Cantidad tecleada por la persona (con coma o punto), o null si no es válida. */
+export function leerCantidad(texto: string): number | null {
+  const t = texto.trim().replace(",", ".");
+  if (!/^\d{1,16}(\.\d{1,8})?$/.test(t)) return null;
+  return Number(t);
 }

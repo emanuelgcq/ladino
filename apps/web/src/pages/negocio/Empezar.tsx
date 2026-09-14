@@ -13,6 +13,7 @@ import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
 import { AltaSimple, ImportarExcel } from "./Productos.js";
 import { CrearCuenta } from "./Dinero.js";
+import { IvaQueCobras } from "../../components/capa-fiscal/IvaQueCobras.js";
 import { porcentajeAFraccion, fraccionAPorcentaje } from "./comunes.js";
 
 /**
@@ -20,7 +21,7 @@ import { porcentajeAFraccion, fraccionAPorcentaje } from "./comunes.js";
  * paso lee su estado del servidor y se marca solo; el de productos se puede
  * saltar, el del dinero no — sin una cuenta no hay dónde caer un cobro.
  *
- * El paso fiscal es el delicado: Ladino NO decide cómo facturas ni qué IVA
+ * El paso fiscal es el delicado: Ladino NO decide cómo facturas ni qué impuesto
  * cobras. Enseña las opciones CON su norma (viene del servidor, citada en la
  * migración) y el porcentaje lo escribe y lo ACEPTA la persona: queda
  * registrado con su usuario y la fecha. El servidor lo marca
@@ -482,7 +483,7 @@ function PasoFacturas({
   const [vendeA, setVendeA] = useState<"negocios" | "personas" | "mitad" | null>(null);
   const [maquina, setMaquina] = useState<boolean | null>(null);
   // VACÍO a propósito: el porcentaje lo escribe la persona. Un «16» puesto
-  // por Ladino era una alícuota que se aceptaba sin haberla tecleado
+  // por Ladino era un porcentaje que se aceptaba sin haberla tecleado
   // (auditoría 2026-09-11); el número vigente va en la AYUDA, con su fuente.
   const [porcentaje, setPorcentaje] = useState("");
   const [desde, setDesde] = useState("");
@@ -649,7 +650,7 @@ function PasoFacturas({
                 <p className="text-[0.82rem] text-muted-foreground">
                   Tus ventas saldrán como <span className="font-medium">recibos</span>, rotulados
                   como documento no fiscal — sin RIF, la ley no permite emitir facturas. Sacar el
-                  RIF es un trámite digital en el portal del SENIAT (
+                  RIF es un trámite digital en el portal oficial (
                   <a
                     href="https://www.seniat.gob.ve"
                     target="_blank"
@@ -825,47 +826,15 @@ function PasoFacturas({
         {setup.current_regime !== null &&
           setup.current_regime !== "sin_emision" &&
           setup.sales_mode !== "recibos" && (
-            <div className="space-y-2 border-t border-border pt-4">
-              <h3 className="font-medium">El IVA que cobras</h3>
-              {setup.iva_general !== null ? (
-                <p className="flex items-center gap-2 text-[0.95rem]">
-                  <Check className="size-4 text-success-soft-foreground" />
-                  Quedó en {fraccionAPorcentaje(setup.iva_general.rate)}%, aceptado por ti.
-                </p>
-              ) : (
-                <>
-                  <p className="text-[0.9rem] text-muted-foreground">
-                    El porcentaje lo fija la ley, no Ladino: escríbelo tú y confírmalo con tu
-                    contador. Al aceptar queda registrado con tu usuario y la fecha de hoy, y así
-                    aparecerá en la auditoría.
-                  </p>
-                  <div className="flex flex-wrap items-end gap-2">
-                    <FormField
-                      label="Porcentaje (%)"
-                      hint="La alícuota general vigente la confirma tu contador (Ley de IVA; hoy 16 %)."
-                    >
-                      {(p) => (
-                        <Input
-                          {...p}
-                          value={porcentaje}
-                          onChange={(e) => setPorcentaje(e.target.value)}
-                          inputMode="decimal"
-                          placeholder="16"
-                          className="w-28"
-                        />
-                      )}
-                    </FormField>
-                    <Button
-                      variant="primary"
-                      disabled={aceptar.isPending || porcentajeAFraccion(porcentaje) === null}
-                      onClick={() => aceptar.mutate()}
-                    >
-                      Acepto este porcentaje
-                    </Button>
-                  </div>
-                </>
-              )}
-            </div>
+            <IvaQueCobras
+              aceptado={
+                setup.iva_general !== null ? fraccionAPorcentaje(setup.iva_general.rate) : null
+              }
+              valor={porcentaje}
+              onValor={setPorcentaje}
+              puedeAceptar={!aceptar.isPending && porcentajeAFraccion(porcentaje) !== null}
+              onAceptar={() => aceptar.mutate()}
+            />
           )}
 
         {setup.current_regime === "formatos_libres" && setup.iva_general !== null && (

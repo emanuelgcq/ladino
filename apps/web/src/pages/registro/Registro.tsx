@@ -72,7 +72,7 @@ const PASOS: readonly Paso[] = [
   "resumen",
 ];
 
-/** Los prefijos que el SENIAT asigna: J/G empresa y gobierno, V/E persona, P pasaporte. */
+/** Los prefijos del RIF: J/G empresa y gobierno, V/E persona, P pasaporte. */
 const PREFIJOS_RIF = ["J", "V", "E", "G", "P"] as const;
 
 const RUBROS: {
@@ -306,7 +306,7 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
       return;
     }
     if (paso === "direccion" && d.direccion.trim().length < 5) {
-      setAviso("Necesitamos la dirección registrada en el SENIAT.");
+      setAviso("Necesitamos la dirección fiscal, la que aparece en tu RIF.");
       return;
     }
     if (paso === "tu" && d.duenoNombre.trim().length < 2) {
@@ -645,7 +645,7 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
         {paso === "direccion" && (
           <Pregunta
             titulo="¿Cuál es la dirección fiscal?"
-            ayuda="La dirección registrada en el SENIAT. Sale en tus facturas."
+            ayuda="La dirección fiscal que aparece en tu RIF. Sale en tus facturas."
             aviso={aviso}
             onSeguir={avanzar}
           >

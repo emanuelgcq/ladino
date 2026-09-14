@@ -42,6 +42,22 @@ export interface NavItem {
   readonly permiso?: string | readonly string[];
   /** Solo visible si el módulo avanzado está activo o el usuario pidió verlo todo. */
   readonly advanced?: "compras" | "contabilidad" | "libros";
+  /**
+   * CAPA FISCAL (plan «Ladino sin RIF», A9): la entrada no existe para una
+   * empresa que vende con recibos, sea cual sea el rol. EL MODO ESCONDE, EL ROL
+   * MUESTRA: este filtro es de la EMPRESA y va aparte del permiso. La
+   * contabilidad NO lleva esta marca — un contador la ve por su rol.
+   */
+  readonly fiscal?: true;
+}
+
+/**
+ * ¿Existe la capa fiscal para esta empresa? No, si vende con recibos. Mientras
+ * el modo no ha llegado (null) tampoco se enseña: mejor que aparezca un instante
+ * tarde a quien factura que enseñarle Libros un instante a quien no.
+ */
+export function capaFiscalVisible(modo: "facturas" | "recibos" | "ninguno" | null): boolean {
+  return modo === "facturas" || modo === "ninguno";
 }
 
 export interface NavGroup {
@@ -158,6 +174,7 @@ export const NAV_ADMIN: NavGroup[] = [
         label: "Libros fiscales",
         icon: BookOpenCheck,
         advanced: "libros",
+        fiscal: true,
         permiso: "fiscal_book.read",
       },
       {
@@ -165,6 +182,7 @@ export const NAV_ADMIN: NavGroup[] = [
         label: "Declarar IVA",
         icon: FileSpreadsheet,
         advanced: "libros",
+        fiscal: true,
         permiso: "fiscal_book.read",
       },
       {
@@ -172,6 +190,7 @@ export const NAV_ADMIN: NavGroup[] = [
         label: "IGTF",
         icon: ShieldCheck,
         advanced: "libros",
+        fiscal: true,
         // La caja LEE el estado para avisar del 3 %; esta pantalla es la del
         // administrador, que además lo configura.
         permiso: ["fiscal_book.read", "company.settings.manage"],
@@ -180,6 +199,7 @@ export const NAV_ADMIN: NavGroup[] = [
         to: "/admin/facturacion-fiscal",
         label: "Facturación fiscal",
         icon: FileCheck2,
+        fiscal: true,
         permiso: ["fiscal.range.manage", "fiscal.audit.read"],
       },
     ],

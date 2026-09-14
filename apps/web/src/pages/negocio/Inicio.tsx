@@ -9,6 +9,8 @@ import { esCero } from "../../components/decimal-compare.js";
 import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
 import { fechaRelativa } from "./comunes.js";
+import { ETIQUETA_OBLIGACION } from "../../components/capa-fiscal/vencimientos.js";
+import { useModoDeVenta } from "../../app/modo-venta.js";
 import { hoyLocal, diaLocalMas } from "../../fechas.js";
 
 /**
@@ -21,13 +23,6 @@ import { hoyLocal, diaLocalMas } from "../../fechas.js";
 /** Con cuánta anticipación avisar de un vencimiento fiscal (orden del dueño). */
 const DIAS_DE_AVISO = 5;
 
-const ETIQUETA_OBLIGACION: Record<string, string> = {
-  iva: "La declaración de IVA",
-  igtf: "El IGTF percibido",
-  ret_iva: "Las retenciones de IVA",
-  islr: "El ISLR",
-};
-
 interface Resumen {
   functional_currency: string;
   vendido_hoy: string;
@@ -39,7 +34,14 @@ interface Resumen {
   lo_que_debo: string;
   mi_dinero: { currency: string; balance: string }[];
   por_agotarse: number;
-  tasa_del_dia: { rate: string; rate_date: string; source: string; es_de_hoy: boolean } | null;
+  tasa_del_dia: {
+    rate: string;
+    rate_date: string;
+    source: string;
+    es_de_hoy: boolean;
+    /** Días desde la fecha de la tasa (B12): el cálculo usa la última que haya. */
+    dias_de_antiguedad: number;
+  } | null;
   ultimas_ventas: {
     id: string;
     issued_at: string | null;
@@ -56,6 +58,8 @@ export function Inicio(): React.JSX.Element {
   // La deuda vive en la administración: el enlace solo para quien puede
   // entrar ahí (el mismo gate que en Mi dinero).
   const puedeVerDeuda = puede(["customer.tax_id.manage", "accounting.read"]);
+  // En modo recibos no hay obligaciones fiscales que recordar (A4).
+  const { modo } = useModoDeVenta();
 
   const resumen = useQuery({
     queryKey: ["negocio-resumen", empresa.id],
@@ -70,6 +74,7 @@ export function Inicio(): React.JSX.Element {
   const vencimientos = useQuery({
     queryKey: ["vencimientos-inicio", empresa.id],
     staleTime: 300_000,
+    enabled: modo === "facturas",
     retry: false,
     queryFn: () =>
       llamar<{ items: { id: string; obligation: string; due_date: string }[] }>(
@@ -95,9 +100,17 @@ export function Inicio(): React.JSX.Element {
     });
   }
   if (r !== null) {
-    if (r.tasa_del_dia === null || !r.tasa_del_dia.es_de_hoy) {
+    if (r.tasa_del_dia === null) {
       recordatorios.push({
-        texto: "La tasa del día no está confirmada. Un toque en «Sigue igual» y listo.",
+        texto: "Todavía no hay tasa del día. Sin ella no se vende en dólares.",
+        a: "/dinero",
+      });
+    } else if (!r.tasa_del_dia.es_de_hoy) {
+      // B12: la tasa vieja no bloquea todavía, pero se DICE cuántos días tiene —
+      // el sistema está cobrando con ella.
+      const d = r.tasa_del_dia.dias_de_antiguedad;
+      recordatorios.push({
+        texto: `Estás vendiendo con la tasa de hace ${d} día${d === 1 ? "" : "s"}. Confírmala o actualízala.`,
         a: "/dinero",
       });
     }

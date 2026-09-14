@@ -25,6 +25,7 @@ import {
   importeValido,
   type EntityOption,
 } from "../../components/forms.js";
+import { AVISO_PRECIO_COMPRA } from "../../components/capa-fiscal/textos.js";
 import { fechaRelativa } from "./comunes.js";
 
 /**
@@ -32,7 +33,7 @@ import { fechaRelativa } from "./comunes.js";
  * una pantalla — la COMPRA de mercancía (con la factura del proveedor, entra
  * al depósito y a la deuda) y el GASTO que no es mercancía (alquiler, luz,
  * nómina: sale de una cuenta y va a contabilidad solo). Todo importe lo
- * calcula el servidor; los totales de la factura llegan con su IVA puesto.
+ * calcula el servidor; los totales de la factura llegan con su impuesto puesto.
  */
 
 interface Proveedor {
@@ -751,7 +752,7 @@ function RegistrarCompra({
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
         // El tipo de persona y de contribuyente los INFIERE el servidor del
-        // prefijo del RIF: la pantalla no decide nada tributario.
+        // prefijo del documento: la pantalla no decide nada tributario.
         body: JSON.stringify({
           company_id: empresa.id,
           legal_name: nuevoNombre.trim(),
@@ -873,7 +874,7 @@ function RegistrarCompra({
                   />
                 )}
               </FormField>
-              <FormField label="RIF" required hint="El de la factura que te entregó.">
+              <FormField label="Cédula o RIF" required hint="El de la factura que te entregó.">
                 {(p) => (
                   <Input {...p} value={nuevoRif} onChange={(e) => setNuevoRif(e.target.value)} />
                 )}
@@ -990,10 +991,7 @@ function RegistrarCompra({
             >
               <Plus /> Otro producto
             </Button>
-            <p className="text-[0.8rem] text-faint-foreground">
-              El precio es por unidad y sin IVA: el impuesto lo pone el sistema con la regla
-              vigente.
-            </p>
+            <p className="text-[0.8rem] text-faint-foreground">{AVISO_PRECIO_COMPRA}</p>
           </div>
 
           <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">

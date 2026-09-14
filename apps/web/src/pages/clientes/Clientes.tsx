@@ -27,7 +27,7 @@ import {
   DialogTitle,
 } from "../../ui/dialog.js";
 import { useToast } from "../../ui/toast.js";
-import { MensajeError } from "../ventas/comunes.js";
+import { KIND_LABEL, MensajeError } from "../ventas/comunes.js";
 import { fechaRelativa } from "../negocio/comunes.js";
 import { mostrarImporte } from "../../money.js";
 import { compararImportes, esCero } from "../../components/decimal-compare.js";
@@ -40,6 +40,8 @@ type ClienteConDeuda = Customer & { readonly debt?: string };
 /** Las facturas emitidas con saldo, tal como las devuelve el estado de cuenta. */
 interface DocumentoAbierto {
   id: string;
+  /** factura, recibo o nota de débito: el mensaje lo nombra por lo que es (A10). */
+  kind: string;
   series: string;
   document_number: number | null;
   issued_at: string | null;
@@ -761,7 +763,7 @@ function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element 
     const filas = abiertas
       .map(
         (d) =>
-          `• Factura ${d.series}-${String(d.document_number ?? "")}: ${mostrarImporte({ amount: d.balance, currency: estado.data.currency })}`,
+          `• ${KIND_LABEL[d.kind] ?? "Documento"} ${d.series}-${String(d.document_number ?? "")}: ${mostrarImporte({ amount: d.balance, currency: estado.data.currency })}`,
       )
       .join("\n");
     return `Hola ${cliente.legal_name}, te escribe ${empresa.legal_name}. Tu cuenta pendiente:\n${filas}\nTotal: ${mostrarImporte({ amount: estado.data.total_outstanding, currency: estado.data.currency })}. ¡Gracias!`;

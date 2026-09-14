@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Banknote,
@@ -16,6 +15,13 @@ import {
 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { useModoDeVenta } from "../../app/modo-venta.js";
+import { AvisoFacturacion } from "../../components/capa-fiscal/AvisoFacturacion.js";
+import { FilasImpuesto } from "../../components/capa-fiscal/FilasImpuesto.js";
+import {
+  IgtfCobradoEnVenta,
+  IncluyeIgtf,
+  SUFIJO_CON_IGTF,
+} from "../../components/capa-fiscal/Igtf.js";
 import { errorDePersona } from "../../lib.js";
 import { abrirPdf as abrirPdfApi } from "../../pdf.js";
 import {
@@ -33,6 +39,8 @@ import {
   siguienteEtiqueta,
   type ClientePos,
   type CuentaAbierta,
+  cantidadTexto,
+  leerCantidad,
 } from "../../pos-cuentas.js";
 import { mostrarImporte, mostrarCantidad } from "../../money.js";
 import { compararImportes } from "../../components/decimal-compare.js";
@@ -111,7 +119,7 @@ interface Venta {
   document_status: string;
   /** Lo que quedó debiendo, en moneda funcional. "0.00000000" = pagada. */
   balance: string;
-  /** El IGTF que cobró esta venta, si alguno de los pagos lo causó. */
+  /** El impuesto a las transacciones que cobró esta venta, si algún pago lo causó. */
   igtf: { functional_amount: string; currency: string } | null;
 }
 
@@ -335,7 +343,7 @@ function VenderDeEmpresa(): React.JSX.Element {
   // La cotización de la cuenta ACTIVA (solo ella: N fichas, UNA cotización),
   // SIEMPRE del servidor, con debounce — y sin debounce al cambiar de ficha.
   const lineas = useMemo(
-    () => activa.lineas.map((l) => ({ product_id: l.product_id, quantity: String(l.qty) })),
+    () => activa.lineas.map((l) => ({ product_id: l.product_id, quantity: cantidadTexto(l.qty) })),
     [activa],
   );
   const lineasDebounced = useDebounced(lineas, 300, activa.id);
@@ -418,7 +426,7 @@ function VenderDeEmpresa(): React.JSX.Element {
         linea !== undefined &&
         tope !== null &&
         tope !== undefined &&
-        compararImportes(String(linea.qty + delta), tope) > 0
+        compararImportes(cantidadTexto(linea.qty + delta), tope) > 0
       ) {
         toast.warning(
           `Solo quedan ${mostrarCantidad(tope)}`,
@@ -430,9 +438,46 @@ function VenderDeEmpresa(): React.JSX.Element {
     tocar(activa.id, (c) => ({
       ...c,
       lineas: c.lineas
-        .map((l) => (l.product_id === productId ? { ...l, qty: l.qty + delta } : l))
+        .map((l) =>
+          l.product_id === productId
+            ? { ...l, qty: leerCantidad(cantidadTexto(l.qty + delta)) ?? 0 }
+            : l,
+        )
         .filter((l) => l.qty > 0),
     }));
+  }
+
+  /**
+   * FIJAR LA CANTIDAD TECLEADA (A13): medio kilo de queso es «0,5». Mismo tope de
+   * existencia que el «+»; cero la quita. El total lo calcula el servidor.
+   */
+  function fijarQty(productId: string, texto: string): boolean {
+    const nueva = leerCantidad(texto);
+    if (nueva === null) {
+      toast.warning("Cantidad no válida", "Escribe un número, por ejemplo 2 o 0,5.");
+      return false;
+    }
+    const linea = activa.lineas.find((l) => l.product_id === productId);
+    const tope = linea?.existencia ?? null;
+    if (
+      nueva > 0 &&
+      tope !== null &&
+      tope !== undefined &&
+      compararImportes(cantidadTexto(nueva), tope) > 0
+    ) {
+      toast.warning(
+        `Solo quedan ${mostrarCantidad(tope)}`,
+        "No se puede anotar más de lo que hay en el depósito.",
+      );
+      return false;
+    }
+    tocar(activa.id, (c) => ({
+      ...c,
+      lineas: c.lineas
+        .map((l) => (l.product_id === productId ? { ...l, qty: nueva } : l))
+        .filter((l) => l.qty > 0),
+    }));
+    return true;
   }
 
   // EL GESTO DEL LECTOR (Enter en la búsqueda, o la cámara). Se busca el
@@ -500,7 +545,13 @@ function VenderDeEmpresa(): React.JSX.Element {
     return { ok: false, texto: `Varios productos con «${codigo}»: elígelo en la lista` };
   }
 
-  const clienteResuelto = modoRecibos || activa.cliente !== null || activa.sinIdentificar;
+  // A12: en modo recibos la venta al contado no pide cliente — SOLO si el dueño
+  // permite vender sin identificar. El servidor exige cliente en TODOS los modos
+  // cuando el ajuste está apagado, y antes la caja lo daba por resuelto y el cobro
+  // terminaba en 422.
+  const permiteSinIdentificar = ajustes.data?.allow_unidentified_sales ?? true;
+  const clienteResuelto =
+    (modoRecibos && permiteSinIdentificar) || activa.cliente !== null || activa.sinIdentificar;
 
   // En modo recibos no hay cédula que pedir primero: el foco va a la búsqueda.
   useEffect(() => {
@@ -531,14 +582,7 @@ function VenderDeEmpresa(): React.JSX.Element {
 
   return (
     <div className="space-y-2">
-      {modoRecibos && (
-        <div className="flex items-center gap-2 rounded-md border border-border bg-surface-muted/50 px-3 py-1.5 text-[0.82rem] text-muted-foreground">
-          Estás vendiendo con recibos.{" "}
-          <Link to="/empezar" className="text-accent-soft-foreground underline">
-            Con tu RIF puedes facturar →
-          </Link>
-        </div>
-      )}
+      {modoRecibos && <AvisoFacturacion />}
       {/*
         Altura FIJA, no mínima: con `min-h` la cuadrícula crecía con el catálogo
         —300 productos daban una página de 3.870 px— y el carrito se estiraba con
@@ -727,11 +771,13 @@ function VenderDeEmpresa(): React.JSX.Element {
                           aria-label={`Quitar uno de ${l.nombre !== "" ? l.nombre : "este producto"}`}
                           onClick={() => cambiarQty(l.product_id, -1)}
                         >
-                          {l.qty === 1 ? <Trash2 /> : <Minus />}
+                          {l.qty <= 1 ? <Trash2 /> : <Minus />}
                         </Button>
-                        <span className="w-7 text-center text-[0.95rem] font-medium tabular-nums">
-                          {l.qty}
-                        </span>
+                        <CantidadEditable
+                          cantidad={l.qty}
+                          nombre={l.nombre !== "" ? l.nombre : "este producto"}
+                          onFijar={(t) => fijarQty(l.product_id, t)}
+                        />
                         <Button
                           variant="ghost"
                           size="iconSm"
@@ -767,7 +813,7 @@ function VenderDeEmpresa(): React.JSX.Element {
             )}
           </div>
           <div className="space-y-2 border-t border-border p-3">
-            {/* Si el servidor no puede cotizar (sin regla de IVA, sin tasa, un
+            {/* Si el servidor no puede cotizar (sin regla de impuesto, sin tasa, un
                 producto sin precio), se DICE: antes las líneas quedaban en «…»
                 y Cobrar se apagaba sin explicación (auditoría 2026-09-11). */}
             {cotizacion.isError && activa.lineas.length > 0 && (
@@ -780,24 +826,14 @@ function VenderDeEmpresa(): React.JSX.Element {
             )}
             {cotizacion.data && activa.lineas.length > 0 && (
               <>
-                <div className="flex justify-between text-[0.88rem] text-muted-foreground">
-                  <span>Sin impuesto</span>
-                  <span className="tabular-nums">
-                    {mostrarImporte({
-                      amount: cotizacion.data.subtotal_bs,
-                      currency: cotizacion.data.functional_currency,
-                    })}
-                  </span>
-                </div>
-                <div className="flex justify-between text-[0.88rem] text-muted-foreground">
-                  <span>IVA</span>
-                  <span className="tabular-nums">
-                    {mostrarImporte({
-                      amount: cotizacion.data.impuesto_bs,
-                      currency: cotizacion.data.functional_currency,
-                    })}
-                  </span>
-                </div>
+                {/* En modo recibos no existe el impuesto: el total ES el precio (A4). */}
+                {!modoRecibos && (
+                  <FilasImpuesto
+                    subtotal={cotizacion.data.subtotal_bs}
+                    impuesto={cotizacion.data.impuesto_bs}
+                    moneda={cotizacion.data.functional_currency}
+                  />
+                )}
                 <div className="flex items-baseline justify-between">
                   <span className="text-[1rem] font-semibold">Total</span>
                   <span className="text-xl font-semibold tabular-nums">
@@ -1395,7 +1431,7 @@ function Cobrar({
   }, [formas.data]);
 
   // ── La vista previa del SERVIDOR (ADR-0059): cuánto abona cada forma, su
-  // IGTF, el vuelto, lo que falta y cuánto pedir en cada forma para cerrar.
+  // impuesto a las transacciones, el vuelto, lo que falta y cuánto pedir en cada forma.
   // Es el MISMO cálculo que hará la venta; la pantalla no suma dinero.
   const limpio = (v: string): string => v.trim().replace(",", ".");
   const conMonto = pagos
@@ -1669,7 +1705,7 @@ function Cobrar({
                       {s?.monto != null && (
                         <span className="pl-6 text-[0.75rem] font-normal text-muted-foreground tabular-nums">
                           {mostrarImporte({ amount: s.monto, currency: b.currency })}
-                          {s.igtf !== null ? " con IGTF" : ""}
+                          {s.igtf !== null ? SUFIJO_CON_IGTF : ""}
                         </span>
                       )}
                     </Button>
@@ -1778,9 +1814,9 @@ function PagoFila({
               {mostrarImporte({ amount: fila.abonoFuncional ?? "0", currency: funcional })}
             </p>
             {fila.igtf !== null && (
-              <p className="text-warning-soft-foreground">
-                Incluye IGTF {mostrarImporte({ amount: fila.igtf, currency: pago.currency })}
-              </p>
+              <IncluyeIgtf
+                importe={mostrarImporte({ amount: fila.igtf, currency: pago.currency })}
+              />
             )}
             {fila.vuelto !== null && (
               <p className="font-medium text-success-soft-foreground">
@@ -1850,14 +1886,12 @@ function VentaLista({
             </div>
           )}
           {venta.igtf !== null && (
-            <p className="text-[0.88rem] text-muted-foreground tabular-nums">
-              Se cobró además{" "}
-              {mostrarImporte({
+            <IgtfCobradoEnVenta
+              importe={mostrarImporte({
                 amount: venta.igtf.functional_amount,
                 currency: venta.igtf.currency,
-              })}{" "}
-              de IGTF por el pago en divisas.
-            </p>
+              })}
+            />
           )}
           {venta.change !== null && (
             <div className="rounded-lg bg-success-soft p-4">
@@ -1879,5 +1913,46 @@ function VentaLista({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * La cantidad de una línea, editable a mano (A13): se teclea «0,5» o «2» y se
+ * fija al salir del campo o con Enter; Escape la deja como estaba.
+ */
+function CantidadEditable({
+  cantidad,
+  nombre,
+  onFijar,
+}: {
+  cantidad: number;
+  nombre: string;
+  onFijar: (texto: string) => boolean;
+}): React.JSX.Element {
+  const [texto, setTexto] = useState(() => cantidadTexto(cantidad).replace(".", ","));
+  useEffect(() => setTexto(cantidadTexto(cantidad).replace(".", ",")), [cantidad]);
+  const fijar = () => {
+    if (texto.replace(",", ".") === cantidadTexto(cantidad)) return;
+    if (!onFijar(texto)) setTexto(cantidadTexto(cantidad).replace(".", ","));
+  };
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      aria-label={`Cantidad de ${nombre}`}
+      className="h-8 w-14 rounded-sm border border-transparent bg-transparent text-center text-[0.95rem] font-medium tabular-nums hover:border-border focus:border-border-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-ring max-sm:h-9"
+      value={texto}
+      onChange={(e) => setTexto(e.target.value)}
+      onFocus={(e) => e.target.select()}
+      onBlur={fijar}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          (e.target as HTMLInputElement).blur();
+        } else if (e.key === "Escape") {
+          setTexto(cantidadTexto(cantidad).replace(".", ","));
+        }
+      }}
+    />
   );
 }

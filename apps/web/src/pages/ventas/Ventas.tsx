@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Receipt } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { useModoDeVenta } from "../../app/modo-venta.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
 import { DualMoney } from "../../components/DualMoney.js";
@@ -51,7 +52,14 @@ export function Ventas(): React.JSX.Element {
   const navigate = useNavigate();
   const [pagina, setPagina] = useState(1);
   const [estado, setEstado] = useState("");
+  // En modo recibos la lista arranca en recibos (A11): filtrar por facturas
+  // enseñaba una lista vacía a quien no factura.
+  const { modo } = useModoDeVenta();
   const [kind, setKind] = useState("invoice");
+  const [kindElegido, setKindElegido] = useState(false);
+  useEffect(() => {
+    if (!kindElegido && modo === "recibos") setKind("receipt");
+  }, [modo, kindElegido]);
   const [rango, setRango] = useState({ from: "", to: "" });
   const [cliente, setCliente] = useState<EntityOption | null>(null);
 
@@ -182,11 +190,13 @@ export function Ventas(): React.JSX.Element {
                 ariaLabel="Tipo de documento"
                 value={kind}
                 onValueChange={(v) => {
+                  setKindElegido(true);
                   setKind(v === "todos" ? "" : v);
                   setPagina(1);
                 }}
                 options={[
                   { value: "todos", label: "Todos los tipos" },
+                  { value: "receipt", label: "Recibos" },
                   { value: "invoice", label: "Facturas" },
                   { value: "credit_note", label: "Notas de crédito" },
                   { value: "debit_note", label: "Notas de débito" },

@@ -341,7 +341,7 @@ export function DetalleFactura(): React.JSX.Element {
                     <TH>Descripción</TH>
                     <TH className="text-right">Cantidad</TH>
                     <TH className="text-right">Precio</TH>
-                    <TH className="text-right">IVA</TH>
+                    {doc.kind !== "receipt" && <TH className="text-right">IVA</TH>}
                     <TH className="text-right">Total</TH>
                   </TR>
                 </THead>
@@ -357,9 +357,17 @@ export function DetalleFactura(): React.JSX.Element {
                           currency: l.transaction_currency,
                         })}
                       </TDNum>
-                      <TDNum>
-                        {mostrarImporte({ amount: l.tax_amount, currency: l.transaction_currency })}
-                      </TDNum>
+                      {/* Un recibo no repercute impuesto: ni columna ni cero (A4). Se decide
+                          por el TIPO del documento, no por el modo de hoy: un recibo viejo
+                          sigue sin IVA y una factura vieja lo sigue enseñando. */}
+                      {doc.kind !== "receipt" && (
+                        <TDNum>
+                          {mostrarImporte({
+                            amount: l.tax_amount,
+                            currency: l.transaction_currency,
+                          })}
+                        </TDNum>
+                      )}
                       <TDNum>
                         {mostrarImporte({
                           amount: l.line_total_transaction,
@@ -454,7 +462,11 @@ export function DetalleFactura(): React.JSX.Element {
           {(doc.kind === "invoice" || doc.kind === "receipt") && (
             <Card>
               <CardHeader>
-                <CardTitle>Notas y devoluciones sobre esta factura</CardTitle>
+                <CardTitle>
+                  {doc.kind === "receipt"
+                    ? "Devoluciones sobre este recibo"
+                    : "Notas y devoluciones sobre esta factura"}
+                </CardTitle>
               </CardHeader>
               <CardContent className="px-0 pb-1">
                 {notas.isError ? (
@@ -521,13 +533,20 @@ export function DetalleFactura(): React.JSX.Element {
               <CardTitle>Totales</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1.5 text-[0.9rem]">
-              <Fila etiqueta="Subtotal">
-                {mostrarImporte({ amount: doc.subtotal_amount, currency: doc.functional_currency })}
-              </Fila>
-              <Fila etiqueta="IVA">
-                {mostrarImporte({ amount: doc.tax_amount, currency: doc.functional_currency })}
-              </Fila>
-              <div className="my-2 h-px bg-border" />
+              {doc.kind !== "receipt" && (
+                <>
+                  <Fila etiqueta="Subtotal">
+                    {mostrarImporte({
+                      amount: doc.subtotal_amount,
+                      currency: doc.functional_currency,
+                    })}
+                  </Fila>
+                  <Fila etiqueta="IVA">
+                    {mostrarImporte({ amount: doc.tax_amount, currency: doc.functional_currency })}
+                  </Fila>
+                  <div className="my-2 h-px bg-border" />
+                </>
+              )}
               <Fila etiqueta="Total" destacada>
                 {/* El contrato del documento trae los totales FUNCIONALES; el
                     total en divisa vive en las LÍNEAS y no se suma aquí

@@ -349,7 +349,9 @@ function Paso({
   titulo,
   estado,
   resumen,
-  codigo409,
+  // El código del 409 queda en la firma para quien lee el código; en PANTALLA
+  // no se enseña (A10): la persona ve «Pendiente», no «409 TAX_RULE_MISSING».
+  codigo409: _codigo409,
   sello,
   extra,
   children,
@@ -379,9 +381,6 @@ function Paso({
           </CardTitle>
         </div>
         <div className="flex items-center gap-2">
-          <Badge tone="outline" className="font-mono">
-            409 {codigo409}
-          </Badge>
           {estado === "completo" && <Badge tone="accent">Completo</Badge>}
           {estado === "pendiente" && <Badge tone="warning">Pendiente</Badge>}
           {estado === "error" && <Badge tone="destructive">Sin comprobar</Badge>}

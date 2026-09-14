@@ -81,3 +81,60 @@ export function violaciones(texto: string): Violacion[] {
   }
   return halladas;
 }
+
+/**
+ * LA CAPA FISCAL (plan «Ladino sin RIF», A15). Un negocio que vende con recibos
+ * no tiene IVA, ni IGTF, ni trámites ante el SENIAT: esas palabras no pueden
+ * aparecer en las pantallas de la persona. Lo que una empresa que FACTURA sí ve
+ * (la fila de IVA del carrito, el IGTF de un pago en divisas) vive en
+ * `src/components/capa-fiscal/**`, fuera del alcance de este gate, y la pantalla
+ * lo pinta solo cuando el modo de venta es «facturas». Así la frontera es de
+ * arquitectura y el gate la vigila.
+ *
+ * Es una lista APARTE de `TERMINOS_PROHIBIDOS` a propósito: el gate original
+ * asevera que su muestra envenenada dispara exactamente todos sus términos, y
+ * sumarle términos obligaría a editar esa aserción. Este gate tiene su propia
+ * variante rota (test/glosario-capa-fiscal.test.ts).
+ *
+ * EXCEPCIONES EXPLÍCITAS, y solo estas:
+ *   · el RIF se nombra donde el negocio decide si lo tiene (registro y Empezar,
+ *     que incluye «¿Ya tienes RIF?»);
+ *   · el RIF o la cédula de un CLIENTE o PROVEEDOR es su documento de identidad,
+ *     no la capa fiscal del negocio: «cédula o RIF» / «RIF o cédula».
+ */
+export interface TerminoCapaFiscal extends TerminoProhibido {
+  /** Archivos (ruta relativa con /) donde el término sí se admite. */
+  readonly permitidoEn?: RegExp;
+  /** Frases que contienen el término y se admiten en cualquier pantalla. */
+  readonly salvo?: RegExp;
+}
+
+export const TERMINOS_CAPA_FISCAL: readonly TerminoCapaFiscal[] = [
+  { patron: /\bIVA\b/, usa: "nada: el IVA vive en src/components/capa-fiscal" },
+  { patron: /\bIGTF\b/, usa: "nada: el IGTF vive en src/components/capa-fiscal" },
+  { patron: /\bSENIAT\b/, usa: "nada: la pantalla de la persona no habla de trámites fiscales" },
+  { patron: /al[íi]cuota/iu, usa: "nada: la alícuota es de quien factura" },
+  { patron: /\blotes?\b/iu, usa: "«Por vencer» (el vencimiento es lo que la persona ve)" },
+  {
+    patron: /\b4\d\d\s+[A-Z][A-Z_]{3,}\b/,
+    usa: "el person_message del error, nunca «409 CÓDIGO»",
+  },
+  {
+    patron: /\bRIF\b/,
+    usa: "«cédula o RIF» si es el documento de un cliente o proveedor; el RIF del negocio solo en el registro y en Empezar",
+    permitidoEn: /(^|\/)(registro\/Registro\.tsx|negocio\/Empezar\.tsx)$/,
+    salvo: /c[ée]dula\s+o\s+(el\s+)?RIF|RIF\s+o\s+(la\s+)?c[ée]dula/giu,
+  },
+];
+
+/** Las violaciones de la capa fiscal en un texto fuente. `archivo`: ruta relativa con /. */
+export function violacionesCapaFiscal(texto: string, archivo = ""): Violacion[] {
+  const halladas: Violacion[] = [];
+  for (const t of TERMINOS_CAPA_FISCAL) {
+    if (t.permitidoEn !== undefined && t.permitidoEn.test(archivo)) continue;
+    const limpio = t.salvo === undefined ? texto : texto.replace(t.salvo, "");
+    const m = limpio.match(t.patron);
+    if (m !== null) halladas.push({ termino: m[0], usa: t.usa });
+  }
+  return halladas;
+}

@@ -24,7 +24,16 @@ import { Button } from "../ui/button.js";
 import { Tooltip } from "../ui/tooltip.js";
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu.js";
 import { useSesion } from "./session.js";
-import { NAV_NEGOCIO, NAV_ADMIN, NAV_EMPEZAR, CRUMBS, rutaInicial, type NavItem } from "./nav.js";
+import {
+  NAV_NEGOCIO,
+  NAV_ADMIN,
+  NAV_EMPEZAR,
+  CRUMBS,
+  capaFiscalVisible,
+  rutaInicial,
+  type NavItem,
+} from "./nav.js";
+import { useModoDeVenta } from "./modo-venta.js";
 import { sondearModulosActivos, type ModulosActivos } from "./modulos-activos.js";
 import { CommandPalette } from "./palette.js";
 import { LogoLadino } from "../components/LogoLadino.js";
@@ -64,11 +73,15 @@ function guardarBandera(clave: string, v: boolean): void {
   }
 }
 
-export function mostrarTodosLosModulos(): boolean {
-  return leerBandera(CLAVE_TODOS);
+// Las banderas de la vista son POR EMPRESA (A14): con dos negocios en la misma
+// cuenta, «mostrar todos los módulos» de uno no puede abrirle los del otro.
+const claveDe = (clave: string, empresaId: string) => `${clave}.${empresaId}`;
+
+export function mostrarTodosLosModulos(empresaId: string): boolean {
+  return leerBandera(claveDe(CLAVE_TODOS, empresaId));
 }
-export function setMostrarTodos(v: boolean): void {
-  guardarBandera(CLAVE_TODOS, v);
+export function setMostrarTodos(empresaId: string, v: boolean): void {
+  guardarBandera(claveDe(CLAVE_TODOS, empresaId), v);
 }
 
 /**
@@ -116,18 +129,28 @@ export function AppShell(): React.JSX.Element {
   const [paleta, setPaleta] = useState(false);
   // El menú en TELÉFONO: un panel deslizable. Se cierra al navegar.
   const [panelMovil, setPanelMovil] = useState(false);
-  const [adminAbierto, setAdminAbierto] = useState(() => leerBandera(CLAVE_ADMIN_ABIERTO));
+  const { puede, empresa } = useSesion();
+  const [adminAbierto, setAdminAbierto] = useState(() =>
+    leerBandera(claveDe(CLAVE_ADMIN_ABIERTO, empresa.id)),
+  );
   const activos = useModulosActivos();
-  const { puede } = useSesion();
+  const { modo } = useModoDeVenta();
   const empezar = useEmpezarPendiente();
-  const [todos, setTodos] = useState(mostrarTodosLosModulos);
+  const [todos, setTodos] = useState(() => mostrarTodosLosModulos(empresa.id));
   const location = useLocation();
   const enAdmin = location.pathname.startsWith("/admin");
 
-  useEffect(() => setTodos(mostrarTodosLosModulos()), [location.pathname]);
+  useEffect(() => setTodos(mostrarTodosLosModulos(empresa.id)), [location.pathname, empresa.id]);
+  useEffect(
+    () => setAdminAbierto(leerBandera(claveDe(CLAVE_ADMIN_ABIERTO, empresa.id))),
+    [empresa.id],
+  );
   useEffect(() => setPanelMovil(false), [location.pathname]);
   useEffect(() => guardarBandera(CLAVE_SIDEBAR, colapsada), [colapsada]);
-  useEffect(() => guardarBandera(CLAVE_ADMIN_ABIERTO, adminAbierto), [adminAbierto]);
+  useEffect(
+    () => guardarBandera(claveDe(CLAVE_ADMIN_ABIERTO, empresa.id), adminAbierto),
+    [adminAbierto, empresa.id],
+  );
 
   // El título de la pestaña sigue a la miga: con seis pestañas de Ladino
   // abiertas, «Ladino · Inventario» se distingue de «Ladino · Vender».
@@ -152,6 +175,9 @@ export function AppShell(): React.JSX.Element {
     // este usuario. El toggle de módulos avanzados filtra DESPUÉS: activa
     // módulos de la empresa, no abre puertas que el rol cierra.
     if (item.permiso !== undefined && !puede(item.permiso)) return false;
+    // Después, la EMPRESA: la capa fiscal no existe para quien vende con recibos,
+    // tenga el rol que tenga (A9). Filtro aparte del permiso, nunca mezclado.
+    if (item.fiscal === true && !capaFiscalVisible(modo)) return false;
     if (item.advanced === undefined) return true;
     return todos || activos[item.advanced];
   };
@@ -362,7 +388,7 @@ export function AppShell(): React.JSX.Element {
         </nav>
       )}
 
-      <CommandPalette open={paleta} onOpenChange={setPaleta} />
+      <CommandPalette open={paleta} onOpenChange={setPaleta} visible={visible} />
     </div>
   );
 }

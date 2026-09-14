@@ -23,8 +23,8 @@ import { Depositos } from "./configuracion/Depositos.js";
  */
 export function Configuracion(): React.JSX.Element {
   const [tema, setTemaLocal] = useState<ThemeChoice>(temaActual);
-  const [todos, setTodos] = useState(mostrarTodosLosModulos);
   const { empresa, llamar, puede } = useSesion();
+  const [todos, setTodos] = useState(() => mostrarTodosLosModulos(empresa.id));
   const toast = useToast();
   const qc = useQueryClient();
 
@@ -171,7 +171,7 @@ export function Configuracion(): React.JSX.Element {
               id="cfg-todos"
               checked={todos}
               onCheckedChange={(v: boolean) => {
-                setMostrarTodos(v);
+                setMostrarTodos(empresa.id, v);
                 setTodos(v);
               }}
               aria-label="Mostrar todos los módulos"

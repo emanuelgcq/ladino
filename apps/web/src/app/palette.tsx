@@ -26,9 +26,16 @@ interface Accion {
 export function CommandPalette({
   open,
   onOpenChange,
+  visible,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /**
+   * El filtro del MENÚ, el mismo objeto (A8): permiso, módulo activo y modo de
+   * venta. Antes la paleta filtraba solo por permiso y enseñaba Libros, Declarar
+   * IVA o IGTF que el menú escondía.
+   */
+  visible: (item: NavItem) => boolean;
 }): React.JSX.Element {
   const { llamar, puede, empresa } = useSesion();
   const navigate = useNavigate();
@@ -45,11 +52,9 @@ export function CommandPalette({
   }, [open]);
 
   const rutas = useMemo<Accion[]>(() => {
-    // ADR-0048: la paleta ofrece las mismas puertas que el menú — lo que el
-    // rol no abre, tampoco se busca con Cmd+K.
-    const items: NavItem[] = [...NAV_NEGOCIO, ...NAV_ADMIN.flatMap((g) => g.items)].filter(
-      (i) => i.permiso === undefined || puede(i.permiso),
-    );
+    // ADR-0048: la paleta ofrece las mismas puertas que el menú — con el mismo
+    // filtro del menú, no una copia que se desalinea.
+    const items: NavItem[] = [...NAV_NEGOCIO, ...NAV_ADMIN.flatMap((g) => g.items)].filter(visible);
     const filtradas =
       q === "" ? items : items.filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
     return filtradas.map((i) => {
@@ -62,7 +67,7 @@ export function CommandPalette({
         to: i.to,
       };
     });
-  }, [q, puede]);
+  }, [q, visible]);
 
   // Entidades: solo con 2+ caracteres, con debounce vía staleTime corto de la
   // caché y la clave por texto. La búsqueda es la del SERVIDOR.

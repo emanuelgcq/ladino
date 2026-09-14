@@ -23,7 +23,7 @@ import { formatearDocumento } from "./comunes.js";
  * cliente (decisión del dueño, 2026-09-05): la deuda, el cobro y el estado
  * de cuenta viven en Administración → Clientes. Aquí queda la lista, la
  * búsqueda y el alta rápida. El tipo de persona y de contribuyente los
- * infiere el SERVIDOR del prefijo del RIF: la pantalla manda el documento y
+ * infiere el SERVIDOR del prefijo del documento: la pantalla manda el documento y
  * nada más.
  */
 
@@ -94,7 +94,7 @@ export function ClientesNegocio(): React.JSX.Element {
           <Input
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            placeholder="Nombre o RIF…"
+            placeholder="Nombre, cédula o RIF…"
             className="w-56 pl-8"
             aria-label="Buscar clientes"
           />
@@ -165,7 +165,7 @@ export function ClientesNegocio(): React.JSX.Element {
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{c.legal_name}</span>
                   <span className="block text-[0.8rem] text-muted-foreground tabular-nums">
-                    {c.tax_id !== null ? formatearDocumento(c.tax_id) : "Sin RIF"}
+                    {c.tax_id !== null ? formatearDocumento(c.tax_id) : "Sin documento"}
                     {c.phone !== null ? ` · ${c.phone}` : ""}
                   </span>
                 </span>
@@ -225,7 +225,7 @@ function AltaCliente({
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
         // Sin `person_type_code` ni `taxpayer_type_code`: los infiere el
-        // servidor del prefijo del RIF (V/E persona, J/G empresa, P
+        // servidor del prefijo del documento (V/E persona, J/G empresa, P
         // extranjera). Aquí no se decide nada tributario.
         body: JSON.stringify({
           company_id: empresa.id,
@@ -255,7 +255,7 @@ function AltaCliente({
       <DialogContent className="max-w-sm">
         <DialogTitle>Nuevo cliente</DialogTitle>
         <DialogDescription>
-          Con el nombre basta. El RIF, si te lo pide en factura.
+          Con el nombre basta. La cédula o RIF, si te la da: sirve el día que factures.
         </DialogDescription>
         <div className="space-y-3 pt-2">
           <FormField label="Nombre" required>

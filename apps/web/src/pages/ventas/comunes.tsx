@@ -16,6 +16,15 @@ export const CODIGOS_PUESTA_A_PUNTO: Record<string, string> = {
   RETENTION_RULE_MISSING: "Falta la norma de retención cargada (módulo de compras).",
 };
 
+/**
+ * Los 409 que NO son un paso pendiente de la puesta a punto sino «esto es de quien
+ * factura» (plan «Ladino sin RIF», A10). Llevan a Empezar, donde se activa la
+ * facturación, no a la puesta a punto fiscal.
+ */
+const CODIGOS_DE_QUIEN_FACTURA: Record<string, string> = {
+  REGIME_KIND_NOT_ALLOWED: "Esto es de quien factura",
+};
+
 export function MensajeError({ error }: { error: unknown }): React.JSX.Element | null {
   // Sin error no hay mensaje. Quien lo pinta sin condición —Declarar IVA e
   // IGTF— mostraba un «null» rojo debajo de las pestañas nada más entrar,
@@ -23,13 +32,25 @@ export function MensajeError({ error }: { error: unknown }): React.JSX.Element |
   if (error == null) return null;
   if (error instanceof LlamadaApiError) {
     const guia = CODIGOS_PUESTA_A_PUNTO[error.body.code];
+    const deQuienFactura = CODIGOS_DE_QUIEN_FACTURA[error.body.code];
     return (
       <div
         role="alert"
         className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-[0.88rem]"
       >
-        <p className="font-medium text-warning-soft-foreground">{guia ?? `${error.body.code}`}</p>
+        {/* Nunca el código crudo como título (A10): la persona lee una frase. */}
+        <p className="font-medium text-warning-soft-foreground">
+          {guia ?? deQuienFactura ?? "No se pudo completar"}
+        </p>
         <p className="mt-0.5 text-muted-foreground">{error.body.message}</p>
+        {deQuienFactura !== undefined && (
+          <Link
+            to="/empezar"
+            className="mt-1.5 inline-flex items-center gap-1.5 font-medium text-accent-soft-foreground hover:underline"
+          >
+            <ClipboardCheck className="size-3.5" /> Ir a Empezar
+          </Link>
+        )}
         {guia !== undefined && (
           <Link
             to="/admin/facturacion-fiscal"
@@ -56,6 +77,7 @@ export function numeroDe(d: { series: string; document_number: number | null }):
 
 export const KIND_LABEL: Record<string, string> = {
   invoice: "Factura",
+  receipt: "Recibo",
   credit_note: "Nota de crédito",
   debit_note: "Nota de débito",
   quote: "Cotización",

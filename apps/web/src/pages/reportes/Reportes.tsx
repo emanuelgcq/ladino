@@ -157,8 +157,8 @@ export function Reportes(): React.JSX.Element {
                 )}
                 <CardDescription className="mt-2">
                   {barras.length > 0
-                    ? "Cada barra es el neto del mes (esmeralda ganancia, ámbar pérdida), tal como lo suma `exchange_gain_loss` en el servidor. El detalle por documento vive en cada factura."
-                    : "El diferencial lo suma `exchange_gain_loss` en el servidor: aparece cuando un cobro se valora a una tasa distinta de la de emisión. El detalle por documento vive en cada factura."}
+                    ? "Cada barra es el neto del mes (esmeralda ganancia, ámbar pérdida), tal como lo calcula el servidor. El detalle por documento vive en cada venta."
+                    : "El diferencial lo calcula el servidor: aparece cuando un cobro se valora a una tasa distinta de la de emisión. El detalle por documento vive en cada venta."}
                 </CardDescription>
               </>
             )}
