@@ -876,7 +876,7 @@ function Diario(): React.JSX.Element {
             <Input
               aria-label="ID del documento de origen"
               placeholder="ID de origen (uuid)"
-              className="w-72 font-mono text-[0.84rem]"
+              className="w-full font-mono text-[0.84rem] sm:w-72"
               value={sourceId}
               onChange={(e) => filtrar(setSourceId)(e.target.value)}
               aria-invalid={sourceId.trim() !== "" && sourceIdFiltro === "" ? true : undefined}
@@ -1324,7 +1324,7 @@ function Mayor(): React.JSX.Element {
       )}
       <Card>
         <CardContent className="flex flex-wrap items-end gap-3 pt-4">
-          <div className="w-72">
+          <div className="w-full sm:w-72">
             <SimpleSelect
               ariaLabel="Cuenta"
               value={cuentaId === "" ? null : cuentaId}

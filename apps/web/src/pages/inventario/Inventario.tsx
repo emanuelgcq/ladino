@@ -191,7 +191,7 @@ export function Inventario(): React.JSX.Element {
         title="Inventario"
         description="Existencias al costo promedio ponderado del servidor; cada movimiento es un hecho que no se edita."
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {/* ADR-0048: cada verbo aparece según el rol; el servidor decide. */}
             {(Object.keys(OPERACION) as Operacion[])
               .filter((op) => puede(OPERACION[op].permiso))

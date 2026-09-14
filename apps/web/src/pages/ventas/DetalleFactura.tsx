@@ -222,7 +222,7 @@ export function DetalleFactura(): React.JSX.Element {
   if (detalle.isPending || detalle.data === undefined) {
     return (
       <div className="space-y-3">
-        <Skeleton className="h-8 w-72" />
+        <Skeleton className="h-8 w-72 max-w-full" />
         <Skeleton className="h-48 w-full" />
       </div>
     );
@@ -867,7 +867,7 @@ function Devolucion({
             ))}
           </div>
           {(depositos.data?.length ?? 0) > 1 && (
-            <div className="w-56">
+            <div className="w-full sm:w-56">
               <SimpleSelect
                 ariaLabel="Depósito al que reingresa"
                 value={deposito}

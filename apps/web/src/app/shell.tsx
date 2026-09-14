@@ -499,7 +499,7 @@ function CompanySwitcher(): React.JSX.Element {
         <Building2 className="size-4 shrink-0 text-muted-foreground max-sm:hidden" />
         <span className="truncate">{empresa.legal_name}</span>
       </MenuTrigger>
-      <MenuContent align="start" className="w-72">
+      <MenuContent align="start" className="w-72 max-w-[calc(100vw-1.5rem)]">
         {companies.length > 5 && (
           <div className="px-2 pb-1.5 pt-1">
             <input

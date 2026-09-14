@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { Session } from "@supabase/supabase-js";
+import type { EmailOtpType, Session } from "@supabase/supabase-js";
 import { Building2, LogOut } from "lucide-react";
 import { api, supabase, LlamadaApiError, type Company } from "../lib.js";
 import { Button } from "../ui/button.js";
@@ -53,6 +53,53 @@ function mensajeDe(e: unknown): string {
 
 const claveEmpresa = (userId: string) => `ladino.company.${userId}`;
 
+/**
+ * LOS ENLACES DEL CORREO (2026-09-14). Se leen UNA vez, al cargar el módulo y
+ * antes de que supabase-js limpie la URL:
+ *
+ *   · `?token_hash=…&type=recovery|email` — el formato nuevo de las plantillas.
+ *     Abrir el enlace NO gasta nada: se gasta al pulsar «Continuar». Las vistas
+ *     previas de Telegram/WhatsApp y los escáneres de correo abren los enlaces
+ *     por su cuenta, y con el formato viejo (`{{ .ConfirmationURL }}`, un GET que
+ *     verifica en el acto) se lo comían antes que la persona: visto en
+ *     producción, un enlace de recuperación consumido por una IP de Telegram a
+ *     los 20 segundos de enviarse.
+ *   · `#error_code=otp_expired…` — un enlace viejo ya gastado o vencido: se
+ *     explica en voz de persona en vez de dejar el login mudo.
+ *   · `#…type=recovery` — el formato viejo, válido mientras queden correos
+ *     enviados con él: marca la recuperación sin depender de oír el evento.
+ */
+interface EnlaceDeCorreo {
+  tokenHash: string;
+  tipo: "recovery" | "email";
+}
+function leerEnlace(): {
+  enlace: EnlaceDeCorreo | null;
+  fallo: string | null;
+  recuperacion: boolean;
+} {
+  if (typeof window === "undefined") return { enlace: null, fallo: null, recuperacion: false };
+  const q = new URLSearchParams(window.location.search);
+  const h = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const tokenHash = q.get("token_hash");
+  const tipo = q.get("type");
+  let enlace: EnlaceDeCorreo | null = null;
+  if (tokenHash !== null && (tipo === "recovery" || tipo === "email")) enlace = { tokenHash, tipo };
+  const codigo = h.get("error_code") ?? q.get("error_code");
+  const fallo =
+    codigo === null
+      ? null
+      : codigo === "otp_expired"
+        ? "Ese enlace ya se usó o venció. Pide uno nuevo y ábrelo directo desde el correo, sin reenviarlo por chat."
+        : "No se pudo usar ese enlace. Pide uno nuevo.";
+  if (enlace !== null || fallo !== null) {
+    // Fuera de la barra: ni se comparte por error ni se reintenta al recargar.
+    window.history.replaceState(null, "", window.location.pathname);
+  }
+  return { enlace, fallo, recuperacion: h.get("type") === "recovery" };
+}
+const LLEGADA = leerEnlace();
+
 export function SessionProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [session, setSession] = useState<Session | null>(null);
   const [cargando, setCargando] = useState(true);
@@ -63,7 +110,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
 
   // El enlace de «recuperar contraseña» abre una sesión de RECUPERACIÓN:
   // antes de dejar pasar a la app se exige la contraseña nueva.
-  const [recuperando, setRecuperando] = useState(false);
+  const [recuperando, setRecuperando] = useState(LLEGADA.recuperacion);
+  const [enlace, setEnlace] = useState<EnlaceDeCorreo | null>(LLEGADA.enlace);
 
   useEffect(() => {
     void supabase.auth.getSession().then(({ data }) => {
@@ -189,8 +237,20 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     [session, empresa, companies, permisos, setEmpresa, llamar, puede],
   );
 
+  if (enlace !== null) {
+    return (
+      <ConfirmarEnlace
+        enlace={enlace}
+        onListo={(tipo) => {
+          if (tipo === "recovery") setRecuperando(true);
+          setEnlace(null);
+        }}
+        onDescartar={() => setEnlace(null)}
+      />
+    );
+  }
   if (cargando) return <PantallaCentrada>Cargando…</PantallaCentrada>;
-  if (!session) return <Login />;
+  if (!session) return <Login aviso={LLEGADA.fallo} />;
   if (recuperando) return <NuevaClave onLista={() => setRecuperando(false)} />;
   if (companies === null) return <PantallaCentrada>Cargando empresas…</PantallaCentrada>;
   // Sin ninguna empresa: EL REGISTRO PREMIUM (pantalla completa, como el
@@ -277,12 +337,92 @@ function vozDeAuth(mensaje: string): string {
   return mensaje;
 }
 
-function Login(): React.JSX.Element {
-  const [modo, setModo] = useState<"entrar" | "crear" | "olvide">("entrar");
+/**
+ * El paso intermedio del enlace del correo: la persona pulsa y RECIÉN AHÍ se
+ * gasta el enlace. Un bot que abre la página no pulsa nada.
+ */
+function ConfirmarEnlace({
+  enlace,
+  onListo,
+  onDescartar,
+}: {
+  enlace: EnlaceDeCorreo;
+  onListo: (tipo: EnlaceDeCorreo["tipo"]) => void;
+  onDescartar: () => void;
+}): React.JSX.Element {
+  const [ocupado, setOcupado] = useState(false);
+  const [error, setError] = useState("");
+  const recuperar = enlace.tipo === "recovery";
+
+  async function continuar(): Promise<void> {
+    setOcupado(true);
+    setError("");
+    const r = await supabase.auth.verifyOtp({
+      token_hash: enlace.tokenHash,
+      type: enlace.tipo satisfies EmailOtpType,
+    });
+    setOcupado(false);
+    if (r.error || r.data.session === null) {
+      const m = (r.error?.message ?? "").toLowerCase();
+      setError(
+        m.includes("expired") || m.includes("invalid") || m.includes("not found")
+          ? "Este enlace ya se usó o venció. Pide uno nuevo y ábrelo directo desde el correo, sin reenviarlo por chat."
+          : vozDeAuth(r.error?.message ?? "No se pudo usar el enlace."),
+      );
+      return;
+    }
+    onListo(enlace.tipo);
+  }
+
+  return (
+    <PantallaAuth>
+      <Card className="shadow-overlay">
+        <CardContent className="px-6 pb-6 pt-6 text-center">
+          <p className="text-[1.1rem] font-semibold">
+            {recuperar ? "Crea tu contraseña nueva" : "Verifica tu correo"}
+          </p>
+          <p className="mt-2 text-[0.92rem] text-muted-foreground">
+            {recuperar
+              ? "Pulsa continuar y eliges tu contraseña nueva."
+              : "Pulsa continuar para confirmar tu correo y entrar a Ladino."}
+          </p>
+          {error && (
+            <p
+              role="alert"
+              className="mt-4 rounded-md bg-destructive-soft px-3 py-2 text-left text-[0.85rem] text-destructive-soft-foreground"
+            >
+              {error}
+            </p>
+          )}
+          {error === "" ? (
+            <Button
+              variant="primary"
+              size="lg"
+              className="mt-5 h-10 w-full"
+              disabled={ocupado}
+              onClick={() => void continuar()}
+            >
+              {ocupado ? "Un momento…" : "Continuar"}
+            </Button>
+          ) : (
+            <Button variant="primary" size="lg" className="mt-5 h-10 w-full" onClick={onDescartar}>
+              Ir a entrar
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    </PantallaAuth>
+  );
+}
+
+function Login({ aviso = null }: { aviso?: string | null }): React.JSX.Element {
+  const [modo, setModo] = useState<"entrar" | "crear" | "olvide">(
+    aviso === null ? "entrar" : "olvide",
+  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmacion, setConfirmacion] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(aviso ?? "");
   const [ocupado, setOcupado] = useState(false);
   /** Tras crear cuenta o pedir recuperación: la pantalla de «revisa tu correo». */
   const [correoEnviado, setCorreoEnviado] = useState<"verificacion" | "recuperacion" | null>(null);
@@ -346,6 +486,10 @@ function Login(): React.JSX.Element {
               {correoEnviado === "verificacion"
                 ? `Te mandamos un enlace a ${email} para verificar tu cuenta. Ábrelo y sigues aquí mismo.`
                 : `Si ${email} tiene cuenta en Ladino, te llegará un enlace para crear una contraseña nueva.`}
+            </p>
+            <p className="mt-2 text-[0.85rem] text-muted-foreground">
+              Ábrelo directo desde el correo. Si lo reenvías por WhatsApp o Telegram, la vista
+              previa del chat puede gastarlo.
             </p>
             <p className="mt-3 text-[0.82rem] text-faint-foreground">
               ¿No llega? Mira en el correo no deseado, o{" "}

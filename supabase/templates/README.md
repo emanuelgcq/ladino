@@ -59,3 +59,18 @@ Supabase). El logo se sirve desde
   nueva» (con confirmación) antes de dejar pasar a la app.
 
 En LOCAL nada de esto aplica: el stack usa Inbucket y no exige verificación.
+
+## 4. Por qué el enlace lleva `token_hash` y no `{{ .ConfirmationURL }}` (2026-09-14)
+
+`{{ .ConfirmationURL }}` apunta a `/auth/v1/verify`, que **gasta el enlace con solo abrirlo** (un
+GET). Las vistas previas de Telegram/WhatsApp y los escáneres de correo corporativos abren los
+enlaces por su cuenta, y se lo comían antes que la persona: en producción, un enlace de
+recuperación lo consumió una IP de Telegram a los 20 segundos de enviarse, y la persona llegaba a
+`/#error_code=otp_expired`.
+
+Las plantillas llevan `{{ .SiteURL }}/?token_hash={{ .TokenHash }}&type=recovery|email`: la web
+enseña «Continuar» y solo al pulsarlo llama a `verifyOtp`. Un bot no pulsa. (Código:
+`apps/web/src/app/session.tsx`, `leerEnlace` y `ConfirmarEnlace`.)
+
+**Orden al cambiar**: primero se despliega la web que entiende `token_hash`, después se pegan las
+plantillas. Al revés, los enlaces nuevos caerían en una web que no los sabe leer.

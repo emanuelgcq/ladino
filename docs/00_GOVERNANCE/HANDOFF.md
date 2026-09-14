@@ -64,6 +64,20 @@ controla tras recargar, `Page.getInstallabilityErrors` vacío, manifest sin erro
 - **Si se sube a Play**: Play firma con SU llave; hay que agregar el SHA-256 de «App signing key» (Play
   Console → Integridad de la app) a `assetlinks.json`, o la app mostrará la barra del navegador.
 
+### Enlaces del correo que se gastaban solos + pantallas de 320 px
+
+- **Recuperar contraseña fallaba** (`/#error_code=otp_expired`): los auth_logs mostraron que la
+  **vista previa de Telegram** (IPs 149.154.161.x) abría el enlace a los ~20 s de enviarse y lo
+  gastaba (`{{ .ConfirmationURL }}` verifica con un GET). Arreglo: plantillas con
+  `{{ .SiteURL }}/?token_hash={{ .TokenHash }}&type=recovery|email`; la web enseña «Continuar» y
+  solo al pulsar llama a `verifyOtp`. Enlace gastado o vencido → mensaje claro y pedir otro.
+  El formato viejo sigue funcionando. **Orden: deploy de la web ANTES de pegar las plantillas en
+  Supabase** (pendiente tras el deploy; `supabase/templates/README.md` §4).
+- **Pantallas de 320–360 px**: resumen de Cobrar sin cifras pegadas, línea de la cuenta en dos
+  filas con botones de 36 px, tasa del día, verbos de Inventario que bajan de línea, anchos fijos
+  (`w-56`/`w-72`) a `w-full sm:…` en Libros, Contabilidad, Ventas, Empezar y detalle de factura,
+  avisos (toast) de ancho fluido.
+
 ## Deploy
 
 Solo el contenedor web: `cd /opt/apps/ladino && git pull && docker compose up -d --build web`.

@@ -419,8 +419,8 @@ function TarjetaTasa({
   const tasa = resumen?.tasa_del_dia ?? null;
   return (
     <Card>
-      <CardContent className="flex flex-wrap items-center gap-4 py-4">
-        <div className="min-w-0 flex-1">
+      <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-3 py-4">
+        <div className="min-w-[12rem] flex-1">
           <div className="flex items-center gap-2 text-muted-foreground">
             <RefreshCw className="size-4" />
             <span className="text-[0.9rem]">Tasa del día</span>

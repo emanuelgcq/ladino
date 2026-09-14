@@ -326,7 +326,7 @@ function Libro({
         </CardHeader>
         <CardContent className="space-y-2">
           <div className="flex flex-wrap items-end gap-3">
-            <div className="w-72">
+            <div className="w-full sm:w-72">
               <SimpleSelect
                 ariaLabel="Formato de exportación"
                 value={formato}

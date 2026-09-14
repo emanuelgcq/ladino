@@ -1,7 +1,10 @@
 <!-- Ladino · Recuperar contraseña. Se pega en Supabase → Authentication →
      Email Templates → «Reset password». Asunto sugerido:
      «Crea tu contraseña nueva de Ladino».
-     Todo el CSS va inline: es correo, no web. -->
+     Todo el CSS va inline: es correo, no web.
+     El enlace lleva token_hash y NO verifica al abrirse: la app pide pulsar
+     «Continuar». Así la vista previa de un chat o el escáner de un correo no
+     lo gasta antes que la persona (2026-09-14, visto en producción). -->
 <table
   role="presentation"
   width="100%"
@@ -61,7 +64,7 @@
         <tr>
           <td align="center" style="padding: 28px 40px">
             <a
-              href="{{ .ConfirmationURL }}"
+              href="{{ .SiteURL }}/?token_hash={{ .TokenHash }}&amp;type=recovery"
               style="
                 display: inline-block;
                 background-color: #2563eb;
@@ -84,8 +87,10 @@
               Si el botón no funciona, copia y pega este enlace en tu navegador:
             </p>
             <p style="margin: 6px 0 0 0; font-size: 12px; line-height: 18px; word-break: break-all">
-              <a href="{{ .ConfirmationURL }}" style="color: #2563eb; text-decoration: underline"
-                >{{ .ConfirmationURL }}</a
+              <a
+                href="{{ .SiteURL }}/?token_hash={{ .TokenHash }}&amp;type=recovery"
+                style="color: #2563eb; text-decoration: underline"
+                >{{ .SiteURL }}/?token_hash={{ .TokenHash }}&amp;type=recovery</a
               >
             </p>
           </td>

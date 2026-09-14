@@ -222,7 +222,7 @@ export function Ventas(): React.JSX.Element {
                 setPagina(1);
               }}
             />
-            <div className="w-56">
+            <div className="w-full sm:w-56">
               <EntityPicker
                 placeholder="Filtrar por cliente…"
                 value={cliente}

@@ -591,7 +591,7 @@ function PasoFacturas({
                     value={direccion}
                     onChange={(e) => setDireccion(e.target.value)}
                     placeholder="Av. Bolívar, local 3, Valencia"
-                    className="w-72"
+                    className="w-full sm:w-72"
                   />
                 )}
               </FormField>

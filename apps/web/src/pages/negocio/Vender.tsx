@@ -697,9 +697,15 @@ function VenderDeEmpresa(): React.JSX.Element {
                 {activa.lineas.map((l) => {
                   const cot = cotizacion.data?.lines.find((x) => x.product_id === l.product_id);
                   return (
-                    <li key={l.product_id} className="flex items-center gap-2 py-2.5">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-[0.92rem] font-medium">
+                    // En teléfonos angostos (< 380 px) la línea va en dos filas: el nombre
+                    // entero arriba, cantidad y total abajo — en una sola fila
+                    // el nombre quedaba en tres letras y los botones apretados.
+                    <li
+                      key={l.product_id}
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1 py-2.5 min-[380px]:flex-nowrap"
+                    >
+                      <div className="min-w-0 basis-full min-[380px]:basis-auto min-[380px]:flex-1">
+                        <p className="line-clamp-2 break-words text-[0.92rem] font-medium min-[380px]:line-clamp-1">
                           {/* La restaurada de la nube trae solo la intención:
                               el nombre lo pone la cotización al llegar. */}
                           {l.nombre !== "" ? l.nombre : (cot?.description ?? "…")}
@@ -716,10 +722,11 @@ function VenderDeEmpresa(): React.JSX.Element {
                             : "…"}
                         </p>
                       </div>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1 max-[379px]:mr-auto">
                         <Button
                           variant="ghost"
                           size="iconSm"
+                          className="max-sm:size-9"
                           aria-label={`Quitar uno de ${l.nombre !== "" ? l.nombre : "este producto"}`}
                           onClick={() => cambiarQty(l.product_id, -1)}
                         >
@@ -731,6 +738,7 @@ function VenderDeEmpresa(): React.JSX.Element {
                         <Button
                           variant="ghost"
                           size="iconSm"
+                          className="max-sm:size-9"
                           aria-label={`Agregar uno de ${l.nombre !== "" ? l.nombre : "este producto"}`}
                           onClick={() => cambiarQty(l.product_id, 1)}
                         >
@@ -1563,10 +1571,10 @@ function Cobrar({
           }}
         >
           {/* EL RESUMEN DE CAJA: total, recibido y lo que falta o el vuelto. */}
-          <div className="grid grid-cols-3 gap-2 rounded-lg bg-surface-muted p-3 text-center">
+          <div className="grid grid-cols-3 gap-1.5 rounded-lg bg-surface-muted p-2.5 text-center sm:gap-2 sm:p-3 [&_p]:min-w-0 [&_p]:break-words">
             <div>
               <p className="text-[0.78rem] text-muted-foreground">Total</p>
-              <p className="text-[1.15rem] font-semibold tabular-nums">
+              <p className="text-[0.98rem] font-semibold min-[380px]:text-[1.15rem] tabular-nums">
                 {mostrarImporte({ amount: cotizacion.functional_total, currency: funcional })}
               </p>
               {cotizacion.anchor_total !== null && cotizacion.anchor_currency !== funcional && (
@@ -1580,7 +1588,7 @@ function Cobrar({
             </div>
             <div>
               <p className="text-[0.78rem] text-muted-foreground">Recibido</p>
-              <p className="text-[1.15rem] font-semibold tabular-nums">
+              <p className="text-[0.98rem] font-semibold min-[380px]:text-[1.15rem] tabular-nums">
                 {mostrarImporte({ amount: estado?.pagado ?? "0", currency: funcional })}
               </p>
             </div>
@@ -1588,7 +1596,7 @@ function Cobrar({
               {estado?.vuelto ? (
                 <>
                   <p className="text-[0.78rem] text-success-soft-foreground">Vuelto</p>
-                  <p className="text-[1.15rem] font-semibold text-success-soft-foreground tabular-nums">
+                  <p className="text-[0.98rem] font-semibold min-[380px]:text-[1.15rem] text-success-soft-foreground tabular-nums">
                     {mostrarImporte({
                       amount: estado.vuelto.amount,
                       currency: estado.vuelto.currency,
@@ -1598,14 +1606,14 @@ function Cobrar({
               ) : completo ? (
                 <>
                   <p className="text-[0.78rem] text-success-soft-foreground">Estado</p>
-                  <p className="text-[1.15rem] font-semibold text-success-soft-foreground">
+                  <p className="text-[0.98rem] font-semibold min-[380px]:text-[1.15rem] text-success-soft-foreground">
                     Completo
                   </p>
                 </>
               ) : (
                 <>
                   <p className="text-[0.78rem] text-warning-soft-foreground">Falta</p>
-                  <p className="text-[1.15rem] font-semibold text-warning-soft-foreground tabular-nums">
+                  <p className="text-[0.98rem] font-semibold min-[380px]:text-[1.15rem] text-warning-soft-foreground tabular-nums">
                     {mostrarImporte({
                       amount: estado?.falta ?? cotizacion.functional_total,
                       currency: funcional,
