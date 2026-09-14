@@ -255,6 +255,64 @@ o cuenta puente).
 
 ---
 
+## P-14 · Capa fiscal bloqueada sin régimen que factura (Ola 1 «Ladino sin RIF», A7)
+
+**Hoy:** si la empresa no emite facturas, estas tres acciones responden 409
+`REGIME_KIND_NOT_ALLOWED` y llevan a /empezar:
+
+- activar la percepción de IGTF;
+- marcarse contribuyente especial;
+- cargar talonarios.
+
+**Falta:** confirmar que ningún contribuyente necesita dejar esa capa preparada ANTES de
+activar la facturación. También falta confirmar que un recibo no fiscal nunca percibe IGTF.
+
+**Si la respuesta es otra:** se permite configurar y se sigue bloqueando la percepción en
+recibos. No hace falta migración.
+
+**Dónde se toca:** `packages/domain/src/modo-venta.ts` (`exigeEmpresaQueFactura`), `igtf.ts`,
+la ruta de rangos. Riesgo R-28.
+
+---
+
+## P-15 · El IVA pagado por quien vende con recibos (antes de la Ola 3)
+
+**Hoy:** no cambió nada. Las compras de una empresa en modo recibos no están habilitadas
+(B4). El asiento de compra lleva el IVA al costo del inventario, pero el kardex costea sin
+IVA: mayor y kardex divergen y ningún invariante lo mira.
+
+**Falta:**
+
+- El artículo que diga que el IVA soportado por un no contribuyente no es crédito fiscal y
+  va al costo. Es pariente de P-2.
+- Confirmar que esas compras no cuentan como «documento fiscal» el día que el negocio
+  saca su RIF.
+
+**Si la respuesta es otra:** cambia el costo del inventario de los meses en recibos.
+**Bloquea ADR-3** y el lote L3.
+
+**Dónde se toca:** ADR-3 (por escribir), `purchases.ts`, el generador contable de compras.
+
+---
+
+## P-16 · Textos del modo recibos (VALIDAR-LEGAL)
+
+**Hoy:**
+
+- el recibo dice que no es factura;
+- la cita «(art. 13.14, PA 00071)» sale solo en facturas;
+- la API ya no sirve «copia fiscal» de un recibo (422).
+
+**Falta:**
+
+- validar la leyenda del recibo no fiscal;
+- validar el aviso a quien vende sin estar inscrito (R-27);
+- confirmar si la tasa BCV es obligatoria para quien no factura.
+
+**Dónde se toca:** `apps/api/src/routes/documents-pdf.ts`, textos de Empezar.
+
+---
+
 ## Resumen para la conversación con el asesor
 
 Si el tiempo con el asesor es corto, este es el orden por **coste de resolverlo

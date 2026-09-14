@@ -481,6 +481,90 @@ invisibles.
 régimen fiscal, o si el gate de kind gana una excepción. Ladino no puede impedir que un
 inscrito MIENTA al declararse; sí garantiza que la mentira quede firmada y el rastro completo.
 
+**Actualización 2026-09-14 (Ola 1 «Ladino sin RIF», A2).** Ahora el alta SIN RIF asigna
+`sin_facturacion` en la misma transacción que crea la empresa. Antes la empresa nacía sin régimen
+y su caja respondía 409. El acta `fiscal.regime.assigned` guarda `origin: onboarding`, el usuario y
+la declaración. La primera asignación desde /empezar también deja acta (`origin: empezar`).
+Con esto, un inscrito que se registre sin poner su RIF queda en recibos **con firma desde el
+primer minuto**. La transición contraria sigue sin existir: `e2e-modo-venta` asevera el 409 de
+facturas → recibos. `platform.sales_mode_at` (migración 54) es la única definición del modo, y
+el pgTAP 054 la compara contra el trigger de emisión en cada régimen sembrado.
+
+### R-28 · Los guards de A7 pueden dejar fuera a una empresa en transición legítima
+
+- **Severidad:** Baja · **Disparador:** un dueño que ya tiene RIF pide activar IGTF, marcarse
+  contribuyente especial o cargar talonarios ANTES de activar la facturación en /empezar
+- **Dónde:** `packages/domain/src/modo-venta.ts` (`exigeEmpresaQueFactura`) · `igtf.ts`
+  (`enableIgtf`, `setCompanyTaxpayerType` solo para `especial`) · ruta de rangos en
+  `apps/api/src/routes/sales.ts`
+
+Desde la Ola 1, estas tres acciones responden 409 `REGIME_KIND_NOT_ALLOWED` si la empresa no emite
+facturas. El motivo: un recibo percibiría IGTF, y un talonario sin régimen que factura es papel sin
+uso. El orden natural es activar la facturación primero; el 409 trae escrita esa salida («Ir a
+Empezar»). La hipótesis que falta validar es que nadie necesita preparar la capa fiscal
+antes de tener el régimen (P-14 en `PENDIENTES_ASESOR.md`).
+
+**Deja de ser aceptable:** si el asesor confirma que la carga previa es un caso real. Mitigación
+en ese momento: permitir la configuración y seguir bloqueando la **percepción** en recibos. Eso
+se decide en el caso de uso, no en la pantalla.
+
+### R-29 · Una empresa nueva no puede vender el producto que acaba de cargar con precio en USD
+
+- **Severidad:** Alta · **Disparador:** ya ocurre. Confirmado en producción («Pollos y víveres
+  paola») y por `e2e-recibos-punta-a-punta` (`it.fails`, BUG VIVO)
+- **Dónde:** `create-company.ts` siembra «detal» y «mayor» en la moneda funcional (VES) · el alta
+  simple guarda el precio USD en «detal USD» · la caja prefiere «detal»
+
+El producto queda con precio en una lista que la caja no mira. La salida de hoy es fijar la lista
+predeterminada en Ajustes, y el dueño no sabe que existe. Arreglarlo choca con R1 (precios
+anclados en USD) y con ADR-0046: decidir cuál es la lista de la caja es una decisión del dueño.
+**No se tocó**, y las listas en Bs de producción tampoco.
+
+**Deja de ser aceptable:** ya lo es para el primer usuario sin RIF. Mitigación: la decisión sobre
+la lista predeterminada de una empresa nueva, antes de salir a buscar usuarios. Cuando se tome,
+el `it.fails` pasa a `it` sin cambiar su aserción.
+
+### R-30 · Los datos de semilla viven mezclados con los reales en producción
+
+- **Severidad:** Media · **Disparador:** cualquier cifra agregada de «Ladino» o «ferreteria» que
+  se lea como real · la reprocesión de documentos de la Ola 2 (ADR-1)
+- **Dónde:** producción, empresas «Ladino» (1.193 documentos de semilla + 8 reales del dueño) y
+  «ferreteria» (semilla + 5 facturas de José) · usuario `seed-0dd23796` aún activo con membresía
+
+La marca de semilla a nivel de empresa (plan, 1.3) **no se ejecutó**: no separa lo sembrado de lo
+real dentro de la misma empresa, y suspender «Ladino» suspendería la empresa del dueño. Por R8 no
+se borra nada. La única marca disponible es el autor del documento.
+
+**Deja de ser aceptable:** antes de reprocesar documentos en la Ola 2. Mitigación: una decisión
+explícita del dueño sobre la marca por documento o sobre la desactivación del usuario semilla.
+
+### R-31 · Empresas existentes sin régimen siguen con la caja bloqueada
+
+- **Severidad:** Media · **Disparador:** el dueño de «Corazon de Jesus» (régimen NULL, modo
+  `ninguno`) intenta vender
+- **Dónde:** A2 solo corrige el alta nueva. `platform.sales_mode_at` devuelve `ninguno` para esa
+  empresa en producción
+
+Una empresa en modo `ninguno` ve la capa fiscal (a propósito: todavía no eligió) y su caja responde
+409 hasta que el dueño elige en /empezar. No se asignó régimen por SQL en producción: sería
+declarar por él una situación legal.
+
+**Deja de ser aceptable:** si ese dueño no encuentra /empezar. Mitigación: avisarle, o que Inicio
+lleve a Empezar cuando el modo sea `ninguno`.
+
+### R-32 · Falla intermitente de `e2e-sales` («NC directa», 409)
+
+- **Severidad:** Baja · **Disparador:** un `verify` en rojo en ese caso sin cambios que lo toquen
+- **Dónde:** `apps/api/test/e2e-sales.test.ts`, caso de nota de crédito directa
+
+Falló una vez durante la Ola 1. No se reprodujo en tres corridas completas de la API ni en un
+`verify` completo. Se descartó el desfase de reloj, porque el régimen del fixture empieza AYER.
+La causa **no está cerrada**. No se reintentó hasta el verde: queda anotado para reconocerlo.
+
+**Deja de ser aceptable:** a la segunda aparición. Mitigación: correr el caso con
+`LADINO_E2E_DEBUG=1` y guardar el cuerpo del 409. Asertar el mensaje, no solo el código
+(CLAUDE.md §3).
+
 > **Sobre la numeración.** R-16 a R-21 nacieron en `HANDOFF.md` durante los módulos de ventas,
 > compras y contabilidad y siguen ahí. Este registro salta de R-15 a R-22 por eso, no porque se
 > hayan perdido entradas. Consolidarlos aquí está pendiente y es trabajo de una sesión, no de esta.

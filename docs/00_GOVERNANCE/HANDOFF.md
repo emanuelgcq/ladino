@@ -1,3 +1,59 @@
+# Handoff — 2026-09-14 (22ª entrega) — Ladino sin RIF: Olas 0 y 1
+
+## Estado
+
+- Un negocio **sin RIF** ya puede vender con recibos. Recorrido: se registra, carga un producto,
+  cotiza, vende, cobra y ve su día en Inicio, **sin ningún 409**
+  (`e2e-recibos-punta-a-punta`). Tampoco ve la capa fiscal: ni en el menú, ni en Ctrl+K, ni en la
+  caja, ni en los textos.
+- **Migraciones: 54 en repo y en producción.** La 54
+  (`platform.sales_mode_at`) ya está aplicada en Supabase Cloud. Es aditiva: el deploy de la API
+  puede ir después.
+- **Deploy pendiente, decisión del dueño.** Los commits de esta entrega van a main y el VPS no se
+  tocó.
+- **PÁRATE:**
+  - Ola 2 (ADR-1 costo de ventas/inventario en mayor, ADR-2 anular repone existencia) y Ola 3
+    (ADR-3 compras) esperan la aprobación de sus ADR. No se escribió SQL de ellas.
+  - La marca de semilla (1.3) **no se ejecutó**: contradicción con lo construido (R-30).
+
+## Hecho
+
+| Commit | Qué |
+|---|---|
+| `be820b5` | Planes: `PLAN_LADINO_PERSONAL.md` y `PLAN_LADINO_SIN_RIF.md` |
+| `6a7071b` | Ola 0. V1 (vender producto con lotes → 409) y V2 (cobro USD en caja USD debita `cash_bs`) son **bugs vivos**, `it.fails` en `e2e-ola0-verificaciones`. V3 (plantilla del recibo) fue falso positivo |
+| `18e0116` | Habilitador: `sales_mode` una sola definición (migración 54 + pgTAP 054 contra el trigger), `FiscalSetupResponse.sales_mode`, hook `useModoDeVenta` |
+| `0941f68` | Ola 1.1 backend: A1 Inicio suma recibos y notas; A2 alta sin RIF con régimen y acta; A3 cotizar sin IVA; A5 línea `no_fiscal`; A6 sin copia fiscal de recibo; A7 guards; B12 antigüedad de la tasa |
+| (este) | Ola 1.2 web: gate de la capa fiscal, `components/capa-fiscal/`, menú y paleta filtran por modo, banderas por empresa, cantidades decimales en la caja, venta sin identificar respeta el ajuste, recibos en /admin/ventas, detalle y catálogo sin IVA en recibos, sin «409 CÓDIGO» en pantalla |
+
+## Decisiones tomadas en la ejecución
+
+- **Modo contra tipo de documento.**
+  - Menú, caja, catálogo y Empezar deciden por el **modo** de la empresa.
+  - El detalle y el PDF deciden por el **tipo** del documento: un recibo viejo sigue sin IVA y una
+    factura vieja lo sigue enseñando.
+- **El gate de la capa fiscal es aparte.** `TERMINOS_CAPA_FISCAL` en `i18n/glosario.ts`, con su
+  test y su variante rota. El test del glosario original afirma un número exacto de términos y
+  **no se editó**.
+- **`capaFiscalVisible`**: la capa se ve en `facturas` y en `ninguno`; se oculta en `recibos` y
+  mientras el modo no llega. La contabilidad no lleva la marca: el contador la ve por su rol.
+  Comprobado en local: con «todos los módulos», Contabilidad aparece y Libros/Declarar IVA/IGTF/
+  Facturación fiscal no, ni en el menú ni en Ctrl+K.
+- `quickSale` toma el reloj del modo igual que la emisión (efecto lateral del habilitador).
+
+## Abierto (ver `RISK_REGISTER.md` R-27..R-32 y `PENDIENTES_ASESOR.md` P-14..P-16)
+
+- **R-29, bug vivo fuera de los planes.** El precio USD del alta simple va a «detal USD» y la caja
+  usa «detal» (VES). Una empresa nueva no vende lo que carga. Decisión del dueño (choca con R1 y
+  ADR-0046).
+- **R-1 del encargo.** Todas las empresas de producción tienen listas en Bs. Se reporta y no se
+  tocan.
+- **R-30.** Semilla mezclada con lo real. `seed-0dd23796` sigue activo.
+- **R-31.** «Corazon de Jesus» sigue sin régimen (modo `ninguno`).
+- **R-32.** Intermitente `e2e-sales` «NC directa».
+- **Ola 3, B8.** Chocará con el paso 5 de `e2e-recibos-punta-a-punta`, que cambia de régimen antes
+  de cargar reglas y rango.
+
 # Handoff — 2026-09-14 (21ª entrega) — Ladino como app, con lector por cámara
 
 ## Estado
