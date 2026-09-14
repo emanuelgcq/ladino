@@ -796,6 +796,14 @@ export type CreateExchangeRateRequest = z.infer<typeof CreateExchangeRateRequest
  * regímenes con su norma citada, el vigente de la empresa y si la alícuota
  * general del IVA ya fue aceptada en esta instancia.
  */
+/**
+ * EL MODO DE VENTA (migración 54): la única definición, derivada del régimen
+ * vigente con la lógica del trigger de emisión. La web no lo deduce del nombre
+ * del régimen: lo lee de aquí.
+ */
+export const SalesMode = z.enum(["facturas", "recibos", "ninguno"]);
+export type SalesMode = z.infer<typeof SalesMode>;
+
 export const FiscalSetupResponse = z
   .object({
     regimes: z.array(
@@ -811,6 +819,8 @@ export const FiscalSetupResponse = z
         .strict(),
     ),
     current_regime: z.string().nullable(),
+    /** Qué vende la empresa hoy: facturas, recibos o ninguno (migración 54). */
+    sales_mode: SalesMode,
     iva_general: z.object({ rate: amount, legal_source: z.string() }).strict().nullable(),
   })
   .strict();

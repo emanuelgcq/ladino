@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { useModoDeVenta } from "../../app/modo-venta.js";
 import { errorDePersona } from "../../lib.js";
 import { abrirPdf as abrirPdfApi } from "../../pdf.js";
 import {
@@ -319,13 +320,9 @@ function VenderDeEmpresa(): React.JSX.Element {
         default_warehouse_id: string | null;
       }>("/v1/company-settings"),
   });
-  const setupFiscal = useQuery({
-    queryKey: ["empezar-fiscal", empresa.id],
-    staleTime: 5 * 60_000,
-    queryFn: () => llamar<{ current_regime: string | null }>("/v1/fiscal/setup"),
-  });
-  // Modo recibos (migración 37): el POS es el MISMO; cambia el documento.
-  const modoRecibos = setupFiscal.data?.current_regime === "sin_facturacion";
+  // Modo recibos (migración 54, definición única): el POS es el MISMO; cambia el documento.
+  const { modo: modoDeVenta } = useModoDeVenta();
+  const modoRecibos = modoDeVenta === "recibos";
 
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],

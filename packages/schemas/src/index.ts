@@ -120,6 +120,7 @@ export {
   RegisterContingencyInvoiceRequest,
   CloseContingencyRequest,
   FiscalSetupResponse,
+  SalesMode,
   AssignFiscalRegimeRequest,
   AcceptIvaGeneralRequest,
   AcceptIvaGeneralResponse,

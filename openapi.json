@@ -5397,6 +5397,14 @@
             "type": "string",
             "nullable": true
           },
+          "sales_mode": {
+            "type": "string",
+            "enum": [
+              "facturas",
+              "recibos",
+              "ninguno"
+            ]
+          },
           "iva_general": {
             "type": "object",
             "nullable": true,
@@ -5419,6 +5427,7 @@
         "required": [
           "regimes",
           "current_regime",
+          "sales_mode",
           "iva_general"
         ],
         "additionalProperties": false

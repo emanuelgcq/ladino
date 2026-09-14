@@ -1,7 +1,7 @@
 import type { Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql, type TransactionSql } from "@ladino/db";
 import { AssignFiscalRegimeRequest, AcceptIvaGeneralRequest } from "@ladino/schemas";
-import { RULES_VERSION } from "@ladino/domain";
+import { RULES_VERSION, modoDeVenta } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
 
@@ -62,6 +62,7 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
          order by case code when 'formatos_libres' then 0 else 1 end, code`;
       const [vigente] = await tx<{ regime_code: string }[]>`
         select regime_code from platform.regime_at(${companyId}, now())`;
+      const modo = await modoDeVenta(tx, companyId, new Date().toISOString());
       const [iva] = await tx<{ rate: string; legal_source: string }[]>`
         select rate::text as rate, legal_source from public.tax_rules
          where jurisdiction = 'VE' and tax_code = 'iva' and transaction_type = 'sale'
@@ -75,6 +76,7 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
       return {
         regimes: regimenes,
         current_regime: vigente?.regime_code ?? null,
+        sales_mode: modo,
         iva_general: iva ?? null,
       };
     });
@@ -109,10 +111,11 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
       // (migración 37). La vigencia vieja se CIERRA (no se borra: append-only
       // por fecha, ADR-0029) y los recibos históricos quedan intactos bajo
       // ella. Cualquier otro cambio sigue siendo un acto del mundo técnico.
-      if (
-        ya &&
-        !(ya.regime_code === "sin_facturacion" && parsed.data.regime_code !== "sin_facturacion")
-      ) {
+      // «Vende con recibos» lo dice la definición única (migración 54), no el
+      // nombre del régimen.
+      const vendeConRecibos =
+        (await modoDeVenta(tx, companyId, new Date().toISOString())) === "recibos";
+      if (ya && !(vendeConRecibos && parsed.data.regime_code !== ya.regime_code)) {
         throw new DominioError({
           code: "DUPLICATE",
           message: `La empresa ya factura bajo «${ya.regime_code}». Cambiar de régimen es un acto del mundo técnico: /admin/facturacion-fiscal.`,

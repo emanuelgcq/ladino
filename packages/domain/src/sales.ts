@@ -40,6 +40,7 @@ import type {
   CreateDirectCreditNoteRequest,
   DirectCreditNoteResponse,
   CreateDebitNoteRequest,
+  SalesMode,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
@@ -598,6 +599,24 @@ interface Contexto {
   readonly numberingMode: string;
   /** Los kinds que el régimen vigente permite emitir (migración 37). */
   readonly allowedKinds: readonly string[];
+  /** El modo de venta vigente (migración 54): la ÚNICA definición. */
+  readonly salesMode: SalesMode;
+}
+
+/**
+ * EL MODO DE VENTA de una empresa a una fecha (migración 54). No se deduce aquí:
+ * lo contesta `platform.sales_mode_at`, que replica la lógica del trigger de
+ * emisión y que el pgTAP 054 compara contra el trigger régimen por régimen. Dominio,
+ * API y web leen esta misma respuesta.
+ */
+export async function modoDeVenta(
+  sql: TransactionSql,
+  companyId: string,
+  fecha: string,
+): Promise<SalesMode> {
+  const [fila] = await sql<{ modo: SalesMode }[]>`
+    select platform.sales_mode_at(${companyId}, ${fecha}) as modo`;
+  return fila?.modo ?? "ninguno";
 }
 
 function traducir(e: unknown): SalesError | null {
@@ -636,17 +655,26 @@ async function autorizar(
   const [cfg] = await sql<{ moneda: string }[]>`
     select functional_currency_code as moneda from public.companies where id = ${companyId}`;
   if (!cfg) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  // El régimen y el modo en UNA consulta: el modo no añade un viaje a la base.
   const [regimen] = await sql<
-    { regime_version_id: string; numbering_mode: string; allowed_kinds: string[] }[]
+    {
+      regime_version_id: string | null;
+      numbering_mode: string | null;
+      allowed_kinds: string[] | null;
+      sales_mode: SalesMode;
+    }[]
   >`
-    select regime_version_id, numbering_mode, allowed_kinds
-      from platform.regime_at(${companyId}, ${fecha})`;
+    select r.regime_version_id, r.numbering_mode, r.allowed_kinds,
+           platform.sales_mode_at(${companyId}, ${fecha}) as sales_mode
+      from (select 1) as ancla
+      left join platform.regime_at(${companyId}, ${fecha}) r on true`;
   return ok({
     tenantId: scope.value.tenantId,
     functionalCurrency: cfg.moneda,
     regimeVersionId: regimen?.regime_version_id ?? "",
     numberingMode: regimen?.numbering_mode ?? "",
     allowedKinds: regimen?.allowed_kinds ?? [],
+    salesMode: regimen?.sales_mode ?? "ninguno",
   });
 }
 
@@ -2899,9 +2927,9 @@ async function clienteEfectivo(
  * corazón compartido de cotización, pedido y factura. La pantalla de Vender
  * pregunta con debounce; el cliente jamás suma dinero.
  */
-/** Modo recibos (migración 37): el régimen vigente solo emite `receipt`. */
+/** Modo recibos: lo dice la definición única (migración 54), no una fórmula local. */
 function esModoRecibos(ctx: Contexto): boolean {
-  return ctx.allowedKinds.includes("receipt") && !ctx.allowedKinds.includes("invoice");
+  return ctx.salesMode === "recibos";
 }
 
 export async function quotePos(
@@ -3082,12 +3110,11 @@ export async function quickSale(
   // EL KIND LO DECIDE EL RÉGIMEN, no la pantalla (migración 37): en modo
   // recibos la misma venta del POS emite un recibo; con datos fiscales, una
   // factura. El gate de kind del trigger y de emitirVenta respalda esto.
-  const [regimen] = await sql<{ allowed_kinds: string[] }[]>`
-    select allowed_kinds from platform.regime_at(${input.company_id}, now())`;
+  // El modo con la definición única (migración 54) y con EL MISMO RELOJ que usa
+  // la emisión (el de Node): antes se leía con el now() de Postgres y en el
+  // instante de un cambio de régimen los dos relojes podían discrepar.
   const modoRecibos =
-    regimen !== undefined &&
-    regimen.allowed_kinds.includes("receipt") &&
-    !regimen.allowed_kinds.includes("invoice");
+    (await modoDeVenta(sql, input.company_id, new Date().toISOString())) === "recibos";
 
   const emitida = await (modoRecibos ? createReceipt : createInvoice)(uow, {
     company_id: input.company_id,

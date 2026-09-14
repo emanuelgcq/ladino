@@ -37,6 +37,8 @@ interface FormaDeFacturar {
 interface SetupFiscal {
   regimes: FormaDeFacturar[];
   current_regime: string | null;
+  /** Definición única del modo (migración 54). */
+  sales_mode: "facturas" | "recibos" | "ninguno";
   iva_general: { rate: string; legal_source: string } | null;
 }
 interface Resumen {
@@ -93,7 +95,7 @@ export function Empezar(): React.JSX.Element {
     facturacion !== null &&
     facturacion.current_regime !== null &&
     (facturacion.current_regime === "sin_emision" ||
-      facturacion.current_regime === "sin_facturacion" ||
+      facturacion.sales_mode === "recibos" ||
       (facturacion.iva_general !== null && (!necesitaTalonario || hayTalonario)));
 
   const pasos: { titulo: string; listo: boolean; saltable: boolean }[] = [
@@ -607,7 +609,7 @@ function PasoFacturas({
         )}
 
         {setup.current_regime === null ||
-        (setup.current_regime === "sin_facturacion" && activandoFacturacion) ? (
+        (setup.sales_mode === "recibos" && activandoFacturacion) ? (
           <div className="space-y-4">
             <div className="space-y-1.5">
               <p className="font-medium" id="empezar-rif-titulo">
@@ -799,7 +801,7 @@ function PasoFacturas({
                 ajusta desde el mundo de administración.
               </p>
             )}
-            {setup.current_regime === "sin_facturacion" && (
+            {setup.sales_mode === "recibos" && (
               <div className="space-y-2">
                 <p className="text-[0.85rem] text-muted-foreground">
                   Vendes con recibos (documento no fiscal). Todo lo demás — inventario, clientes,
@@ -822,7 +824,7 @@ function PasoFacturas({
 
         {setup.current_regime !== null &&
           setup.current_regime !== "sin_emision" &&
-          setup.current_regime !== "sin_facturacion" && (
+          setup.sales_mode !== "recibos" && (
             <div className="space-y-2 border-t border-border pt-4">
               <h3 className="font-medium">El IVA que cobras</h3>
               {setup.iva_general !== null ? (

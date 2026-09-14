@@ -63,8 +63,8 @@ const RUBROS: { value: string; label: string }[] = [
   { value: "otro", label: "Otro" },
 ];
 
+const RECIBOS = { etiqueta: "Vendes con recibos", enlace: "/empezar" };
 const MODO: Record<string, { etiqueta: string; enlace: string }> = {
-  sin_facturacion: { etiqueta: "Vendes con recibos", enlace: "/empezar" },
   formatos_libres: { etiqueta: "Facturas por formas libres", enlace: "/admin/facturacion-fiscal" },
   sin_emision: {
     etiqueta: "Administrativo sin emisión (facturas por tu máquina fiscal)",
@@ -90,13 +90,19 @@ export function MiEmpresa(): React.JSX.Element {
   const setupFiscal = useQuery({
     queryKey: ["empezar-fiscal", empresa.id],
     staleTime: 5 * 60_000,
-    queryFn: () => llamar<{ current_regime: string | null }>("/v1/fiscal/setup"),
+    queryFn: () =>
+      llamar<{ current_regime: string | null; sales_mode: string }>("/v1/fiscal/setup"),
   });
   const recargar = () => void qc.invalidateQueries({ queryKey: ["mi-empresa", empresa.id] });
 
   const e = empresas.data;
   const sinRif = e !== null && e !== undefined && e.tax_id.startsWith("PEND-");
-  const modo = MODO[setupFiscal.data?.current_regime ?? ""] ?? null;
+  // «Vendes con recibos» lo dice el modo (migración 54); los demás rótulos
+  // distinguen regímenes que facturan, y esos sí dependen del régimen.
+  const modo =
+    setupFiscal.data?.sales_mode === "recibos"
+      ? RECIBOS
+      : (MODO[setupFiscal.data?.current_regime ?? ""] ?? null);
 
   const subirLogo = useMutation({
     mutationFn: async (blob: Blob) => {

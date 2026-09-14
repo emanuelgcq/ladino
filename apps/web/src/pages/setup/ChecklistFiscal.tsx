@@ -53,6 +53,8 @@ interface RegimenFiscal {
 interface SetupFiscal {
   regimes: RegimenFiscal[];
   current_regime: string | null;
+  /** Definición única del modo (migración 54). */
+  sales_mode: "facturas" | "recibos" | "ninguno";
   /** La alícuota general VIGENTE (fracción en string) con su fuente, o null. */
   iva_general: { rate: string; legal_source: string } | null;
 }
@@ -137,7 +139,7 @@ export function ChecklistFiscal(): React.JSX.Element {
   // resto es un acto del mundo técnico (/admin/facturacion-fiscal).
   const puedeAsignarRegimen =
     puede("fiscal.regime.manage") &&
-    (setup.data?.current_regime === null || setup.data?.current_regime === "sin_facturacion");
+    (setup.data?.current_regime === null || setup.data?.sales_mode === "recibos");
   const rangos = useQuery({
     queryKey: ["rangos", empresa.id],
     queryFn: () =>
