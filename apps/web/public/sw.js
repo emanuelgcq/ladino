@@ -15,7 +15,7 @@
  * La página (index.html) va SIEMPRE primero a la red: tras un deploy, la app
  * abre la versión nueva. La copia guardada solo se usa si no hay red.
  */
-const VERSION = "ladino-2026-09-14";
+const VERSION = "ladino-2026-09-14b";
 const CACHE_CODIGO = `${VERSION}-assets`;
 const CACHE_PAGINA = `${VERSION}-pagina`;
 
@@ -63,7 +63,9 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          if (res.ok) {
+          // Solo una PÁGINA sustituye a la copia guardada: abrir el manifest o
+          // un icono en la barra de direcciones no puede reemplazar a la app.
+          if (res.ok && (res.headers.get("content-type") ?? "").includes("text/html")) {
             const copia = res.clone();
             void caches.open(CACHE_PAGINA).then((c) => c.put("/", copia));
           }

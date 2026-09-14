@@ -29,7 +29,7 @@ export function DialogContent({
         className={cn(
           // En teléfono: casi todo el ancho y nunca más alto que la pantalla —
           // el contenido largo se desplaza DENTRO del diálogo.
-          "fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-1.5rem)] w-[calc(100%-1.5rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto",
+          "fixed left-1/2 top-1/2 z-50 w-[calc(100%-1.5rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 max-sm:max-h-[calc(100dvh-1.5rem)] max-sm:overflow-y-auto",
           "rounded-lg border border-glass-border bg-glass p-5 shadow-overlay outline-none backdrop-blur-xl backdrop-saturate-150",
           "transition-[opacity,transform,translate,scale] duration-200 ease-out",
           "data-[starting-style]:scale-[0.97] data-[starting-style]:opacity-0",

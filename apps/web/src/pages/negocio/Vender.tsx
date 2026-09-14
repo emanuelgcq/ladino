@@ -43,7 +43,7 @@ import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
 import { ETIQUETA_FORMA, FORMAS_BASE, MONEDA_FORMA } from "../../components/formas-de-pago.js";
 import { formatearDocumento } from "./comunes.js";
-import { BotonEscanear } from "../../components/EscanerCodigo.js";
+import { BotonEscanear, type Lectura } from "../../components/EscanerCodigo.js";
 
 /**
  * VENDER: el punto de venta. La venta EMPIEZA POR LA CÉDULA — es el flujo
@@ -165,6 +165,11 @@ function VenderDeEmpresa(): React.JSX.Element {
   });
   const [activaId, setActivaId] = useState<string>("");
   const activa = cuentas.find((c) => c.id === activaId) ?? cuentas[0]!;
+  // LAS CUENTAS MÁS RECIENTES, sin esperar al render: dos escaneos seguidos
+  // resuelven en la misma tanda, y el segundo `tocar` partía de las cuentas
+  // del render — sin la línea del primero — y la pisaba (revisión 2026-09-14).
+  const cuentasRef = useRef(cuentas);
+  cuentasRef.current = cuentas;
   const [descartando, setDescartando] = useState<CuentaAbierta | null>(null);
 
   const sincronizador = useMemo(
@@ -192,7 +197,8 @@ function VenderDeEmpresa(): React.JSX.Element {
 
   /** TODA mutación de cuentas pasa por aquí: estado + disco síncrono + nube. */
   function tocar(id: string, cambio: (c: CuentaAbierta) => CuentaAbierta): void {
-    const siguientes = cuentas.map((c) => (c.id === id ? cambio(c) : c));
+    const siguientes = cuentasRef.current.map((c) => (c.id === id ? cambio(c) : c));
+    cuentasRef.current = siguientes;
     setCuentas(siguientes);
     escribirCuentasLocales(empresa.id, siguientes);
     const cambiada = siguientes.find((c) => c.id === id);
@@ -356,13 +362,17 @@ function VenderDeEmpresa(): React.JSX.Element {
       }),
   });
 
-  function agregar(p: ProductoFila): void {
+  /** Anota uno. Devuelve el motivo si no se pudo (null = anotado). */
+  function agregar(p: ProductoFila, avisar = true): string | null {
+    const negar = (titulo: string, detalle: string): string => {
+      if (avisar) toast.warning(titulo, detalle);
+      return titulo;
+    };
     if (!p.price_amount) {
-      toast.warning(
-        "Ese producto no tiene precio",
+      return negar(
+        `${p.name}: no tiene precio`,
         "Se le pone en Administración → Productos antes de venderlo.",
       );
-      return;
     }
     // LA EXISTENCIA MANDA (orden del dueño, 2026-09-08): no se anota más de lo
     // que hay. Solo bienes — un servicio no tiene existencia. El número lo
@@ -370,20 +380,22 @@ function VenderDeEmpresa(): React.JSX.Element {
     // inventario del servidor al emitir.
     const existencia = p.kind === "good" ? (p.stock_quantity ?? "0") : null;
     if (existencia !== null && compararImportes(existencia, "0") <= 0) {
-      toast.warning("Sin existencia", "Registra la entrada de mercancía antes de venderlo.");
-      return;
+      return negar(
+        `${p.name}: sin existencia`,
+        "Registra la entrada de mercancía antes de venderlo.",
+      );
     }
-    const ya = activa.lineas.find((l) => l.product_id === p.id);
+    const actual = cuentasRef.current.find((c) => c.id === activa.id) ?? activa;
+    const ya = actual.lineas.find((l) => l.product_id === p.id);
     if (
       existencia !== null &&
       ya !== undefined &&
       compararImportes(String(ya.qty + 1), existencia) > 0
     ) {
-      toast.warning(
-        `Solo quedan ${mostrarCantidad(existencia)}`,
+      return negar(
+        `${p.name}: solo quedan ${mostrarCantidad(existencia)}`,
         "No se puede anotar más de lo que hay en el depósito.",
       );
-      return;
     }
     tocar(activa.id, (c) => {
       const linea = c.lineas.find((l) => l.product_id === p.id);
@@ -394,6 +406,7 @@ function VenderDeEmpresa(): React.JSX.Element {
           : [...c.lineas, { product_id: p.id, qty: 1, nombre: p.name, existencia }],
       };
     });
+    return null;
   }
 
   function cambiarQty(productId: string, delta: number): void {
@@ -431,11 +444,21 @@ function VenderDeEmpresa(): React.JSX.Element {
   // tomar el primero de la lista vieja anotaba un producto EQUIVOCADO
   // (corregido 2026-09-14). Orden: código de barras exacto, código interno exacto, único
   // resultado. Si hay varios, se muestran para elegir; nunca se adivina.
+  //
+  // Los códigos se atienden EN COLA, en el orden en que llegaron: el lector de
+  // mostrador puede pasar el segundo antes de que responda el primero.
   const agregarRef = useRef(agregar);
   agregarRef.current = agregar;
-  async function agregarPorCodigo(texto: string): Promise<void> {
+  const colaCodigos = useRef<Promise<unknown>>(Promise.resolve());
+  /** En cola. `avisar`: con toasts (Enter); sin ellos, el lector muestra la Lectura. */
+  function encolarCodigo(texto: string, avisar = true): Promise<Lectura> {
+    const turno = colaCodigos.current.then(() => agregarPorCodigo(texto, avisar));
+    colaCodigos.current = turno.catch(() => undefined);
+    return turno;
+  }
+  async function agregarPorCodigo(texto: string, avisar: boolean): Promise<Lectura> {
     const codigo = texto.trim();
-    if (codigo === "") return;
+    if (codigo === "") return { ok: false, texto: "Código vacío" };
     let encontrados: ProductoFila[];
     try {
       const r = await qc.fetchQuery({
@@ -448,8 +471,8 @@ function VenderDeEmpresa(): React.JSX.Element {
       });
       encontrados = r.items;
     } catch (e) {
-      toast.error("No se pudo buscar el código", errorDePersona(e));
-      return;
+      if (avisar) toast.error("No se pudo buscar el código", errorDePersona(e));
+      return { ok: false, texto: `No se pudo buscar ${codigo}: ${errorDePersona(e)}` };
     }
     const igual = (a: string | null) => a !== null && a.toLowerCase() === codigo.toLowerCase();
     const elegido =
@@ -457,19 +480,27 @@ function VenderDeEmpresa(): React.JSX.Element {
       encontrados.find((p) => igual(p.sku)) ??
       (encontrados.length === 1 ? encontrados[0] : undefined);
     if (elegido !== undefined) {
-      agregarRef.current(elegido);
-      setBusqueda("");
-      return;
+      const motivo = agregarRef.current(elegido, avisar);
+      if (motivo !== null) return { ok: false, texto: motivo };
+      const linea = cuentasRef.current
+        .find((c) => c.id === activa.id)
+        ?.lineas.find((l) => l.product_id === elegido.id);
+      return { ok: true, texto: `${elegido.name} · ${linea?.qty ?? 1} en la cuenta` };
     }
-    setBusqueda(codigo);
+    // Se deja el texto a la vista para elegir — salvo que ya se esté
+    // tecleando otra cosa.
+    setBusqueda((actual) => (actual === "" ? codigo : actual));
     if (encontrados.length === 0) {
-      toast.warning(
-        `No hay un producto con el código ${codigo}`,
-        "Revisa el código o búscalo por nombre.",
-      );
-    } else {
-      toast.info("Hay varios productos con ese texto", "Toca el que corresponde.");
+      if (avisar) {
+        toast.warning(
+          `No hay un producto con el código ${codigo}`,
+          "Revisa el código o búscalo por nombre.",
+        );
+      }
+      return { ok: false, texto: `No hay un producto con el código ${codigo}` };
     }
+    if (avisar) toast.info("Hay varios productos con ese texto", "Toca el que corresponde.");
+    return { ok: false, texto: `Varios productos con «${codigo}»: elígelo en la lista` };
   }
 
   const clienteResuelto = modoRecibos || activa.cliente !== null || activa.sinIdentificar;
@@ -530,7 +561,10 @@ function VenderDeEmpresa(): React.JSX.Element {
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  void agregarPorCodigo(busqueda);
+                  // Se captura y se vacía YA: el siguiente escaneo empieza limpio.
+                  const codigo = busqueda;
+                  setBusqueda("");
+                  void encolarCodigo(codigo);
                 }
               }}
               placeholder="Busca o pasa el lector de código de barras…"
@@ -540,7 +574,9 @@ function VenderDeEmpresa(): React.JSX.Element {
             <BotonEscanear
               className="h-11 w-11 sm:h-11 sm:w-11"
               titulo="Agregar con la cámara"
-              onCodigo={(c) => void agregarPorCodigo(c)}
+              focoAlCerrar={buscarRef}
+              continuo
+              onCodigo={(c) => encolarCodigo(c, false)}
             />
           </div>
           {productos.isLoading ? (
@@ -550,7 +586,7 @@ function VenderDeEmpresa(): React.JSX.Element {
               {q === "" ? "No hay productos activos para vender." : "Nada con ese nombre o código."}
             </p>
           ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            <div className="min-h-0 flex-1 overflow-y-auto pb-20 pr-1 lg:pb-0">
               <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-4">
                 {items.map((p) => (
                   <TarjetaPos key={p.id} producto={p} onAgregar={() => agregar(p)} />

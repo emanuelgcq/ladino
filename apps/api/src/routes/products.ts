@@ -108,6 +108,15 @@ export function productsRoutes(
                  or p.name ilike ${comoPatron(search)} escape '\\'
                  or p.barcode ilike ${comoPatron(search)} escape '\\')`;
       const activos = soloActivos ? tx`and p.status = 'active'` : tx``;
+      // Lo EXACTO primero (2026-09-14): el lector busca un código entero, y
+      // con códigos cortos («12») la coincidencia parcial ordenada por nombre
+      // podía dejar el producto exacto fuera de la primera página.
+      const orden =
+        search === ""
+          ? tx`p.name`
+          : // coalesce: sin código de barras la comparación es NULL, y un NULL
+            // en `desc` va PRIMERO en Postgres.
+            tx`coalesce(lower(p.barcode) = lower(${search}) or lower(p.sku) = lower(${search}), false) desc, p.name`;
 
       // La lista de precios: la pedida, o «detal» de la empresa (la del alta
       // simple). Resolverla aquí y no en el cliente es lo que permite que la
@@ -180,7 +189,7 @@ export function productsRoutes(
           ${precioJoin}
           ${stockJoin}
          where p.company_id = ${companyId} ${filtro} ${activos}
-         order by p.name
+         order by ${orden}
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
     });
 

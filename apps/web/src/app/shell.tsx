@@ -311,7 +311,13 @@ export function AppShell(): React.JSX.Element {
               </BaseDialog.Close>
             </div>
             <BaseDialog.Title className="sr-only">Menú</BaseDialog.Title>
-            <nav className="flex-1 overflow-y-auto px-2 pb-4" aria-label="Navegación principal">
+            <nav
+              className="flex-1 overflow-y-auto px-2 pb-4"
+              aria-label="Navegación principal"
+              onClick={(e) => {
+                if ((e.target as HTMLElement).closest("a") !== null) setPanelMovil(false);
+              }}
+            >
               {contenidoNav(false)}
             </nav>
           </BaseDialog.Popup>

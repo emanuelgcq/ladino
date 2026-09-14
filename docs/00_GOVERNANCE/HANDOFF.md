@@ -27,6 +27,23 @@ lectura y cierre, producto correcto, Enter rápido correcto, código inexistente
 entrada manual por SKU, ficha en Productos, campo del alta. Build de producción: worker activo,
 controla tras recargar, `Page.getInstallabilityErrors` vacío, manifest sin errores, abre sin red.
 
+### Segunda pasada del mismo día: modo continuo, revisión y QA completo
+
+| Qué | Dónde |
+|---|---|
+| **Modo continuo en la caja**: la cámara queda abierta y cada código se agrega en el acto, con bip, vibración, marco verde/rojo y las últimas lecturas a la vista («Café molido 500g · 2 en la cuenta»). Consenso de 2 cuadros iguales (sin lecturas falsas) y **tiempo de olvido** de 1,5 s: el mismo producto no se cuenta dos veces mientras sigue delante; para otro igual se retira y se vuelve a mostrar. Botones Pausar/Seguir y «Listo · N leídos». Buscar un producto y llenar un campo siguen siendo de una lectura | `components/EscanerCodigo.tsx`, `Vender.tsx` |
+| Revisión de código (11 hallazgos, todos corregidos): la cámara quedaba encendida si se cerraba el lector antes de dar permiso; escaneos USB seguidos podían perder un producto (ahora el campo se vacía en el keydown, los códigos van en cola y `tocar` parte del estado más reciente); diálogos recortaban los selectores en escritorio; última fila del POS bajo la barra; menú móvil no cerraba al tocar la pantalla actual; teclado numérico impedía códigos con letras; doble entrega manual+cámara; foco al buscador al cerrar; mensaje de «recarga» si falta el fragmento de ZXing tras un deploy; el worker solo guarda páginas HTML | varios |
+| La búsqueda de productos pone primero la coincidencia EXACTA de código de barras o SKU (con `coalesce`: un NULL en `desc` iría primero) | `apps/api/src/routes/products.ts` |
+
+**QA completo (local + producción en lectura):**
+- `verify` en verde.
+- 23 pantallas en teléfono (390 px): **cero** desbordes horizontales. Aviso bajo: objetivos táctiles chicos en Contabilidad (árbol de cuentas).
+- Recorrido de botones en escritorio: sin errores de consola ni de API; lo marcado resultó falso positivo (descargas CSV/PDF, ordenar, tema, avisos-toast que cierran con su botón).
+- Caja por la UI con verificación en base: pago móvil Bs + efectivo USD con IGTF (sugerencia con IGTF, factura `paid`, 2 pagos, percepción, kardex, existencias, asiento); efectivo USD con vuelto (el pago registra lo aplicado, no el billete); fiada parcial con cliente (`issued`, saldo). Invariantes stock/caja/cobertura en **0**.
+- Lector: EAN-13 reales dibujados en un canvas como cámara (ZXing de verdad): una lectura, continuo, olvido, pausa, código desconocido, manual, 3 escaneos USB seguidos = cantidad 3.
+- App instalable (build de producción): worker activo, instalable sin errores, abre sin red, ninguna respuesta de API en caché.
+- **Producción (solo lectura)**: 53 migraciones; stock, caja, cobertura contable, comprobación y asientos cuadrados en **0** en las 4 empresas; outbox 7.625 publicados sin reintentos; cola contable 1.527 pendientes (acción del dueño).
+
 ## Deploy
 
 Solo el contenedor web: `cd /opt/apps/ladino && git pull && docker compose up -d --build web`.
