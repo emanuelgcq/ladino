@@ -108,7 +108,7 @@ export function Reportes(): React.JSX.Element {
               <Skeleton className="h-40 w-full" />
             ) : (
               <>
-                <div className="mb-3 grid grid-cols-3 gap-3">
+                <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div>
                     <p className="text-[0.8rem] text-muted-foreground">Ganancia</p>
                     <p className="font-mono text-[1.1rem] font-semibold text-accent-soft-foreground">

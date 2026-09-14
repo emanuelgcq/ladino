@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Dialog as BaseDialog } from "@base-ui-components/react/dialog";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -9,9 +10,12 @@ import {
   ChevronsLeft,
   ChevronsRight,
   LogOut,
+  Menu as MenuIcono,
   Moon,
+  MoreHorizontal,
   Search,
   Sun,
+  X,
 } from "lucide-react";
 import { supabase } from "../lib.js";
 import { cn } from "../ui/cn.js";
@@ -107,6 +111,8 @@ function useEmpezarPendiente(): boolean {
 export function AppShell(): React.JSX.Element {
   const [colapsada, setColapsada] = useState(() => leerBandera(CLAVE_SIDEBAR));
   const [paleta, setPaleta] = useState(false);
+  // El menú en TELÉFONO: un panel deslizable. Se cierra al navegar.
+  const [panelMovil, setPanelMovil] = useState(false);
   const [adminAbierto, setAdminAbierto] = useState(() => leerBandera(CLAVE_ADMIN_ABIERTO));
   const activos = useModulosActivos();
   const { puede } = useSesion();
@@ -116,6 +122,7 @@ export function AppShell(): React.JSX.Element {
   const enAdmin = location.pathname.startsWith("/admin");
 
   useEffect(() => setTodos(mostrarTodosLosModulos()), [location.pathname]);
+  useEffect(() => setPanelMovil(false), [location.pathname]);
   useEffect(() => guardarBandera(CLAVE_SIDEBAR, colapsada), [colapsada]);
   useEffect(() => guardarBandera(CLAVE_ADMIN_ABIERTO, adminAbierto), [adminAbierto]);
 
@@ -172,11 +179,65 @@ export function AppShell(): React.JSX.Element {
     (location.pathname === "/admin" && !puede("report.export"));
   if (sinAcceso) return <Navigate to={rutaInicial(puede)} replace />;
 
+  const entradasNegocio = (empezar ? [NAV_EMPEZAR, ...NAV_NEGOCIO] : NAV_NEGOCIO).filter(visible);
+  const contenidoNav = (colapsada: boolean): React.JSX.Element => (
+    <>
+      {/* El grupo SIN nombre: la app. Objetivos táctiles de 44 px. */}
+      <div className="mb-1 space-y-0.5">
+        {entradasNegocio.map((item) => (
+          <ItemNav key={item.to} item={item} colapsada={colapsada} grande />
+        ))}
+      </div>
+
+      {admin && (
+        <div className="mt-3 border-t border-border pt-2">
+          {!colapsada ? (
+            <button
+              className="flex w-full items-center gap-1 px-2 pb-1 pt-1 text-[0.72rem] font-medium uppercase tracking-wider text-faint-foreground hover:text-muted-foreground"
+              onClick={() => setAdminAbierto((v) => !v)}
+              aria-expanded={adminVisible}
+            >
+              {adminVisible ? (
+                <ChevronDown className="size-3.5" />
+              ) : (
+                <ChevronRight className="size-3.5" />
+              )}
+              Administración
+            </button>
+          ) : (
+            <div className="my-1 h-px bg-border" />
+          )}
+          {adminVisible &&
+            NAV_ADMIN.map((grupo) => {
+              const items = grupo.items.filter(visible);
+              if (items.length === 0) return null;
+              return (
+                <div key={grupo.label ?? "raiz"} className="mb-1">
+                  {grupo.label !== null && !colapsada && (
+                    <p className="px-2 pb-0.5 pt-2 text-[0.7rem] font-medium uppercase tracking-wider text-faint-foreground/80">
+                      {grupo.label}
+                    </p>
+                  )}
+                  {items.map((item) => (
+                    <ItemNav key={item.to} item={item} colapsada={colapsada} />
+                  ))}
+                </div>
+              );
+            })}
+        </div>
+      )}
+    </>
+  );
+
+  // El POS ocupa la pantalla entera en el teléfono y trae su propia barra de
+  // cuenta abajo: ahí no va la barra de pestañas.
+  const enPos = location.pathname === "/vender";
+
   return (
     <div className="flex min-h-screen bg-background">
       <aside
         className={cn(
-          "sticky top-0 flex h-screen shrink-0 flex-col border-r border-glass-border bg-glass backdrop-blur-xl backdrop-saturate-150",
+          "sticky top-0 hidden h-screen shrink-0 flex-col border-r border-glass-border bg-glass backdrop-blur-xl backdrop-saturate-150 lg:flex",
           "transition-[width] duration-200",
           colapsada ? "w-14" : "w-64",
         )}
@@ -193,50 +254,7 @@ export function AppShell(): React.JSX.Element {
           )}
         </div>
         <nav className="flex-1 overflow-y-auto px-2 pb-2" aria-label="Navegación principal">
-          {/* El grupo SIN nombre: la app. Objetivos táctiles de 44 px. */}
-          <div className="mb-1 space-y-0.5">
-            {(empezar ? [NAV_EMPEZAR, ...NAV_NEGOCIO] : NAV_NEGOCIO).filter(visible).map((item) => (
-              <ItemNav key={item.to} item={item} colapsada={colapsada} grande />
-            ))}
-          </div>
-
-          {admin && (
-            <div className="mt-3 border-t border-border pt-2">
-              {!colapsada ? (
-                <button
-                  className="flex w-full items-center gap-1 px-2 pb-1 pt-1 text-[0.72rem] font-medium uppercase tracking-wider text-faint-foreground hover:text-muted-foreground"
-                  onClick={() => setAdminAbierto((v) => !v)}
-                  aria-expanded={adminVisible}
-                >
-                  {adminVisible ? (
-                    <ChevronDown className="size-3.5" />
-                  ) : (
-                    <ChevronRight className="size-3.5" />
-                  )}
-                  Administración
-                </button>
-              ) : (
-                <div className="my-1 h-px bg-border" />
-              )}
-              {adminVisible &&
-                NAV_ADMIN.map((grupo) => {
-                  const items = grupo.items.filter(visible);
-                  if (items.length === 0) return null;
-                  return (
-                    <div key={grupo.label ?? "raiz"} className="mb-1">
-                      {grupo.label !== null && !colapsada && (
-                        <p className="px-2 pb-0.5 pt-2 text-[0.7rem] font-medium uppercase tracking-wider text-faint-foreground/80">
-                          {grupo.label}
-                        </p>
-                      )}
-                      {items.map((item) => (
-                        <ItemNav key={item.to} item={item} colapsada={colapsada} />
-                      ))}
-                    </div>
-                  );
-                })}
-            </div>
-          )}
+          {contenidoNav(colapsada)}
         </nav>
         <div className="border-t border-border p-2">
           <Button
@@ -253,12 +271,87 @@ export function AppShell(): React.JSX.Element {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar onBuscar={() => setPaleta(true)} />
+        <TopBar onBuscar={() => setPaleta(true)} onMenu={() => setPanelMovil(true)} />
         {enAdmin && <Migas />}
-        <main className="mx-auto w-full max-w-7xl flex-1 px-4 pb-10 pt-4 md:px-6">
+        <main
+          className={cn(
+            "mx-auto w-full min-w-0 max-w-7xl flex-1 px-3 pt-3 sm:px-4 sm:pt-4 md:px-6 lg:pb-10",
+            enPos ? "pb-3" : "pb-24",
+          )}
+        >
           <Outlet />
         </main>
       </div>
+
+      {/* TELÉFONO: el menú completo en un panel deslizable desde la izquierda. */}
+      <BaseDialog.Root open={panelMovil} onOpenChange={setPanelMovil}>
+        <BaseDialog.Portal>
+          <BaseDialog.Backdrop
+            className={cn(
+              "fixed inset-0 z-40 bg-black/45 backdrop-blur-[2px] lg:hidden dark:bg-black/65",
+              "transition-opacity duration-200 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0",
+            )}
+          />
+          <BaseDialog.Popup
+            className={cn(
+              "fixed inset-y-0 left-0 z-50 flex w-[82vw] max-w-80 flex-col border-r border-glass-border bg-background shadow-overlay outline-none lg:hidden",
+              "transition-transform duration-200 ease-out data-[ending-style]:-translate-x-full data-[starting-style]:-translate-x-full",
+            )}
+          >
+            <div className="flex items-center justify-between px-3 py-3">
+              <LogoLadino alto="h-7" />
+              <BaseDialog.Close
+                aria-label="Cerrar menú"
+                className="flex size-10 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted"
+              >
+                <X className="size-5" />
+              </BaseDialog.Close>
+            </div>
+            <BaseDialog.Title className="sr-only">Menú</BaseDialog.Title>
+            <nav className="flex-1 overflow-y-auto px-2 pb-4" aria-label="Navegación principal">
+              {contenidoNav(false)}
+            </nav>
+          </BaseDialog.Popup>
+        </BaseDialog.Portal>
+      </BaseDialog.Root>
+
+      {/* TELÉFONO: las pantallas del mostrador a un toque, abajo, al alcance del pulgar. */}
+      {!enPos && (
+        <nav
+          aria-label="Accesos rápidos"
+          className="fixed inset-x-0 bottom-0 z-30 flex border-t border-glass-border bg-glass pb-[env(safe-area-inset-bottom)] backdrop-blur-xl backdrop-saturate-150 lg:hidden"
+        >
+          {entradasNegocio
+            .filter((i) => i !== NAV_EMPEZAR)
+            .slice(0, 4)
+            .map((item) => {
+              const Icono = item.icon;
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) =>
+                    cn(
+                      "flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[0.7rem]",
+                      isActive ? "font-medium text-accent" : "text-muted-foreground",
+                    )
+                  }
+                >
+                  <Icono className="size-5" />
+                  <span className="max-w-full truncate px-1">{item.label}</span>
+                </NavLink>
+              );
+            })}
+          <button
+            type="button"
+            onClick={() => setPanelMovil(true)}
+            className="flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[0.7rem] text-muted-foreground"
+          >
+            <MoreHorizontal className="size-5" />
+            Más
+          </button>
+        </nav>
+      )}
 
       <CommandPalette open={paleta} onOpenChange={setPaleta} />
     </div>
@@ -302,17 +395,31 @@ function ItemNav({
   );
 }
 
-function TopBar({ onBuscar }: { onBuscar: () => void }): React.JSX.Element {
+function TopBar({
+  onBuscar,
+  onMenu,
+}: {
+  onBuscar: () => void;
+  onMenu: () => void;
+}): React.JSX.Element {
   const { session, empresa } = useSesion();
   return (
-    <header className="sticky top-0 z-30 flex h-12 items-center gap-2 border-b border-glass-border bg-glass px-4 backdrop-blur-xl backdrop-saturate-150">
+    <header className="sticky top-0 z-30 flex h-14 items-center gap-1 border-b border-glass-border bg-glass px-2 backdrop-blur-xl backdrop-saturate-150 sm:gap-2 sm:px-4 lg:h-12">
+      <button
+        type="button"
+        onClick={onMenu}
+        aria-label="Abrir menú"
+        className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-muted lg:hidden"
+      >
+        <MenuIcono className="size-5" />
+      </button>
       <CompanySwitcher />
       <div className="flex-1" />
       <Button
         variant="secondary"
         size="sm"
         onClick={onBuscar}
-        className="w-56 justify-start text-muted-foreground max-md:w-auto"
+        className="w-56 justify-start text-muted-foreground max-md:size-10 max-md:w-10 max-md:justify-center max-md:px-0"
         aria-label="Buscar o ir a una pantalla (Ctrl K)"
       >
         <Search />
@@ -324,7 +431,7 @@ function TopBar({ onBuscar }: { onBuscar: () => void }): React.JSX.Element {
       <ThemeToggle />
       <Menu>
         <MenuTrigger
-          className="flex size-7 items-center justify-center rounded-full bg-surface-muted text-[0.8rem] font-medium uppercase text-muted-foreground hover:bg-border"
+          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-surface-muted text-[0.85rem] font-medium uppercase text-muted-foreground hover:bg-border lg:size-7 lg:text-[0.8rem]"
           aria-label="Menú de usuario"
         >
           {(session.user.email ?? "?").slice(0, 1)}
@@ -360,9 +467,9 @@ function CompanySwitcher(): React.JSX.Element {
     <Menu>
       <MenuTrigger
         aria-label="Cambiar de empresa"
-        className="flex max-w-64 items-center gap-2 rounded-sm px-2 py-1 text-[0.9rem] font-medium hover:bg-surface-muted"
+        className="flex min-w-0 max-w-64 items-center gap-2 rounded-sm px-2 py-2 text-[0.9rem] font-medium hover:bg-surface-muted lg:py-1"
       >
-        <Building2 className="size-4 shrink-0 text-muted-foreground" />
+        <Building2 className="size-4 shrink-0 text-muted-foreground max-sm:hidden" />
         <span className="truncate">{empresa.legal_name}</span>
       </MenuTrigger>
       <MenuContent align="start" className="w-72">
@@ -433,7 +540,7 @@ function Migas(): React.JSX.Element {
     CRUMBS[r] ?? (seg !== undefined && /^[0-9a-f-]{20,}$/i.test(seg) ? "Detalle" : (seg ?? ""));
   const rutas = partes.map((_, i) => "/" + partes.slice(0, i + 1).join("/"));
   return (
-    <div className="flex h-8 items-center gap-1 border-b border-border bg-background px-4 text-[0.82rem] text-muted-foreground md:px-6">
+    <div className="flex h-8 items-center gap-1 overflow-x-auto whitespace-nowrap border-b border-border bg-background px-3 text-[0.82rem] text-muted-foreground max-sm:hidden sm:px-4 md:px-6">
       <Link to="/inicio" className="hover:text-foreground">
         Inicio
       </Link>

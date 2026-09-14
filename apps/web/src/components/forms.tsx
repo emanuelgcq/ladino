@@ -164,7 +164,7 @@ export function DateRangePicker({
   className?: string;
 }): React.JSX.Element {
   return (
-    <div className={cn("flex items-center gap-1.5", className)}>
+    <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
       <DatePicker value={from} onChange={(v) => onChange({ from: v, to })} max={to} />
       <span className="text-faint-foreground">–</span>
       <DatePicker value={to} onChange={(v) => onChange({ from, to: v })} min={from} />

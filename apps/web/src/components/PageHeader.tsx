@@ -24,7 +24,7 @@ export function PageHeader({
           <p className="mt-0.5 max-w-2xl text-[0.88rem] text-muted-foreground">{description}</p>
         )}
       </div>
-      {actions !== undefined && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      {actions !== undefined && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }

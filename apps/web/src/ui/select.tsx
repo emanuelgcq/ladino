@@ -46,7 +46,7 @@ export function SimpleSelect({
         aria-label={ariaLabel}
         className={cn(
           "flex h-8 w-full items-center justify-between gap-2 rounded-sm border",
-          "border-border-strong bg-surface px-2.5 text-[0.92rem] text-foreground shadow-soft",
+          "border-border-strong bg-surface px-2.5 text-base text-foreground shadow-soft sm:text-[0.92rem]",
           "focus-visible:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50",
           className,

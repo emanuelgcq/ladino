@@ -27,7 +27,9 @@ export function DialogContent({
       />
       <BaseDialog.Popup
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2",
+          // En teléfono: casi todo el ancho y nunca más alto que la pantalla —
+          // el contenido largo se desplaza DENTRO del diálogo.
+          "fixed left-1/2 top-1/2 z-50 max-h-[calc(100dvh-1.5rem)] w-[calc(100%-1.5rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 overflow-y-auto",
           "rounded-lg border border-glass-border bg-glass p-5 shadow-overlay outline-none backdrop-blur-xl backdrop-saturate-150",
           "transition-[opacity,transform,translate,scale] duration-200 ease-out",
           "data-[starting-style]:scale-[0.97] data-[starting-style]:opacity-0",
@@ -39,7 +41,7 @@ export function DialogContent({
         {children}
         <BaseDialog.Close
           aria-label="Cerrar"
-          className="absolute right-3 top-3 rounded-sm p-1 text-muted-foreground hover:bg-surface-muted hover:text-foreground"
+          className="absolute right-2 top-2 flex size-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-surface-muted hover:text-foreground sm:right-3 sm:top-3 sm:size-auto sm:p-1"
         >
           <X className="size-4" />
         </BaseDialog.Close>
@@ -76,5 +78,5 @@ export function DialogFooter({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
-  return <div className={cn("mt-4 flex justify-end gap-2", className)} {...props} />;
+  return <div className={cn("mt-4 flex flex-wrap justify-end gap-2", className)} {...props} />;
 }

@@ -292,7 +292,7 @@ function TarjetaProducto({
       onClick={onAbrir}
       className="group overflow-hidden rounded-lg border border-border bg-surface text-left transition-shadow hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
     >
-      <Foto producto={producto} className="aspect-square w-full" />
+      <Foto producto={producto} className="h-28 w-full sm:aspect-square sm:h-auto" />
       <div className="space-y-0.5 p-2.5">
         <p className="truncate text-[0.92rem] font-medium leading-tight">{producto.name}</p>
         <p className="text-[0.95rem] font-semibold tabular-nums">

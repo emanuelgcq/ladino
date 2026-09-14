@@ -349,7 +349,7 @@ export function DetalleFactura(): React.JSX.Element {
                   {lines.map((l) => (
                     <TR key={l.id}>
                       <TD className="text-faint-foreground">{l.line_number}</TD>
-                      <TD className="max-w-64 truncate whitespace-normal">{l.description}</TD>
+                      <TD className="min-w-40 max-w-64 whitespace-normal">{l.description}</TD>
                       <TDNum>{mostrarCantidad(l.quantity)}</TDNum>
                       <TDNum>
                         {mostrarImporte({

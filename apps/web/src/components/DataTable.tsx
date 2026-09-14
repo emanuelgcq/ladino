@@ -161,7 +161,7 @@ export function DataTable<T>({
               value={search.value}
               onChange={(e) => search.onChange(e.target.value)}
               placeholder={search.placeholder ?? "Buscar…"}
-              className="h-7 w-56"
+              className="h-9 w-full sm:h-7 sm:w-56"
               aria-label={search.placeholder ?? "Buscar"}
             />
           )}

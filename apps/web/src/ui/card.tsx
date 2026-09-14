@@ -22,7 +22,12 @@ export function CardHeader({
 }: React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
   return (
     <div
-      className={cn("flex items-center justify-between gap-2 px-4 pt-3 pb-2", className)}
+      className={cn(
+        // flex-wrap: en teléfono la descripción o las acciones bajan de línea en
+        // vez de apretar el título en una columna de dos palabras.
+        "flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-4 pt-3 pb-2",
+        className,
+      )}
       {...props}
     />
   );

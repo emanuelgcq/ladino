@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Banknote,
+  ChevronLeft,
   CreditCard,
   Minus,
   Plus,
@@ -285,6 +286,8 @@ function VenderDeEmpresa(): React.JSX.Element {
   }, [nube.data]);
 
   const [cobrando, setCobrando] = useState(false);
+  // TELÉFONO: la cuenta se abre a pantalla entera desde la barra de abajo.
+  const [cuentaMovil, setCuentaMovil] = useState(false);
   const [venta, setVenta] = useState<Venta | null>(null);
   // El nombre del que quedó debiendo, capturado al vender: la ficha de la
   // cuenta ya murió cuando el diálogo de éxito lo enseña.
@@ -479,7 +482,7 @@ function VenderDeEmpresa(): React.JSX.Element {
         bajar toda la lista para cobrar. La caja ocupa la pantalla y cada columna
         se desplaza por dentro.
       */}
-      <div className="flex h-[calc(100vh-8rem)] gap-4">
+      <div className="flex h-[calc(100dvh-9.5rem)] gap-4 lg:h-[calc(100vh-8rem)]">
         {/* ── La cuadrícula ──────────────────────────────────────────────── */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="relative shrink-0">
@@ -517,7 +520,18 @@ function VenderDeEmpresa(): React.JSX.Element {
         </div>
 
         {/* ── El carrito ─────────────────────────────────────────────────── */}
-        <aside className="flex w-96 shrink-0 flex-col rounded-lg border border-border bg-surface">
+        <aside
+          className={`${
+            cuentaMovil ? "fixed inset-0 z-40 flex" : "hidden"
+          } flex-col bg-surface lg:static lg:z-auto lg:flex lg:w-96 lg:shrink-0 lg:rounded-lg lg:border lg:border-border`}
+          aria-label="Cuenta"
+        >
+          <div className="flex items-center gap-2 border-b border-border px-2 py-2 lg:hidden">
+            <Button variant="ghost" className="h-10" onClick={() => setCuentaMovil(false)}>
+              <ChevronLeft /> Productos
+            </Button>
+            <span className="ml-auto pr-2 text-[0.95rem] font-semibold">Cuenta</span>
+          </div>
           {/* Las FICHAS: una por cuenta abierta. Cada una guarda sola — en el
               disco de la caja al instante y en la nube detrás — y solo se
               cierra al cobrarse (o descartándola a propósito). */}
@@ -765,6 +779,34 @@ function VenderDeEmpresa(): React.JSX.Element {
           </div>
         </aside>
 
+        {/* TELÉFONO: la cuenta a un toque, con lo que lleva y el total. */}
+        {!cuentaMovil && (
+          <div className="fixed inset-x-0 bottom-0 z-30 border-t border-glass-border bg-glass p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur-xl lg:hidden">
+            <Button
+              variant={activa.lineas.length > 0 ? "primary" : "secondary"}
+              size="lg"
+              className="h-12 w-full justify-between text-[1rem]"
+              onClick={() => setCuentaMovil(true)}
+            >
+              <span>
+                {activa.lineas.length === 0
+                  ? "Cuenta vacía"
+                  : `Ver cuenta · ${String(activa.lineas.reduce((n, l) => n + l.qty, 0))} ${
+                      activa.lineas.reduce((n, l) => n + l.qty, 0) === 1 ? "producto" : "productos"
+                    }`}
+              </span>
+              {activa.lineas.length > 0 && cotizacion.data && (
+                <span className="tabular-nums">
+                  {mostrarImporte({
+                    amount: cotizacion.data.functional_total,
+                    currency: cotizacion.data.functional_currency,
+                  })}
+                </span>
+              )}
+            </Button>
+          </div>
+        )}
+
         {cobrando && cotizacion.data && deposito !== null && (
           <Cobrar
             cotizacion={cotizacion.data}
@@ -776,6 +818,7 @@ function VenderDeEmpresa(): React.JSX.Element {
             clienteNombre={activa.sinIdentificar ? null : (activa.cliente?.legal_name ?? null)}
             onVendida={(v) => {
               setCobrando(false);
+              setCuentaMovil(false);
               setVenta(v);
               setDeudor(activa.cliente?.legal_name ?? null);
               // La cuenta cobrada MUERE: el servidor la borró en la MISMA
@@ -862,11 +905,11 @@ function TarjetaPos({
           src={producto.image_url}
           alt=""
           loading="lazy"
-          className="aspect-square w-full object-cover"
+          className="h-24 w-full object-cover sm:aspect-square sm:h-auto"
         />
       ) : (
         <div
-          className="flex aspect-square w-full items-center justify-center bg-accent-soft text-3xl font-semibold text-accent-soft-foreground"
+          className="flex h-24 w-full items-center justify-center bg-accent-soft text-3xl font-semibold text-accent-soft-foreground sm:aspect-square sm:h-auto"
           aria-hidden
         >
           {producto.name.slice(0, 1).toUpperCase()}
