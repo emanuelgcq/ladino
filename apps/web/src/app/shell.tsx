@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
+  Download,
   LogOut,
   Menu as MenuIcono,
   Moon,
@@ -28,6 +29,8 @@ import { sondearModulosActivos, type ModulosActivos } from "./modulos-activos.js
 import { CommandPalette } from "./palette.js";
 import { LogoLadino } from "../components/LogoLadino.js";
 import { esOscuroAhora, setTema, temaActual } from "../theme.js";
+import { useInstalarApp } from "../instalar.js";
+import { useToast } from "../ui/toast.js";
 
 /**
  * El shell de los DOS MUNDOS (Fase C): arriba, sin nombre, las pantallas de
@@ -403,6 +406,8 @@ function TopBar({
   onMenu: () => void;
 }): React.JSX.Element {
   const { session, empresa } = useSesion();
+  const app = useInstalarApp();
+  const toast = useToast();
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center gap-1 border-b border-glass-border bg-glass px-2 backdrop-blur-xl backdrop-saturate-150 sm:gap-2 sm:px-4 lg:h-12">
       <button
@@ -442,6 +447,22 @@ function TopBar({
             <p className="truncate text-[0.78rem] text-muted-foreground">{empresa.legal_name}</p>
           </div>
           <MenuSeparator />
+          {app.disponible && (
+            <MenuItem
+              onClick={() => {
+                if (app.manual) {
+                  toast.info(
+                    "Instalar Ladino en el iPhone",
+                    "En Safari, toca Compartir y luego «Agregar a inicio».",
+                  );
+                } else {
+                  void app.instalar();
+                }
+              }}
+            >
+              <Download /> Instalar la app
+            </MenuItem>
+          )}
           <MenuItem onClick={() => void supabase.auth.signOut()}>
             <LogOut /> Salir
           </MenuItem>

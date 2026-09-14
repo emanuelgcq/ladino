@@ -28,6 +28,7 @@ import { useToast } from "../../ui/toast.js";
 import { mostrarImporte } from "../../money.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { errorDePersona } from "../../lib.js";
+import { BotonEscanear } from "../../components/EscanerCodigo.js";
 import type { Product, PriceList, PriceItem, Unit, TaxCategory } from "../../lib.js";
 
 /**
@@ -312,12 +313,15 @@ function NuevoProducto({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
           </FormField>
           <FormField label="Código de barras">
             {(a) => (
-              <Input
-                id={a.id}
-                className="font-mono"
-                value={form.barcode}
-                onChange={(e) => setForm({ ...form, barcode: e.target.value })}
-              />
+              <div className="flex gap-2">
+                <Input
+                  id={a.id}
+                  className="font-mono"
+                  value={form.barcode}
+                  onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                />
+                <BotonEscanear onCodigo={(c) => setForm((f) => ({ ...f, barcode: c }))} />
+              </div>
             )}
           </FormField>
         </div>
@@ -614,12 +618,15 @@ function DetalleProducto({
             </FormField>
             <FormField label="Código de barras">
               {(a) => (
-                <Input
-                  id={a.id}
-                  className="font-mono"
-                  value={form.barcode}
-                  onChange={(e) => setForm({ ...form, barcode: e.target.value })}
-                />
+                <div className="flex gap-2">
+                  <Input
+                    id={a.id}
+                    className="font-mono"
+                    value={form.barcode}
+                    onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                  />
+                  <BotonEscanear onCodigo={(c) => setForm((f) => ({ ...f, barcode: c }))} />
+                </div>
               )}
             </FormField>
           </div>

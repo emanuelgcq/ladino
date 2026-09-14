@@ -6,6 +6,7 @@ import { ToasterProvider } from "./ui/toast.js";
 import { SessionProvider } from "./app/session.js";
 import { router } from "./app/router.js";
 import { initTema } from "./theme.js";
+import { capturarInstalacion } from "./instalar.js";
 
 // Fuentes autoalojadas (nunca un CDN): Inter para UI, JetBrains Mono para números.
 import "@fontsource-variable/inter/index.css";
@@ -14,6 +15,15 @@ import "./styles/theme.css";
 
 // El tema se aplica ANTES del primer render para que no haya flash claro→oscuro.
 initTema();
+capturarInstalacion();
+
+// La app instalable (public/sw.js): solo en producción. En desarrollo un
+// worker cachearía el código de Vite y confundiría cada recarga.
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+  });
+}
 
 /**
  * Estado de servidor con TanStack Query (apps/web/CLAUDE.md): sin duplicar la

@@ -1,0 +1,23 @@
+{
+  "id": "/",
+  "name": "Ladino",
+  "short_name": "Ladino",
+  "description": "Ventas, inventario y contabilidad para el comercio venezolano, en bolívares y dólares.",
+  "lang": "es-VE",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    { "src": "/favicon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/favicon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Vender", "short_name": "Vender", "url": "/vender" },
+    { "name": "Productos", "short_name": "Productos", "url": "/productos" }
+  ]
+}

@@ -1,3 +1,42 @@
+# Handoff — 2026-09-14 (21ª entrega) — Ladino como app, con lector por cámara
+
+## Estado
+
+- **Ladino se instala como app** (PWA): Android con Chrome → menú ⋮ → «Instalar app» (o
+  menú de usuario → «Instalar la app»); iPhone con Safari → Compartir → «Agregar a inicio».
+  Se decidió PWA y **no** app nativa: el mismo código y el mismo deploy, sin tiendas ni
+  revisiones, y la cámara funciona igual. `apps/mobile` (Expo) sigue siendo el camino si algún
+  día hace falta algo que la web no da (impresora Bluetooth, trabajo sin red).
+- **Lector de códigos por cámara** en: Vender (agrega al carrito), Productos (abre la ficha) y
+  el campo «Código de barras» del alta/edición de productos (Administración y negocio).
+- Sin migraciones ni cambios de contrato de la API. **Migraciones: 53 en repo y en producción.**
+
+## Hecho en esta sesión
+
+| Qué | Dónde |
+|---|---|
+| Diseño móvil: menú lateral en cajón, barra de pestañas abajo, carrito del POS a pantalla entera, campos de 16 px (iPhone no hace zoom) | commit `f87b7fe` |
+| Manifest + service worker mínimo: caché solo del código con hash (`/assets`) y de la última página; **nunca** API ni Supabase (otro origen); navegación red-primero para que cada deploy se vea al abrir | `apps/web/public/manifest.webmanifest`, `apps/web/public/sw.js`, `main.tsx` (solo en producción) |
+| «Instalar la app» en el menú de usuario (captura `beforeinstallprompt`; en iPhone explica los pasos) | `apps/web/src/instalar.ts`, `app/shell.tsx` |
+| Escáner: `BarcodeDetector` nativo (Android) y ZXing cargado aparte solo si hace falta (iPhone); EAN-13/8, UPC, Code 128/39, QR; vibra al leer; mensajes de permiso/cámara ocupada/sin https; entrada manual siempre | `apps/web/src/components/EscanerCodigo.tsx` |
+| **Defecto corregido**: Enter en la búsqueda del POS (el gesto del lector de mostrador) tomaba el primero de la lista VIEJA — el debounce aún no había buscado — y podía anotar un producto equivocado. Ahora consulta el servidor en el momento: barras exacto → SKU exacto → único resultado; si hay varios, los muestra; si no hay, avisa | `Vender.tsx` (`agregarPorCodigo`) |
+| nginx: `manifest.webmanifest` con su tipo y sin caché (`nginx -t` en la imagen real) | `infra/docker/nginx-web.conf` |
+
+QA local: cámara simulada con un canvas que dibuja EAN-13 reales (se ejerce ZXing de verdad):
+lectura y cierre, producto correcto, Enter rápido correcto, código inexistente, permiso denegado,
+entrada manual por SKU, ficha en Productos, campo del alta. Build de producción: worker activo,
+controla tras recargar, `Page.getInstallabilityErrors` vacío, manifest sin errores, abre sin red.
+
+## Deploy
+
+Solo el contenedor web: `cd /opt/apps/ladino && git pull && docker compose up -d --build web`.
+
+## Pendiente
+
+- Lo de la 20ª entrega sigue igual (SMTP, tokens, proyecto viejo, cola contable, planes).
+- Probar en un teléfono real Android e iPhone: la lectura depende del enfoque de la cámara; en
+  iPhone los códigos muy pequeños cuestan más (ZXing).
+
 # Handoff — 2026-09-13 (20ª entrega) — base a Virginia y la caja rehecha
 
 ## Estado

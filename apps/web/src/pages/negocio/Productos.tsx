@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Camera,
   ChevronDown,
@@ -32,6 +32,7 @@ import {
   PLANTILLA_PRODUCTOS,
   NOTA_FORMATO_PRODUCTOS,
 } from "../../components/importar.js";
+import { BotonEscanear } from "../../components/EscanerCodigo.js";
 
 /**
  * PRODUCTOS (Fase C, PARTE 7): lo que vendo, con foto. Cuadrícula visual por
@@ -78,6 +79,40 @@ export function ProductosNegocio(): React.JSX.Element {
   );
   const [detalle, setDetalle] = useState<ProductoFila | null>(null);
   const q = useDebounced(busqueda.trim(), 250);
+  const qc = useQueryClient();
+  const toastConsulta = useToast();
+
+  // La cámara consulta un producto: código de barras exacto, código interno exacto o
+  // único resultado abre su ficha; si no, se deja la búsqueda a la vista.
+  async function consultarCodigo(texto: string): Promise<void> {
+    const codigo = texto.trim();
+    if (codigo === "") return;
+    try {
+      const r = await qc.fetchQuery({
+        queryKey: ["negocio-productos-codigo", empresa.id, codigo],
+        queryFn: () =>
+          llamar<{ items: ProductoFila[] }>(
+            `/v1/products?with_price=1&with_stock=1&per_page=20&search=${encodeURIComponent(codigo)}`,
+          ),
+        staleTime: 5_000,
+      });
+      const igual = (a: string | null) => a !== null && a.toLowerCase() === codigo.toLowerCase();
+      const elegido =
+        r.items.find((x) => igual(x.barcode)) ??
+        r.items.find((x) => igual(x.sku)) ??
+        (r.items.length === 1 ? r.items[0] : undefined);
+      if (elegido !== undefined) {
+        setDetalle(elegido);
+        return;
+      }
+      setBusqueda(codigo);
+      if (r.items.length === 0) {
+        toastConsulta.warning(`No hay un producto con el código ${codigo}`);
+      }
+    } catch (e) {
+      toastConsulta.error("No se pudo buscar el código", errorDePersona(e));
+    }
+  }
 
   useEffect(() => localStorage.setItem(CLAVE_VISTA, vista), [vista]);
 
@@ -109,14 +144,20 @@ export function ProductosNegocio(): React.JSX.Element {
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-semibold">Productos</h1>
         <div className="flex-1" />
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-faint-foreground" />
-          <Input
-            value={busqueda}
-            onChange={(e) => setBusqueda(e.target.value)}
-            placeholder="Buscar por nombre o código…"
-            className="w-64 pl-8"
-            aria-label="Buscar productos"
+        <div className="order-last flex w-full gap-2 sm:order-none sm:w-auto">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-faint-foreground" />
+            <Input
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              placeholder="Buscar por nombre o código…"
+              className="w-full pl-8 sm:w-64"
+              aria-label="Buscar productos"
+            />
+          </div>
+          <BotonEscanear
+            titulo="Consultar con la cámara"
+            onCodigo={(c) => void consultarCodigo(c)}
           />
         </div>
         <Button
@@ -566,7 +607,12 @@ export function AltaSimple({
                 {(p) => <Input {...p} value={codigo} onChange={(e) => setCodigo(e.target.value)} />}
               </FormField>
               <FormField label="Código de barras">
-                {(p) => <Input {...p} value={barras} onChange={(e) => setBarras(e.target.value)} />}
+                {(p) => (
+                  <div className="flex gap-2">
+                    <Input {...p} value={barras} onChange={(e) => setBarras(e.target.value)} />
+                    <BotonEscanear onCodigo={setBarras} />
+                  </div>
+                )}
               </FormField>
               <FormField label="Categoría" hint="Se crea si no existe." className="col-span-2">
                 {(p) => (

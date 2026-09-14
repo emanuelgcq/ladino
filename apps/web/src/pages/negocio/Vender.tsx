@@ -43,6 +43,7 @@ import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
 import { ETIQUETA_FORMA, FORMAS_BASE, MONEDA_FORMA } from "../../components/formas-de-pago.js";
 import { formatearDocumento } from "./comunes.js";
+import { BotonEscanear } from "../../components/EscanerCodigo.js";
 
 /**
  * VENDER: el punto de venta. La venta EMPIEZA POR LA CÉDULA — es el flujo
@@ -424,15 +425,50 @@ function VenderDeEmpresa(): React.JSX.Element {
     }));
   }
 
-  // Enter en la búsqueda: agrega la coincidencia EXACTA de código de barras, o
-  // la primera de la lista — es el gesto del lector.
-  function onEnterBusqueda(): void {
-    const items = productos.data?.items ?? [];
-    const porBarras = items.find((p) => p.barcode !== null && p.barcode === busqueda.trim());
-    const elegido = porBarras ?? items[0];
-    if (elegido) {
-      agregar(elegido);
+  // EL GESTO DEL LECTOR (Enter en la búsqueda, o la cámara). Se busca el
+  // código en el SERVIDOR en ese momento: el lector de mostrador teclea y pulsa
+  // Enter en milisegundos, antes de que la lista con debounce se refresque, y
+  // tomar el primero de la lista vieja anotaba un producto EQUIVOCADO
+  // (corregido 2026-09-14). Orden: código de barras exacto, código interno exacto, único
+  // resultado. Si hay varios, se muestran para elegir; nunca se adivina.
+  const agregarRef = useRef(agregar);
+  agregarRef.current = agregar;
+  async function agregarPorCodigo(texto: string): Promise<void> {
+    const codigo = texto.trim();
+    if (codigo === "") return;
+    let encontrados: ProductoFila[];
+    try {
+      const r = await qc.fetchQuery({
+        queryKey: ["pos-productos", empresa.id, codigo],
+        queryFn: () =>
+          llamar<{ items: ProductoFila[] }>(
+            `/v1/products?only_active=1&with_price=1&with_stock=1&per_page=60&search=${encodeURIComponent(codigo)}`,
+          ),
+        staleTime: 5_000,
+      });
+      encontrados = r.items;
+    } catch (e) {
+      toast.error("No se pudo buscar el código", errorDePersona(e));
+      return;
+    }
+    const igual = (a: string | null) => a !== null && a.toLowerCase() === codigo.toLowerCase();
+    const elegido =
+      encontrados.find((p) => igual(p.barcode)) ??
+      encontrados.find((p) => igual(p.sku)) ??
+      (encontrados.length === 1 ? encontrados[0] : undefined);
+    if (elegido !== undefined) {
+      agregarRef.current(elegido);
       setBusqueda("");
+      return;
+    }
+    setBusqueda(codigo);
+    if (encontrados.length === 0) {
+      toast.warning(
+        `No hay un producto con el código ${codigo}`,
+        "Revisa el código o búscalo por nombre.",
+      );
+    } else {
+      toast.info("Hay varios productos con ese texto", "Toca el que corresponde.");
     }
   }
 
@@ -485,7 +521,7 @@ function VenderDeEmpresa(): React.JSX.Element {
       <div className="flex h-[calc(100dvh-9.5rem)] gap-4 lg:h-[calc(100vh-8rem)]">
         {/* ── La cuadrícula ──────────────────────────────────────────────── */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <div className="relative shrink-0">
+          <div className="relative flex shrink-0 gap-2">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint-foreground" />
             <Input
               ref={buscarRef}
@@ -494,12 +530,17 @@ function VenderDeEmpresa(): React.JSX.Element {
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  onEnterBusqueda();
+                  void agregarPorCodigo(busqueda);
                 }
               }}
               placeholder="Busca o pasa el lector de código de barras…"
               className="h-11 pl-9 text-[1rem]"
               aria-label="Buscar productos para vender"
+            />
+            <BotonEscanear
+              className="h-11 w-11 sm:h-11 sm:w-11"
+              titulo="Agregar con la cámara"
+              onCodigo={(c) => void agregarPorCodigo(c)}
             />
           </div>
           {productos.isLoading ? (
