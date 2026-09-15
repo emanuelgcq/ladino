@@ -1,3 +1,90 @@
+# Handoff — 2026-09-15 (23ª entrega) — Bug de producción y Ola 2: contabilidad verdadera
+
+## Estado
+
+- **Bloque 0, en producción:** una empresa nueva vende el primer producto que carga en USD. La
+  migración 55 ya está aplicada y reparó a «Pollos y víveres paola» y «Taty Lunch». La regla de
+  precios se mantiene: todo precio de lista va anclado en USD y se muestra dual.
+- **Ola 2 (ADR-0060 y ADR-0061), en código y en main:**
+  - la cuenta de efectivo sale de la caja real, en los cinco caminos;
+  - la venta con lotes reparte por FEFO;
+  - el costo de ventas se asienta, y toda entrada de mercancía también;
+  - invariantes nuevos kardex ↔ mayor y cobertura de movimientos;
+  - anular repone la mercancía y solo se permite sin cobros;
+  - devolución de recibos con recibo de devolución, tope acumulado y reembolso.
+- **Migraciones: 59 en el repo, 55 en producción.** Las **56–59** esperan la **ventana del
+  deploy**: se aplican en el mismo momento que la API nueva (ADR-0057). Con la API vieja, las
+  plantillas nuevas encolarían los cobros; nunca producen un asiento equivocado, pero dejarían la
+  cola creciendo hasta el deploy.
+- **PÁRATE: regularización del histórico.** El ensayo en seco (solo lectura) está en el informe.
+  El script `scripts/ola2/regularizacion-inventario-y-caja.sql` está probado en local y **no se
+  ejecutó en producción**: espera el deploy y el visto bueno del dueño sobre los números.
+- **Ola 3: no empezada.** Así se pidió.
+
+## Commits
+
+| Commit | Qué |
+|---|---|
+| `a753d7c` | Bloque 0 · el alta de empresa nace con «detal» y «mayor» en USD y «detal» predeterminada; migración 55 repara las existentes |
+| `b4a2c16` | El precio de lista se ancla en USD: el alta simple y la importación rechazan Bs |
+| `c305662` | ADR-0060 y ADR-0061 aceptados con las precisiones del dueño |
+| `87c7ea4` | Migración 56 · cuenta de efectivo por caja real (cinco caminos) + pago a proveedor en divisa arreglado |
+| `afdd709` | Migración 57 · FEFO en la venta con lotes |
+| `6e16c26` | Migración 58 · inventario en el mayor (costo de ventas, entradas, invariante) + factura de proveedor en divisa arreglada |
+| `268b9d7` | Migración 59 · corregir una venta (anular repone, recibo de devolución, reembolso, tope acumulado) |
+
+## Reversibilidad, migración por migración (con datos vivos)
+
+| Migración | Qué escribe | Cómo se deshace | Hasta dónde |
+|---|---|---|---|
+| **55** · lista de caja | `company_settings.default_price_list_id` en 4 empresas, 2 listas «detal USD», actas | poner NULL en las empresas del acta `origin = migration_20260915120000` | **Total**, salvo que el dueño ya haya cargado productos en esas listas: deshacer los dejaría sin vender, así que se revisa empresa por empresa |
+| **56** · caja real | papel `treasury_account`, `resolved_by`, triggers de mapeo, `ledger_account_id` en las cajas (con acta), plantillas de 5 hechos versionadas | nueva versión de plantilla con `cash_bs`/`cash_usd` desde ese momento; NULL en `ledger_account_id` según el acta | **Parcial.** Los asientos YA generados contra la caja real no se reescriben, porque son correctos. Deshacer solo cambia los siguientes |
+| **57** · FEFO | una función | `drop function` | **Total.** No escribe datos; la venta con lotes vuelve al 409 |
+| **58** · inventario en el mayor | 3 papeles y cuentas por empresa, 4 `source_kind`, 6 hechos, plantilla de compra versionada, `inventory_ledger_cutovers` vacía, 2 funciones | desactivar cuentas; nueva versión de plantillas | **Parcial.** Con asientos de costo de ventas o entradas ya generados, se revierten uno a uno con contra-asiento (`reverseJournalEntry`); nada se borra. Las cuentas con historia no se borran |
+| **59** · corregir una venta | kind `receipt_return`, `customer_refunds`, 2 `source_kind`, 3 hechos, trigger LAD84, `annulled_stock_gaps` | migración nueva, **solo mientras no haya** recibos de devolución ni reembolsos | Con filas **no se revierte**: son hechos de dinero append-only y se corrigen con contra-asiento |
+| Regularización (script, no migración) | entradas de reposición, asientos manuales, corte, acta | contra-asiento de cada asiento; un corte nuevo lo documenta | Las entradas de reposición no se revierten: son hechos correctos, porque la venta está anulada |
+
+## Hallado por los tests, no por la revisión
+
+1. **Pago a proveedor en divisa, roto en producción.** El neto era «bruto en USD − retención en
+   Bs», y el asiento mezclaba monedas: todo pago en divisa con plantillas cargadas moría con 422
+   «descuadrado».
+2. **Factura de proveedor en divisa.** Se asentaba con importes en la moneda de la factura como
+   si fueran bolívares: 23,20 USD entraban a cuentas por pagar como 23,20 «Bs» en vez de 928.
+3. **Devolución de productos con lotes, imposible.** Se reingresaba al lote nulo (LAD38) y al
+   `cost_snapshot`, no al costo real con que salió.
+4. **Mi primer borrador de la migración 58** usó el código 5.1.05, que ya existía: `on conflict
+   do nothing` lo descartó en silencio y el papel quedó sin cuenta. Lo cazó
+   `e2e-accounting-hooks`; de ahí la guarda LAD83.
+5. **Eventos inventados en el preset.** pgTAP 026 los rechazó y se rehízo con los eventos reales
+   del catálogo.
+6. **Entorno.** La API de desarrollo que quedó corriendo en :3000 trajo la tasa real del BCV a la
+   base de pruebas y rompió V2 (1 USD «superaba» 400 Bs); los servidores de desarrollo abiertos
+   hicieron agotar el tiempo de tres E2E pesados. No son defectos de código.
+
+## Aserciones existentes cambiadas
+
+- **Autorizada por el dueño:** `e2e-igtf.test.ts:640-677`, reemplazada por (a) y (b).
+- **Consecuencia directa de decisiones aprobadas, cada una explicada en su commit:**
+  - `e2e-accounting-hooks:263`, pgTAP 026-13 y pgTAP 046-19: papeles con cuenta, opción A de
+    `treasury_account`;
+  - pgTAP 037-1: `sin_facturacion` admite ahora `receipt_return` (ADR-0061).
+- **Mantenimiento de listas previsto por los propios tests:**
+  - pgTAP 025-26: fixture del TRUNCATE (tablas nuevas con FK al diario);
+  - pgTAP 026-15: lista de eventos reales.
+- **`it.fails` → `it` sin cambiar la aserción:** V1, V2 y el bug vivo de listas de precios.
+
+## Abierto
+
+- **Deploy + migraciones 56–59**, en la misma ventana.
+- **Regularización:** visto bueno del dueño sobre el ensayo en seco, y ejecutarla después del
+  deploy. Los números están en el informe.
+- **VALIDAR-CONTADOR:**
+  - contrapartida de la regularización (`inventory_adjustment`; para Paola el origen es
+    existencia inicial y correspondería `opening_equity`);
+  - cuentas nuevas 2.1.07, 3.1.04 y 5.1.07.
+- **Riesgos R-33..R-37 y pendientes P-17..P-18** (RISK_REGISTER / PENDIENTES_ASESOR).
+
 # Handoff — 2026-09-14 (22ª entrega) — Ladino sin RIF: Olas 0 y 1
 
 ## Estado

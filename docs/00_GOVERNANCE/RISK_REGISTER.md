@@ -568,3 +568,85 @@ La causa **no está cerrada**. No se reintentó hasta el verde: queda anotado pa
 > **Sobre la numeración.** R-16 a R-21 nacieron en `HANDOFF.md` durante los módulos de ventas,
 > compras y contabilidad y siguen ahí. Este registro salta de R-15 a R-22 por eso, no porque se
 > hayan perdido entradas. Consolidarlos aquí está pendiente y es trabajo de una sesión, no de esta.
+
+### R-33 · El vencimiento de un lote se juzga con el día de la sesión (UTC), no el de Caracas
+
+- **Severidad:** Baja · **Disparador:** una venta de un producto con lotes entre las 20:00 y la
+  medianoche de Caracas, el día en que vence un lote
+- **Dónde:** trigger LAD46 (`occurred_at::date`, migración 20) · `allocate_lots_fefo` (migración
+  57) usa a propósito la MISMA expresión para no elegir un lote que el trigger rechace
+
+Es la familia de CLAUDE.md §3. Entre las 20:00 y las 24:00 de Caracas, un lote que vence «hoy»
+en Caracas ya es «ayer» en UTC: el reparto lo excluye y el trigger lo rechazaría. El efecto es
+conservador (vende primero el siguiente lote; nunca vende vencido).
+
+**Deja de ser aceptable:** si una empresa vende perecederos de noche y lo nota. Mitigación: una
+migración que lleve el trigger y el reparto al día de Caracas a la vez, con su test de horario.
+
+### R-34 · Una empresa «especial» trata el IVA de compra como NO recuperable
+
+- **Severidad:** Media · **Disparador:** la primera factura de proveedor de una empresa sujeto
+  pasivo especial (Ladino lo es en producción)
+- **Dónde:** `registerSupplierInvoice`: `ivaRecuperable = companyTaxpayerType === "ordinario"`
+
+Un sujeto pasivo especial también es contribuyente ordinario de IVA; con la regla actual su IVA
+de compra va al COSTO, no a crédito fiscal. Hallado al revisar la revalorización de la Ola 2; no
+se cambió porque es una decisión tributaria (P-17).
+
+**Deja de ser aceptable:** antes de que una empresa especial real registre compras.
+
+### R-35 · Las migraciones 56–59 exigen la ventana del deploy
+
+- **Severidad:** Media · **Disparador:** aplicar 56–59 en Supabase sin desplegar la API nueva (o al
+  revés)
+- **Dónde:** migración 56 (plantillas con `treasury_account`), 58 (compra contra el puente)
+
+Con la API vieja, la plantilla nueva pide un papel que el generador viejo no resuelve: los cobros,
+pagos, gastos y cierres se ENCOLAN (nunca un asiento equivocado) y la recepción de compra no
+asienta mientras la factura sí debita el puente. Todo se recupera con «Contabilizar pendientes»
+tras el deploy, pero la cola crece mientras tanto.
+
+**Deja de ser aceptable:** si pasa más de un día entre las dos cosas. Mitigación: aplicarlas en el
+mismo acto que `docker compose up -d --build`.
+
+### R-36 · Los E2E comparten la tasa global del día y compiten por la máquina
+
+- **Severidad:** Baja · **Disparador:** un proceso que escriba la tasa oficial del día en la base
+  local (la API de desarrollo trae la del BCV) o servidores de desarrollo abiertos durante el verify
+- **Dónde:** E2E que siembran `exchange_rates` con `where not exists` (tasa 40); timeouts de 5 s
+  en los E2E de PDF e importación
+
+Visto el 2026-09-15: con la API de desarrollo abierta, la tasa real (842) entró a la base de
+pruebas y V2 falló; con los servidores abiertos, tres E2E agotaron el tiempo. No son defectos de
+código, pero un verify en rojo por el entorno enseña a reintentar hasta el verde.
+
+**Deja de ser aceptable:** a la próxima vez. Mitigación: cerrar la API y la web de desarrollo antes
+del verify (anotado en la memoria de trabajo).
+
+### R-37 · Los hechos históricos pendientes se contabilizan con las plantillas de su fecha
+
+- **Severidad:** Media · **Disparador:** «Contabilizar pendientes» sobre la cola histórica de
+  «Ladino» (1.526 hechos) después de la regularización
+- **Dónde:** ADR-0055 (la vigencia se elige por la fecha del hecho) · migraciones 56 y 58
+
+Un cobro de hace una semana que salga de la cola usa la plantilla vigente en SU fecha —la vieja,
+con `cash_bs`—, y la reclasificación de la regularización ya se habrá calculado. Esa porción
+quedaría en caja Bs otra vez.
+
+**Deja de ser aceptable:** si se procesa la cola después de regularizar. Mitigación: procesar la
+cola ANTES de la regularización, o volver a correr la reclasificación (el script es idempotente en
+su comprobación de rojo).
+
+### R-38 · Una empresa que pasó de recibos a facturas no puede devolver un recibo viejo
+
+- **Severidad:** Baja · **Disparador:** devolución de un recibo emitido antes de activar la
+  facturación
+- **Dónde:** `allowed_kinds` de los regímenes fiscales (solo `sin_facturacion` admite
+  `receipt_return`); trigger de emisión LAD49
+
+El recibo de devolución se emite con el régimen de HOY. En un régimen fiscal responde 409
+`REGIME_KIND_NOT_ALLOWED`. Se dejó así a propósito: abrir el `receipt_return` en regímenes fiscales
+es abrir una vía para bajar ventas fuera del libro (R-27).
+
+**Deja de ser aceptable:** con el primer caso real. Mitigación: permitirlo solo contra recibos
+emitidos bajo `sin_facturacion` (la regla vive en LAD84).

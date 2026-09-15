@@ -313,6 +313,34 @@ IVA: mayor y kardex divergen y ningún invariante lo mira.
 
 ---
 
+## P-17 · ¿El sujeto pasivo especial recupera el IVA de sus compras?
+
+**Hoy:** `registerSupplierInvoice` trata como recuperable SOLO al contribuyente `ordinario`; el
+`especial` lleva el IVA de compra al costo (R-34).
+
+**Falta:** confirmar que el especial es también contribuyente ordinario de IVA y recupera el
+crédito fiscal (la lectura habitual), y con qué artículo.
+
+**Si la respuesta es la habitual:** una línea de código y el costo de las compras de las empresas
+especiales cambia hacia adelante; lo ya registrado se corrige con nota del contador.
+
+**Dónde se toca:** `packages/domain/src/purchases.ts` (`ivaRecuperable`).
+
+---
+
+## P-18 · Regularización del histórico: la contrapartida (VALIDAR-CONTADOR)
+
+**Hoy:** el script de la Ola 2 lleva la diferencia kardex − mayor a «Ajuste de inventario»
+(5.1.04) y reclasifica caja Bs → caja USD. Para una empresa cuya diferencia es solo existencia
+inicial («Pollos y víveres paola») la contrapartida natural sería «Aportes en inventario» (3.1.04).
+
+**Falta:** que un contador confirme la cuenta por empresa, y el tratamiento del costo de ventas de
+meses pasados que nunca se asentó.
+
+**Dónde se toca:** `scripts/ola2/regularizacion-inventario-y-caja.sql` (paso 3).
+
+---
+
 ## Resumen para la conversación con el asesor
 
 Si el tiempo con el asesor es corto, este es el orden por **coste de resolverlo
