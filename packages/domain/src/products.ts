@@ -342,6 +342,9 @@ export async function setProductImage(
   return ok(aRespuesta(fila));
 }
 
+/** La moneda en que se ancla todo precio de lista (ADR-0046/0047). */
+const MONEDA_ANCLA = "USD";
+
 // ── El ALTA SIMPLE de la Fase C ─────────────────────────────────────────────
 
 /**
@@ -355,7 +358,8 @@ export async function setProductImage(
  *     pan», no en códigos. Si choca con uno existente, prueba el siguiente;
  *   · la clasificación fiscal sale de company_settings (y el contador la
  *     corrige por producto en /admin — nunca se pregunta en el mostrador);
- *   · el precio va a la lista «detal» de SU moneda, que se crea si no existe;
+ *   · el precio va en USD a la lista predeterminada de la caja (o a «detal»),
+ *     que se crea si no existe;
  *   · el stock inicial es una ENTRADA de kardex con costo y referencia
  *     `inventario-inicial`, no un número suelto en una columna.
  */
@@ -371,6 +375,22 @@ export async function createProductSimple(
   if (!scope.ok) return scope;
   if (scope.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
+  }
+
+  // EL PRECIO SE ANCLA EN DÓLARES (ADR-0046/0047, regla del dueño): la lista
+  // guarda USD y la pantalla enseña el equivalente en Bs con la tasa del día,
+  // calculado por el servidor. Un precio en bolívares quedaría congelado y
+  // habría que remarcarlo a mano cada vez que se mueve la tasa.
+  for (const [etiqueta, p] of [
+    ["precio", input.price],
+    ["precio al mayor", input.wholesale_price],
+  ] as const) {
+    if (p !== undefined && p.currency !== MONEDA_ANCLA) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `El ${etiqueta} se carga en dólares (USD). Ladino muestra su valor en bolívares con la tasa del día.`,
+      });
+    }
   }
 
   const esServicio = input.is_service === true;

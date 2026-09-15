@@ -143,16 +143,18 @@ describe("empresa nueva → cargar un producto en USD → venderlo", () => {
     expect(p["price_amount"]).toBe("5.00000000");
   });
 
-  it("un precio en bolívares por el alta (lo admite la importación) tampoco se rompe", async () => {
+  it("todo el recorrido: ni un 4xx", () => {
+    expect(errores).toEqual([]);
+  });
+  it("el precio se ancla en USD: un precio en bolívares se rechaza con la salida escrita", async () => {
     const r = await pedir("POST", "/v1/products/simple", {
       company_id: COMPANY,
       name: "Bolsa plástica",
       price: { amount: "10", currency: "VES" },
     });
-    expect(r.status).toBe(201);
-  });
-
-  it("todo el recorrido: ni un 4xx", () => {
-    expect(errores).toEqual([]);
+    expect(r.status).toBe(422);
+    expect(((await r.json()) as { message: string }).message).toContain(
+      "se carga en dólares (USD)",
+    );
   });
 });

@@ -441,7 +441,7 @@ export function productsRoutes(
           row: n,
           status: "error",
           name: nombre,
-          message: `La moneda «${texto(colMoneda)}» no se entiende. Usa USD o VES.`,
+          message: `La moneda «${texto(colMoneda)}» no se entiende. El precio va en dólares (USD).`,
         });
         continue;
       }
