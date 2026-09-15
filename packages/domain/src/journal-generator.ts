@@ -119,6 +119,8 @@ const TABLAS_BACKLINK = new Set([
   // el UPDATE que este generador hace es exactamente el único que admiten.
   "expenses",
   "cash_closings",
+  // ADR-0061: el reembolso lleva el mismo guard de «solo backlink».
+  "customer_refunds",
 ]);
 
 /**

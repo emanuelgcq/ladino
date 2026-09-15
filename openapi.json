@@ -3449,7 +3449,8 @@
               "invoice",
               "credit_note",
               "debit_note",
-              "receipt"
+              "receipt",
+              "receipt_return"
             ]
           },
           "series": {
@@ -3587,7 +3588,8 @@
                   "invoice",
                   "credit_note",
                   "debit_note",
-                  "receipt"
+                  "receipt",
+                  "receipt_return"
                 ]
               },
               "series": {
@@ -3975,7 +3977,8 @@
                     "invoice",
                     "credit_note",
                     "debit_note",
-                    "receipt"
+                    "receipt",
+                    "receipt_return"
                   ]
                 },
                 "series": {
@@ -4682,6 +4685,89 @@
         ],
         "additionalProperties": false
       },
+      "RefundCustomerCreditRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "company_id",
+          "account_id",
+          "amount",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "CustomerRefundResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customer_credit_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "refunded_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "accounting": {
+            "type": "string",
+            "enum": [
+              "posted",
+              "queued"
+            ]
+          },
+          "journal_entry_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "credit_remaining": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "customer_credit_id",
+          "account_id",
+          "amount",
+          "currency",
+          "refunded_at",
+          "accounting",
+          "journal_entry_id",
+          "credit_remaining"
+        ],
+        "additionalProperties": false
+      },
       "ReturnResponse": {
         "type": "object",
         "properties": {
@@ -4843,7 +4929,8 @@
                     "invoice",
                     "credit_note",
                     "debit_note",
-                    "receipt"
+                    "receipt",
+                    "receipt_return"
                   ]
                 },
                 "series": {
@@ -6233,7 +6320,8 @@
                   "invoice",
                   "credit_note",
                   "debit_note",
-                  "receipt"
+                  "receipt",
+                  "receipt_return"
                 ]
               },
               "series": {
@@ -6889,7 +6977,8 @@
                   "invoice",
                   "credit_note",
                   "debit_note",
-                  "receipt"
+                  "receipt",
+                  "receipt_return"
                 ]
               },
               "series": {
@@ -19195,8 +19284,8 @@
     },
     "/v1/invoices/{id}/annul": {
       "post": {
-        "summary": "Anular una factura emitida (permiso sales.invoice.annul)",
-        "description": "Anular no es borrar: el documento y su correlativo SE CONSERVAN (regla 1, ADR-0037). El número anulado sigue ocupado y no se reutiliza.",
+        "summary": "Anular una factura o un recibo emitidos y SIN cobros (permiso sales.invoice.annul)",
+        "description": "Anular no es borrar: el documento y su correlativo SE CONSERVAN (regla 1, ADR-0037). El número anulado sigue ocupado y no se reutiliza. Anular REPONE la existencia al lote y valor con que salió (ADR-0061 §2). Con cobros → 409 DOCUMENT_HAS_PAYMENTS: una venta cobrada se deshace con una devolución, no anulándola.",
         "security": [
           {
             "bearerAuth": []
@@ -21343,8 +21432,8 @@
     },
     "/v1/returns": {
       "post": {
-        "summary": "Registrar devolución contra su factura (permiso sales.return.manage)",
-        "description": "No hay devolución sin documento origen, y nunca por más de lo vendido.",
+        "summary": "Registrar devolución contra su factura o recibo (permiso sales.return.manage)",
+        "description": "No hay devolución sin documento origen, y nunca por más de lo vendido — sumando las devoluciones ya confirmadas de la misma línea (ADR-0061 §4).",
         "security": [
           {
             "bearerAuth": []
@@ -21433,10 +21522,111 @@
         }
       }
     },
+    "/v1/customer-credits/{id}/refunds": {
+      "post": {
+        "summary": "Reembolsar un saldo a favor desde una caja (permiso sales.return.manage)",
+        "description": "ADR-0061 §8: el camino del dinero de una venta devuelta. Consume el saldo a favor, saca el dinero de la cuenta (en la moneda del saldo) y lo asienta contra la caja real.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundCustomerCreditRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El reembolso registrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerRefundResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/returns/{id}/confirm": {
       "post": {
-        "summary": "Confirmar devolución: reingreso al COSTO ORIGINAL, nota de crédito y saldo a favor",
-        "description": "Los tres en una transacción. El reingreso usa el cost_snapshot de la línea de origen, no el costo de hoy: devolver no puede revalorizar el inventario.",
+        "summary": "Confirmar devolución: reingreso al lote y costo con que SALIÓ, nota de crédito (factura) o recibo de devolución (recibo), y saldo a favor",
+        "description": "Todo en una transacción (ADR-0061 §5). El reingreso reparte lo devuelto entre las salidas de la venta, lote por lote y a su valor — no el costo de hoy ni el cost_snapshot. Un recibo se corrige con recibo de devolución (no fiscal, sin IVA, fuera de los libros).",
         "security": [
           {
             "bearerAuth": []

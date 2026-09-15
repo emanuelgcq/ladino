@@ -169,6 +169,10 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   // Modo recibos (migración 37): cada régimen emite SOLO sus kinds. 409: el
   // cuerpo está bien; lo que no cuadra es el régimen, y se arregla en Empezar.
   REGIME_KIND_NOT_ALLOWED: 409,
+  // ADR-0061: una venta con cobros no se anula — se devuelve. 409: el cuerpo está
+  // bien; lo que impide anular es el estado (el dinero ya entró), y el mensaje
+  // dice el camino.
+  DOCUMENT_HAS_PAYMENTS: 409,
   // El adaptador BCV (DolarAPI) no respondió o respondió irreconocible. 502:
   // el cuerpo del cliente está bien; lo que falló está aguas arriba, y el
   // fallback es la carga manual de siempre.

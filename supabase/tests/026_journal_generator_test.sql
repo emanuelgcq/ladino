@@ -138,7 +138,9 @@ select is(
                                -- Inventario en el mayor (migración 58, ADR-0060): los
                                -- eventos de inventario del catálogo, que EVENT_CATALOG.md
                                -- reserva «para el COGS»; el origen va en source_kind.
-                               'stock.shipped', 'stock.received')),
+                               'stock.shipped', 'stock.received',
+                               -- Corregir una venta (migración 59, ADR-0061):
+                               'sales.receipt_return.issued', 'ar.credit_refunded')),
   0::bigint,
   'los eventos del preset son los del OUTBOX, con su nombre real: no se inventa un vocabulario paralelo');
 

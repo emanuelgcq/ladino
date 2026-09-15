@@ -67,7 +67,8 @@ anulado ⇒ su kardex neto es cero».
 - Va en la misma transacción que la anulación.
 - El permiso de anular basta. La reposición es parte del caso de uso y queda en la auditoría; no
   se exige además `inventory.move`.
-- Con ADR-0060 aprobado, el hecho `inventory.cost_of_sales` se reversa junto con el asiento de la
+- Con ADR-0060, el costo de ventas asentado se revierte con el hecho `sales_cost` /
+  `stock.received` (inventario contra costo de ventas); si seguía en la cola, se descarta con la
   venta.
 
 ### 3. Evento propio
@@ -140,6 +141,28 @@ El camino, para facturas y recibos por igual:
 El 409 de «Anular» con cobros dice exactamente eso: «Esta venta ya tiene cobros y no se puede
 anular. Para deshacerla, registra una devolución: repone la mercancía y devuelve el dinero como
 saldo a favor o reembolso.» — y la pantalla lo acompaña con el botón «Devolución».
+
+## Implementación (migración 59, 2026-09-15)
+
+- **Anular** (`annulInvoice`): bloquea el documento, admite solo factura o recibo, responde 409
+  `DOCUMENT_HAS_PAYMENTS` con el camino escrito si hay cobros, repone con
+  `reponerSalidasDeDocumento` (mismo lote, depósito y valor de cada salida) y, si el costo de ventas
+  llegó a asentarse, lo revierte con el hecho `sales_cost` / `stock.received`; si seguía en la cola,
+  lo descarta con la venta.
+- **Devolver** (`createReturn` / `confirmReturn`): factura o recibo; tope ACUMULADO por línea al
+  crear y al confirmar; el reingreso reparte lo devuelto entre las salidas de la venta —lote por lote,
+  en orden de vencimiento, a su valor—, así que un producto con lotes ya se puede devolver (antes
+  reingresaba al lote nulo y moría en LAD38) y el costo ya no es el `cost_snapshot`. Un recibo emite
+  `receipt_return` (serie D, sin IVA, tratamiento `no_fiscal`, hecho
+  `sales_receipt_return` / `sales.receipt_return.issued`).
+- **El dinero**: toda devolución deja saldo a favor; `refundCustomerCredit`
+  (`POST /v1/customer-credits/{id}/refunds`, permiso `sales.return.manage`) lo reembolsa desde una
+  caja en la moneda del saldo: `customer_refunds` (append-only, baja el saldo de la cuenta, entra al
+  recómputo) y asiento `customer_refund` / `ar.credit_refunded` contra la caja REAL.
+- **Invariante**: `platform.annulled_stock_gaps(company)`, en pgTAP 059 y e2e-corregir-venta con su
+  variante rota. `accounting_coverage_gaps` aprende el recibo de devolución y el reembolso.
+- **Aserción existente cambiada por decisión de este ADR**: pgTAP 037 test 1 afirmaba
+  «sin_facturacion: SOLO receipt»; ahora `{receipt, receipt_return}` (sigue sin nada fiscal).
 
 ## Alternativas descartadas
 

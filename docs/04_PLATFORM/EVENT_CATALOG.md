@@ -99,6 +99,28 @@ Configuración de tesorería (casos de uso de `treasury.ts`, `schema_version` 1)
 - treasury.account.created · treasury.account.updated
 - treasury.payment_method.created · treasury.payment_method.updated
 
+## Corregir una venta (migración 59, ADR-0061)
+- sales.receipt.annulled
+- sales.receipt_return.issued
+- ar.credit_refunded
+
+**`sales.receipt.annulled`** lo emite `annulInvoice` cuando lo anulado es un RECIBO; la factura
+sigue emitiendo `fiscal.invoice.annulled`. Un recibo no es un documento fiscal y su anulación no
+se nombra como si lo fuera. Payload `{reason}`.
+
+**`sales.receipt_return.issued`** lo emite `confirmReturn` cuando el origen es un recibo: el
+documento es un recibo de devolución (`kind = receipt_return`), no fiscal y sin IVA. Payload
+`{return_id, customer_credit_id}`, como la nota de crédito.
+
+**`ar.credit_refunded`** lo emite `refundCustomerCredit` con `aggregate_type = customer_credit`:
+el dinero de un saldo a favor salió de una caja. Payload `{refund_id, account_id, amount}`.
+
+Y dos eventos que ya existían ganan un consumidor contable (migración 58, ADR-0060):
+`stock.shipped` asienta el costo de lo vendido (`source_kind` sales_cost) y la salida directa;
+`stock.received` asienta la entrada sin compra, la recepción de compra, la devolución y la
+reposición de una venta anulada. El ORIGEN va en `source_kind`, nunca en un nombre de evento
+paralelo.
+
 ## Estructura organizacional
 
 Sección nueva (S0.5). Las cuatro anteriores —Fiscal, Accounting, Inventory, Money— cubren el

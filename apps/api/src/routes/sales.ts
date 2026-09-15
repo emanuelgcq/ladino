@@ -17,6 +17,7 @@ import {
   CreateFiscalRangeRequest,
   CreateExchangeRateRequest,
   PosTenderRequest,
+  RefundCustomerCreditRequest,
 } from "@ladino/schemas";
 import {
   createQuote,
@@ -39,6 +40,7 @@ import {
   minorUnitsOf,
   previsualizarCobro,
   exigeEmpresaQueFactura,
+  refundCustomerCredit,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -526,6 +528,21 @@ export function salesRoutes(
   });
 
   // ── Devoluciones ──────────────────────────────────────────────────────────
+
+  // ADR-0061 §8: el dinero de un saldo a favor sale de una caja.
+  app.post("/v1/customer-credits/:id/refunds", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const id = idValido(c.req.param("id"));
+    const parsed = RefundCustomerCreditRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      refundCustomerCredit(uow, id, parsed.data),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
 
   app.post("/v1/returns", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);

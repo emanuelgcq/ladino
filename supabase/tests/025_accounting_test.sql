@@ -255,7 +255,7 @@ $$, 'LAD06', null, 'ni se borran');
 select throws_ok($$
   truncate public.journal_lines, public.journal_generation_queue,
            public.expenses, public.cash_closings, public.inventory_ledger_cutovers,
-           public.journal_entries
+           public.customer_refunds, public.journal_entries
 $$, 'LAD06', null,
   'TRUNCATE sobre el diario: rechazado por trigger (capa 2 de ADR-0006), no por la FK');
 

@@ -78,6 +78,7 @@ export function numeroDe(d: { series: string; document_number: number | null }):
 export const KIND_LABEL: Record<string, string> = {
   invoice: "Factura",
   receipt: "Recibo",
+  receipt_return: "Recibo de devolución",
   credit_note: "Nota de crédito",
   debit_note: "Nota de débito",
   quote: "Cotización",

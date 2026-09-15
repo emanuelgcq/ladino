@@ -31,6 +31,8 @@ export const DocumentKind = z.enum([
   "credit_note",
   "debit_note",
   "receipt",
+  /** ADR-0061: recibo de devolución — corrige un recibo; no fiscal, fuera de los libros. */
+  "receipt_return",
 ]);
 export const DocumentStatus = z.enum([
   "draft",
@@ -856,3 +858,35 @@ export const AcceptIvaGeneralResponse = z
   })
   .strict();
 export type AcceptIvaGeneralResponse = z.infer<typeof AcceptIvaGeneralResponse>;
+
+/**
+ * EL REEMBOLSO DE UN SALDO A FAVOR (ADR-0061 §8). El dinero sale de una caja
+ * (`account_id`, en la moneda del saldo) y el saldo a favor baja por lo
+ * reembolsado. Es la única vía para el «consumidor final», que no conserva saldo.
+ */
+export const RefundCustomerCreditRequest = z
+  .object({
+    company_id: uuid,
+    account_id: uuid,
+    amount,
+    reason: z.string().trim().min(3).max(300),
+  })
+  .strict();
+export type RefundCustomerCreditRequest = z.infer<typeof RefundCustomerCreditRequest>;
+
+export const CustomerRefundResponse = z
+  .object({
+    id: uuid,
+    customer_credit_id: uuid,
+    account_id: uuid,
+    amount: z.string(),
+    currency: z.string(),
+    refunded_at: z.string().datetime({ offset: true }),
+    /** posted = asentado; queued = en la cola contable (ADR-0042). */
+    accounting: z.enum(["posted", "queued"]),
+    journal_entry_id: uuid.nullable(),
+    /** Lo que queda del saldo a favor después del reembolso. */
+    credit_remaining: z.string(),
+  })
+  .strict();
+export type CustomerRefundResponse = z.infer<typeof CustomerRefundResponse>;

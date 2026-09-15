@@ -231,6 +231,17 @@ export function DetalleFactura(): React.JSX.Element {
   const difPorPago = new Map(exchange_differences.map((d) => [d.payment_id, d]));
   const dual = doc.transaction_currency !== doc.functional_currency;
   const pagable = doc.kind === "invoice" && (doc.status === "issued" || doc.status === "paid");
+  // ADR-0061: un recibo también se devuelve (con recibo de devolución), y
+  // factura y recibo se anulan solo mientras NO tengan cobros — con cobros, el
+  // camino es la devolución.
+  const devolvible =
+    (doc.kind === "invoice" || doc.kind === "receipt") &&
+    (doc.status === "issued" || doc.status === "paid");
+  const anulable =
+    (doc.kind === "invoice" || doc.kind === "receipt") &&
+    doc.status === "issued" &&
+    payments.length === 0;
+  const nombreDoc = doc.kind === "receipt" ? "recibo" : "factura";
 
   /**
    * La COPIA imprime «SIN DERECHO A CRÉDITO FISCAL» (PA 00071 art. 13.13):
@@ -250,7 +261,10 @@ export function DetalleFactura(): React.JSX.Element {
         headers: { "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({ company_id: empresa.id, reason: motivo }),
       });
-      toast.success("Factura anulada", "El correlativo se conserva; el asiento se reversó.");
+      toast.success(
+        doc.kind === "receipt" ? "Recibo anulado" : "Factura anulada",
+        "El correlativo se conserva, la mercancía volvió al inventario y el asiento se reversó.",
+      );
       invalidarTrasCambio();
     } catch (e) {
       setErrorAccion(e);
@@ -270,7 +284,7 @@ export function DetalleFactura(): React.JSX.Element {
         actions={
           <>
             {/* Los permisos son cortesía de UX (ADR-0048): el servidor los exige igual. */}
-            {doc.status === "issued" && doc.kind === "invoice" && puede("sales.invoice.annul") && (
+            {anulable && puede("sales.invoice.annul") && (
               <Button variant="ghost" onClick={() => setAnulando(true)}>
                 <Ban /> Anular
               </Button>
@@ -296,7 +310,7 @@ export function DetalleFactura(): React.JSX.Element {
                   <HandCoins /> Registrar cobro
                 </Button>
               )}
-            {pagable && puede("sales.return.manage") && (
+            {devolvible && puede("sales.return.manage") && (
               <Button variant="secondary" onClick={() => setDevolviendo(true)}>
                 <Undo2 /> Devolución
               </Button>
@@ -624,18 +638,23 @@ export function DetalleFactura(): React.JSX.Element {
       <ConfirmDialog
         open={anulando}
         onOpenChange={setAnulando}
-        title={`Anular la factura ${numeroDe(doc)}`}
-        confirmLabel="Anular la factura"
+        title={`Anular ${doc.kind === "receipt" ? "el recibo" : "la factura"} ${numeroDe(doc)}`}
+        confirmLabel={doc.kind === "receipt" ? "Anular el recibo" : "Anular la factura"}
         destructive
         confirmDisabled={motivo.trim().length < 3}
         onConfirm={anular}
       >
         <div className="space-y-2">
           <p>
-            La factura quedará <Badge tone="destructive">Anulada</Badge>, su correlativo{" "}
-            <strong>se conserva</strong> (nunca se reutiliza), el inventario que descargó se repone
-            y su asiento contable se <strong>reversa</strong> con un contra-asiento. Esto no se
-            puede deshacer: lo que corrige una factura emitida es una nota de crédito.
+            {doc.kind === "receipt" ? "El recibo quedará " : "La factura quedará "}
+            <Badge tone="destructive">{doc.kind === "receipt" ? "Anulado" : "Anulada"}</Badge>, su
+            correlativo <strong>se conserva</strong> (nunca se reutiliza), la mercancía que salió{" "}
+            <strong>vuelve al inventario</strong> al mismo costo con que salió, y su asiento
+            contable se <strong>reversa</strong> con un contra-asiento. Esto no se puede deshacer.
+          </p>
+          <p className="text-[0.88rem] text-muted-foreground">
+            Solo se anula un {nombreDoc} sin cobros. Si ya se cobró, no se anula: registra una
+            devolución, que repone la mercancía y devuelve el dinero como saldo a favor o reembolso.
           </p>
           <Textarea
             aria-label="Motivo de anulación"
@@ -801,6 +820,17 @@ function Devolucion({
   const [creada, setCreada] = useState<string | null>(null);
   const llaveCrear = useRef(crypto.randomUUID());
   const llaveConfirmar = useRef(crypto.randomUUID());
+  const llaveReembolso = useRef(crypto.randomUUID());
+  const esRecibo = documento.kind === "receipt";
+  /** La caja de la que sale el dinero, si se reembolsa en el acto (ADR-0061 §8). */
+  const [cajaReembolso, setCajaReembolso] = useState<string | null>(null);
+  const cuentas = useQuery({
+    queryKey: ["cuentas-reembolso", empresa.id],
+    queryFn: () =>
+      llamar<{ accounts: { id: string; name: string; currency: string; is_active: boolean }[] }>(
+        "/v1/treasury/accounts",
+      ),
+  });
 
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],
@@ -839,13 +869,39 @@ function Devolucion({
         id = r.id;
         setCreada(id);
       }
-      await llamar(`/v1/returns/${id}/confirm`, {
+      const confirmada = await llamar<{
+        credit_note_id: string | null;
+        customer_credit_id: string | null;
+      }>(`/v1/returns/${id}/confirm`, {
         method: "POST",
         headers: { "Idempotency-Key": llaveConfirmar.current },
       });
+      if (
+        cajaReembolso !== null &&
+        confirmada.customer_credit_id !== null &&
+        confirmada.credit_note_id !== null
+      ) {
+        // El importe del reembolso es el del documento que dejó el saldo: lo dice
+        // el servidor, la pantalla no suma.
+        const nota = await llamar<{ document: { total_amount: string } }>(
+          `/v1/documents/${confirmada.credit_note_id}`,
+        );
+        await llamar(`/v1/customer-credits/${confirmada.customer_credit_id}/refunds`, {
+          method: "POST",
+          headers: { "Idempotency-Key": llaveReembolso.current },
+          body: JSON.stringify({
+            company_id: empresa.id,
+            account_id: cajaReembolso,
+            amount: nota.document.total_amount,
+            reason: `Reembolso de la devolución: ${motivo.trim()}`,
+          }),
+        });
+      }
       toast.success(
         "Devolución confirmada",
-        "La mercancía reingresó a su costo original y la nota de crédito dejó saldo a favor.",
+        cajaReembolso !== null
+          ? "La mercancía reingresó al costo con que salió y el dinero salió de la caja elegida."
+          : `La mercancía reingresó al costo con que salió y ${esRecibo ? "el recibo de devolución" : "la nota de crédito"} dejó saldo a favor.`,
       );
       onClose(true);
     } catch (e) {
@@ -861,9 +917,13 @@ function Devolucion({
       <DialogContent className="max-w-lg">
         <DialogTitle>Devolución de {numeroDe(documento)}</DialogTitle>
         <DialogDescription>
-          La mercancía reingresa <strong>al costo con el que salió</strong> —no al de hoy—, y se
-          emite una nota de crédito (exige su propio rango de numeración) que deja el saldo a favor
-          del cliente.
+          La mercancía reingresa <strong>al costo y lote con los que salió</strong> —no al de hoy—,
+          y se emite{" "}
+          {esRecibo
+            ? "un recibo de devolución (no fiscal, sin IVA)"
+            : "una nota de crédito (exige su propio rango de numeración)"}{" "}
+          que deja el saldo a favor del cliente. Si el cliente quiere su dinero, elige de qué caja
+          sale.
         </DialogDescription>
         <div className="space-y-3 pt-2">
           <div className="divide-y divide-border rounded-md border border-border">
@@ -896,6 +956,20 @@ function Devolucion({
               />
             </div>
           )}
+          <div className="w-full sm:w-72">
+            <SimpleSelect
+              ariaLabel="Devolver el dinero desde"
+              value={cajaReembolso ?? "saldo"}
+              onValueChange={(v) => setCajaReembolso(v === "saldo" ? null : v)}
+              disabled={creada !== null}
+              options={[
+                { value: "saldo", label: "Dejar saldo a favor del cliente" },
+                ...(cuentas.data?.accounts ?? [])
+                  .filter((c) => c.is_active && c.currency === documento.functional_currency)
+                  .map((c) => ({ value: c.id, label: `Devolver el dinero desde «${c.name}»` })),
+              ]}
+            />
+          </div>
           <Textarea
             aria-label="Motivo de la devolución"
             rows={2}

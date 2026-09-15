@@ -66,6 +66,8 @@ import {
   AnnulInvoiceRequest,
   RegisterPaymentRequest,
   CreateReturnRequest,
+  RefundCustomerCreditRequest,
+  CustomerRefundResponse,
   DocumentResponse,
   DocumentDetailResponse,
   ListDocumentsResponse,
@@ -1314,6 +1316,11 @@ export function buildOpenApiDocument(): object {
   const registrarCobro = registry.register("RegisterPaymentRequest", RegisterPaymentRequest);
   const respuestaCobro = registry.register("RegisterPaymentResponse", RegisterPaymentResponse);
   const crearDevolucion = registry.register("CreateReturnRequest", CreateReturnRequest);
+  const pedirReembolso = registry.register(
+    "RefundCustomerCreditRequest",
+    RefundCustomerCreditRequest,
+  );
+  const reembolso = registry.register("CustomerRefundResponse", CustomerRefundResponse);
   const devolucion = registry.register("ReturnResponse", ReturnResponse);
   const antiguedad = registry.register("AgingResponse", AgingResponse);
   const estadoCuenta = registry.register("CustomerStatementResponse", CustomerStatementResponse);
@@ -1422,10 +1429,12 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "post",
     path: "/v1/invoices/{id}/annul",
-    summary: "Anular una factura emitida (permiso sales.invoice.annul)",
+    summary: "Anular una factura o un recibo emitidos y SIN cobros (permiso sales.invoice.annul)",
     description:
       "Anular no es borrar: el documento y su correlativo SE CONSERVAN (regla 1, ADR-0037). " +
-      "El número anulado sigue ocupado y no se reutiliza.",
+      "El número anulado sigue ocupado y no se reutiliza. Anular REPONE la existencia al lote y " +
+      "valor con que salió (ADR-0061 §2). Con cobros → 409 DOCUMENT_HAS_PAYMENTS: una venta " +
+      "cobrada se deshace con una devolución, no anulándola.",
     security: [{ bearerAuth: [] }],
     request: {
       params: idParam,
@@ -1868,8 +1877,10 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "post",
     path: "/v1/returns",
-    summary: "Registrar devolución contra su factura (permiso sales.return.manage)",
-    description: "No hay devolución sin documento origen, y nunca por más de lo vendido.",
+    summary: "Registrar devolución contra su factura o recibo (permiso sales.return.manage)",
+    description:
+      "No hay devolución sin documento origen, y nunca por más de lo vendido — sumando las " +
+      "devoluciones ya confirmadas de la misma línea (ADR-0061 §4).",
     security: [{ bearerAuth: [] }],
     request: {
       headers: idemHeader,
@@ -1879,11 +1890,28 @@ export function buildOpenApiDocument(): object {
   });
   registry.registerPath({
     method: "post",
-    path: "/v1/returns/{id}/confirm",
-    summary: "Confirmar devolución: reingreso al COSTO ORIGINAL, nota de crédito y saldo a favor",
+    path: "/v1/customer-credits/{id}/refunds",
+    summary: "Reembolsar un saldo a favor desde una caja (permiso sales.return.manage)",
     description:
-      "Los tres en una transacción. El reingreso usa el cost_snapshot de la línea de origen, " +
-      "no el costo de hoy: devolver no puede revalorizar el inventario.",
+      "ADR-0061 §8: el camino del dinero de una venta devuelta. Consume el saldo a favor, saca " +
+      "el dinero de la cuenta (en la moneda del saldo) y lo asienta contra la caja real.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: z.object({ id: z.string().uuid() }),
+      body: { content: { "application/json": { schema: pedirReembolso } } },
+    },
+    responses: { 201: okJson(reembolso, "El reembolso registrado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/returns/{id}/confirm",
+    summary:
+      "Confirmar devolución: reingreso al lote y costo con que SALIÓ, nota de crédito (factura) o recibo de devolución (recibo), y saldo a favor",
+    description:
+      "Todo en una transacción (ADR-0061 §5). El reingreso reparte lo devuelto entre las salidas " +
+      "de la venta, lote por lote y a su valor — no el costo de hoy ni el cost_snapshot. Un " +
+      "recibo se corrige con recibo de devolución (no fiscal, sin IVA, fuera de los libros).",
     security: [{ bearerAuth: [] }],
     request: { params: idParam, headers: idemHeader },
     responses: { 200: okJson(devolucion, "Devolución confirmada."), ...erroresComunes },

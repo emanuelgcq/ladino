@@ -44,8 +44,11 @@ insert into public.products (id, tenant_id, company_id, sku, name, kind, status,
 select is(
   (select numbering_mode || '·' || array_to_string(allowed_kinds, ',')
      from public.fiscal_regimes where code = 'sin_facturacion'),
-  'internal_only·receipt',
-  'sin_facturacion existe: internal_only y SOLO receipt');
+  -- Ampliada con la migración 59 (ADR-0061, aprobado por el dueño el 2026-09-15):
+  -- el recibo se corrige con RECIBO DE DEVOLUCIÓN, que es el único otro kind del
+  -- régimen. Sigue sin admitir factura, nota de crédito ni nota de débito.
+  'internal_only·receipt,receipt_return',
+  'sin_facturacion existe: internal_only, recibo y recibo de devolución — nada fiscal');
 
 -- ── 2. El gate de kind, en las dos direcciones ───────────────────────────────
 select throws_ok(

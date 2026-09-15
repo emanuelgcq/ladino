@@ -41,10 +41,12 @@ import type {
   DirectCreditNoteResponse,
   CreateDebitNoteRequest,
   SalesMode,
+  RefundCustomerCreditRequest,
+  CustomerRefundResponse,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
-import { issueStockBatch, receiveStock } from "./inventory.js";
+import { issueStockBatch, receiveStock, reponerSalidasDeDocumento } from "./inventory.js";
 import { resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 import { reverseJournalEntry } from "./accounting.js";
@@ -76,7 +78,8 @@ export type SalesError =
   | { code: "EXCHANGE_RATE_MISSING"; message: string }
   | { code: "NEGATIVE_STOCK"; message: string }
   | { code: "APPEND_ONLY_VIOLATION"; message: string }
-  | { code: "REGIME_KIND_NOT_ALLOWED"; message: string };
+  | { code: "REGIME_KIND_NOT_ALLOWED"; message: string }
+  | { code: "DOCUMENT_HAS_PAYMENTS"; message: string };
 
 /**
  * Redondeo de la VALORACIÓN (cobros y diferencial cambiario): la escala de
@@ -1005,6 +1008,11 @@ async function resolverLista(
   return ok(pedida);
 }
 
+/** El recibo y su devolución no son documentos fiscales: sin IVA ni clasificación de libro. */
+function esNoFiscal(kind: string): boolean {
+  return kind === "receipt" || kind === "receipt_return";
+}
+
 async function insertarDocumento(
   sql: TransactionSql,
   ctx: Contexto,
@@ -1155,8 +1163,8 @@ async function insertarDocumento(
       // congela 'no_fiscal' explícito —no NULL, que ya significa «anterior a la
       // migración 27»— y sin tipo de operación. Antes quedaba la categoría del
       // producto (p. ej. gravado_general) y 'interna', que un libro podría leer.
-      tax_category_snapshot: d.kind === "receipt" ? "no_fiscal" : l.taxCategory,
-      operation_type: d.kind === "receipt" ? null : l.operationType,
+      tax_category_snapshot: esNoFiscal(d.kind) ? "no_fiscal" : l.taxCategory,
+      operation_type: esNoFiscal(d.kind) ? null : l.operationType,
     });
   }
 
@@ -1187,7 +1195,7 @@ async function insertarDocumento(
            -- con 'no_fiscal', en vez de fingir una clasificación de libro.
            x.tax_category_snapshot,
            ${
-             d.kind === "receipt"
+             esNoFiscal(d.kind)
                ? sql`'no_fiscal'`
                : sql`platform.tax_treatment_of(x.tax_category_snapshot)`
            },
@@ -1654,6 +1662,127 @@ async function emitirVenta(
   }
 }
 
+/**
+ * REEMBOLSA un saldo a favor desde una caja (ADR-0061 §8). Consume el saldo como
+ * lo consume aplicarlo a una factura (`applied_amount`), registra la salida de
+ * dinero —que baja el saldo de la cuenta por trigger— y la asienta contra la caja
+ * REAL (`customer_refund` / `ar.credit_refunded`, cuenta por treasury_account).
+ * El saldo y la cuenta van en la MISMA moneda: convertir aquí inventaría una tasa
+ * que el cliente no pactó.
+ */
+export async function refundCustomerCredit(
+  uow: UnitOfWork,
+  creditId: string,
+  input: RefundCustomerCreditRequest,
+): Promise<Result<CustomerRefundResponse, SalesError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Reembolsar exige un usuario real." });
+  }
+  const fecha = new Date().toISOString();
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "sales.return.manage", fecha);
+  if (!ctx.ok) return ctx;
+
+  const [credito] = await sql<
+    { id: string; amount: string; applied_amount: string; status: string; currency: string }[]
+  >`select id, amount::text as amount, applied_amount::text as applied_amount, status, currency
+      from public.customer_credits
+     where id = ${creditId} and company_id = ${input.company_id}
+     for update`;
+  if (!credito) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  const [cuenta] = await sql<{ currency: string; name: string; is_active: boolean }[]>`
+    select currency, name, is_active from public.company_accounts
+     where id = ${input.account_id} and company_id = ${input.company_id}`;
+  if (!cuenta) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (!cuenta.is_active) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `La cuenta «${cuenta.name}» está desactivada.`,
+    });
+  }
+  if (cuenta.currency !== credito.currency) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `El saldo a favor está en ${credito.currency} y la cuenta «${cuenta.name}» en ${cuenta.currency}: el reembolso sale de una cuenta en la moneda del saldo.`,
+    });
+  }
+  const total = parseDecimal(credito.amount);
+  const aplicado = parseDecimal(credito.applied_amount);
+  const pedido = parseDecimal(input.amount);
+  if (!total.ok || !aplicado.ok || !pedido.ok) {
+    return err({ code: "VALIDATION_FAILED", message: "Importes no interpretables." });
+  }
+  const disponible = total.value.minus(aplicado.value);
+  if (!pedido.value.greaterThan(0) || pedido.value.greaterThan(disponible)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `El saldo a favor disponible es ${disponible.toFixed()} y se intentó reembolsar ${pedido.value.toFixed()}.`,
+    });
+  }
+
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  const nuevo = aplicado.value.plus(pedido.value);
+  await sql`
+    update public.customer_credits
+       set applied_amount = ${nuevo.toFixed()},
+           status = case when ${nuevo.equals(total.value)} then 'applied' else status end
+     where id = ${creditId}`;
+
+  // El saldo a favor nace en moneda funcional (la nota o el recibo de
+  // devolución lo crean así): el funcional es el mismo importe.
+  const [reembolso] = await sql<{ id: string; refunded_at: string }[]>`
+    insert into public.customer_refunds
+      (tenant_id, company_id, customer_credit_id, account_id, reason,
+       amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
+       functional_currency, rate_source)
+    values (${ctx.value.tenantId}, ${input.company_id}, ${creditId}, ${input.account_id},
+            ${input.reason}, ${pedido.value.toFixed(8)}, ${credito.currency}, 1,
+            ${pedido.value.toFixed(8)}, ${ctx.value.functionalCurrency}, 'identidad')
+    returning id,
+              to_char(refunded_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as refunded_at`;
+
+  await sql`
+    insert into public.audit_events
+      (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+       actor_type, occurred_at, rules_version, payload)
+    values (${ctx.value.tenantId}, ${input.company_id}, 'customer_credit', ${creditId},
+            'ar.credit_refunded', 'user', now(), ${RULES_VERSION},
+            ${sql.json({ refund_id: reembolso!.id, account_id: input.account_id, amount: pedido.value.toFixed(8), reason: input.reason })})`;
+  await sql`
+    insert into public.outbox
+      (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
+    values (${ctx.value.tenantId}, ${input.company_id}, 'customer_credit', ${creditId},
+            'ar.credit_refunded', 1,
+            ${sql.json({ refund_id: reembolso!.id, account_id: input.account_id, amount: pedido.value.toFixed(8) })})`;
+
+  const generado = await generateJournalFromDocument(sql, {
+    tenantId: ctx.value.tenantId,
+    companyId: input.company_id,
+    sourceKind: "customer_refund",
+    sourceEvent: "ar.credit_refunded",
+    sourceId: reembolso!.id,
+    postingDate: diaNegocio(fecha),
+    postedBy: actor.userId,
+    description: `Reembolso de saldo a favor: ${input.reason}`,
+    functionalCurrency: ctx.value.functionalCurrency,
+    amounts: { functional_amount: pedido.value.toFixed(8) },
+    backlink: { table: "customer_refunds", id: reembolso!.id },
+  });
+  if (!generado.ok) return err({ code: "VALIDATION_FAILED", message: generado.error.message });
+
+  return ok({
+    id: reembolso!.id,
+    customer_credit_id: creditId,
+    account_id: input.account_id,
+    amount: pedido.value.toFixed(8),
+    currency: credito.currency,
+    refunded_at: reembolso!.refunded_at,
+    accounting: generado.value.kind === "queued" ? "queued" : "posted",
+    journal_entry_id: generado.value.kind === "queued" ? null : generado.value.entryId,
+    credit_remaining: total.value.minus(nuevo).toFixed(8),
+  });
+}
+
 /** Anula una factura emitida. El correlativo SE CONSERVA (ADR-0037). */
 export async function annulInvoice(
   uow: UnitOfWork,
@@ -1673,13 +1802,38 @@ export async function annulInvoice(
   );
   if (!ctx.ok) return ctx;
 
-  const [doc] = await sql<{ status: string }[]>`
-    select status from public.documents where id = ${documentId} and company_id = ${input.company_id}`;
+  // El documento BLOQUEADO: un cobro concurrente no puede colarse entre la
+  // comprobación de «sin cobros» y la anulación (ADR-0061 §1).
+  const [doc] = await sql<{ status: string; kind: string }[]>`
+    select status, kind from public.documents
+     where id = ${documentId} and company_id = ${input.company_id}
+     for update`;
   if (!doc) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (doc.kind !== "invoice" && doc.kind !== "receipt") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Solo se anula una factura o un recibo. Una nota no se anula: se corrige con la nota contraria.",
+    });
+  }
+  const nombre = doc.kind === "receipt" ? "recibo" : "factura";
+
+  // UNA VENTA COBRADA NO SE ANULA: SE DEVUELVE (ADR-0061 §8). El cobro es un
+  // hecho de caja que ocurrió; anular fingiría que el dinero nunca entró. El
+  // camino es la devolución: repone la mercancía y devuelve el dinero como
+  // saldo a favor o reembolso.
+  const [cobros] = await sql<{ n: number }[]>`
+    select count(*)::int as n from public.payments where document_id = ${documentId}`;
+  if (doc.status === "paid" || (cobros?.n ?? 0) > 0) {
+    return err({
+      code: "DOCUMENT_HAS_PAYMENTS",
+      message: `Este ${nombre} ya tiene cobros y no se puede anular. Para deshacer la venta, registra una devolución: repone la mercancía y devuelve el dinero como saldo a favor o reembolso.`,
+    });
+  }
   if (doc.status !== "issued") {
     return err({
       code: "VALIDATION_FAILED",
-      message: `Solo se anula una factura emitida; esta está en ${doc.status}.`,
+      message: `Solo se anula un ${nombre} emitido; este está en ${doc.status}.`,
     });
   }
 
@@ -1690,9 +1844,52 @@ export async function annulInvoice(
          set status = 'annulled', annulled_at = now(), annul_reason = ${input.reason}
        where id = ${documentId} and company_id = ${input.company_id}
       returning ${sql.unsafe(DOC_COLUMNS)}`;
-    await auditar(sql, ctx.value.tenantId, anulada!, "fiscal.invoice.annulled", {
-      reason: input.reason,
-    });
+    await auditar(
+      sql,
+      ctx.value.tenantId,
+      anulada!,
+      doc.kind === "receipt" ? "sales.receipt.annulled" : "fiscal.invoice.annulled",
+      { reason: input.reason },
+    );
+
+    /**
+     * ANULAR REPONE (ADR-0061 §2): cada salida vuelve al mismo depósito y lote, al
+     * valor exacto con que salió. Y el mayor la acompaña según lo que pasó con el
+     * costo de ventas: si llegó a asentarse, un hecho propio lo revierte
+     * (inventario contra costo de ventas); si seguía en la cola, se descarta con
+     * la venta y no hay nada que revertir — kardex y mayor quedan igual de netos.
+     */
+    const repuesto = await reponerSalidasDeDocumento(uow, input.company_id, documentId);
+    if (!repuesto.ok) {
+      return err(
+        repuesto.error.code === "NEGATIVE_STOCK"
+          ? { code: "NEGATIVE_STOCK", message: repuesto.error.message }
+          : { code: "VALIDATION_FAILED", message: repuesto.error.message },
+      );
+    }
+    const [costoAsentado] = await sql<{ id: string }[]>`
+      select id from public.journal_entries
+       where company_id = ${input.company_id} and source_kind = 'sales_cost'
+         and source_event = 'stock.shipped' and source_id = ${documentId}
+         and status = 'posted'`;
+    const valorRepuesto = parseDecimal(repuesto.value.repuesto);
+    if (costoAsentado !== undefined && valorRepuesto.ok && !valorRepuesto.value.isZero()) {
+      const reversoCosto = await generateJournalFromDocument(sql, {
+        tenantId: ctx.value.tenantId,
+        companyId: input.company_id,
+        sourceKind: "sales_cost",
+        sourceEvent: "stock.received",
+        sourceId: documentId,
+        postingDate: diaNegocio(new Date().toISOString()),
+        postedBy: actor.userId,
+        description: `Anulación del ${nombre} ${anulada!.series}-${anulada!.document_number ?? ""}: la mercancía vuelve al inventario`,
+        functionalCurrency: ctx.value.functionalCurrency,
+        amounts: { functional_amount: repuesto.value.repuesto },
+      });
+      if (!reversoCosto.ok) {
+        return err({ code: "VALIDATION_FAILED", message: reversoCosto.error.message });
+      }
+    }
 
     // La anulación NO genera un asiento nuevo desde plantilla: REVERSA el que
     // la emisión creó. Reutiliza el caso de uso que ya está probado, deja los
@@ -1704,7 +1901,7 @@ export async function annulInvoice(
     if (conAsiento?.journal_entry_id != null) {
       const reverso = await reverseJournalEntry(uow, conAsiento.journal_entry_id, {
         company_id: input.company_id,
-        reason: `Anulación de la factura: ${input.reason}`,
+        reason: `Anulación del ${nombre}: ${input.reason}`,
       });
       if (!reverso.ok) {
         return err({ code: "VALIDATION_FAILED", message: reverso.error.message });
@@ -1714,6 +1911,17 @@ export async function annulInvoice(
         update public.journal_generation_queue
            set status = 'discarded', processed_at = now()
          where company_id = ${input.company_id} and source_id = ${documentId}
+           and source_kind in ('sales_invoice', 'sales_receipt')
+           and status = 'pending'`;
+    }
+    // El costo de ventas que seguía en la cola se descarta con la venta: nunca
+    // llegó al mayor, y la reposición tampoco lo toca.
+    if (costoAsentado === undefined) {
+      await sql`
+        update public.journal_generation_queue
+           set status = 'discarded', processed_at = now()
+         where company_id = ${input.company_id} and source_id = ${documentId}
+           and source_kind = 'sales_cost' and source_event = 'stock.shipped'
            and status = 'pending'`;
     }
 
@@ -2331,10 +2539,14 @@ export async function createReturn(
   >`select id, status, kind, customer_id, price_list_id from public.documents
      where id = ${input.source_document_id} and company_id = ${input.company_id}`;
   if (!origen) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-  if (origen.kind !== "invoice" || !["issued", "paid"].includes(origen.status)) {
+  // ADR-0061 §5: un RECIBO también se devuelve (con recibo de devolución).
+  if (
+    !["invoice", "receipt"].includes(origen.kind) ||
+    !["issued", "paid"].includes(origen.status)
+  ) {
     return err({
       code: "VALIDATION_FAILED",
-      message: "Solo se devuelve contra una factura emitida.",
+      message: "Solo se devuelve contra una factura o un recibo emitidos.",
     });
   }
 
@@ -2372,10 +2584,21 @@ export async function createReturn(
     if (!pedida.ok || !vendida.ok) {
       return err({ code: "VALIDATION_FAILED", message: "Cantidad no interpretable." });
     }
-    if (pedida.value.greaterThan(vendida.value)) {
+    // EL TOPE ES ACUMULADO (ADR-0061 §4): lo ya devuelto en devoluciones
+    // confirmadas cuenta. Antes se comparaba cada devolución sola, y dos
+    // devoluciones podían devolver más de lo vendido.
+    const [yaDevuelta] = await sql<{ q: string }[]>`
+      select coalesce(sum(rl.quantity), 0)::text as q
+        from public.return_lines rl
+        join public.returns r on r.id = rl.return_id
+       where rl.source_line_id = ${l.source_line_id} and r.status = 'confirmed'`;
+    const devuelta = parseDecimal(yaDevuelta?.q ?? "0");
+    if (!devuelta.ok) return err({ code: "VALIDATION_FAILED", message: devuelta.error.message });
+    const disponible = vendida.value.minus(devuelta.value);
+    if (pedida.value.greaterThan(disponible)) {
       return err({
         code: "VALIDATION_FAILED",
-        message: `No se puede devolver más de lo vendido: la línea tiene ${vendida.value.toFixed()}.`,
+        message: `No se puede devolver más de lo vendido: la línea tiene ${vendida.value.toFixed()} y ya se devolvieron ${devuelta.value.toFixed()}.`,
       });
     }
     // EL COSTO ORIGINAL, copiado. Si la línea no lo tenía (servicio, o venta sin
@@ -2680,49 +2903,133 @@ export async function confirmReturn(
     return err({ code: "VALIDATION_FAILED", message: "La devolución ya no está en borrador." });
   }
 
-  const [origen] = await sql<{ customer_id: string; price_list_id: string | null }[]>`
-    select customer_id, price_list_id from public.documents where id = ${dev.source_document_id}`;
+  const [origen] = await sql<{ customer_id: string; price_list_id: string | null; kind: string }[]>`
+    select customer_id, price_list_id, kind from public.documents
+     where id = ${dev.source_document_id}`;
   const lineas = await sql<
     {
+      source_line_id: string;
       product_id: string;
       quantity: string;
       unit_cost_original: string;
       unit_price_transaction: string;
     }[]
-  >`select product_id, quantity::text as quantity,
+  >`select source_line_id, product_id, quantity::text as quantity,
            unit_cost_original::text as unit_cost_original,
            unit_price_transaction::text as unit_price_transaction
       from public.return_lines where return_id = ${returnId}`;
+
+  // El tope acumulado, otra vez al confirmar: entre el borrador y la
+  // confirmación pudo confirmarse otra devolución de la misma línea.
+  for (const l of lineas) {
+    const [tope] = await sql<{ vendida: string; devuelta: string }[]>`
+      select dl.quantity::text as vendida,
+             coalesce((select sum(rl.quantity) from public.return_lines rl
+                        join public.returns r on r.id = rl.return_id
+                       where rl.source_line_id = dl.id and r.status = 'confirmed'), 0)::text
+               as devuelta
+        from public.document_lines dl where dl.id = ${l.source_line_id}`;
+    const vendida = parseDecimal(tope?.vendida ?? "0");
+    const devuelta = parseDecimal(tope?.devuelta ?? "0");
+    const pedida = parseDecimal(l.quantity);
+    if (!vendida.ok || !devuelta.ok || !pedida.ok) {
+      return err({ code: "VALIDATION_FAILED", message: "Cantidades no interpretables." });
+    }
+    if (devuelta.value.plus(pedida.value).greaterThan(vendida.value)) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `No se puede devolver más de lo vendido: la línea tiene ${vendida.value.toFixed()} y ya se devolvieron ${devuelta.value.toFixed()}.`,
+      });
+    }
+  }
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
   // 1. Reingreso al COSTO ORIGINAL. `receiveStock` recibe el costo TOTAL, así
   //    que se multiplica cantidad × costo unitario original — nunca el vigente.
   //    El asiento va UNA vez por devolución, con la suma (ADR-0060 §2).
+  //    AL COSTO Y LOTE CON QUE SALIÓ (ADR-0061 §5): se reparte lo devuelto entre
+  //    las salidas de la venta —lote por lote, a su valor—, descontando lo que
+  //    devoluciones anteriores ya reingresaron. Antes se reingresaba al
+  //    cost_snapshot de la línea (el último costo del lote nulo, no el que salió)
+  //    y sin lote: un producto con lotes no se podía devolver.
   let reingresado = parseDecimal("0");
   for (const l of lineas) {
-    const [p] = await sql<{ kind: string; is_composed: boolean }[]>`
-      select kind, is_composed from public.products where id = ${l.product_id}`;
-    if (p?.kind !== "good" || p.is_composed) continue;
-    const cantidad = parseDecimal(l.quantity);
-    const costoUnit = parseDecimal(l.unit_cost_original);
-    if (!cantidad.ok || !costoUnit.ok) {
-      return err({ code: "VALIDATION_FAILED", message: "Importes no interpretables." });
+    const tramos = await sql<
+      {
+        lot_id: string | null;
+        salio: string;
+        valor: string;
+        volvio: string;
+        valor_volvio: string;
+      }[]
+    >`
+      with salidas as (
+        select m.lot_id, sum(-m.quantity) as salio, sum(-m.functional_amount) as valor
+          from public.inventory_moves m
+         where m.company_id = ${companyId} and m.source_document_id = ${dev.source_document_id}
+           and m.product_id = ${l.product_id} and m.kind = 'salida'
+         group by m.lot_id
+      ),
+      vueltas as (
+        select m.lot_id, sum(m.quantity) as volvio, sum(m.functional_amount) as valor_volvio
+          from public.inventory_moves m
+          join public.returns r on r.id = m.source_document_id
+         where m.company_id = ${companyId} and r.source_document_id = ${dev.source_document_id}
+           and r.status = 'confirmed' and m.product_id = ${l.product_id} and m.kind = 'entrada'
+         group by m.lot_id
+      )
+      select s.lot_id, s.salio::text, s.valor::text,
+             coalesce(v.volvio, 0)::text as volvio, coalesce(v.valor_volvio, 0)::text as valor_volvio
+        from salidas s left join vueltas v on v.lot_id is not distinct from s.lot_id
+        left join public.lots lo on lo.id = s.lot_id
+       -- En el mismo orden en que salió (FEFO): primero el lote que vence antes.
+       order by lo.expires_at nulls last, s.lot_id nulls first`;
+    // Un servicio o un compuesto no salieron del kardex: no hay nada que reingresar.
+    if (tramos.length === 0) continue;
+    const pedida = parseDecimal(l.quantity);
+    if (!pedida.ok) return err({ code: "VALIDATION_FAILED", message: pedida.error.message });
+    let falta = pedida.value;
+    for (const t of tramos) {
+      if (falta.isZero()) break;
+      const salio = parseDecimal(t.salio);
+      const valor = parseDecimal(t.valor);
+      const volvio = parseDecimal(t.volvio);
+      const valorVolvio = parseDecimal(t.valor_volvio);
+      if (!salio.ok || !valor.ok || !volvio.ok || !valorVolvio.ok) {
+        return err({ code: "VALIDATION_FAILED", message: "Importes no interpretables." });
+      }
+      const queda = salio.value.minus(volvio.value);
+      if (!queda.greaterThan(0)) continue;
+      const toma = queda.lessThan(falta) ? queda : falta;
+      // Si vuelve TODO lo que queda del tramo, el valor es exactamente el que
+      // falta: así el tramo netea a cero sin un residuo de redondeo.
+      const importe = toma.equals(queda)
+        ? valor.value.minus(valorVolvio.value)
+        : valor.value.times(toma).dividedBy(salio.value).toDecimalPlaces(8, 4);
+      const mov = await receiveStock(uow, {
+        company_id: companyId,
+        warehouse_id: dev.warehouse_id,
+        product_id: l.product_id,
+        ...(t.lot_id === null ? {} : { lot_id: t.lot_id }),
+        quantity: toma.toFixed(),
+        amount: importe.toFixed(8),
+        currency: ctx.value.functionalCurrency,
+        sourceDocumentId: returnId,
+        accounting: "document",
+      });
+      if (!mov.ok) return err({ code: "VALIDATION_FAILED", message: mov.error.message });
+      const v = parseDecimal(mov.value.functional_amount);
+      if (reingresado.ok && v.ok)
+        reingresado = { ok: true, value: reingresado.value.plus(v.value) };
+      falta = falta.minus(toma);
     }
-    const total = cantidad.value.times(costoUnit.value).toDecimalPlaces(8, 4);
-    const mov = await receiveStock(uow, {
-      company_id: companyId,
-      warehouse_id: dev.warehouse_id,
-      product_id: l.product_id,
-      quantity: l.quantity,
-      amount: total.toFixed(8),
-      currency: ctx.value.functionalCurrency,
-      sourceDocumentId: returnId,
-      accounting: "document",
-    });
-    if (!mov.ok) return err({ code: "VALIDATION_FAILED", message: mov.error.message });
-    const v = parseDecimal(mov.value.functional_amount);
-    if (reingresado.ok && v.ok) reingresado = { ok: true, value: reingresado.value.plus(v.value) };
+    if (!falta.isZero()) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "No se puede devolver más de lo que salió del inventario con esta venta.",
+      });
+    }
   }
   if (!reingresado.ok) {
     return err({ code: "VALIDATION_FAILED", message: reingresado.error.message });
@@ -2758,7 +3065,9 @@ export async function confirmReturn(
         customerId: origen!.customer_id,
         priceListId: origen!.price_list_id,
         sourceDocumentId: dev.source_document_id,
-        kind: "credit_note",
+        // Un recibo se corrige con RECIBO DE DEVOLUCIÓN, no con nota de crédito:
+        // la nota entraría al libro de ventas de una empresa que no factura.
+        kind: origen!.kind === "receipt" ? "receipt_return" : "credit_note",
         lineas,
         fecha,
         notes: null,
@@ -2782,10 +3091,14 @@ export async function confirmReturn(
   await sql`
     update public.returns set status = 'confirmed', confirmed_at = now(), credit_note_id = ${nc.value.id}
      where id = ${returnId}`;
-  await auditar(sql, ctx.value.tenantId, nc.value, "fiscal.credit_note.issued", {
-    return_id: returnId,
-    customer_credit_id: credito!.id,
-  });
+  const esRecibo = nc.value.kind === "receipt_return";
+  await auditar(
+    sql,
+    ctx.value.tenantId,
+    nc.value,
+    esRecibo ? "sales.receipt_return.issued" : "fiscal.credit_note.issued",
+    { return_id: returnId, customer_credit_id: credito!.id },
+  );
 
   // EL ASIENTO de la NC (cierre de R-20, ADR-0051): menos ingreso y menos IVA
   // débito, contra el saldo a favor del cliente. Sin plantilla, encola — la
@@ -2793,18 +3106,20 @@ export async function confirmReturn(
   const contableNc = await generateJournalFromDocument(sql, {
     tenantId: ctx.value.tenantId,
     companyId,
-    sourceKind: "sales_credit_note",
-    sourceEvent: "fiscal.credit_note.issued",
+    sourceKind: esRecibo ? "sales_receipt_return" : "sales_credit_note",
+    sourceEvent: esRecibo ? "sales.receipt_return.issued" : "fiscal.credit_note.issued",
     sourceId: nc.value.id,
     postingDate: diaNegocio(fecha),
     postedBy: actor.userId,
-    description: `Nota de crédito ${nc.value.series}-${nc.value.document_number ?? ""}`,
+    description: `${esRecibo ? "Recibo de devolución" : "Nota de crédito"} ${nc.value.series}-${nc.value.document_number ?? ""}`,
     functionalCurrency: ctx.value.functionalCurrency,
-    amounts: {
-      subtotal: nc.value.subtotal_amount,
-      tax_amount: nc.value.tax_amount,
-      total: nc.value.total_amount,
-    },
+    amounts: esRecibo
+      ? { subtotal: nc.value.subtotal_amount, total: nc.value.total_amount }
+      : {
+          subtotal: nc.value.subtotal_amount,
+          tax_amount: nc.value.tax_amount,
+          total: nc.value.total_amount,
+        },
     backlink: { table: "documents", id: nc.value.id },
   });
   if (!contableNc.ok) {
@@ -2819,7 +3134,7 @@ export async function confirmReturn(
     reason: dev.reason,
     warehouse_id: dev.warehouse_id,
     lines: lineas.map((l) => ({
-      source_line_id: "",
+      source_line_id: l.source_line_id,
       product_id: l.product_id,
       quantity: l.quantity,
       unit_cost_original: l.unit_cost_original,
@@ -2838,8 +3153,8 @@ async function createInvoiceLike(
     customerId: string;
     priceListId: string | null;
     sourceDocumentId: string;
-    /** ADR-0051: el mismo camino emite la NC y la ND — cambia solo el kind. */
-    kind: "credit_note" | "debit_note";
+    /** ADR-0051: el mismo camino emite la NC y la ND — cambia solo el kind. ADR-0061: y el recibo de devolución. */
+    kind: "credit_note" | "debit_note" | "receipt_return";
     lineas: readonly { product_id: string; quantity: string; unit_price_transaction: string }[];
     fecha: string;
     notes: string | null;
@@ -2891,18 +3206,22 @@ async function createInvoiceLike(
       select taxpayer_type_code from public.customers where id = ${d.customerId}`;
     let taxRuleId: string | null = null;
     let tasa = parseDecimal("0");
-    try {
-      const [regla] = await sql<{ tax_rule_id: string; rate: string }[]>`
-        select tax_rule_id, rate::text as rate
-          from platform.resolve_tax(${d.companyId}, ${diaNegocio(d.fecha)}::date,
-                                    ${JURISDICTION}, ${TAX_CODE},
-                                    ${cliente!.taxpayer_type_code}, ${producto!.tax_category_code})`;
-      taxRuleId = regla!.tax_rule_id;
-      tasa = parseDecimal(regla!.rate);
-    } catch (e) {
-      const conocido = traducir(e);
-      if (conocido) return err(conocido);
-      throw e;
+    // El recibo de devolución, como el recibo, no repercute impuesto: no se
+    // busca regla (sin reglas cargadas sería un 409 que no le toca).
+    if (d.kind !== "receipt_return") {
+      try {
+        const [regla] = await sql<{ tax_rule_id: string; rate: string }[]>`
+          select tax_rule_id, rate::text as rate
+            from platform.resolve_tax(${d.companyId}, ${diaNegocio(d.fecha)}::date,
+                                      ${JURISDICTION}, ${TAX_CODE},
+                                      ${cliente!.taxpayer_type_code}, ${producto!.tax_category_code})`;
+        taxRuleId = regla!.tax_rule_id;
+        tasa = parseDecimal(regla!.rate);
+      } catch (e) {
+        const conocido = traducir(e);
+        if (conocido) return err(conocido);
+        throw e;
+      }
     }
     if (!tasa.ok) return err({ code: "VALIDATION_FAILED", message: tasa.error.message });
     const calc = calculateLine({
@@ -2922,7 +3241,10 @@ async function createInvoiceLike(
       taxRuleId,
       costSnapshot: null,
       taxCategory: producto!.tax_category_code,
-      operationType: cliente!.taxpayer_type_code === "no_domiciliado" ? null : "interna",
+      operationType:
+        d.kind === "receipt_return" || cliente!.taxpayer_type_code === "no_domiciliado"
+          ? null
+          : "interna",
       // Una NOTA no mueve mercancia (ADR-0051: la NC directa corrige precio,
       // no devuelve): este camino nunca genera kardex, ni antes ni ahora.
       esInventariable: false,
@@ -2932,7 +3254,7 @@ async function createInvoiceLike(
   const creado = await insertarDocumento(sql, ctx, {
     companyId: d.companyId,
     kind: d.kind,
-    series: "A",
+    series: d.kind === "receipt_return" ? "D" : "A",
     customerId: d.customerId,
     vendorId: null,
     branchId: null,
@@ -2946,12 +3268,13 @@ async function createInvoiceLike(
   });
   if (!creado.ok) return creado;
 
+  const serie = d.kind === "receipt_return" ? "D" : "A";
   const [num] = await sql<{ n: string }[]>`
-    select platform.claim_document_number(${d.companyId}, ${d.kind}, 'A')::text as n`;
+    select platform.claim_document_number(${d.companyId}, ${d.kind}, ${serie})::text as n`;
   let control: string | null = null;
   if (ctx.numberingMode === "range") {
     const [c] = await sql<{ n: string }[]>`
-      select platform.claim_control_number(${d.companyId}, ${d.kind}, 'A')::text as n`;
+      select platform.claim_control_number(${d.companyId}, ${d.kind}, ${serie})::text as n`;
     control = c!.n;
   }
   const [emitida] = await sql<DocumentResponse[]>`

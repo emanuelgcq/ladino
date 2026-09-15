@@ -121,6 +121,8 @@ export {
   CloseContingencyRequest,
   FiscalSetupResponse,
   SalesMode,
+  RefundCustomerCreditRequest,
+  CustomerRefundResponse,
   AssignFiscalRegimeRequest,
   AcceptIvaGeneralRequest,
   AcceptIvaGeneralResponse,

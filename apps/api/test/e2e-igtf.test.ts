@@ -16,9 +16,9 @@ import { diaCaracas } from "./_dia-caracas.js";
  *      venta» de «percibe por pago»;
  *   4. la percepción tiene su asiento POSTEADO y cuadrado (Dr caja divisas /
  *      Cr IGTF por enterar), y NO es ingreso;
- *   5. **anular después de percibir** deja la percepción en
- *      `pendiente_reintegro` con motivo — nunca se resta sola — y el total a
- *      enterar deja de contarla;
+ *   5. **una factura cobrada no se anula** (ADR-0061): 409 que lleva a la
+ *      devolución, y lo percibido no se toca; sin cobros, anular repone la
+ *      existencia y su valor exactos;
  *   6. el aviso `/v1/pos/igtf` da la MISMA cifra que luego cobra el servidor:
  *      un preview que difiere del cargo real es peor que no tenerlo;
  *   7. dejar de ser `especial` APAGA la percepción en el mismo acto.
@@ -657,12 +657,15 @@ describe("LA CAJA (ADR-0059): IGTF dentro de lo recibido, vuelto y formas mezcla
 });
 
 describe("IGTF — los bordes", () => {
-  it("anular DESPUÉS de percibir deja la percepción pendiente de reintegro, no la borra", async () => {
-    // El total a enterar ANTES: lo que ya había percibido el bloque anterior.
-    const previo = (await (
-      await pedir("GET", `/v1/igtf/perceptions?from=${HOY}&to=${HOY}`)
-    ).json()) as { items: unknown[]; total_functional: string };
-
+  /*
+   * REEMPLAZO AUTORIZADO (dueño, 2026-09-15 · ADR-0061). Aquí vivía «anular
+   * DESPUÉS de percibir deja la percepción pendiente de reintegro», que anulaba
+   * una factura CON un cobro y esperaba 200. Esa aserción era incorrecta: anular
+   * una venta ya cobrada sin tratar el dinero es justo lo que no debe permitirse
+   * —el cobro es un hecho de caja que ocurrió, y anular fingía que el dinero
+   * nunca entró—. No se ajustó: se reemplazó por los dos tests de abajo.
+   */
+  it("(a) anular una factura CON cobro aplicado → 409, y el mensaje lleva a la devolución; lo percibido no se toca", async () => {
     const doc = await facturar("2");
     const cobro = await pedir("POST", "/v1/payments", {
       company_id: COMPANY,
@@ -679,22 +682,46 @@ describe("IGTF — los bordes", () => {
       company_id: COMPANY,
       reason: "Error de facturación en la prueba E2E",
     });
+    expect(anular.status).toBe(409);
+    const cuerpo = (await anular.json()) as { code: string; message: string };
+    expect(cuerpo.code).toBe("DOCUMENT_HAS_PAYMENTS");
+    expect(cuerpo.message).toContain("registra una devolución");
+
+    const [estado] = await sql<{ status: string }[]>`
+      select status from public.documents where id = ${doc["id"]!}`;
+    expect(estado!.status).toBe("issued");
+    const [fila] = await sql<{ status: string }[]>`
+      select status from public.igtf_perceptions where id = ${percibido.igtf!.id}`;
+    expect(fila!.status).toBe("percibido");
+  });
+
+  it("(b) anular una factura SIN cobros → 200, y la existencia y su VALOR vuelven exactamente a los de antes de la venta", async () => {
+    const posicion = async (): Promise<{ q: string; v: string }> => {
+      const [p] = await sql<{ q: string; v: string }[]>`
+        select coalesce(sum(quantity), 0)::text as q, coalesce(sum(value), 0)::text as v
+          from public.stock_balances
+         where company_id = ${COMPANY} and warehouse_id = ${W1} and product_id = ${PRODUCTO}`;
+      return p!;
+    };
+    const antes = await posicion();
+    const doc = await facturar("3");
+    const vendida = await posicion();
+    // La venta sí sacó mercancía: si no, el test no probaría la reposición.
+    const [bajo] = await sql<{ ok: boolean }[]>`
+      select ${vendida.q}::numeric = ${antes.q}::numeric - 3
+             and ${vendida.v}::numeric < ${antes.v}::numeric as ok`;
+    expect(bajo!.ok).toBe(true);
+
+    const anular = await pedir("POST", `/v1/invoices/${doc["id"]}/annul`, {
+      company_id: COMPANY,
+      reason: "Factura emitida por error, sin cobrar",
+    });
     expect(anular.status).toBe(200);
+    expect(await posicion()).toEqual(antes);
 
-    // La fila SIGUE existiendo: el dinero del cliente ya entró y devolverlo es
-    // un acto aparte. Cambia de estado, con motivo.
-    const [fila] = await sql<{ status: string; status_reason: string }[]>`
-      select status, status_reason from public.igtf_perceptions
-       where id = ${percibido.igtf!.id}`;
-    expect(fila!.status).toBe("pendiente_reintegro");
-    expect(fila!.status_reason).toContain("Error de facturación");
-
-    // Y el total a enterar VUELVE al de antes: la percepción anulada se
-    // lista, pero no se entera como si se debiera.
-    const r = await pedir("GET", `/v1/igtf/perceptions?from=${HOY}&to=${HOY}`);
-    const cuerpo = (await r.json()) as { items: unknown[]; total_functional: string };
-    expect(cuerpo.items.length).toBe(previo.items.length + 1);
-    expect(cuerpo.total_functional).toBe(previo.total_functional);
+    const [neto] = await sql<{ n: number }[]>`
+      select count(*)::int as n from platform.annulled_stock_gaps(${COMPANY})`;
+    expect(neto!.n).toBe(0);
   });
 
   it("un instrumento que se apaga deja de percibir en el cobro siguiente", async () => {

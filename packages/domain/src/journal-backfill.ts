@@ -51,6 +51,8 @@ const TABLA_DE: Record<string, string> = {
   landed_cost_variance: "landed_costs",
   expense: "expenses",
   cash_closing: "cash_closings",
+  sales_receipt_return: "documents",
+  customer_refund: "customer_refunds",
 };
 
 interface FilaCola {

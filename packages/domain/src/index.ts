@@ -51,6 +51,7 @@ export {
   createInvoice,
   createReceipt,
   annulInvoice,
+  refundCustomerCredit,
   registerPayment,
   createReturn,
   confirmReturn,

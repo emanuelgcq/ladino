@@ -406,6 +406,23 @@ export async function receiveStock(
     input.warehouse_id,
   ]);
   if (!ctx.ok) return ctx;
+  return ingresar(uow, actor.userId, ctx.value, input);
+}
+
+/**
+ * La entrada al kardex, YA autorizada. `receiveStock` la usa tras pedir
+ * `inventory.move`; la reposición de una venta anulada la usa con el permiso de
+ * ANULAR, que es el que autoriza ese hecho (ADR-0061 §2).
+ */
+async function ingresar(
+  uow: UnitOfWork,
+  userId: string,
+  ctxValue: Contexto,
+  input: ReceiveStockInput,
+): Promise<Result<InventoryMoveResponse, InventoryError>> {
+  const { sql } = uow;
+  const ctx = { ok: true as const, value: ctxValue };
+  const actor = { userId };
 
   // OJO: el default NO es el reloj del cliente. `created_at` lo fija el trigger con
   // now(), que es la hora de INICIO DE TRANSACCIÓN, así que cualquier instante
@@ -696,6 +713,78 @@ async function repartirPorLotes(
     }
   }
   return ok(resultado);
+}
+
+/**
+ * REPONE EXACTAMENTE LO QUE UN DOCUMENTO SACÓ (ADR-0061 §2). Por cada salida con
+ * `source_document_id` = el documento, una entrada en el MISMO depósito y lote,
+ * por la misma cantidad y el MISMO valor funcional —no el promedio de hoy ni el
+ * `cost_snapshot` de la línea—. Así el kardex del documento netea a cero en
+ * cantidad y en valor (`annulled_stock_gaps`).
+ *
+ * No asienta: quien anula decide el hecho contable, porque depende de si el
+ * costo de ventas llegó a asentarse. Devuelve el valor total repuesto.
+ */
+export async function reponerSalidasDeDocumento(
+  uow: UnitOfWork,
+  companyId: string,
+  documentId: string,
+): Promise<Result<{ repuesto: string; movimientos: number }, InventoryError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "Reponer existencias exige un usuario real.",
+    });
+  }
+  const [cfg] = await sql<{ tenant_id: string; moneda: string; negativo: boolean }[]>`
+    select c.tenant_id, c.functional_currency_code as moneda,
+           coalesce(s.allow_negative_stock, false) as negativo
+      from public.companies c
+      left join public.inventory_settings s on s.company_id = c.id
+     where c.id = ${companyId}`;
+  if (!cfg) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  const ctx: Contexto = {
+    tenantId: cfg.tenant_id,
+    functionalCurrency: cfg.moneda,
+    allowNegative: cfg.negativo,
+  };
+
+  const salidas = await sql<
+    {
+      warehouse_id: string;
+      product_id: string;
+      lot_id: string | null;
+      quantity: string;
+      valor: string;
+    }[]
+  >`select warehouse_id, product_id, lot_id, (-quantity)::text as quantity,
+           (-functional_amount)::text as valor
+      from public.inventory_moves
+     where company_id = ${companyId} and source_document_id = ${documentId} and kind = 'salida'
+     order by created_at, id`;
+
+  let total = parseDecimal("0");
+  if (!total.ok) return err({ code: "VALIDATION_FAILED", message: total.error.message });
+  for (const m of salidas) {
+    const r = await ingresar(uow, actor.userId, ctx, {
+      company_id: companyId,
+      warehouse_id: m.warehouse_id,
+      product_id: m.product_id,
+      ...(m.lot_id === null ? {} : { lot_id: m.lot_id }),
+      quantity: m.quantity,
+      amount: m.valor,
+      currency: ctx.functionalCurrency,
+      note: "Reposición por anulación de la venta",
+      sourceDocumentId: documentId,
+      accounting: "document",
+    });
+    if (!r.ok) return r;
+    const v = parseDecimal(m.valor);
+    if (!v.ok) return err({ code: "VALIDATION_FAILED", message: v.error.message });
+    total = { ok: true, value: total.value.plus(v.value) };
+  }
+  return ok({ repuesto: total.value.toFixed(8), movimientos: salidas.length });
 }
 
 export async function issueStockBatch(
