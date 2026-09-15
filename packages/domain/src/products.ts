@@ -596,7 +596,14 @@ async function ponerPrecioEnLista(
       return ok(puestoDirecto.value);
     }
   }
-  const nombre = precio.currency === funcional ? base : `${base} ${precio.currency}`;
+  // El nombre base («detal»/«mayor») es de la moneda en que la lista NACIÓ: en
+  // una empresa vieja, la funcional; en una nueva, USD (createCompany). Si el
+  // precio viene en otra moneda, va a la variante «detal VES» / «detal USD».
+  const [base_] = await sql<{ currency_code: string }[]>`
+    select currency_code from public.price_lists
+     where company_id = ${companyId} and name = ${base} and status = 'active'`;
+  const monedaBase = base_?.currency_code ?? funcional;
+  const nombre = precio.currency === monedaBase ? base : `${base} ${precio.currency}`;
   const [lista] = await sql<{ id: string; currency_code: string }[]>`
     select id, currency_code from public.price_lists
      where company_id = ${companyId} and name = ${nombre} and status = 'active'`;

@@ -20,14 +20,13 @@ import { diaCaracas } from "./_dia-caracas.js";
  *   A6 · la API no sirve «copia fiscal» de un recibo;
  *   A7 · IGTF, contribuyente especial y talonarios responden 409 con la salida escrita.
  *
- * BUG VIVO FUERA DE LOS PLANES (hallado por este E2E, 2026-09-14, confirmado en
- * producción en «Pollos y víveres paola»): el alta simple con precio en USD
- * guarda el precio en la lista «detal USD», pero una empresa nueva nace con
- * «detal» y «mayor» en su moneda funcional (create-company.ts) y la caja elige
- * «detal» — donde ese producto NO tiene precio. Sin fijar la lista
- * predeterminada, el negocio no puede vender lo que acaba de cargar. Queda como
- * `it.fails` hasta la decisión del dueño (choca con ADR-0046 / R1); el resto del
- * recorrido fija la predeterminada como lo haría el dueño desde Ajustes.
+ * BUG DE PRODUCCIÓN hallado por este E2E (2026-09-14, «Pollos y víveres paola»):
+ * el alta simple con precio en USD guardaba el precio en «detal USD», pero una
+ * empresa nueva nacía con «detal» y «mayor» en su moneda funcional y sin
+ * predeterminada, y la caja elegía «detal» — donde ese producto NO tenía precio.
+ * Fue `it.fails` hasta el arreglo (2026-09-15): las listas nacen en USD y «detal»
+ * es la predeterminada. La aserción no cambió; solo pasó de `it.fails` a `it`.
+ * El paso siguiente (fijar la predeterminada) queda como lo haría el dueño.
  */
 const URL_LOCAL = "postgres://postgres:postgres@127.0.0.1:54322/postgres";
 const URL_API = "postgres://ladino_api:ladino_api@127.0.0.1:54322/postgres";
@@ -137,16 +136,13 @@ describe("negocio sin RIF, de punta a punta", () => {
     PRODUCTO = ((await r.json()) as { product: { id: string } }).product.id;
   });
 
-  it.fails(
-    "BUG VIVO · lo cargado por el alta simple en USD se vende sin tocar Ajustes",
-    async () => {
-      const r = await pedir("POST", "/v1/pos/quote", {
-        company_id: COMPANY,
-        lines: [{ product_id: PRODUCTO, quantity: "1" }],
-      });
-      expect(r.status).toBe(200);
-    },
-  );
+  it("CERRADO 2026-09-15 · lo cargado por el alta simple en USD se vende sin tocar Ajustes", async () => {
+    const r = await pedir("POST", "/v1/pos/quote", {
+      company_id: COMPANY,
+      lines: [{ product_id: PRODUCTO, quantity: "1" }],
+    });
+    expect(r.status).toBe(200);
+  });
 
   it("el dueño fija como predeterminada la lista donde quedó el precio", async () => {
     const [lista] = await sql<{ id: string }[]>`

@@ -202,14 +202,32 @@ export async function createCompany(
   // mercado venezolano da por supuestas: detal y mayor. Se siembran aquí y no
   // en la migración porque son de la empresa, no del esquema, y porque una
   // empresa sin ninguna lista no puede vender: el alta dejaría un agujero que
-  // la primera venta descubre. Ambas en la moneda funcional; que sean dos y no
-  // una es lo que hace que `sales.price_list.override` signifique algo.
-  await sql`
+  // la primera venta descubre. Que sean dos y no una es lo que hace que
+  // `sales.price_list.override` signifique algo.
+  //
+  // AMBAS EN USD, y «detal» queda como la PREDETERMINADA de la caja, en la
+  // misma transacción (bug de producción 2026-09-15, «Pollos y víveres
+  // paola»). El precio se ancla en USD y la pantalla lo enseña dual
+  // (ADR-0046/0047). Antes nacían en la moneda funcional y sin predeterminada:
+  // el alta simple, con su precio en USD, no cabía en «detal» VES y lo escribía
+  // en «detal USD»; la caja resolvía «detal» por nombre —la VES, vacía— y la
+  // primera venta respondía «el producto no tiene precio». El alta escribía en
+  // una lista y la caja leía en otra.
+  const listas = await sql<{ id: string; name: string }[]>`
     insert into public.price_lists (tenant_id, company_id, name, currency_code)
-    select ${fila.tenant_id}, ${fila.id}, l.nombre, c.functional_currency_code
-      from public.companies c, (values ('detal'), ('mayor')) as l(nombre)
-     where c.id = ${fila.id}
-    on conflict (company_id, name) do nothing`;
+    select ${fila.tenant_id}, ${fila.id}, l.nombre, 'USD'
+      from (values ('detal'), ('mayor')) as l(nombre)
+    on conflict (company_id, name) do nothing
+    returning id, name`;
+  const detal = listas.find((l) => l.name === "detal");
+  if (detal !== undefined) {
+    await sql`
+      insert into public.company_settings (company_id, tenant_id, default_price_list_id)
+      values (${fila.id}, ${fila.tenant_id}, ${detal.id})
+      on conflict (company_id) do update set
+        default_price_list_id = coalesce(public.company_settings.default_price_list_id,
+                                         excluded.default_price_list_id)`;
+  }
 
   // Y el cliente de sistema de la venta de mostrador (migración 32): toda
   // empresa nace con su «Consumidor final», congelado por trigger. Sin él, la
