@@ -169,6 +169,8 @@ Por eso esta categoría de test se escribe aparte y a propósito. Los que ya exi
 | Documento posteado ⇒ asiento **o** cola | `accounting_coverage_gaps()` | ventas y compras ↔ contabilidad |
 | Toda tabla con `tenant_id` lleva su ancla | test 006 sobre el catálogo | esquema entero |
 | Σ débitos = Σ créditos | `trial_balance()` | contabilidad entera |
+| Valor del kardex = saldo del mayor de inventario | `inventory_ledger_gap()` | inventario ↔ contabilidad (ADR-0060) |
+| Movimiento de valor ⇒ asiento **o** cola | `inventory_coverage_gaps()` | inventario ↔ contabilidad |
 
 **Al cerrar un módulo, la pregunta no es «¿pasan sus tests?» sino «¿qué invariante cruza este
 módulo con los anteriores, y quién lo mira?».** Si la respuesta es «nadie», ese es el trabajo que

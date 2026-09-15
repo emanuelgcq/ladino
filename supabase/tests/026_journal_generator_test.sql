@@ -134,7 +134,11 @@ select is(
                                'ar.credit_applied',
                                -- Declaraciones e IGTF (migración 46):
                                'ar.retention_applied',
-                               'igtf.perception_recorded')),
+                               'igtf.perception_recorded',
+                               -- Inventario en el mayor (migración 58, ADR-0060): los
+                               -- eventos de inventario del catálogo, que EVENT_CATALOG.md
+                               -- reserva «para el COGS»; el origen va en source_kind.
+                               'stock.shipped', 'stock.received')),
   0::bigint,
   'los eventos del preset son los del OUTBOX, con su nombre real: no se inventa un vocabulario paralelo');
 

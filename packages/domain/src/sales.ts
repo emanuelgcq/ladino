@@ -1570,6 +1570,38 @@ async function emitirVenta(
             : { code: "VALIDATION_FAILED", message: mov.error.message },
         );
       }
+
+      /**
+       * EL COSTO DE LO VENDIDO (ADR-0060 §1). Es EXACTAMENTE lo que el kardex
+       * registró al sacar la mercancía —la suma de las salidas de este
+       * documento, lote por lote—, no un costo recalculado. Un hecho propio,
+       * aparte del asiento de la venta: el importador lo lleva a las empresas
+       * existentes y la cobertura de movimientos lo exige por separado.
+       */
+      let costo = parseDecimal("0");
+      for (const m of mov.value) {
+        const v = parseDecimal(m.functional_amount);
+        if (!costo.ok || !v.ok) break;
+        costo = { ok: true, value: costo.value.minus(v.value) };
+      }
+      if (!costo.ok) return err({ code: "VALIDATION_FAILED", message: costo.error.message });
+      if (costo.value.greaterThan(0)) {
+        const costoVentas = await generateJournalFromDocument(sql, {
+          tenantId: ctx.value.tenantId,
+          companyId: input.company_id,
+          sourceKind: "sales_cost",
+          sourceEvent: "stock.shipped",
+          sourceId: doc.value.id,
+          postingDate: diaNegocio(fecha),
+          postedBy: actor.userId,
+          description: `Costo de lo vendido — ${kind === "receipt" ? "Recibo" : "Factura"} ${doc.value.series}-${doc.value.document_number ?? ""}`,
+          functionalCurrency: ctx.value.functionalCurrency,
+          amounts: { cost_amount: costo.value.toFixed(8) },
+        });
+        if (!costoVentas.ok) {
+          return err({ code: "VALIDATION_FAILED", message: costoVentas.error.message });
+        }
+      }
     }
 
     await auditar(
@@ -2666,6 +2698,8 @@ export async function confirmReturn(
 
   // 1. Reingreso al COSTO ORIGINAL. `receiveStock` recibe el costo TOTAL, así
   //    que se multiplica cantidad × costo unitario original — nunca el vigente.
+  //    El asiento va UNA vez por devolución, con la suma (ADR-0060 §2).
+  let reingresado = parseDecimal("0");
   for (const l of lineas) {
     const [p] = await sql<{ kind: string; is_composed: boolean }[]>`
       select kind, is_composed from public.products where id = ${l.product_id}`;
@@ -2684,8 +2718,31 @@ export async function confirmReturn(
       amount: total.toFixed(8),
       currency: ctx.value.functionalCurrency,
       sourceDocumentId: returnId,
+      accounting: "document",
     });
     if (!mov.ok) return err({ code: "VALIDATION_FAILED", message: mov.error.message });
+    const v = parseDecimal(mov.value.functional_amount);
+    if (reingresado.ok && v.ok) reingresado = { ok: true, value: reingresado.value.plus(v.value) };
+  }
+  if (!reingresado.ok) {
+    return err({ code: "VALIDATION_FAILED", message: reingresado.error.message });
+  }
+  if (!reingresado.value.isZero()) {
+    const contableReingreso = await generateJournalFromDocument(sql, {
+      tenantId: ctx.value.tenantId,
+      companyId,
+      sourceKind: "sales_return",
+      sourceEvent: "stock.received",
+      sourceId: returnId,
+      postingDate: diaNegocio(new Date().toISOString()),
+      postedBy: actor.userId,
+      description: "Devolución de venta: la mercancía vuelve al inventario",
+      functionalCurrency: ctx.value.functionalCurrency,
+      amounts: { functional_amount: reingresado.value.toFixed(8) },
+    });
+    if (!contableReingreso.ok) {
+      return err({ code: "VALIDATION_FAILED", message: contableReingreso.error.message });
+    }
   }
 
   // 2. La nota de crédito, emitida como cualquier documento fiscal — y por eso

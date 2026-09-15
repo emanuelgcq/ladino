@@ -76,6 +76,10 @@ function importesDe(ctx: Record<string, unknown>): AmountContext {
     "landed_to_variance",
     "exchange_difference",
     "functional_amount",
+    // ADR-0060 §2: la revalorización de la factura de proveedor. Sin estas dos
+    // claves, un hecho encolado perdería sus importes al reprocesarse.
+    "revaluation_to_inventory",
+    "revaluation_to_variance",
   ] as const;
   const salida: AmountContext = {};
   for (const k of claves) {

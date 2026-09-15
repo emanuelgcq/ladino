@@ -56,10 +56,14 @@ inventario» (`docs/06_QA/ACCOUNTING_INVARIANTS_TESTS.md:10`), y no existe.
 ### 1. El costo de ventas es un hecho propio, no una línea de la plantilla de la venta
 
 - Cada documento que descarga existencia (factura, recibo) genera, **en la misma transacción**,
-  el hecho `inventory.cost_of_sales`: Débito `cogs_general`, Crédito `inventory_general`.
+  el hecho `sales_cost` / `stock.shipped`: Débito `cogs_general`, Crédito `inventory_general`.
+  El evento es el REAL del outbox —EVENT_CATALOG.md reserva `stock.*` «para el COGS»— y el
+  origen va en `source_kind`, que es esa dimensión (pgTAP 026 lo exige: nada de vocabulario
+  paralelo de eventos).
 - El importe es **exactamente** −Σ`functional_amount` de los movimientos con ese
   `source_document_id`. No se recalcula nada.
-- `cost_snapshot` de la línea pasa a ser ese mismo costo, por línea.
+- `cost_snapshot` de la línea no se reescribe (la línea emitida no se edita); el costo contable
+  es el de los movimientos.
 - **Por qué hecho aparte:**
   - El importador salta los hechos que ya tienen plantilla (`accounting.ts:984-990`). Una línea
     nueva en la plantilla de venta **nunca llegaría** a las empresas existentes; un hecho nuevo
@@ -75,7 +79,22 @@ inventario» (`docs/06_QA/ACCOUNTING_INVARIANTS_TESTS.md:10`), y no existe.
 | Recepción de compra | `inventory_general` | `goods_received_not_invoiced` (propósito nuevo, cuenta puente) |
 | Factura de proveedor con mercancía recibida | `goods_received_not_invoiced` (por lo recibido) + diferencia de precio | `suppliers` |
 | Devolución de venta confirmada | `inventory_general` | `cogs_general` |
-| Consumo de receta / transferencia entre depósitos | sin asiento si la cuenta es la misma | — |
+| Consumo de receta | `cogs_general` | `inventory_general` |
+| Salida directa (consumo interno) | `inventory_adjustment` | `inventory_general` |
+| Transferencia entre depósitos | sin asiento: no cambia el valor de la empresa | — |
+
+**Orígenes y eventos (implementado, migración 58).** Cuatro `source_kind` nuevos en sus tres
+casas, con los eventos reales del catálogo:
+
+| Hecho | `source_kind` | evento | `source_id` |
+|---|---|---|---|
+| Costo de lo vendido (venta) | `sales_cost` | `stock.shipped` | el documento |
+| Consumo de receta | `sales_cost` | `stock.shipped` | el movimiento |
+| Salida directa | `inventory_move` | `stock.shipped` | el movimiento |
+| Existencia inicial / entrada directa | `stock_opening` | `stock.received` | el movimiento |
+| Recepción de compra | `goods_receipt` | `stock.received` | la recepción |
+| Devolución de venta | `sales_return` | `stock.received` | la devolución |
+| Factura distinta de lo recibido | `purchase_revaluation` | `ap.invoice_posted` | la factura |
 
 - **Diferencia entre lo facturado y lo recibido.** Si la factura del proveedor valora distinto
   (precio, o IVA al costo del formal), la diferencia entra al kardex como `revaluacion` (tipo que
@@ -131,12 +150,19 @@ más: **es el cierre de un agujero de diseño**, el observador que no depende de
 `platform.inventory_ledger_gap(company)` =
 
 > valor del kardex − saldo del mayor en cuentas de propósito `inventory_general`
-> − importes de hechos de inventario en la cola `pending`
 
-- Tiene que dar **0**, sin lista de perdones.
-- Un hecho encolado no es excepción: está dentro del enunciado.
-- Se prueba en pgTAP (con su variante rota) y se agrega a la tabla de CLAUDE.md §3.
-- `accounting_coverage_gaps()` se extiende a movimientos de inventario y a cobros.
+- `diferencia` tiene que dar **0**, sin lista de perdones.
+- **Estricto (precisión del dueño, 2026-09-15):** un hecho encolado lo pone en ROJO, y es verdad
+  —mientras está en cola el mayor no sabe de esa mercancía—. La columna `en_cola` dice cuánto de
+  la diferencia es pendiente. El borrador restaba la cola; la variante rota que pidió el dueño
+  («quita la plantilla de costo de ventas → rojo») exige la forma estricta.
+- La cobertura va en su PROPIA función, `platform.inventory_coverage_gaps(company)`: todo
+  movimiento que cambia el valor (entrada, salida, ajuste, revaluación) posterior al corte tiene
+  asiento o cola. No se mezcla en `accounting_coverage_gaps()`, que sigue preguntando por
+  documentos: extenderla habría puesto en rojo los fixtures que siembran existencia por SQL en
+  los E2E contables, y su pregunta es otra.
+- Se prueba en pgTAP 058 y en `e2e-inventario-en-el-mayor`, con sus variantes rotas, y se agrega a
+  la tabla de CLAUDE.md §3.
 
 ### 6. El histórico: corte con asiento de regularización, no reproceso
 

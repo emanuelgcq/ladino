@@ -29,7 +29,7 @@ import type {
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
-import { receiveStock, revalueStock } from "./inventory.js";
+import { receiveStock, revalueStock, revalorizar } from "./inventory.js";
 import { resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 
@@ -557,7 +557,9 @@ export async function receiveGoods(
   }
 
   // El kardex, en la MISMA transacción y al costo funcional de la recepción.
-  // `receiveStock` recibe el importe TOTAL, no el unitario.
+  // `receiveStock` recibe el importe TOTAL, no el unitario. El asiento va UNA
+  // vez por recepción, con la suma (ADR-0060 §2).
+  let recibido = parseDecimal("0");
   for (const l of input.lines) {
     const [p] = await sql<{ kind: string; is_composed: boolean }[]>`
       select kind, is_composed from public.products where id = ${l.product_id}`;
@@ -579,8 +581,32 @@ export async function receiveGoods(
       ...(l.lot_code !== undefined ? { lot_code: l.lot_code } : {}),
       ...(l.lot_expires_at !== undefined ? { lot_expires_at: l.lot_expires_at } : {}),
       sourceDocumentId: recepcion.id,
+      accounting: "document",
     });
     if (!mov.ok) return err({ code: "VALIDATION_FAILED", message: mov.error.message });
+    const v = parseDecimal(mov.value.functional_amount);
+    if (recibido.ok && v.ok) recibido = { ok: true, value: recibido.value.plus(v.value) };
+  }
+  if (!recibido.ok) return err({ code: "VALIDATION_FAILED", message: recibido.error.message });
+  if (!recibido.value.isZero()) {
+    // Inventario contra «mercancía recibida por facturar»: la factura del
+    // proveedor, cuando llegue, debita ese puente.
+    const contableRecepcion = await generateJournalFromDocument(sql, {
+      tenantId: ctx.value.tenantId,
+      companyId: input.company_id,
+      sourceKind: "goods_receipt",
+      sourceEvent: "stock.received",
+      sourceId: recepcion.id,
+      postingDate: diaNegocio(input.received_at ?? new Date().toISOString()),
+      postedBy: actor.userId,
+      description: `Recepción de compra ${recepcion.receipt_number ?? ""}`,
+      functionalCurrency: ctx.value.functionalCurrency,
+      amounts: { functional_amount: recibido.value.toFixed(8) },
+      backlink: { table: "goods_receipts", id: recepcion.id },
+    });
+    if (!contableRecepcion.ok) {
+      return err({ code: "VALIDATION_FAILED", message: contableRecepcion.error.message });
+    }
   }
 
   await auditar(
@@ -912,6 +938,26 @@ export async function registerSupplierInvoice(
     },
   );
 
+  /**
+   * LOS IMPORTES DEL ASIENTO, EN MONEDA FUNCIONAL (hallado al probar ADR-0060,
+   * 2026-09-15). El asiento recibía subtotal, IVA y total en la moneda de la
+   * FACTURA con `functionalCurrency` VES: una factura de 23,20 USD acreditaba
+   * cuentas por pagar con 23,20 «Bs» en vez de 928, y el pago en dólares la
+   * debitaba después por 928. Se convierten con la tasa de la factura, y el
+   * total funcional es la SUMA de las dos partes convertidas: redondeadas por
+   * separado podrían diferir del total redondeado y descuadrar el asiento.
+   */
+  const aFunc = (v: string): Result<Decimal, PurchaseError> => {
+    const d = parseDecimal(v);
+    if (!d.ok) return err({ code: "VALIDATION_FAILED", message: d.error.message });
+    return ok(d.value.times(tasa.value.rate).toDecimalPlaces(8, 4));
+  };
+  const subtotalFunc = aFunc(detalle.value.subtotal_amount);
+  if (!subtotalFunc.ok) return subtotalFunc;
+  const impuestoFunc = aFunc(detalle.value.tax_amount);
+  if (!impuestoFunc.ok) return impuestoFunc;
+  const totalFunc = subtotalFunc.value.plus(impuestoFunc.value);
+
   // El asiento de la compra. `taxRecoverable` es la bandera que decide si el
   // IVA va a crédito fiscal o al costo (ADR-0040 §7): la plantilla tiene las
   // dos ramas y este booleano elige, sin que nadie escriba una cuenta aquí.
@@ -926,9 +972,9 @@ export async function registerSupplierInvoice(
     description: `Factura de compra ${input.supplier_document_number}`,
     functionalCurrency: ctx.value.functionalCurrency,
     amounts: {
-      subtotal: detalle.value.subtotal_amount,
-      tax_amount: detalle.value.tax_amount,
-      total: detalle.value.total_amount,
+      subtotal: subtotalFunc.value.toFixed(8),
+      tax_amount: impuestoFunc.value.toFixed(8),
+      total: totalFunc.toFixed(8),
     },
     conditions: {
       taxRecoverable: ivaRecuperable,
@@ -939,7 +985,144 @@ export async function registerSupplierInvoice(
   if (!contable.ok) {
     return err({ code: "VALIDATION_FAILED", message: contable.error.message });
   }
+
+  const revalorizada = await revalorizarContraRecepcion(uow, {
+    tenantId: ctx.value.tenantId,
+    companyId: input.company_id,
+    functionalCurrency: ctx.value.functionalCurrency,
+    facturaId,
+    tasa: tasa.value.rate,
+    ivaRecuperable,
+    fecha: input.invoice_date,
+    documento: input.supplier_document_number,
+  });
+  if (!revalorizada.ok) return revalorizada;
   return detalle;
+}
+
+/**
+ * LA FACTURA DISTINTA DE LO RECIBIDO (ADR-0060 §2). La recepción metió la
+ * mercancía al kardex —y al mayor, contra «mercancía recibida por facturar»— a
+ * su valor; la factura debita ese puente por lo que de verdad cuesta. Si
+ * difieren (precio, tasa del día, IVA no recuperable), la diferencia de cada
+ * línea ligada a una recepción:
+ *   · revaloriza lo que QUEDA de esa mercancía en el kardex (valor sin cantidad);
+ *   · va a «variación de costo de compras» por lo que ya salió, porque una salida
+ *     emitida no se reescribe;
+ *   · y sale del puente por el total, en un hecho propio, para que kardex y mayor
+ *     se muevan juntos. Las líneas sin recepción no tocan el kardex.
+ *
+ * Lo que queda se estima como en el landed cost: la existencia actual de la
+ * posición, acotada por lo facturado (ADR-0034 descartó el costeo por capas).
+ */
+async function revalorizarContraRecepcion(
+  uow: UnitOfWork,
+  d: {
+    tenantId: string;
+    companyId: string;
+    functionalCurrency: string;
+    facturaId: string;
+    tasa: Decimal;
+    ivaRecuperable: boolean;
+    fecha: string;
+    documento: string;
+  },
+): Promise<Result<true, PurchaseError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") return ok(true);
+  const lineas = await sql<
+    {
+      quantity: string;
+      subtotal: string;
+      tax: string;
+      recibida: string;
+      valor_recibido: string;
+      product_id: string;
+      lot_id: string | null;
+      warehouse_id: string;
+      en_stock: string;
+    }[]
+  >`select il.quantity::text as quantity, il.line_subtotal_transaction::text as subtotal,
+           il.tax_amount::text as tax, rl.quantity::text as recibida,
+           rl.functional_amount::text as valor_recibido, rl.product_id, rl.lot_id,
+           gr.warehouse_id,
+           coalesce((select b.quantity from public.stock_balances b
+                      where b.company_id = ${d.companyId} and b.warehouse_id = gr.warehouse_id
+                        and b.product_id = rl.product_id
+                        and b.lot_id is not distinct from rl.lot_id), 0)::text as en_stock
+      from public.supplier_invoice_lines il
+      join public.goods_receipt_lines rl on rl.id = il.goods_receipt_line_id
+      join public.goods_receipts gr on gr.id = rl.goods_receipt_id
+     where il.supplier_invoice_id = ${d.facturaId} and il.company_id = ${d.companyId}
+     order by il.line_number`;
+  if (lineas.length === 0) return ok(true);
+
+  const cero = parseDecimal("0");
+  if (!cero.ok) return err({ code: "VALIDATION_FAILED", message: cero.error.message });
+  let aInventario = cero.value;
+  let aVariacion = cero.value;
+  for (const l of lineas) {
+    const q = parseDecimal(l.quantity);
+    const sub = parseDecimal(l.subtotal);
+    const tax = parseDecimal(l.tax);
+    const qr = parseDecimal(l.recibida);
+    const vr = parseDecimal(l.valor_recibido);
+    const st = parseDecimal(l.en_stock);
+    if (!q.ok || !sub.ok || !tax.ok || !qr.ok || !vr.ok || !st.ok || qr.value.isZero()) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "Datos de la recepción no interpretables.",
+      });
+    }
+    const costoTxn = d.ivaRecuperable ? sub.value : sub.value.plus(tax.value);
+    const costoFunc = costoTxn.times(d.tasa).toDecimalPlaces(8, 4);
+    const recibidoFacturado = vr.value.times(q.value).dividedBy(qr.value).toDecimalPlaces(8, 4);
+    const diferencia = costoFunc.minus(recibidoFacturado);
+    if (diferencia.isZero()) continue;
+    const queda = st.value.isNegative()
+      ? cero.value
+      : st.value.greaterThan(q.value)
+        ? q.value
+        : st.value;
+    const inv = diferencia.times(queda).dividedBy(q.value).toDecimalPlaces(8, 4);
+    const vari = diferencia.minus(inv);
+    if (!inv.isZero()) {
+      const mov = await revalorizar(sql, d.tenantId, {
+        company_id: d.companyId,
+        warehouse_id: l.warehouse_id,
+        product_id: l.product_id,
+        lot_id: l.lot_id,
+        amount: inv.toFixed(8),
+        currency: d.functionalCurrency,
+        reason: `Factura de proveedor ${d.documento} distinta de lo recibido`,
+        sourceDocumentId: d.facturaId,
+      });
+      if (!mov.ok) return err({ code: "VALIDATION_FAILED", message: mov.error.message });
+    }
+    aInventario = aInventario.plus(inv);
+    aVariacion = aVariacion.plus(vari);
+  }
+  const total = aInventario.plus(aVariacion);
+  if (total.isZero()) return ok(true);
+
+  const hecho = await generateJournalFromDocument(sql, {
+    tenantId: d.tenantId,
+    companyId: d.companyId,
+    sourceKind: "purchase_revaluation",
+    sourceEvent: "ap.invoice_posted",
+    sourceId: d.facturaId,
+    postingDate: d.fecha,
+    postedBy: actor.userId,
+    description: `Factura de compra ${d.documento}: diferencia con lo recibido`,
+    functionalCurrency: d.functionalCurrency,
+    amounts: {
+      revaluation_to_inventory: aInventario.toFixed(8),
+      revaluation_to_variance: aVariacion.toFixed(8),
+      functional_amount: total.toFixed(8),
+    },
+  });
+  if (!hecho.ok) return err({ code: "VALIDATION_FAILED", message: hecho.error.message });
+  return ok(true);
 }
 
 /**

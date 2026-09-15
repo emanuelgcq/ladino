@@ -126,6 +126,8 @@ export async function consumeRecipe(
       ...(input.occurred_at !== undefined ? { occurred_at: input.occurred_at } : {}),
       ...(input.reference !== undefined ? { reference: input.reference } : {}),
       sourceDocumentId: documento,
+      // Lo que consume una receta es costo de lo vendido (ADR-0060 §2).
+      accountingSource: "sales_cost",
     });
     // Sin savepoint a propósito: si un ingrediente no alcanza, la venta entera
     // no ocurrió. Media receta consumida es peor que ninguna — el plato no se

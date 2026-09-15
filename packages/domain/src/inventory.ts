@@ -496,6 +496,15 @@ export async function receiveStock(
   await auditarYPublicar(sql, fila, ctx.value.tenantId, "stock.received", {
     reference: fila.reference,
   });
+  if (input.accounting !== "document") {
+    const contable = await asentarMovimiento(sql, actor.userId, ctx.value, fila, {
+      sourceKind: "stock_opening",
+      evento: "stock.received",
+      descripcion: `Entrada de existencias${fila.reference ? `: ${fila.reference}` : ""}`,
+      amounts: { functional_amount: fila.functional_amount },
+    });
+    if (!contable.ok) return contable;
+  }
   return ok(fila);
 }
 
@@ -504,7 +513,49 @@ export async function receiveStock(
  * cliente, lo pone el caso de uso que agrupa varios movimientos en un hecho
  * (consumeRecipe hoy; la factura de venta mañana).
  */
-export type IssueStockInput = IssueStockRequest & { readonly sourceDocumentId?: string };
+export type IssueStockInput = IssueStockRequest & {
+  readonly sourceDocumentId?: string;
+  /** Por omisión, salida directa (consumo interno); la receta la declara costo de ventas. */
+  readonly accountingSource?: OrigenSalida;
+};
+
+/**
+ * EL ASIENTO DE UN MOVIMIENTO SUELTO (ADR-0060 §2), en la misma transacción. Un
+ * movimiento que cambia el valor del inventario sin asiento ni cola es un hueco
+ * de `inventory_coverage_gaps`; con plantilla, el mayor lo refleja al instante.
+ * El hecho se identifica por el MOVIMIENTO (source_id), así que cada uno es
+ * idempotente por sí mismo.
+ */
+async function asentarMovimiento(
+  sql: TransactionSql,
+  userId: string,
+  ctx: Contexto,
+  fila: InventoryMoveResponse,
+  hecho: {
+    readonly sourceKind: "stock_opening" | OrigenSalida;
+    readonly evento: "stock.received" | "stock.shipped";
+    readonly descripcion: string;
+    readonly amounts: { readonly functional_amount?: string; readonly cost_amount?: string };
+  },
+): Promise<Result<true, InventoryError>> {
+  // Un movimiento sin valor (costo cero) no mueve el mayor: no hay nada que asentar.
+  const valor = parseDecimal(fila.functional_amount);
+  if (valor.ok && valor.value.isZero()) return ok(true);
+  const generado = await generateJournalFromDocument(sql, {
+    tenantId: ctx.tenantId,
+    companyId: fila.company_id,
+    sourceKind: hecho.sourceKind,
+    sourceEvent: hecho.evento,
+    sourceId: fila.id,
+    postingDate: diaNegocio(fila.occurred_at),
+    postedBy: userId,
+    description: hecho.descripcion,
+    functionalCurrency: ctx.functionalCurrency,
+    amounts: hecho.amounts,
+  });
+  if (!generado.ok) return err({ code: "VALIDATION_FAILED", message: generado.error.message });
+  return ok(true);
+}
 
 /**
  * SALIDA DE VARIAS LÍNEAS EN UN SOLO VIAJE (2026-09-10).
@@ -803,7 +854,24 @@ export async function issueStockBatch(
   await auditarYPublicarLote(sql, movimientos, ctx.value.tenantId, "stock.shipped");
   return ok(movimientos);
 }
-export type ReceiveStockInput = ReceiveStockRequest & { readonly sourceDocumentId?: string };
+/**
+ * EL ASIENTO DE UNA ENTRADA (ADR-0060 §2). Toda entrada al kardex asienta su
+ * contrapartida en el mayor, con el evento REAL del outbox (`stock.received`) y
+ * el ORIGEN en `source_kind`:
+ *   · `stock_opening` (por omisión): existencia inicial y entrada directa, contra
+ *     «aportes en inventario». Se asienta aquí, por movimiento;
+ *   · `document`: la entrada es parte de un documento (recepción de compra,
+ *     devolución) y QUIEN LLAMA asienta una vez por documento, con la suma de
+ *     sus movimientos. Si no lo hiciera, `inventory_coverage_gaps` lo señala.
+ */
+export type AsientoEntrada = "stock_opening" | "document";
+/** El origen de una salida suelta: salida directa o consumo que es costo de ventas (receta). */
+export type OrigenSalida = "inventory_move" | "sales_cost";
+
+export type ReceiveStockInput = ReceiveStockRequest & {
+  readonly sourceDocumentId?: string;
+  readonly accounting?: AsientoEntrada;
+};
 export type AdjustStockInput = AdjustStockRequest & { readonly sourceDocumentId?: string };
 
 export async function issueStock(
@@ -890,6 +958,22 @@ export async function issueStock(
   await auditarYPublicar(sql, fila, ctx.value.tenantId, "stock.shipped", {
     reference: fila.reference,
   });
+  const origen = input.accountingSource ?? "inventory_move";
+  const costo = fila.functional_amount.replace("-", "");
+  const contable = await asentarMovimiento(sql, actor.userId, ctx.value, fila, {
+    sourceKind: origen,
+    evento: "stock.shipped",
+    descripcion:
+      origen === "sales_cost"
+        ? `Costo de lo consumido${fila.reference ? `: ${fila.reference}` : ""}`
+        : `Salida de existencias${fila.reference ? `: ${fila.reference}` : ""}`,
+    // La salida directa elige lado por el signo; el costo de ventas va en positivo.
+    amounts:
+      origen === "sales_cost"
+        ? { cost_amount: costo }
+        : { functional_amount: fila.functional_amount },
+  });
+  if (!contable.ok) return contable;
   return ok(fila);
 }
 
@@ -1171,19 +1255,21 @@ export async function transferStock(
  * ya calculaba `valor + importe` y `cantidad + 0` correctamente; lo que faltaba
  * era que el CHECK admitiera el caso.
  */
+export interface RevalueStockInput {
+  readonly company_id: string;
+  readonly warehouse_id: string;
+  readonly product_id: string;
+  readonly lot_id?: string | null;
+  /** Importe funcional a incorporar. Positivo sube el costo. */
+  readonly amount: string;
+  readonly currency: string;
+  readonly reason: string;
+  readonly sourceDocumentId?: string;
+}
+
 export async function revalueStock(
   uow: UnitOfWork,
-  input: {
-    readonly company_id: string;
-    readonly warehouse_id: string;
-    readonly product_id: string;
-    readonly lot_id?: string | null;
-    /** Importe funcional a incorporar. Positivo sube el costo. */
-    readonly amount: string;
-    readonly currency: string;
-    readonly reason: string;
-    readonly sourceDocumentId?: string;
-  },
+  input: RevalueStockInput,
 ): Promise<Result<InventoryMoveResponse, InventoryError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
@@ -1193,7 +1279,20 @@ export async function revalueStock(
     input.warehouse_id,
   ]);
   if (!ctx.ok) return ctx;
+  return revalorizar(sql, ctx.value.tenantId, input);
+}
 
+/**
+ * La revalorización SIN autorización propia: la usa un caso de uso que ya
+ * autorizó el hecho que la origina (la factura del proveedor, ADR-0060 §2). Pedir
+ * además `inventory.move` a quien registra facturas le impediría registrar una
+ * factura contra mercancía recibida — el permiso de la compra es el que manda.
+ */
+export async function revalorizar(
+  sql: TransactionSql,
+  tenantId: string,
+  input: RevalueStockInput,
+): Promise<Result<InventoryMoveResponse, InventoryError>> {
   const importe = Money.of(input.amount, input.currency);
   if (!importe.ok) return err({ code: "VALIDATION_FAILED", message: importe.error.message });
   if (importe.value.amount.isZero()) {
@@ -1211,7 +1310,7 @@ export async function revalueStock(
            amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
            functional_currency, rate_source, rate_timestamp, rounding_policy_id,
            occurred_at, reason, source_document_id)
-        values (${ctx.value.tenantId}, ${input.company_id}, ${input.warehouse_id},
+        values (${tenantId}, ${input.company_id}, ${input.warehouse_id},
                 ${input.product_id}, ${input.lot_id ?? null}, 'revaluacion', 0,
                 ${importe.value.toAmountString()}, ${input.currency}, 1,
                 ${importe.value.toAmountString()}, ${input.currency}, 'identidad', now(),
@@ -1220,7 +1319,7 @@ export async function revalueStock(
         returning ${sp.unsafe(MOVE_COLUMNS)}`;
       return m!;
     });
-    await auditarYPublicar(sql, fila, ctx.value.tenantId, "inventory.revalued", {
+    await auditarYPublicar(sql, fila, tenantId, "inventory.revalued", {
       reason: input.reason,
       amount: importe.value.toAmountString(),
     });

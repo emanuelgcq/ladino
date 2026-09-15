@@ -59,6 +59,9 @@ export interface AmountContext {
   readonly landed_to_variance?: string;
   readonly exchange_difference?: string;
   readonly functional_amount?: string;
+  /** La factura de proveedor distinta de lo recibido (ADR-0060 §2): lo que revaloriza y lo que va a variación. */
+  readonly revaluation_to_inventory?: string;
+  readonly revaluation_to_variance?: string;
 }
 
 /** Las banderas que responden los predicados. Ocho preguntas, ni una más. */
