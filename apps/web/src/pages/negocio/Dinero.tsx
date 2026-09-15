@@ -31,7 +31,7 @@ import { SimpleSelect } from "../../ui/select.js";
 import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
-import { fechaLocal } from "../../fechas.js";
+import { fechaLocal, fuenteDeTasa } from "../../fechas.js";
 
 /**
  * MI DINERO (Fase C, PARTE 11): «¿dónde está mi plata?» en una pantalla.
@@ -436,7 +436,8 @@ function TarjetaTasa({
                 <span className="text-base font-normal text-muted-foreground">por dólar</span>
               </p>
               <p className="text-[0.8rem] text-faint-foreground">
-                {tasa.es_de_hoy ? "Confirmada hoy" : `Del ${tasa.rate_date}`} · {tasa.source}
+                {tasa.es_de_hoy ? "Confirmada hoy" : `Del ${fechaLocal(tasa.rate_date)}`} ·{" "}
+                {fuenteDeTasa(tasa.source)}
               </p>
             </>
           )}

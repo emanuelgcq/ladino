@@ -50,7 +50,7 @@ import type {
   SupplierStatement,
   Warehouse,
 } from "../../lib.js";
-import { hoyLocal, fechaLocal } from "../../fechas.js";
+import { hoyLocal, fechaLocal, fuenteDeTasa } from "../../fechas.js";
 
 /**
  * Compras — Fase B. Cuatro superficies: órdenes (con recepción y landed cost),
@@ -280,7 +280,7 @@ function DetalleOrden({ id, onCerrar }: { id: string; onCerrar: () => void }): R
             <DialogDescription>
               Moneda {d.order.transaction_currency} · tasa{" "}
               <span className="font-mono">{mostrarCantidad(d.order.fx_rate)}</span> (
-              {d.order.rate_source})
+              {fuenteDeTasa(d.order.rate_source)})
             </DialogDescription>
 
             <div className="mt-3 space-y-4">
@@ -379,11 +379,13 @@ function DetalleOrden({ id, onCerrar }: { id: string; onCerrar: () => void }): R
                 <div>
                   <div className="mb-1 flex items-center justify-between">
                     <p className="text-[0.85rem] font-medium">Facturas del proveedor</p>
-                    {puedeFacturar && (
-                      <Button variant="secondary" size="sm" onClick={() => setFacturando(true)}>
-                        Registrar factura…
-                      </Button>
-                    )}
+                    {/* Sin nada recibido por facturar, no se ofrece otra factura (QA 2026-09-15, h. 86). */}
+                    {puedeFacturar &&
+                      d.progress.some((p) => !/^0*(\.0*)?$/.test(p.quantity_to_invoice)) && (
+                        <Button variant="secondary" size="sm" onClick={() => setFacturando(true)}>
+                          Registrar factura…
+                        </Button>
+                      )}
                   </div>
                   {d.invoices.length === 0 ? (
                     <p className="text-[0.85rem] text-muted-foreground">
@@ -739,7 +741,11 @@ function NuevaOrden(): React.JSX.Element {
 
   const almacenes = useQuery({
     queryKey: ["almacenes", empresa.id],
-    queryFn: () => llamar<Warehouse[]>("/v1/warehouses"),
+    // Solo los activos: un depósito apagado no recibe ni despacha (migración 60).
+    queryFn: () =>
+      llamar<(Warehouse & { status?: string })[]>("/v1/warehouses").then((ws) =>
+        ws.filter((w) => w.status !== "inactive"),
+      ),
   });
 
   const listo =
@@ -1730,15 +1736,24 @@ function RegistrarFacturaProveedor({
   const [nroControl, setNroControl] = useState("");
   const [fecha, setFecha] = useState(hoyLocal());
   const [lineas, setLineas] = useState(
-    detalle.lines.map((l) => ({
-      // Clave estable para React: con el índice, borrar o reordenar mezclaba
-      // el estado de los inputs entre líneas.
-      clave: crypto.randomUUID(),
-      product_id: l.product_id,
-      description: l.description,
-      quantity: l.quantity,
-      unit_price: l.unit_price_transaction,
-    })),
+    detalle.lines.map((l) => {
+      // Se propone facturar lo RECIBIDO que falta por facturar, no lo pedido: antes una
+      // orden ya facturada volvía a proponer el total y se registraba dos veces (QA
+      // 2026-09-15, h. 86). Si ya no falta nada, la línea nace vacía (= no la trae).
+      const p = detalle.progress.find((x) => x.order_line_id === l.id);
+      const falta = p?.quantity_to_invoice ?? l.quantity;
+      return {
+        // Clave estable para React: con el índice, borrar o reordenar mezclaba
+        // el estado de los inputs entre líneas.
+        clave: crypto.randomUUID(),
+        product_id: l.product_id,
+        description: l.description,
+        quantity: /^0*(\.0*)?$/.test(falta)
+          ? ""
+          : falta.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, ""),
+        unit_price: l.unit_price_transaction,
+      };
+    }),
   );
   const [error, setError] = useState<unknown>(null);
   const [ocupado, setOcupado] = useState(false);

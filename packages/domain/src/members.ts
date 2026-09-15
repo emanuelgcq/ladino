@@ -140,8 +140,11 @@ export async function addMember(
   const [persona] = await sql<{ id: string | null }[]>`
     select platform.user_id_by_email(${input.email}) as id`;
   if (persona?.id === null || persona?.id === undefined) {
+    // Código propio (404) y no NOT_FOUND: NOT_FOUND viaja con el mensaje de persona FIJO
+    // («Eso no existe o no está disponible para ti») y la pantalla no decía qué hacer
+    // (QA de pantalla 2026-09-15, h. 74). Quien agrega ya tiene el permiso de miembros.
     return err({
-      code: "NOT_FOUND",
+      code: "MEMBER_NOT_REGISTERED",
       message:
         "Esa persona todavía no tiene cuenta en Ladino. Pídele que se registre con ese correo y vuelve a agregarla.",
     });

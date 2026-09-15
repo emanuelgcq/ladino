@@ -225,7 +225,7 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
     const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigeLectura(tx, actor, companyId);
       return tx<Record<string, unknown>[]>`
-        select p.code as purpose, p.name, p.description,
+        select p.code as purpose, p.name, p.description, p.resolved_by,
                s.account_id, a.code as account_code, a.name as account_name
           from public.account_purposes p
           left join public.company_account_settings s
@@ -669,7 +669,14 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
          group by a.kind, a.code, a.name
         having coalesce(sum(jl.functional_debit), 0) <> coalesce(sum(jl.functional_credit), 0)
          order by a.code`;
-      const [totales] = await tx<{ ta: string; tp: string; tq: string; cuadra: boolean }[]>`
+      // El RESULTADO del ejercicio aún sin cerrar (ingresos − gastos a la fecha) es patrimonio:
+      // hasta el cierre anual vive en las cuentas de resultado, no en las de patrimonio. Sin él,
+      // toda empresa con ventas veía «NO cuadra — hay un asiento roto en la base» con la
+      // comprobación cuadrada (QA de pantalla 2026-09-15, h. 66). Tras el cierre anual, el
+      // asiento de cierre deja ese neto en cero y la fila desaparece sola.
+      const [totales] = await tx<
+        { ta: string; tp: string; tq: string; tpq: string; resultado: string; cuadra: boolean }[]
+      >`
         with saldos as (
           select a.kind,
                  coalesce(sum(jl.functional_debit), 0) - coalesce(sum(jl.functional_credit), 0)
@@ -677,15 +684,20 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
             from public.accounts a
             join public.journal_lines jl on jl.account_id = a.id
             join public.journal_entries e on e.id = jl.entry_id
-           where a.company_id = ${companyId} and a.kind in ('activo', 'pasivo', 'patrimonio')
+           where a.company_id = ${companyId}
+             and a.kind in ('activo', 'pasivo', 'patrimonio', 'ingreso', 'gasto')
              and e.status in ('posted', 'reversed') and e.posting_date <= ${hasta}::date
            group by a.kind, a.id
         )
         select coalesce(sum(deudor) filter (where kind = 'activo'), 0)::text as ta,
                coalesce(-sum(deudor) filter (where kind = 'pasivo'), 0)::text as tp,
-               coalesce(-sum(deudor) filter (where kind = 'patrimonio'), 0)::text as tq,
+               coalesce(-sum(deudor) filter (where kind in ('patrimonio', 'ingreso', 'gasto')), 0)::text
+                 as tq,
+               coalesce(-sum(deudor) filter (where kind in ('ingreso', 'gasto')), 0)::text as resultado,
+               coalesce(-sum(deudor) filter (where kind in ('pasivo', 'patrimonio', 'ingreso', 'gasto')), 0)::text
+                 as tpq,
                coalesce(sum(deudor) filter (where kind = 'activo'), 0)
-                 = coalesce(-sum(deudor) filter (where kind in ('pasivo', 'patrimonio')), 0)
+                 = coalesce(-sum(deudor) filter (where kind in ('pasivo', 'patrimonio', 'ingreso', 'gasto')), 0)
                  as cuadra
           from saldos`;
       const mapear = (k: string) =>
@@ -697,10 +709,22 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
         currency: empresa?.moneda ?? "",
         assets: mapear("activo"),
         liabilities: mapear("pasivo"),
-        equity: mapear("patrimonio"),
+        equity: [
+          ...mapear("patrimonio"),
+          ...(totales === undefined || /^-?0*(\.0*)?$/.test(totales.resultado)
+            ? []
+            : [
+                {
+                  account_code: "",
+                  account_name: "Resultado del ejercicio (sin cerrar)",
+                  amount: totales.resultado,
+                },
+              ]),
+        ],
         total_assets: totales?.ta ?? "0",
         total_liabilities: totales?.tp ?? "0",
         total_equity: totales?.tq ?? "0",
+        total_liabilities_and_equity: totales?.tpq ?? "0",
         balanced: totales?.cuadra ?? true,
       };
     });

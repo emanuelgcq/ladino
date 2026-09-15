@@ -606,7 +606,10 @@ function DialogoRif({
             disabled={
               enviar.isPending ||
               normalizado.length < 3 ||
-              (esCorreccion && motivo.trim().length < 3)
+              (esCorreccion && motivo.trim().length < 3) ||
+              // Sin dirección fiscal el servidor responde 422: el botón ya no invita a fallar
+              // (QA de pantalla 2026-09-15, h. 80).
+              (sinRif && !esCorreccion && !hayDireccion)
             }
             onClick={() => enviar.mutate()}
           >

@@ -766,7 +766,7 @@ function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element 
           `• ${KIND_LABEL[d.kind] ?? "Documento"} ${d.series}-${String(d.document_number ?? "")}: ${mostrarImporte({ amount: d.balance, currency: estado.data.currency })}`,
       )
       .join("\n");
-    return `Hola ${cliente.legal_name}, te escribe ${empresa.legal_name}. Tu cuenta pendiente:\n${filas}\nTotal: ${mostrarImporte({ amount: estado.data.total_outstanding, currency: estado.data.currency })}. ¡Gracias!`;
+    return `Hola ${cliente.legal_name}, te escribe ${empresa.trade_name ?? empresa.legal_name}. Tu cuenta pendiente:\n${filas}\nTotal: ${mostrarImporte({ amount: estado.data.total_outstanding, currency: estado.data.currency })}. ¡Gracias!`;
   };
 
   const telefonoWa = (cliente.phone ?? "").replace(/[^0-9]/g, "").replace(/^0/, "58");

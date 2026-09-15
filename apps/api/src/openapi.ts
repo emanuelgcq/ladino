@@ -47,6 +47,7 @@ import {
   ListInventoryMovesResponse,
   ListStockResponse,
   CreateWarehouseRequest,
+  UpdateWarehouseRequest,
   WarehouseResponse,
   TransferResponse,
   SetRecipeRequest,
@@ -1014,6 +1015,7 @@ export function buildOpenApiDocument(): object {
   const transferencia = registry.register("TransferResponse", TransferResponse);
   const crearAlmacen = registry.register("CreateWarehouseRequest", CreateWarehouseRequest);
   const almacen = registry.register("WarehouseResponse", WarehouseResponse);
+  const cambiarAlmacen = registry.register("UpdateWarehouseRequest", UpdateWarehouseRequest);
 
   registry.registerPath({
     method: "get",
@@ -1132,6 +1134,25 @@ export function buildOpenApiDocument(): object {
       201: okJson(almacen, "Almacén creado."),
       ...erroresComunes,
       409: errorRef("Ya existe un almacén con ese código en la empresa."),
+    },
+  });
+  registry.registerPath({
+    method: "patch",
+    path: "/v1/warehouses/{id}",
+    summary: "Renombrar, apagar/encender o hacer principal un almacén (warehouse.manage)",
+    description:
+      "El principal no se apaga, ni un almacén con existencias (WAREHOUSE_IN_USE). Hacerlo " +
+      "principal exige además company.settings.manage (migración 60).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: z.object({ id: z.string().uuid() }),
+      body: { content: { "application/json": { schema: cambiarAlmacen } } },
+    },
+    responses: {
+      200: okJson(almacen, "Almacén actualizado."),
+      ...erroresComunes,
+      409: errorRef("El principal o un almacén con mercancía no se apaga."),
     },
   });
 
@@ -1916,6 +1937,23 @@ export function buildOpenApiDocument(): object {
     request: { params: idParam, headers: idemHeader },
     responses: { 200: okJson(devolucion, "Devolución confirmada."), ...erroresComunes },
   });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/returns/{id}/cancel",
+    summary: "Cancelar una devolución en BORRADOR (sales.return.manage)",
+    description:
+      "Un borrador no movió inventario, dinero ni asiento: cancelarlo solo cambia su estado y " +
+      "queda en la auditoría. Una devolución confirmada no se cancela (QA 2026-09-15, h. 55).",
+    security: [{ bearerAuth: [] }],
+    request: { params: idParam, headers: idemHeader },
+    responses: {
+      200: okJson(
+        z.object({ id: z.string().uuid(), status: z.literal("cancelled") }),
+        "Borrador cancelado.",
+      ),
+      ...erroresComunes,
+    },
+  });
 
   // ── Las NOTAS (ADR-0051) ───────────────────────────────────────────────────
   const ncDirecta = registry.register(
@@ -2665,6 +2703,8 @@ export function buildOpenApiDocument(): object {
             purpose: z.string(),
             name: z.string(),
             description: z.string(),
+            /** No null: la cuenta NO se asigna aquí, la resuelve ese origen (ADR-0060). */
+            resolved_by: z.string().nullable(),
             account_id: z.string().uuid().nullable(),
             account_code: z.string().nullable(),
             account_name: z.string().nullable(),

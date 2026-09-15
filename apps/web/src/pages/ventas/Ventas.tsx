@@ -123,7 +123,16 @@ export function Ventas(): React.JSX.Element {
         id: "estado",
         header: "Estado",
         accessorKey: "status",
-        cell: (c) => <FiscalStatusBadge estado={c.getValue<string>()} />,
+        cell: (c) => (
+          <FiscalStatusBadge
+            estado={
+              c.getValue<string>() === "issued" &&
+              (c.row.original as { has_payments?: boolean }).has_payments === true
+                ? "partially_paid"
+                : c.getValue<string>()
+            }
+          />
+        ),
         enableSorting: false,
       },
       {

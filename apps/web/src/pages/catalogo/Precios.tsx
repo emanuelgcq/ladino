@@ -365,9 +365,12 @@ function PreciosDeLista({
 
   async function cargarPrecio(): Promise<void> {
     setError(null);
-    // Una fecha escrita por la persona es la MEDIANOCHE de Caracas de ese día, no la de UTC.
+    // El campo es datetime-local («2026-09-17T08:00»): esa hora es la de Caracas, no la del
+    // navegador ni la de UTC. Antes se le pegaba «T00:00:00-04:00» a un valor que ya traía la
+    // hora, la fecha salía inválida y toISOString() lanzaba antes de llamar a la API: ningún
+    // precio con vigencia se podía cargar (QA de pantalla 2026-09-15, hallazgo 10).
     const cuando =
-      desde === "" ? new Date().toISOString() : new Date(`${desde}T00:00:00-04:00`).toISOString();
+      desde === "" ? new Date().toISOString() : new Date(`${desde}:00-04:00`).toISOString();
     try {
       await llamar(`/v1/price-lists/${lista.id}/prices`, {
         method: "POST",

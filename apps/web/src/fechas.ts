@@ -101,3 +101,13 @@ export function quincenaLocal(desde: Date = new Date()): { desde: string; hasta:
     ? { desde: `${a}-${mm}-01`, hasta: `${a}-${mm}-15` }
     : { desde: `${a}-${mm}-16`, hasta: mes.hasta };
 }
+
+/**
+ * La fuente de una tasa, para leer: «BCV oficial vía DolarAPI (2026-09-15T00:00:00-04:00)»
+ * → «BCV oficial vía DolarAPI». El instante entre paréntesis ya viaja en su propio campo
+ * (rate_date / rate_timestamp) y la persona lo veía como un volcado ISO en Inicio, Mi dinero y
+ * Empezar (QA de pantalla 2026-09-15, hallazgo 8).
+ */
+export function fuenteDeTasa(source: string): string {
+  return source.replace(/\s*\([^)]*\)\s*$/, "");
+}

@@ -28,6 +28,7 @@ import type {
   SimplePurchaseResponse,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
+import { clasificacionPorPrefijo } from "./customers.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { receiveStock, revalueStock, revalorizar } from "./inventory.js";
 import { resolverCuentaEfectivo } from "./treasury.js";
@@ -59,6 +60,7 @@ export type PurchaseError =
   | { code: "PRICE_ABOVE_TOLERANCE"; message: string }
   | { code: "FISCAL_NUMBERING_INVALID"; message: string }
   | { code: "NEGATIVE_STOCK"; message: string }
+  | { code: "OVER_INVOICED"; message: string }
   | { code: "APPEND_ONLY_VIOLATION"; message: string };
 
 const POLICY: RoundingPolicy = { id: "purchases:document:8:HALF_UP", scale: 8, mode: "HALF_UP" };
@@ -209,11 +211,19 @@ export async function createSupplier(
         "Un proveedor nacional necesita RIF: sin él no se puede llevar al libro de compras ni practicarle retención.",
     });
   }
-  if (!extranjero && (!input.person_type_code || !input.taxpayer_type_code)) {
-    return err({
-      code: "VALIDATION_FAILED",
-      message: "Un proveedor nacional necesita tipo de persona y clasificación de contribuyente.",
-    });
+  // Sin tipo de persona o de contribuyente, se INFIEREN del prefijo del RIF (la misma regla
+  // que los clientes, ADR-0033). La compra simple solo pide nombre y RIF, y el servidor
+  // respondía 422 con cualquier formato: una bodega no podía registrar ni una compra
+  // (QA de pantalla 2026-09-15, h. 48). Quien compra a un proveedor con una V vende con
+  // factura, así que su clasificación por defecto es «ordinario», no «consumidor_final».
+  // VALIDAR-SENIAT: un proveedor formal o especial se corrige en su ficha.
+  let personType = input.person_type_code ?? null;
+  let taxpayerType = input.taxpayer_type_code ?? null;
+  if (!extranjero && (personType === null || taxpayerType === null)) {
+    const inferida = clasificacionPorPrefijo(input.tax_id ?? null);
+    personType ??= inferida.persona;
+    taxpayerType ??=
+      inferida.contribuyente === "consumidor_final" ? "ordinario" : inferida.contribuyente;
   }
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
@@ -227,8 +237,8 @@ export async function createSupplier(
         values (${ctx.value.tenantId}, ${input.company_id},
                 ${extranjero ? null : (input.tax_id ?? null)}, ${input.legal_name},
                 ${input.trade_name ?? null}, ${input.supplier_kind},
-                ${extranjero ? null : (input.person_type_code ?? null)},
-                ${extranjero ? null : (input.taxpayer_type_code ?? null)},
+                ${extranjero ? null : personType},
+                ${extranjero ? null : taxpayerType},
                 ${input.fiscal_address ?? null}, ${input.email ?? null}, ${input.phone ?? null},
                 ${input.payment_terms_days ?? 0})
         returning id, company_id, tax_id, legal_name, trade_name, supplier_kind,
@@ -583,7 +593,13 @@ export async function receiveGoods(
       sourceDocumentId: recepcion.id,
       accounting: "document",
     });
-    if (!mov.ok) return err({ code: "VALIDATION_FAILED", message: mov.error.message });
+    if (!mov.ok) {
+      return err(
+        mov.error.code === "PERMISSION_REQUIRED"
+          ? { code: "PERMISSION_REQUIRED", message: mov.error.message }
+          : { code: "VALIDATION_FAILED", message: mov.error.message },
+      );
+    }
     const v = parseDecimal(mov.value.functional_amount);
     if (recibido.ok && v.ok) recibido = { ok: true, value: recibido.value.plus(v.value) };
   }
@@ -630,6 +646,78 @@ export async function receiveGoods(
 
 // ── Factura del proveedor y retenciones ─────────────────────────────────────
 
+/**
+ * Lo facturado (acumulado, facturas no anuladas) más lo que se pide no puede pasar de lo
+ * recibido. Devuelve el error listo para responder, o null si cabe.
+ */
+async function topeDeFacturacion(
+  sql: TransactionSql,
+  input: RegisterSupplierInvoiceRequest,
+): Promise<PurchaseError | null> {
+  const porRecepcion = new Map<string, Decimal>();
+  const porProducto = new Map<string, Decimal>();
+  for (const l of input.lines) {
+    const q = parseDecimal(l.quantity);
+    if (!q.ok) continue;
+    if (l.goods_receipt_line_id !== undefined) {
+      const previo = porRecepcion.get(l.goods_receipt_line_id);
+      porRecepcion.set(
+        l.goods_receipt_line_id,
+        previo === undefined ? q.value : previo.plus(q.value),
+      );
+    } else if (input.purchase_order_id !== undefined) {
+      const previo = porProducto.get(l.product_id);
+      porProducto.set(l.product_id, previo === undefined ? q.value : previo.plus(q.value));
+    }
+  }
+  for (const [lineaRecepcion, pedida] of porRecepcion) {
+    const [f] = await sql<{ recibida: string; facturada: string; producto: string }[]>`
+      select rl.quantity::text as recibida,
+             coalesce((select sum(il.quantity) from public.supplier_invoice_lines il
+                         join public.supplier_invoices i on i.id = il.supplier_invoice_id
+                        where il.goods_receipt_line_id = rl.id and i.status <> 'annulled'), 0)::text
+               as facturada,
+             p.name as producto
+        from public.goods_receipt_lines rl
+        join public.products p on p.id = rl.product_id
+       where rl.id = ${lineaRecepcion} and rl.company_id = ${input.company_id}`;
+    if (!f) return { code: "NOT_FOUND", message: "Recurso no encontrado." };
+    const recibida = parseDecimal(f.recibida);
+    const facturada = parseDecimal(f.facturada);
+    if (!recibida.ok || !facturada.ok) continue;
+    if (facturada.value.plus(pedida).greaterThan(recibida.value)) {
+      return {
+        code: "OVER_INVOICED",
+        message: `De «${f.producto}» se recibieron ${recibida.value.toFixed()} y ya hay ${facturada.value.toFixed()} facturadas: esta factura llevaría el total a ${facturada.value.plus(pedida).toFixed()}. Una misma mercancía no se factura dos veces.`,
+      };
+    }
+  }
+  for (const [producto, pedida] of porProducto) {
+    const [f] = await sql<{ recibida: string; facturada: string; nombre: string }[]>`
+      select coalesce((select sum(rl.quantity) from public.goods_receipt_lines rl
+                         join public.goods_receipts r on r.id = rl.goods_receipt_id
+                        where r.purchase_order_id = ${input.purchase_order_id!}
+                          and r.status = 'confirmed' and rl.product_id = ${producto}), 0)::text
+               as recibida,
+             coalesce((select sum(il.quantity) from public.supplier_invoice_lines il
+                         join public.supplier_invoices i on i.id = il.supplier_invoice_id
+                        where i.purchase_order_id = ${input.purchase_order_id!}
+                          and i.status <> 'annulled' and il.product_id = ${producto}), 0)::text
+               as facturada,
+             (select name from public.products where id = ${producto}) as nombre`;
+    const recibida = parseDecimal(f?.recibida ?? "0");
+    const facturada = parseDecimal(f?.facturada ?? "0");
+    if (!recibida.ok || !facturada.ok) continue;
+    if (facturada.value.plus(pedida).greaterThan(recibida.value)) {
+      return {
+        code: "OVER_INVOICED",
+        message: `De «${f?.nombre ?? "ese producto"}» la orden tiene ${recibida.value.toFixed()} recibidas y ${facturada.value.toFixed()} ya facturadas: esta factura llevaría el total a ${facturada.value.plus(pedida).toFixed()}. Una misma mercancía no se factura dos veces.`,
+      };
+    }
+  }
+  return null;
+}
+
 export async function registerSupplierInvoice(
   uow: UnitOfWork,
   input: RegisterSupplierInvoiceRequest,
@@ -670,7 +758,13 @@ export async function registerSupplierInvoice(
         "La empresa no tiene clasificación tributaria propia y sin ella no se sabe si el IVA de la compra es crédito fiscal o costo. Asígnala antes de registrar facturas.",
     });
   }
-  const ivaRecuperable = ctx.value.companyTaxpayerType === "ordinario";
+  // El contribuyente ESPECIAL es un contribuyente ordinario de IVA designado agente de
+  // retención: recupera el crédito fiscal igual. Antes solo «ordinario» lo recuperaba y la
+  // compra de una empresa especial dejaba el IVA atrapado en «Mercancía recibida por
+  // facturar» (QA de pantalla 2026-09-15, h. 75; R-34). VALIDAR-TRIBUTARIO: P-17 sigue
+  // abierta para que el asesor lo confirme con su artículo.
+  const ivaRecuperable =
+    ctx.value.companyTaxpayerType === "ordinario" || ctx.value.companyTaxpayerType === "especial";
 
   const tasa = await tasaA(
     sql,
@@ -729,6 +823,13 @@ export async function registerSupplierInvoice(
       priceInvoiced: precio.value,
     });
   }
+  // NUNCA MÁS DE LO RECIBIDO (QA de pantalla 2026-09-15, h. 86): una orden recibida y ya
+  // facturada aceptaba una SEGUNDA factura por lo mismo, y la deuda con el proveedor se
+  // duplicaba. El matching de tres vías solo informaba; el tope acumulado no existía. Se
+  // comprueba por línea de recepción cuando viene, y por producto de la orden cuando no.
+  const sobre = await topeDeFacturacion(sql, input);
+  if (sobre !== null) return err(sobre);
+
   const match = matchThreeWay({ lines: entradas, priceTolerancePct: tolerancia.value });
   if (!match.ok) return err({ code: "VALIDATION_FAILED", message: match.error.message });
 
@@ -1989,6 +2090,30 @@ export async function registerSupplierPayment(
  * IVA por regla, asiento o cola — con cada pieza validando sus permisos.
  * Una transacción: si la factura falla, tampoco quedan orden ni recepción.
  */
+async function lineasFacturaDeRecepcion(
+  sql: TransactionSql,
+  companyId: string,
+  recepcionId: string,
+  lineasOrden: readonly { id: string; product_id: string }[],
+  lineas: readonly { product_id: string; quantity: string; unit_price: string }[],
+): Promise<
+  { product_id: string; quantity: string; unit_price: string; goods_receipt_line_id?: string }[]
+> {
+  const recibidas = await sql<{ id: string; purchase_order_line_id: string | null }[]>`
+    select id, purchase_order_line_id from public.goods_receipt_lines
+     where goods_receipt_id = ${recepcionId} and company_id = ${companyId}`;
+  const porLineaOrden = new Map(recibidas.map((r) => [r.purchase_order_line_id, r.id]));
+  return lineas.map((l, i) => {
+    const lineaRecepcion = porLineaOrden.get(lineasOrden[i]?.id ?? null);
+    return {
+      product_id: l.product_id,
+      quantity: l.quantity,
+      unit_price: l.unit_price,
+      ...(lineaRecepcion === undefined ? {} : { goods_receipt_line_id: lineaRecepcion }),
+    };
+  });
+}
+
 export async function simplePurchase(
   uow: UnitOfWork,
   input: SimplePurchaseRequest,
@@ -2050,11 +2175,15 @@ export async function simplePurchase(
       : { supplier_control_number: input.supplier_control_number }),
     invoice_date: fechaFactura,
     currency: input.currency,
-    lines: input.lines.map((l) => ({
-      product_id: l.product_id,
-      quantity: l.quantity,
-      unit_price: l.unit_price,
-    })),
+    // Cada línea de factura, atada a SU línea de recepción: es lo que deja correr la
+    // revalorización contra lo recibido y el tope de facturación (QA 2026-09-15, h. 75/86).
+    lines: await lineasFacturaDeRecepcion(
+      sql,
+      input.company_id,
+      recibo.value.id,
+      lineasOrden,
+      input.lines,
+    ),
   });
   if (!factura.ok) return factura;
 

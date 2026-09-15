@@ -708,18 +708,19 @@ function RegistrarCompra({
     enabled: pagarAhora,
     queryFn: () => llamar<{ methods: FormaDePago[] }>("/v1/payment-methods"),
   });
-  const ajustes = useQuery({
-    queryKey: ["ajustes", empresa.id],
-    staleTime: 5 * 60_000,
-    queryFn: () => llamar<{ default_warehouse_id: string | null }>("/v1/company-settings"),
-  });
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],
     staleTime: 5 * 60_000,
-    queryFn: () => llamar<{ id: string; name: string }[]>("/v1/warehouses"),
+    queryFn: () =>
+      llamar<{ id: string; name: string; status: string; is_default: boolean }[]>("/v1/warehouses"),
   });
-  const deposito = ajustes.data?.default_warehouse_id ?? depositos.data?.[0]?.id ?? null;
-  const buscandoDeposito = ajustes.isPending || depositos.isPending;
+  // El PRINCIPAL por defecto (migración 60) — no «el primero por código», que con un depósito
+  // nuevo mandaba la compra a otro lado. Con más de uno activo, la persona elige a cuál llega.
+  const activos = (depositos.data ?? []).filter((d) => d.status === "active");
+  const [depositoElegido, setDepositoElegido] = useState<string | null>(null);
+  const deposito =
+    depositoElegido ?? activos.find((d) => d.is_default)?.id ?? activos[0]?.id ?? null;
+  const buscandoDeposito = depositos.isPending;
 
   /**
    * Las formas con las que se paga: las CONFIGURADAS cuyo tipo sea un
@@ -1016,6 +1017,22 @@ function RegistrarCompra({
                   onValueChange={elegirForma}
                   options={opcionesDePago}
                   placeholder={formas.isPending ? "Cargando…" : "Elige…"}
+                />
+              )}
+            </FormField>
+          )}
+
+          {activos.length > 1 && (
+            <FormField label="¿A qué depósito llega?" required>
+              {(p) => (
+                <SimpleSelect
+                  id={p.id}
+                  value={deposito}
+                  onValueChange={setDepositoElegido}
+                  options={activos.map((d) => ({
+                    value: d.id,
+                    label: d.is_default ? `${d.name} (principal)` : d.name,
+                  }))}
                 />
               )}
             </FormField>

@@ -173,6 +173,16 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   // bien; lo que impide anular es el estado (el dinero ya entró), y el mensaje
   // dice el camino.
   DOCUMENT_HAS_PAYMENTS: 409,
+  // Migración 60: el depósito principal, o uno con mercancía, no se apaga. 409: el cuerpo
+  // está bien; lo que lo impide es el estado, y el mensaje dice qué hacer primero.
+  WAREHOUSE_IN_USE: 409,
+  // QA 2026-09-15 h. 86: lo facturado de una mercancía no pasa de lo recibido. 409: el cuerpo
+  // está bien; lo que lo impide es lo ya facturado, y el mensaje dice cuánto.
+  OVER_INVOICED: 409,
+  // QA 2026-09-15 h. 74: agregar a quien no tiene cuenta. 404 como antes, con su mensaje.
+  MEMBER_NOT_REGISTERED: 404,
+  // QA 2026-09-15 h. 67: un asiento generado por un documento se corrige desde el documento.
+  ENTRY_GENERATED_BY_DOCUMENT: 409,
   // El adaptador BCV (DolarAPI) no respondió o respondió irreconocible. 502:
   // el cuerpo del cliente está bien; lo que falló está aguas arriba, y el
   // fallback es la carga manual de siempre.

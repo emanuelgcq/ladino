@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, Search, Users } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { mostrarImporte } from "../../money.js";
 import { errorDePersona } from "../../lib.js";
 import { Button } from "../../ui/button.js";
 import { Card } from "../../ui/card.js";
@@ -35,6 +36,8 @@ interface ClienteFila {
   email?: string | null;
   fiscal_address?: string | null;
   is_system?: boolean;
+  /** Lo que debe HOY, redondeado a 2 por el servidor (with_debt=1). */
+  debt?: string;
 }
 
 const POR_PAGINA = 50;
@@ -66,7 +69,7 @@ export function ClientesNegocio(): React.JSX.Element {
     initialPageParam: 1,
     queryFn: ({ pageParam }) =>
       llamar<{ items: ClienteFila[]; total: number }>(
-        `/v1/customers?per_page=${POR_PAGINA}&page=${pageParam}${
+        `/v1/customers?exclude_system=1&with_debt=1&per_page=${POR_PAGINA}&page=${pageParam}${
           q === "" ? "" : `&search=${encodeURIComponent(q)}`
         }`,
       ),
@@ -115,7 +118,8 @@ export function ClientesNegocio(): React.JSX.Element {
           className="flex items-center justify-between rounded-lg border border-border bg-surface px-4 py-3 text-[0.9rem] transition-colors hover:border-accent hover:bg-accent-soft/30"
         >
           <span>
-            ¿Quién te debe y cuánto? Está en <strong>Administración → Clientes</strong>.
+            Para cobrar una deuda o ver el estado de cuenta, abre al cliente en{" "}
+            <strong>Administración → Clientes</strong>.
           </span>
           <ArrowRight className="size-4 shrink-0 text-accent" />
         </Link>
@@ -169,6 +173,15 @@ export function ClientesNegocio(): React.JSX.Element {
                     {c.phone !== null ? ` · ${c.phone}` : ""}
                   </span>
                 </span>
+                {/* Quién debe, en la lista del negocio: antes había que ir a Administración
+                    para saberlo (QA de pantalla 2026-09-15, h. 84). */}
+                {c.debt !== undefined &&
+                  !/^-?0*(\.0*)?$/.test(c.debt) &&
+                  !c.debt.startsWith("-") && (
+                    <span className="shrink-0 rounded-full bg-warning-soft px-2 py-0.5 text-[0.8rem] font-medium text-warning-soft-foreground tabular-nums">
+                      Debe {mostrarImporte({ amount: c.debt, currency: "VES" })}
+                    </span>
+                  )}
               </button>
             ))}
           </div>

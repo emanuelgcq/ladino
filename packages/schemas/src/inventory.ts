@@ -68,6 +68,8 @@ export const IssueStockRequest = z
     ...posicion,
     quantity: QuantityString,
     occurred_at: z.string().datetime({ offset: true }).optional(),
+    /** Por qué sale (merma, consumo interno, regalo). La pantalla lo exige (QA 2026-09-15, h. 42). */
+    reason: z.string().trim().min(3).max(500).optional(),
     reference: z.string().trim().min(1).max(60).optional(),
     note: z.string().trim().min(1).max(500).optional(),
   })
@@ -173,6 +175,17 @@ export const CreateWarehouseRequest = z
   .strict();
 export type CreateWarehouseRequest = z.infer<typeof CreateWarehouseRequest>;
 
+/** Renombrar, apagar/encender o hacer principal un depósito (migración 60). */
+export const UpdateWarehouseRequest = z
+  .object({
+    company_id: uuid,
+    name: z.string().trim().min(1).max(100).optional(),
+    status: z.enum(["active", "inactive"]).optional(),
+    make_default: z.literal(true).optional(),
+  })
+  .strict();
+export type UpdateWarehouseRequest = z.infer<typeof UpdateWarehouseRequest>;
+
 export const WarehouseResponse = z
   .object({
     id: uuid,
@@ -182,6 +195,8 @@ export const WarehouseResponse = z
     code: z.string(),
     name: z.string(),
     status: z.enum(["active", "inactive"]),
+    /** El principal (platform.default_warehouse): de ahí descuenta la caja. */
+    is_default: z.boolean(),
   })
   .strict();
 export type WarehouseResponse = z.infer<typeof WarehouseResponse>;

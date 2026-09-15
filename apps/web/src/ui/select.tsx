@@ -70,7 +70,12 @@ export function SimpleSelect({
         </BaseSelect.Icon>
       </BaseSelect.Trigger>
       <BaseSelect.Portal>
-        <BaseSelect.Positioner sideOffset={4} className="z-50">
+        {/* alignItemWithTrigger={false}: la lista se ancla DEBAJO del disparador con el
+            posicionador flotante. El modo por defecto (encima del disparador) calcula a mano
+            con la altura de la ventana, y dentro de un diálogo ANIDADO (ficha del cliente →
+            Cobrar) dibujaba la lista a 1343 px con la ventana en 900: invisible, y cobrar una
+            deuda con el ratón era imposible (QA de pantalla 2026-09-15, h. 25). */}
+        <BaseSelect.Positioner sideOffset={4} alignItemWithTrigger={false} className="z-50">
           <BaseSelect.Popup
             className={cn(
               "max-h-72 min-w-[var(--anchor-width)] overflow-y-auto rounded-md border",

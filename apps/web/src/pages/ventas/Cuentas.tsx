@@ -351,7 +351,13 @@ function EstadoDeCuenta({
                       </span>
                     </TD>
                     <TD>
-                      <FiscalStatusBadge estado={d.status} />
+                      <FiscalStatusBadge
+                        estado={
+                          d.status === "issued" && !/^0*(\.0*)?$/.test(d.paid_amount)
+                            ? "partially_paid"
+                            : d.status
+                        }
+                      />
                     </TD>
                     <TDNum>
                       {mostrarImporte({ amount: d.total_amount, currency: data.currency })}

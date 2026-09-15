@@ -11,7 +11,7 @@ import { Card, CardContent } from "../../ui/card.js";
 import { fechaRelativa } from "./comunes.js";
 import { ETIQUETA_OBLIGACION } from "../../components/capa-fiscal/vencimientos.js";
 import { useModoDeVenta } from "../../app/modo-venta.js";
-import { hoyLocal, diaLocalMas } from "../../fechas.js";
+import { hoyLocal, diaLocalMas, fuenteDeTasa } from "../../fechas.js";
 
 /**
  * INICIO (Fase C, PARTE 12): cómo va el negocio, de un vistazo. El número
@@ -351,7 +351,7 @@ export function Inicio(): React.JSX.Element {
       {r?.tasa_del_dia !== null && r?.tasa_del_dia !== undefined && (
         <p className="text-center text-[0.82rem] text-faint-foreground tabular-nums">
           Tasa del día: Bs. {mostrarCantidad(r.tasa_del_dia.rate)} por dólar ·{" "}
-          {r.tasa_del_dia.source}
+          {fuenteDeTasa(r.tasa_del_dia.source)}
         </p>
       )}
     </div>

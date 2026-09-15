@@ -5,7 +5,12 @@ import { diaLocal } from "../../fechas.js";
  * DÍAS calendario, no milisegundos: a las 8 am, lo de anoche es «ayer».
  */
 export function fechaRelativa(iso: string): string {
-  const fecha = new Date(iso);
+  // Una fecha calendario pura («2026-09-15», p. ej. la fecha de una factura de
+  // proveedor) YA es un día de Caracas: `new Date()` la leería como medianoche
+  // UTC y a las 20:00 de Caracas del día anterior — «ayer» para algo de hoy
+  // (QA de pantalla 2026-09-15, hallazgo 78).
+  const soloDia = /^\d{4}-\d{2}-\d{2}$/.test(iso);
+  const fecha = soloDia ? new Date(`${iso}T12:00:00-04:00`) : new Date(iso);
   if (Number.isNaN(fecha.getTime())) return "—";
   // Días de CARACAS comparados como días: la versión anterior sumaba el huso
   // con el signo invertido y «hoy» pasaba a «ayer» a las 16:00 (auditoría

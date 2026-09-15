@@ -58,6 +58,9 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     // pantalla de Clientes vive de esta cifra; pedirla es opt-in porque el
     // cálculo recorre las facturas abiertas del cliente.
     const conDeuda = c.req.query("with_debt") === "1";
+    // `exclude_system=1`: sin el Consumidor final de sistema. El mundo del negocio no lo lista y
+    // su «Mostrando 1 de 2» contaba una fila que nunca enseña (QA de pantalla 2026-09-15, h. 22).
+    const sinSistema = c.req.query("exclude_system") === "1";
     const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 20) || 20, 1), 100);
     const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     const filas = await withTransaction(sql, actor, ({ sql: tx }) => {
@@ -88,6 +91,7 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
           from public.customers cu
           ${deudaJoin}
          where cu.company_id = ${companyId} ${filtro}
+           ${sinSistema ? tx`and not cu.is_system` : tx``}
          order by cu.legal_name, cu.id
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
     });

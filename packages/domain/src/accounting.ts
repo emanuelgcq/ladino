@@ -44,6 +44,7 @@ export type AccountingError =
   | { code: "PERIOD_CLOSED"; message: string }
   | { code: "ACCOUNT_NOT_POSTABLE"; message: string }
   | { code: "ACCOUNT_PURPOSE_MISSING"; message: string }
+  | { code: "ENTRY_GENERATED_BY_DOCUMENT"; message: string }
   | { code: "APPEND_ONLY_VIOLATION"; message: string };
 
 const NATURALEZA: Record<string, "deudora" | "acreedora"> = {
@@ -566,6 +567,11 @@ export async function reverseJournalEntry(
   uow: UnitOfWork,
   entryId: string,
   input: ReverseJournalEntryRequest,
+  /**
+   * `desdeDocumento`: la reversa la pide el caso de uso DEL DOCUMENTO (anular una venta),
+   * que mueve kardex, saldo y asiento a la vez. Sin eso, solo se reversan asientos manuales.
+   */
+  opciones: { readonly desdeDocumento?: boolean } = {},
 ): Promise<Result<JournalEntryResponse, AccountingError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
@@ -574,10 +580,20 @@ export async function reverseJournalEntry(
   const ctx = await autorizar(sql, actor.userId, input.company_id, "accounting.entry.reverse");
   if (!ctx.ok) return ctx;
 
-  const [original] = await sql<{ status: string; description: string }[]>`
-    select status, description from public.journal_entries
+  const [original] = await sql<{ status: string; description: string; source_kind: string }[]>`
+    select status, description, source_kind from public.journal_entries
      where id = ${entryId} and company_id = ${input.company_id}`;
   if (!original) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  // Un asiento GENERADO por un documento (venta, costo, cobro, compra, movimiento…) no se
+  // reversa suelto: el contra-asiento no toca el kardex, ni el saldo de la caja, ni el
+  // documento, y el mayor deja de reproducir el inventario (QA de pantalla 2026-09-15,
+  // h. 67: inventory_ledger_gap pasó de 0 a −900). Se corrige desde su documento.
+  if (original.source_kind !== "manual" && opciones.desdeDocumento !== true) {
+    return err({
+      code: "ENTRY_GENERATED_BY_DOCUMENT",
+      message: `Este asiento lo generó un documento («${original.description}»). Se corrige desde ese documento —anulando o devolviendo la venta, o con su nota— y no reversando el asiento: el contra-asiento suelto no mueve el inventario ni el dinero.`,
+    });
+  }
   if (original.status !== "posted") {
     return err({
       code: "VALIDATION_FAILED",

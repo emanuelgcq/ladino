@@ -35,7 +35,15 @@ export type EstadoFiscal =
   /** Emitida y aún sin asiento NI cola — el hueco que coverage-gaps caza. */
   | "pending_accounting"
   /** No hay regla tributaria vigente (TAX_RULE_MISSING / LAD50). */
-  | "no_rule";
+  | "no_rule"
+  /** Orden de compra: nada recibido todavía (platform.purchase_order_status). */
+  | "pending"
+  /** Orden de compra: algo recibido, falta más. */
+  | "partial"
+  /** Orden de compra: todo lo pedido está recibido. */
+  | "complete"
+  /** Documento de venta emitido con cobros que no llegan al total. */
+  | "partially_paid";
 
 const MAPA: Record<EstadoFiscal, { etiqueta: string; tone: BadgeTone; icono: LucideIcon }> = {
   draft: { etiqueta: "Borrador", tone: "neutral", icono: CircleDashed },
@@ -48,6 +56,11 @@ const MAPA: Record<EstadoFiscal, { etiqueta: string; tone: BadgeTone; icono: Luc
   queued: { etiqueta: "En cola contable", tone: "warning", icono: ListTodo },
   pending_accounting: { etiqueta: "Pendiente de contabilizar", tone: "warning", icono: Clock },
   no_rule: { etiqueta: "Sin regla vigente", tone: "warning", icono: FileWarning },
+  // Las órdenes de compra hablaban inglés en el listado (QA de pantalla 2026-09-15, h. 87).
+  pending: { etiqueta: "Por recibir", tone: "neutral", icono: Clock },
+  partial: { etiqueta: "Recibida en parte", tone: "info", icono: PackageCheck },
+  complete: { etiqueta: "Recibida", tone: "accent", icono: PackageCheck },
+  partially_paid: { etiqueta: "Abonada", tone: "info", icono: CircleDollarSign },
 };
 
 export function FiscalStatusBadge({

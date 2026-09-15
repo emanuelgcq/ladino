@@ -6,6 +6,7 @@ import { useSesion } from "../../app/session.js";
 import { LogoLadino } from "../../components/LogoLadino.js";
 import { errorDePersona } from "../../lib.js";
 import { mostrarCantidad } from "../../money.js";
+import { fuenteDeTasa } from "../../fechas.js";
 import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
 import { Input } from "../../ui/input.js";
@@ -404,7 +405,7 @@ function PasoTasa({
         {tasa !== null && tasa.es_de_hoy ? (
           <p className="flex items-center gap-2 text-[0.95rem]">
             <Check className="size-4 text-success-soft-foreground" />
-            Hoy: Bs. {mostrarCantidad(tasa.rate)} por dólar · {tasa.source}
+            Hoy: Bs. {mostrarCantidad(tasa.rate)} por dólar · {fuenteDeTasa(tasa.source)}
           </p>
         ) : (
           <div className="space-y-3">
@@ -475,7 +476,11 @@ function PasoFacturas({
   const toast = useToast();
   // La PRIMERA pregunta (migración 37): ¿ya tienes RIF? Sin RIF no existe
   // factura (art. 13.5) — pero el negocio arranca HOY vendiendo con recibos.
-  const [tieneRif, setTieneRif] = useState<boolean | null>(null);
+  // Si el registro ya trajo el RIF (no es PEND-*), no se vuelve a preguntar: la ferretería que
+  // cargó J-… en el registro veía otra vez «¿Tu negocio ya tiene RIF?» y podía responder
+  // «Todavía no» teniéndolo (QA de pantalla 2026-09-15, h. 53).
+  const rifDelRegistro = !empresa.tax_id.startsWith("PEND-");
+  const [tieneRif, setTieneRif] = useState<boolean | null>(rifDelRegistro ? true : null);
   // Y si viene del modo recibos con su RIF nuevo, este flag reabre el flujo.
   const [activandoFacturacion, setActivandoFacturacion] = useState(false);
   // Las dos preguntas que deciden la vía (PA 00071): a quién le vendes, y si
@@ -612,34 +617,44 @@ function PasoFacturas({
         {setup.current_regime === null ||
         (setup.sales_mode === "recibos" && activandoFacturacion) ? (
           <div className="space-y-4">
-            <div className="space-y-1.5">
-              <p className="font-medium" id="empezar-rif-titulo">
-                ¿Tu negocio ya tiene RIF?
+            {rifDelRegistro ? (
+              <p className="text-[0.9rem] text-muted-foreground">
+                Tu RIF ya está cargado desde el registro. Solo falta decir cómo facturas.
               </p>
-              <div className="flex gap-1.5" role="radiogroup" aria-labelledby="empezar-rif-titulo">
-                {(
-                  [
-                    [true, "Sí"],
-                    [false, "Todavía no"],
-                  ] as const
-                ).map(([valor, etiqueta]) => (
-                  <button
-                    key={etiqueta}
-                    type="button"
-                    role="radio"
-                    aria-checked={tieneRif === valor}
-                    onClick={() => setTieneRif(valor)}
-                    className={`rounded-full border px-4 py-1.5 text-[0.88rem] ${
-                      tieneRif === valor
-                        ? "border-accent bg-accent-soft text-accent-soft-foreground"
-                        : "border-border bg-surface hover:border-accent"
-                    }`}
-                  >
-                    {etiqueta}
-                  </button>
-                ))}
+            ) : (
+              <div className="space-y-1.5">
+                <p className="font-medium" id="empezar-rif-titulo">
+                  ¿Tu negocio ya tiene RIF?
+                </p>
+                <div
+                  className="flex gap-1.5"
+                  role="radiogroup"
+                  aria-labelledby="empezar-rif-titulo"
+                >
+                  {(
+                    [
+                      [true, "Sí"],
+                      [false, "Todavía no"],
+                    ] as const
+                  ).map(([valor, etiqueta]) => (
+                    <button
+                      key={etiqueta}
+                      type="button"
+                      role="radio"
+                      aria-checked={tieneRif === valor}
+                      onClick={() => setTieneRif(valor)}
+                      className={`rounded-full border px-4 py-1.5 text-[0.88rem] ${
+                        tieneRif === valor
+                          ? "border-accent bg-accent-soft text-accent-soft-foreground"
+                          : "border-border bg-surface hover:border-accent"
+                      }`}
+                    >
+                      {etiqueta}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             {tieneRif === false && (
               <div className="space-y-3 rounded-md border border-border bg-surface-muted/40 p-3">

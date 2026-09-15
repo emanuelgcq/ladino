@@ -156,20 +156,31 @@ export function UsuariosYRoles(): React.JSX.Element {
                     {m.assignments.length === 0 && (
                       <Badge tone="neutral">Sin rol — no puede hacer nada</Badge>
                     )}
-                    {m.assignments.map((a) => (
-                      <Badge key={a.id} tone="accent" className="gap-1">
-                        {a.role_name}
-                        {!(soyYo(m) && a.role_key === "owner") && (
-                          <button
-                            aria-label={`Quitar el rol ${a.role_name}`}
-                            className="hover:text-destructive-soft-foreground"
-                            onClick={() => setQuitando({ miembro: m, asignacion: a })}
-                          >
-                            <X className="size-3" />
-                          </button>
-                        )}
-                      </Badge>
-                    ))}
+                    {/* El dueño trabaja los depósitos por una asignación técnica de almacén
+                        (onboarding): enseñarla como un segundo oficio, con su botón de quitar,
+                        confundía y quitarla le cortaba la caja (QA 2026-09-15, h. 41). */}
+                    {m.assignments
+                      .filter(
+                        (a) =>
+                          !(
+                            a.role_key === "warehouse_ops" &&
+                            m.assignments.some((x) => x.role_key === "owner")
+                          ),
+                      )
+                      .map((a) => (
+                        <Badge key={a.id} tone="accent" className="gap-1">
+                          {a.role_name}
+                          {!(soyYo(m) && a.role_key === "owner") && (
+                            <button
+                              aria-label={`Quitar el rol ${a.role_name}`}
+                              className="hover:text-destructive-soft-foreground"
+                              onClick={() => setQuitando({ miembro: m, asignacion: a })}
+                            >
+                              <X className="size-3" />
+                            </button>
+                          )}
+                        </Badge>
+                      ))}
                   </span>
                 </span>
                 {m.status !== "active" ? (

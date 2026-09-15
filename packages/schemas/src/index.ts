@@ -49,6 +49,7 @@ export {
   StockBalanceResponse,
   ListStockResponse,
   CreateWarehouseRequest,
+  UpdateWarehouseRequest,
   WarehouseResponse,
   TransferResponse,
   RecipeLineRequest,

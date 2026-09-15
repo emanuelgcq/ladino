@@ -213,11 +213,22 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
                line_total_transaction::text as line_total_transaction,
                unit_weight::text as unit_weight
           from public.purchase_order_lines where purchase_order_id = ${id} order by line_number`;
+      // Lo facturado y lo que falta por facturar, por línea (QA 2026-09-15, h. 86): la pantalla
+      // proponía facturar lo PEDIDO aunque ya estuviera facturado, y el servidor lo aceptaba.
       const progress = await tx<Record<string, unknown>[]>`
-        select order_line_id, product_id, quantity_ordered::text as quantity_ordered,
-               quantity_received::text as quantity_received,
-               quantity_pending::text as quantity_pending
-          from platform.purchase_order_progress(${companyId}, ${id})`;
+        select pr.order_line_id, pr.product_id, pr.quantity_ordered::text as quantity_ordered,
+               pr.quantity_received::text as quantity_received,
+               pr.quantity_pending::text as quantity_pending,
+               f.facturada::text as quantity_invoiced,
+               greatest(pr.quantity_received - f.facturada, 0)::text as quantity_to_invoice
+          from platform.purchase_order_progress(${companyId}, ${id}) pr
+          cross join lateral (
+            select coalesce(sum(il.quantity), 0) as facturada
+              from public.supplier_invoice_lines il
+              join public.supplier_invoices i on i.id = il.supplier_invoice_id
+             where i.purchase_order_id = ${id} and i.status <> 'annulled'
+               and il.product_id = pr.product_id
+          ) f`;
       const receipts = await tx<Record<string, unknown>[]>`
         select id, receipt_number::int as receipt_number, status,
                to_char(received_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as received_at,

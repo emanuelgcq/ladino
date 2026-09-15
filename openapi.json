@@ -2418,6 +2418,11 @@
             "type": "string",
             "format": "date-time"
           },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
+          },
           "reference": {
             "type": "string",
             "minLength": 1,
@@ -2848,6 +2853,9 @@
               "active",
               "inactive"
             ]
+          },
+          "is_default": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -2857,7 +2865,39 @@
           "branch_id",
           "code",
           "name",
-          "status"
+          "status",
+          "is_default"
+        ],
+        "additionalProperties": false
+      },
+      "UpdateWarehouseRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ]
+          },
+          "make_default": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "company_id"
         ],
         "additionalProperties": false
       },
@@ -10637,6 +10677,9 @@
           "total_equity": {
             "type": "string"
           },
+          "total_liabilities_and_equity": {
+            "type": "string"
+          },
           "balanced": {
             "type": "boolean"
           }
@@ -10650,6 +10693,7 @@
           "total_assets",
           "total_liabilities",
           "total_equity",
+          "total_liabilities_and_equity",
           "balanced"
         ],
         "additionalProperties": false
@@ -17741,6 +17785,117 @@
         }
       }
     },
+    "/v1/warehouses/{id}": {
+      "patch": {
+        "summary": "Renombrar, apagar/encender o hacer principal un almacén (warehouse.manage)",
+        "description": "El principal no se apaga, ni un almacén con existencias (WAREHOUSE_IN_USE). Hacerlo principal exige además company.settings.manage (migración 60).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWarehouseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Almacén actualizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WarehouseResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "El principal o un almacén con mercancía no se apaga.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/products/{id}/recipe": {
       "get": {
         "summary": "Receta de un producto compuesto, con su costo estimado",
@@ -21715,6 +21870,114 @@
         }
       }
     },
+    "/v1/returns/{id}/cancel": {
+      "post": {
+        "summary": "Cancelar una devolución en BORRADOR (sales.return.manage)",
+        "description": "Un borrador no movió inventario, dinero ni asiento: cancelarlo solo cambia su estado y queda en la auditoría. Una devolución confirmada no se cancela (QA 2026-09-15, h. 55).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Borrador cancelado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "cancelled"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/credit-notes": {
       "post": {
         "summary": "Nota de crédito DIRECTA, sin devolución (permiso sales.return.manage)",
@@ -25555,6 +25818,10 @@
                       "description": {
                         "type": "string"
                       },
+                      "resolved_by": {
+                        "type": "string",
+                        "nullable": true
+                      },
                       "account_id": {
                         "type": "string",
                         "nullable": true,
@@ -25573,6 +25840,7 @@
                       "purpose",
                       "name",
                       "description",
+                      "resolved_by",
                       "account_id",
                       "account_code",
                       "account_name"

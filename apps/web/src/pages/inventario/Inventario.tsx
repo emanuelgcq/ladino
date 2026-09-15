@@ -63,8 +63,12 @@ const OPERACION: Record<
     articulo: "la",
     icono: <ArrowDownToLine />,
     permiso: "inventory.move",
+    // Una entrada directa se contabiliza como APORTE (inventario contra «Aportes en
+    // inventario», ADR-0060): es para el inventario inicial o lo que trae el dueño. Lo
+    // COMPRADO va por Compras, que baja la caja o crea la deuda con el proveedor (QA de
+    // pantalla 2026-09-15, h. 39).
     consecuencia:
-      "El costo promedio del producto en ese almacén se recalculará. El movimiento no se puede editar ni borrar después.",
+      "Úsala para inventario inicial o mercancía que aporta el dueño: en contabilidad entra como aporte, no como compra. Si la compraste, regístrala en Compras y gastos. El costo promedio del producto en ese almacén se recalculará; el movimiento no se edita ni se borra después.",
   },
   salida: {
     etiqueta: "Salida",
@@ -511,7 +515,9 @@ function Movimiento({
         (form.currency === "VES" ||
           !otraTasa ||
           (form.fx_rate !== "" && form.fx_source.trim() !== "")))) &&
-    (operacion !== "ajuste" || form.reason.trim().length >= 3) &&
+    // La SALIDA también exige motivo: sin él no se sabe si fue merma, consumo o regalo, y en el
+    // mayor cae igual en «Ajuste de inventario» (QA de pantalla 2026-09-15, h. 42).
+    ((operacion !== "ajuste" && operacion !== "salida") || form.reason.trim().length >= 3) &&
     (operacion !== "transferencia" ||
       (form.to_warehouse_id !== "" && form.to_warehouse_id !== form.warehouse_id));
 
@@ -554,6 +560,7 @@ function Movimiento({
             ...comun,
             warehouse_id: form.warehouse_id,
             quantity: form.quantity,
+            reason: form.reason.trim(),
           }),
         });
       } else if (operacion === "ajuste") {
@@ -585,13 +592,18 @@ function Movimiento({
       );
       onCerrar(true);
     } catch (e) {
+      // Sin aviso aparte: el diálogo de confirmación y el formulario ya dicen el motivo. El
+      // aviso «No se pudo registrar» sin motivo era la tercera copia del mismo error (QA
+      // 2026-09-15, h. 45).
       setError(e);
-      toast.error("No se pudo registrar");
       throw e;
     }
   }
 
-  const opcionesAlmacen = almacenes.map((w) => ({ value: w.id, label: `${w.code} · ${w.name}` }));
+  // Solo los activos para mover mercancía: un depósito apagado no recibe ni despacha (migración 60).
+  const opcionesAlmacen = almacenes
+    .filter((w) => w.status !== "inactive")
+    .map((w) => ({ value: w.id, label: `${w.code} · ${w.name}` }));
 
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
@@ -738,12 +750,16 @@ function Movimiento({
               )}
             </>
           )}
-          {operacion === "ajuste" && (
+          {(operacion === "ajuste" || operacion === "salida") && (
             <FormField label="Motivo" required className="sm:col-span-2">
               {(a) => (
                 <Input
                   id={a.id}
-                  placeholder="Obligatorio: queda en la auditoría"
+                  placeholder={
+                    operacion === "salida"
+                      ? "Obligatorio: merma, consumo interno, regalo…"
+                      : "Obligatorio: queda en la auditoría"
+                  }
                   value={form.reason}
                   onChange={(e) => setForm({ ...form, reason: e.target.value })}
                 />

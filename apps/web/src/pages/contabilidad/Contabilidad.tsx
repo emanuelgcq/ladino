@@ -79,6 +79,14 @@ const ORIGEN_ASIENTO: { value: string; label: string }[] = [
   { value: "inventory_move", label: "Movimiento de inventario" },
   { value: "landed_cost", label: "Costo en destino" },
   { value: "igtf_perception", label: "Percepción IGTF" },
+  // Los orígenes que el diario enseñaba en código (QA de pantalla 2026-09-15, h. 69).
+  { value: "sales_cost", label: "Costo de lo vendido" },
+  { value: "sales_return", label: "Devolución de venta (mercancía)" },
+  { value: "sales_receipt_return", label: "Recibo de devolución" },
+  { value: "customer_refund", label: "Reembolso a cliente" },
+  { value: "stock_opening", label: "Entrada sin compra (aporte)" },
+  { value: "goods_receipt", label: "Recepción de compra" },
+  { value: "purchase_revaluation", label: "Ajuste de costo de compra" },
 ];
 const etiquetaOrigen = (k: string): string => ORIGEN_ASIENTO.find((o) => o.value === k)?.label ?? k;
 
@@ -346,7 +354,12 @@ function PlanDeCuentas(): React.JSX.Element {
   }
 
   const d = datos.data;
-  const sinAsignar = (d?.papeles ?? []).filter((p) => p.account_id === null);
+  // Un papel que resuelve su origen (la cuenta de tesorería del movimiento, ADR-0060) no se
+  // asigna aquí: contarlo «sin cuenta» alarmaba a toda empresa nueva con un faltante que no
+  // existe (QA de pantalla 2026-09-15, h. 81).
+  const sinAsignar = (d?.papeles ?? []).filter(
+    (p) => p.account_id === null && p.resolved_by === null,
+  );
 
   if (datos.isPending) return <Skeleton className="h-48 w-full" />;
   if (datos.isError || d === undefined) {
@@ -565,7 +578,12 @@ function PlanDeCuentas(): React.JSX.Element {
                 <TR key={p.purpose}>
                   <TD title={p.description}>{p.name}</TD>
                   <TD>
-                    {gestionaPapeles ? (
+                    {p.resolved_by !== null ? (
+                      <span className="text-[0.84rem] text-muted-foreground">
+                        Automática: la cuenta contable de la caja o banco de cada movimiento (se
+                        define en Mi dinero).
+                      </span>
+                    ) : gestionaPapeles ? (
                       <div className="flex items-center gap-2">
                         <div className="w-80 max-w-full">
                           <SimpleSelect
@@ -819,7 +837,9 @@ function Diario(): React.JSX.Element {
                   Postear
                 </Button>
               )}
-              {e.status === "posted" && puedeReversar && (
+              {/* Solo los MANUALES: un asiento generado por un documento se corrige desde el
+                  documento (QA de pantalla 2026-09-15, h. 67). */}
+              {e.status === "posted" && e.source_kind === "manual" && puedeReversar && (
                 <Button variant="ghost" size="sm" onClick={() => setReversando(e.id)}>
                   Reversar
                 </Button>
@@ -1988,12 +2008,7 @@ function Estados(): React.JSX.Element {
                     <TD colSpan={2}>Pasivo + patrimonio</TD>
                     <TDNum>
                       {mostrarImporte({
-                        amount: d.situacion.total_liabilities,
-                        currency: d.situacion.currency,
-                      })}{" "}
-                      +{" "}
-                      {mostrarImporte({
-                        amount: d.situacion.total_equity,
+                        amount: d.situacion.total_liabilities_and_equity,
                         currency: d.situacion.currency,
                       })}
                     </TDNum>

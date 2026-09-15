@@ -161,6 +161,11 @@ export async function onboardBusiness(
   });
   if (!preset.ok) return preset;
 
+  // El registro terminó: la empresa ya opera. Antes quedaba en «onboarding» para siempre,
+  // vendiera o no (QA de pantalla 2026-09-15, h. 82). Crear una empresa por la API
+  // administrativa sigue naciendo en «onboarding»: ahí nadie completó el registro.
+  await sql`update public.companies set status = 'active' where id = ${companyId} and status = 'onboarding'`;
+
   await sql`
     insert into public.audit_events
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type,

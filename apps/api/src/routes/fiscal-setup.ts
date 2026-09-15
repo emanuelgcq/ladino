@@ -192,7 +192,9 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
         select (now() at time zone 'America/Caracas')::date::text as hoy`;
       const hoy = dia!.hoy;
       const fuente =
-        `Alícuota declarada y ACEPTADA por el usuario ${userId} el ${hoy} desde el asistente ` +
+        // Sin el UUID del usuario en el texto: la pantalla lo mostraba crudo (QA 2026-09-15, h. 59).
+        // Quién aceptó queda en created_by de cada regla y en la auditoría.
+        `Alícuota declarada y ACEPTADA por el dueño el ${hoy} desde el asistente ` +
         `de puesta a punto. VALIDAR-TRIBUTARIO: confirmar contra la Ley de IVA vigente antes ` +
         `de producción (docs/02_COMPLIANCE/IVA_SPEC.md).`;
 

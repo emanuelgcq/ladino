@@ -364,6 +364,8 @@ export const BalanceSheetResponse = z
     total_assets: z.string(),
     total_liabilities: z.string(),
     total_equity: z.string(),
+    /** Pasivo + patrimonio (con el resultado sin cerrar), sumado por el servidor en numeric. */
+    total_liabilities_and_equity: z.string(),
     /** activo == pasivo + patrimonio. Si es falso, hay un asiento roto. */
     balanced: z.boolean(),
   })

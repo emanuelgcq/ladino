@@ -947,6 +947,11 @@ async function resolverLista(
   companyId: string,
   customerId: string,
   pedida: string | undefined,
+  /**
+   * `de_contado`: la caja cotiza y cobra en el acto — el bloqueo de cobranzas NO impide
+   * venderle; lo que impide es FIARLE, y eso lo comprueba quickSale con el cobro en la mano.
+   */
+  bloqueo: "rechazar" | "de_contado" = "rechazar",
 ): Promise<Result<string, SalesError>> {
   const [cliente] = await sql<
     { default_price_list_id: string | null; status: string; is_system: boolean }[]
@@ -954,10 +959,11 @@ async function resolverLista(
     select default_price_list_id, status, is_system from public.customers
      where id = ${customerId} and company_id = ${companyId}`;
   if (!cliente) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-  if (cliente.status === "blocked") {
+  if (cliente.status === "blocked" && bloqueo === "rechazar") {
     return err({
       code: "VALIDATION_FAILED",
-      message: "El cliente está bloqueado por cobranzas: no se le puede vender.",
+      message:
+        "El cliente está bloqueado por cobranzas: no se le vende a crédito. En la caja se le vende de contado.",
     });
   }
 
@@ -1436,8 +1442,9 @@ export async function confirmOrder(
 export async function createInvoice(
   uow: UnitOfWork,
   input: CreateInvoiceRequest,
+  bloqueo: "rechazar" | "de_contado" = "rechazar",
 ): Promise<Result<DocumentResponse, SalesError>> {
-  return emitirVenta(uow, input, "invoice");
+  return emitirVenta(uow, input, "invoice", bloqueo);
 }
 
 /**
@@ -1449,14 +1456,16 @@ export async function createInvoice(
 export async function createReceipt(
   uow: UnitOfWork,
   input: CreateInvoiceRequest,
+  bloqueo: "rechazar" | "de_contado" = "rechazar",
 ): Promise<Result<DocumentResponse, SalesError>> {
-  return emitirVenta(uow, input, "receipt");
+  return emitirVenta(uow, input, "receipt", bloqueo);
 }
 
 async function emitirVenta(
   uow: UnitOfWork,
   input: CreateInvoiceRequest,
   kind: "invoice" | "receipt",
+  bloqueo: "rechazar" | "de_contado" = "rechazar",
 ): Promise<Result<DocumentResponse, SalesError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
@@ -1492,6 +1501,7 @@ async function emitirVenta(
     input.company_id,
     input.customer_id,
     input.price_list_id,
+    bloqueo,
   );
   if (!lista.ok) return lista;
 
@@ -1572,10 +1582,15 @@ async function emitirVenta(
         sourceDocumentId: doc.value.id,
       });
       if (!mov.ok) {
+        // Un permiso que falta es un 403, no un «dato inválido»: con el 422 la caja le decía al
+        // dueño que sus datos estaban mal cuando lo que faltaba era el alcance sobre el
+        // depósito (QA de pantalla 2026-09-15, h. 46).
         return err(
           mov.error.code === "NEGATIVE_STOCK"
             ? { code: "NEGATIVE_STOCK", message: mov.error.message }
-            : { code: "VALIDATION_FAILED", message: mov.error.message },
+            : mov.error.code === "PERMISSION_REQUIRED"
+              ? { code: "PERMISSION_REQUIRED", message: mov.error.message }
+              : { code: "VALIDATION_FAILED", message: mov.error.message },
         );
       }
 
@@ -1864,7 +1879,9 @@ export async function annulInvoice(
       return err(
         repuesto.error.code === "NEGATIVE_STOCK"
           ? { code: "NEGATIVE_STOCK", message: repuesto.error.message }
-          : { code: "VALIDATION_FAILED", message: repuesto.error.message },
+          : repuesto.error.code === "PERMISSION_REQUIRED"
+            ? { code: "PERMISSION_REQUIRED", message: repuesto.error.message }
+            : { code: "VALIDATION_FAILED", message: repuesto.error.message },
       );
     }
     const [costoAsentado] = await sql<{ id: string }[]>`
@@ -1899,10 +1916,12 @@ export async function annulInvoice(
     const [conAsiento] = await sql<{ journal_entry_id: string | null }[]>`
       select journal_entry_id from public.documents where id = ${documentId}`;
     if (conAsiento?.journal_entry_id != null) {
-      const reverso = await reverseJournalEntry(uow, conAsiento.journal_entry_id, {
-        company_id: input.company_id,
-        reason: `Anulación del ${nombre}: ${input.reason}`,
-      });
+      const reverso = await reverseJournalEntry(
+        uow,
+        conAsiento.journal_entry_id,
+        { company_id: input.company_id, reason: `Anulación del ${nombre}: ${input.reason}` },
+        { desdeDocumento: true },
+      );
       if (!reverso.ok) {
         return err({ code: "VALIDATION_FAILED", message: reverso.error.message });
       }
@@ -2875,6 +2894,53 @@ export async function createDebitNote(
  * y crea el saldo a favor. Los tres en la misma transacción — una devolución a
  * medias dejaría mercancía en el almacén sin nota de crédito, o al revés.
  */
+/**
+ * Cancela una devolución que quedó en BORRADOR (QA de pantalla 2026-09-15, h. 55): si la
+ * confirmación falla (p. ej. falta el rango de notas de crédito), el borrador quedaba vivo sin
+ * forma de retomarlo ni descartarlo. Un borrador no movió inventario, dinero ni asiento:
+ * cancelarlo solo cambia su estado, y queda en la auditoría.
+ */
+export async function cancelReturn(
+  uow: UnitOfWork,
+  returnId: string,
+  companyId: string,
+): Promise<Result<{ id: string; status: string }, SalesError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Cancelar exige un usuario real." });
+  }
+  const ctx = await autorizar(
+    sql,
+    actor.userId,
+    companyId,
+    "sales.return.manage",
+    new Date().toISOString(),
+  );
+  if (!ctx.ok) return ctx;
+  const [dev] = await sql<{ id: string; status: string }[]>`
+    select id, status from public.returns
+     where id = ${returnId} and company_id = ${companyId}
+     for update`;
+  if (!dev) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (dev.status !== "draft") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Solo se cancela una devolución en borrador; esta ya está " +
+        (dev.status === "confirmed" ? "confirmada." : "cancelada."),
+    });
+  }
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  await sql`update public.returns set status = 'cancelled' where id = ${returnId} and company_id = ${companyId}`;
+  await sql`
+    insert into public.audit_events
+      (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+       actor_type, occurred_at, rules_version, payload)
+    values (${ctx.value.tenantId}, ${companyId}, 'return', ${returnId}, 'sales.return.cancelled',
+            'user', now(), ${RULES_VERSION}, ${sql.json({ id: returnId })})`;
+  return ok({ id: returnId, status: "cancelled" });
+}
+
 export async function confirmReturn(
   uow: UnitOfWork,
   returnId: string,
@@ -3339,6 +3405,7 @@ export async function quotePos(
     input.company_id,
     cliente.value,
     input.price_list_id,
+    "de_contado",
   );
   if (!lista.ok) return lista;
 
@@ -3503,15 +3570,19 @@ export async function quickSale(
   const modoRecibos =
     (await modoDeVenta(sql, input.company_id, new Date().toISOString())) === "recibos";
 
-  const emitida = await (modoRecibos ? createReceipt : createInvoice)(uow, {
-    company_id: input.company_id,
-    customer_id: cliente.value,
-    warehouse_id: input.warehouse_id,
-    branch_id: input.branch_id ?? null,
-    lines: input.lines,
-    ...(input.series === undefined ? {} : { series: input.series }),
-    ...(input.price_list_id === undefined ? {} : { price_list_id: input.price_list_id }),
-  });
+  const emitida = await (modoRecibos ? createReceipt : createInvoice)(
+    uow,
+    {
+      company_id: input.company_id,
+      customer_id: cliente.value,
+      warehouse_id: input.warehouse_id,
+      branch_id: input.branch_id ?? null,
+      lines: input.lines,
+      ...(input.series === undefined ? {} : { series: input.series }),
+      ...(input.price_list_id === undefined ? {} : { price_list_id: input.price_list_id }),
+    },
+    "de_contado",
+  );
   if (!emitida.ok) return emitida;
   let documento = emitida.value;
 
@@ -3588,6 +3659,21 @@ export async function quickSale(
       code: "VALIDATION_FAILED",
       message: "Una venta de mostrador se cobra completa. Para fiar, identifica al cliente.",
     });
+  }
+  // BLOQUEO DE COBRANZAS: se le vende de contado, no se le fía. Antes el bloqueo impedía
+  // hasta cotizarle y un cliente moroso no podía comprar pagando en efectivo (QA de
+  // pantalla 2026-09-15, h. 79). Con el err, withTransaction revierte la venta entera.
+  if (estado !== "paid") {
+    const [bloqueado] = await sql<{ b: boolean }[]>`
+      select status = 'blocked' as b from public.customers
+       where id = ${cliente.value} and company_id = ${input.company_id}`;
+    if (bloqueado?.b === true) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          "El cliente está bloqueado por cobranzas: no se le fía. Cóbrale la venta completa.",
+      });
+    }
   }
 
   if (cobros.length > 0) {

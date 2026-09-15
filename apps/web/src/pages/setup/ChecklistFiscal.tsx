@@ -24,7 +24,7 @@ import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { mostrarPorcentaje } from "../../porcentaje.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { porcentajeAFraccion } from "../negocio/comunes.js";
-import { fechaLocal, hoyLocal } from "../../fechas.js";
+import { fechaLocal, fuenteDeTasa, hoyLocal } from "../../fechas.js";
 
 /**
  * PUESTA A PUNTO FISCAL — R-16 resuelto como diseño.
@@ -59,10 +59,6 @@ interface SetupFiscal {
   iva_general: { rate: string; legal_source: string } | null;
 }
 
-/** «BCV oficial vía DolarAPI (2026-09-11T00:00:00-04:00)» → «BCV oficial vía DolarAPI». */
-function fuenteCorta(source: string): string {
-  return source.replace(/\s*\([^)]*\)\s*$/, "");
-}
 function AlertaRangos(): React.JSX.Element | null {
   const { empresa, llamar } = useSesion();
   // La ruta devuelve el ARRAY directamente (sales.ts): leer `.items` dejaba la
@@ -186,7 +182,7 @@ export function ChecklistFiscal(): React.JSX.Element {
             setup.isError
               ? "No se pudo consultar la puesta a punto fiscal."
               : ivaVigente !== null
-                ? `Alícuota general vigente: ${mostrarPorcentaje(ivaVigente.rate)}. Fuente: ${ivaVigente.legal_source}`
+                ? `Alícuota general vigente: ${mostrarPorcentaje(ivaVigente.rate)}. Fuente: ${ivaVigente.legal_source.replace(/ por el usuario [0-9a-f-]{36}/i, "")}`
                 : "Sin alícuota general vigente: no se emite (ADR-0038 — el sistema no adivina alícuotas). Se carga en /empezar, o aquí mismo si tienes el permiso."
           }
           sello="VALIDAR-SENIAT: la alícuota y su vigencia deben venir de la norma, citada en legal_source."
@@ -218,7 +214,7 @@ export function ChecklistFiscal(): React.JSX.Element {
             tasas.isError
               ? "No se pudieron consultar las tasas."
               : ultimaTasa !== undefined
-                ? `Última: ${mostrarCantidad(ultimaTasa.rate)} Bs/USD · ${fuenteCorta(ultimaTasa.source)} · ${fechaLocal(ultimaTasa.rate_date)}`
+                ? `Última: ${mostrarCantidad(ultimaTasa.rate)} Bs/USD · ${fuenteDeTasa(ultimaTasa.source)} · ${fechaLocal(ultimaTasa.rate_date)}`
                 : "Sin tasa cargada: cualquier operación en divisa fallará."
           }
           extra={
@@ -904,7 +900,11 @@ function Contingencia({ rangos }: { rangos: RangoContingencia[] }): React.JSX.El
 
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],
-    queryFn: () => llamar<{ id: string; code: string; name: string }[]>("/v1/warehouses"),
+    // Solo los activos: un depósito apagado no recibe ni despacha (migración 60).
+    queryFn: () =>
+      llamar<({ id: string; code: string; name: string } & { status?: string })[]>(
+        "/v1/warehouses",
+      ).then((ws) => ws.filter((w) => w.status !== "inactive")),
   });
   // Con un solo depósito no hay nada que elegir: se toma ese.
   const unicoDeposito = depositos.data?.length === 1 ? (depositos.data[0]?.id ?? null) : null;

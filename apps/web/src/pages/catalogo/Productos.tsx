@@ -128,7 +128,7 @@ export function Productos(): React.JSX.Element {
         title="Productos"
         description={
           modoRecibos
-            ? "El catálogo: código, unidad y precio de cada producto."
+            ? "El catálogo: código y unidad de cada producto. El precio se pone en Listas de precios."
             : "El catálogo: SKU, unidad y clasificación tributaria — la clasificación se congela en cada documento al emitir."
         }
         actions={

@@ -335,10 +335,16 @@ function VenderDeEmpresa(): React.JSX.Element {
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],
     staleTime: 5 * 60_000,
-    queryFn: () => llamar<{ id: string; name: string }[]>("/v1/warehouses"),
+    queryFn: () =>
+      llamar<{ id: string; name: string; status: string; is_default: boolean }[]>("/v1/warehouses"),
   });
 
-  const deposito = ajustes.data?.default_warehouse_id ?? depositos.data?.[0]?.id ?? null;
+  // La caja descuenta del PRINCIPAL (migración 60): antes tomaba el primero por código y un
+  // depósito nuevo la dejaba sin poder vender (QA de pantalla 2026-09-15, h. 46).
+  const deposito =
+    depositos.data?.find((d) => d.is_default && d.status === "active")?.id ??
+    depositos.data?.find((d) => d.status === "active")?.id ??
+    null;
 
   // La cotización de la cuenta ACTIVA (solo ella: N fichas, UNA cotización),
   // SIEMPRE del servidor, con debounce — y sin debounce al cambiar de ficha.
@@ -376,7 +382,7 @@ function VenderDeEmpresa(): React.JSX.Element {
     if (!p.price_amount) {
       return negar(
         `${p.name}: no tiene precio`,
-        "Se le pone en Administración → Productos antes de venderlo.",
+        "El precio se pone en Administración → Listas de precios; después ya se vende.",
       );
     }
     // LA EXISTENCIA MANDA (orden del dueño, 2026-09-08): no se anota más de lo
@@ -1275,7 +1281,8 @@ function IdentificarCliente({
             <span className="font-medium tabular-nums">{formatearDocumento(documento)}</span> no
             está registrado. Se guarda ahora mismo:
           </p>
-          <FormField label="Nombre completo" required>
+          {/* Documento J o G: persona jurídica, su nombre es la razón social (QA 2026-09-15, h. 58). */}
+          <FormField label={esEmpresa ? "Razón social" : "Nombre completo"} required>
             {(p) => (
               <Input
                 {...p}
@@ -1561,7 +1568,7 @@ function Cobrar({
                 })}
               </span>
               {pagos.length === 0 ? "" : " (lo recibido se abona ahora)"}. Lo cobras después desde
-              Clientes o Mi dinero.
+              la ficha del cliente (Administración → Clientes) o desde la venta.
             </p>
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" onClick={() => setFiando(false)}>
@@ -1881,7 +1888,8 @@ function VentaLista({
                 })}
               </p>
               <p className="pt-1 text-[0.8rem] text-warning-soft-foreground">
-                Lo cobras después desde Clientes o Mi dinero.
+                Lo cobras después desde la ficha del cliente (Administración → Clientes) o desde la
+                venta.
               </p>
             </div>
           )}

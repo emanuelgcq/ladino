@@ -87,6 +87,38 @@ const ROTULO: Record<string, string> = {
 };
 
 /**
+ * Identificadores internos: viajan en el CSV (trazabilidad) pero en pantalla eran UUID enteros
+ * que nadie puede leer (QA de pantalla 2026-09-15, h. 65).
+ */
+const COLUMNAS_OCULTAS: ReadonlySet<string> = new Set([
+  "document_id",
+  "invoice_id",
+  "retention_id",
+  "journal_entry_id",
+]);
+
+/** Los códigos que el libro trae crudos, dichos en llano. */
+const VALOR_LEGIBLE: Record<string, Record<string, string>> = {
+  kind: {
+    invoice: "Factura",
+    credit_note: "Nota de crédito",
+    debit_note: "Nota de débito",
+    receipt: "Recibo",
+  },
+  status: { issued: "Emitida", paid: "Pagada", annulled: "Anulada", posted: "Registrada" },
+  receipt_status: { issued: "Emitido", annulled: "Anulado", draft: "Borrador" },
+  customer_taxpayer_type: {
+    ordinario: "Ordinario",
+    especial: "Especial",
+    formal: "Formal",
+    consumidor_final: "Consumidor final",
+    no_sujeto: "No sujeto",
+    no_domiciliado: "No domiciliado",
+  },
+  supplier_kind: { nacional: "Nacional", extranjero: "Extranjero" },
+};
+
+/**
  * Las columnas de DINERO, por lista explícita: antes se decidía por prefijo
  * (`base_`, `iva_`, `total_`…) y un prefijo decide también sobre lo que no
  * conoce. `rate` es una fracción y `fx_rate` una tasa: ni una ni otra es un
@@ -261,47 +293,55 @@ function Libro({
   const columnas = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(() => {
     if (b === undefined || b.rows.length === 0) return [];
     const primera = b.rows[0] ?? {};
-    return Object.keys(primera).map((clave) => ({
-      id: clave,
-      header: COLUMNAS_DINERO.has(clave)
-        ? () => <span className="block text-right">{ROTULO[clave] ?? humanizar(clave)}</span>
-        : (ROTULO[clave] ?? humanizar(clave)),
-      enableSorting: false,
-      accessorFn: (fila: Record<string, unknown>) => fila[clave],
-      cell: (c) => {
-        const v = c.row.original[clave];
-        if (v === null || v === undefined) return <span className="text-faint-foreground">—</span>;
-        if (typeof v === "boolean") return v ? "sí" : "no";
-        if (typeof v === "string" && COLUMNAS_DINERO.has(clave)) {
-          return (
-            <span className="block text-right font-mono text-[0.82rem]">
-              {mostrarImporte({ amount: v, currency: b.currency })}
-            </span>
-          );
-        }
-        // La porción retenida viaja como fracción («0.75000000»): se enseña
-        // como «75 %», moviendo la coma sobre el string.
-        if (typeof v === "string" && clave === "rate") {
-          return (
-            <span className="block text-right font-mono text-[0.82rem]">
-              {mostrarPorcentaje(v)}
-            </span>
-          );
-        }
-        if (typeof v === "string" && clave === "fx_rate") {
-          return (
-            <span className="block text-right font-mono text-[0.82rem]">{mostrarCantidad(v)}</span>
-          );
-        }
-        if (typeof v === "string" && COLUMNAS_FECHA.has(clave)) {
-          return <span className="text-[0.84rem]">{fechaLocal(v)}</span>;
-        }
-        // Solo primitivos: las filas del libro traen strings y números, y un
-        // objeto inesperado se enseña como «?» antes que como [object Object].
-        const texto = typeof v === "string" || typeof v === "number" ? String(v) : "?";
-        return <span className="text-[0.84rem]">{texto}</span>;
-      },
-    }));
+    return Object.keys(primera)
+      .filter((clave) => !COLUMNAS_OCULTAS.has(clave))
+      .map((clave) => ({
+        id: clave,
+        header: COLUMNAS_DINERO.has(clave)
+          ? () => <span className="block text-right">{ROTULO[clave] ?? humanizar(clave)}</span>
+          : (ROTULO[clave] ?? humanizar(clave)),
+        enableSorting: false,
+        accessorFn: (fila: Record<string, unknown>) => fila[clave],
+        cell: (c) => {
+          const v = c.row.original[clave];
+          if (v === null || v === undefined)
+            return <span className="text-faint-foreground">—</span>;
+          if (typeof v === "boolean") return v ? "sí" : "no";
+          if (typeof v === "string" && VALOR_LEGIBLE[clave]?.[v] !== undefined) {
+            return VALOR_LEGIBLE[clave][v];
+          }
+          if (typeof v === "string" && COLUMNAS_DINERO.has(clave)) {
+            return (
+              <span className="block text-right font-mono text-[0.82rem]">
+                {mostrarImporte({ amount: v, currency: b.currency })}
+              </span>
+            );
+          }
+          // La porción retenida viaja como fracción («0.75000000»): se enseña
+          // como «75 %», moviendo la coma sobre el string.
+          if (typeof v === "string" && clave === "rate") {
+            return (
+              <span className="block text-right font-mono text-[0.82rem]">
+                {mostrarPorcentaje(v)}
+              </span>
+            );
+          }
+          if (typeof v === "string" && clave === "fx_rate") {
+            return (
+              <span className="block text-right font-mono text-[0.82rem]">
+                {mostrarCantidad(v)}
+              </span>
+            );
+          }
+          if (typeof v === "string" && COLUMNAS_FECHA.has(clave)) {
+            return <span className="text-[0.84rem]">{fechaLocal(v)}</span>;
+          }
+          // Solo primitivos: las filas del libro traen strings y números, y un
+          // objeto inesperado se enseña como «?» antes que como [object Object].
+          const texto = typeof v === "string" || typeof v === "number" ? String(v) : "?";
+          return <span className="text-[0.84rem]">{texto}</span>;
+        },
+      }));
   }, [b]);
 
   return (

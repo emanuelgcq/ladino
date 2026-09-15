@@ -243,7 +243,7 @@ export function Dashboard(): React.JSX.Element {
   return (
     <div>
       <PageHeader
-        title={`Hola — ${empresa.legal_name}`}
+        title={`Hola — ${empresa.trade_name ?? empresa.legal_name}`}
         description="Las cinco respuestas del dueño, con cada cifra calculada por el servidor."
         actions={
           <Button variant="primary" onClick={() => void navigate("/admin/ventas/nueva")}>

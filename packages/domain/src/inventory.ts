@@ -1031,7 +1031,7 @@ export async function issueStock(
         fact: hecho.value.fact,
         occurredAt,
         reference: input.reference ?? null,
-        reason: null,
+        reason: input.reason ?? null,
         note: input.note ?? null,
         transferId: null,
         counterpartId: null,

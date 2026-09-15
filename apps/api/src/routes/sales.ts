@@ -28,6 +28,7 @@ import {
   registerPayment,
   createReturn,
   confirmReturn,
+  cancelReturn,
   quotePos,
   quickSale,
   previsualizarConversion,
@@ -128,7 +129,14 @@ export function salesRoutes(
     const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     const filas = await withTransaction(sql, actor, ({ sql: tx }) => {
       return tx<Record<string, unknown>[]>`
-        select ${tx.unsafe(DOC_COLUMNS)}, count(*) over ()::int as total
+        select ${tx.unsafe(DOC_COLUMNS)},
+               -- ¿tiene cobros? Un documento emitido CON abonos se lee «Abonada» en la lista:
+               -- antes un fiado con abono parcial y uno sin abono decían ambos «Emitida» (QA de
+               -- pantalla 2026-09-15, h. 21).
+               exists (select 1 from public.payments p
+                        where p.company_id = documents.company_id
+                          and p.document_id = documents.id) as has_payments,
+               count(*) over ()::int as total
           from public.documents
          where company_id = ${companyId}
            ${kind === "" ? tx`` : tx`and kind = ${kind}`}
@@ -560,6 +568,15 @@ export function salesRoutes(
     const id = idValido(c.req.param("id"));
     const { actor } = c.get("ladino.auth");
     const r = await withTransaction(sql, actor, (uow) => confirmReturn(uow, id, companyId));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
+
+  app.post("/v1/returns/:id/cancel", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const id = idValido(c.req.param("id"));
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => cancelReturn(uow, id, companyId));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 200);
   });

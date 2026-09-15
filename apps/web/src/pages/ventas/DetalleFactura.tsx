@@ -24,6 +24,7 @@ import { esCero } from "../../components/decimal-compare.js";
 import { EntityPicker, type EntityOption } from "../../components/forms.js";
 import { KIND_LABEL, MensajeError, numeroDe } from "./comunes.js";
 import { CobrarDocumento } from "../../components/CobrarDocumento.js";
+import { ETIQUETA_FORMA } from "../../components/formas-de-pago.js";
 import { numeroDocumento } from "../../components/documento.js";
 import { errorDePersona } from "../../lib.js";
 import { fechaLocal } from "../../fechas.js";
@@ -129,7 +130,11 @@ export function DetalleFactura(): React.JSX.Element {
   const [almacenPedido, setAlmacenPedido] = useState<string | null>(null);
   const depositosPedido = useQuery({
     queryKey: ["depositos", empresa.id],
-    queryFn: () => llamar<{ id: string; code: string; name: string }[]>("/v1/warehouses"),
+    // Solo los activos: un depósito apagado no recibe ni despacha (migración 60).
+    queryFn: () =>
+      llamar<({ id: string; code: string; name: string } & { status?: string })[]>(
+        "/v1/warehouses",
+      ).then((ws) => ws.filter((w) => w.status !== "inactive")),
   });
   const [errorAccion, setErrorAccion] = useState<unknown>(null);
 
@@ -143,7 +148,7 @@ export function DetalleFactura(): React.JSX.Element {
     queryKey: ["cliente", empresa.id, detalle.data?.document.customer_id],
     enabled: detalle.data !== undefined,
     queryFn: () =>
-      llamar<{ legal_name: string; tax_id: string | null }>(
+      llamar<{ legal_name: string; tax_id: string | null; is_system?: boolean }>(
         `/v1/customers/${detalle.data?.document.customer_id}`,
       ),
   });
@@ -231,6 +236,10 @@ export function DetalleFactura(): React.JSX.Element {
   const difPorPago = new Map(exchange_differences.map((d) => [d.payment_id, d]));
   const dual = doc.transaction_currency !== doc.functional_currency;
   const pagable = doc.kind === "invoice" && (doc.status === "issued" || doc.status === "paid");
+  // Un recibo FIADO también se cobra: el servidor siempre lo aceptó (registerPayment no mira el
+  // kind), pero el botón exigía factura y el diálogo de fiar mandaba a cobrar «desde Clientes o
+  // Mi dinero», donde no había cómo (QA de pantalla 2026-09-15, h. 26).
+  const cobrable = (doc.kind === "invoice" || doc.kind === "receipt") && doc.status === "issued";
   // ADR-0061: un recibo también se devuelve (con recibo de devolución), y
   // factura y recibo se anulan solo mientras NO tengan cobros — con cobros, el
   // camino es la devolución.
@@ -301,7 +310,7 @@ export function DetalleFactura(): React.JSX.Element {
                 )}
               </>
             )}
-            {pagable &&
+            {cobrable &&
               balance !== null &&
               !esCero(balance) &&
               !balance.startsWith("-") &&
@@ -345,7 +354,11 @@ export function DetalleFactura(): React.JSX.Element {
           <Card>
             <CardHeader>
               <CardTitle>Líneas</CardTitle>
-              <FiscalStatusBadge estado={doc.status} />
+              <FiscalStatusBadge
+                estado={
+                  doc.status === "issued" && payments.length > 0 ? "partially_paid" : doc.status
+                }
+              />
             </CardHeader>
             <CardContent className="px-0 pb-1">
               <Table>
@@ -421,7 +434,7 @@ export function DetalleFactura(): React.JSX.Element {
                       return (
                         <TR key={p.id}>
                           <TD>{fechaLocal(p.paid_at)}</TD>
-                          <TD>{p.instrument.replace(/_/g, " ")}</TD>
+                          <TD>{ETIQUETA_FORMA[p.instrument] ?? p.instrument.replace(/_/g, " ")}</TD>
                           <TD className="text-muted-foreground">{p.reference ?? "—"}</TD>
                           <TD>
                             <DualMoney
@@ -721,6 +734,7 @@ export function DetalleFactura(): React.JSX.Element {
         <Devolucion
           documento={doc}
           lineas={lines}
+          mostrador={cliente.data?.is_system === true}
           onClose={(hecho) => {
             setDevolviendo(false);
             if (hecho) invalidarTrasCambio();
@@ -799,10 +813,16 @@ function Fila({
 function Devolucion({
   documento,
   lineas,
+  mostrador,
   onClose,
 }: {
   documento: Documento;
   lineas: Linea[];
+  /**
+   * Venta al Consumidor final de sistema: un saldo a favor a su nombre no lo puede usar nadie.
+   * Se devuelve el dinero, siempre (QA de pantalla 2026-09-15, h. 35).
+   */
+  mostrador: boolean;
   onClose: (hecho: boolean) => void;
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
@@ -827,14 +847,24 @@ function Devolucion({
   const cuentas = useQuery({
     queryKey: ["cuentas-reembolso", empresa.id],
     queryFn: () =>
-      llamar<{ accounts: { id: string; name: string; currency: string; is_active: boolean }[] }>(
-        "/v1/treasury/accounts",
-      ),
+      llamar<{
+        accounts: {
+          id: string;
+          name: string;
+          currency: string;
+          is_active: boolean;
+          is_system?: boolean;
+        }[];
+      }>("/v1/treasury/accounts"),
   });
 
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],
-    queryFn: () => llamar<{ id: string; name: string }[]>("/v1/warehouses"),
+    // Solo los activos: un depósito apagado no recibe ni despacha (migración 60).
+    queryFn: () =>
+      llamar<({ id: string; name: string } & { status?: string })[]>("/v1/warehouses").then((ws) =>
+        ws.filter((w) => w.status !== "inactive"),
+      ),
   });
   // El primer depósito por omisión, en un efecto: un setState durante el
   // render es un bucle en potencia.
@@ -847,7 +877,35 @@ function Devolucion({
     .map((l) => ({ linea: l, cantidad: (cantidades[l.id] ?? "").trim().replace(",", ".") }))
     .filter((x) => x.cantidad !== "" && Number(x.cantidad) > 0);
   const listo =
-    creada !== null || (elegidas.length > 0 && motivo.trim().length >= 3 && deposito !== null);
+    creada !== null ||
+    (elegidas.length > 0 &&
+      motivo.trim().length >= 3 &&
+      deposito !== null &&
+      (!mostrador || cajaReembolso !== null));
+
+  /**
+   * Cancelar con un borrador ya creado lo CANCELA en el servidor: antes quedaba huérfano, sin
+   * forma de retomarlo ni descartarlo (QA de pantalla 2026-09-15, h. 55).
+   */
+  async function cancelar(): Promise<void> {
+    if (creada === null) {
+      onClose(false);
+      return;
+    }
+    setOcupado(true);
+    try {
+      await llamar(`/v1/returns/${creada}/cancel`, {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+      });
+      toast.success("Devolución descartada", "El borrador quedó cancelado; nada se movió.");
+      onClose(true);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setOcupado(false);
+    }
+  }
 
   async function devolver(): Promise<void> {
     setError(null);
@@ -959,13 +1017,22 @@ function Devolucion({
           <div className="w-full sm:w-72">
             <SimpleSelect
               ariaLabel="Devolver el dinero desde"
-              value={cajaReembolso ?? "saldo"}
+              value={cajaReembolso ?? (mostrador ? null : "saldo")}
               onValueChange={(v) => setCajaReembolso(v === "saldo" ? null : v)}
               disabled={creada !== null}
+              placeholder="¿De qué caja sale el dinero?"
               options={[
-                { value: "saldo", label: "Dejar saldo a favor del cliente" },
+                ...(mostrador
+                  ? []
+                  : [{ value: "saldo", label: "Dejar saldo a favor del cliente" }]),
                 ...(cuentas.data?.accounts ?? [])
-                  .filter((c) => c.is_active && c.currency === documento.functional_currency)
+                  // «Sin asignar» es de sistema: de ahí no sale un reembolso (QA 2026-09-15, h. 36).
+                  .filter(
+                    (c) =>
+                      c.is_active &&
+                      c.is_system !== true &&
+                      c.currency === documento.functional_currency,
+                  )
                   .map((c) => ({ value: c.id, label: `Devolver el dinero desde «${c.name}»` })),
               ]}
             />
@@ -987,8 +1054,8 @@ function Devolucion({
           {error !== null && <MensajeError error={error} />}
         </div>
         <div className="mt-4 flex justify-end gap-2">
-          <Button variant="ghost" onClick={() => onClose(false)} disabled={ocupado}>
-            Cancelar
+          <Button variant="ghost" onClick={() => void cancelar()} disabled={ocupado}>
+            {creada !== null ? "Descartar el borrador" : "Cancelar"}
           </Button>
           <Button variant="primary" disabled={!listo || ocupado} onClick={() => void devolver()}>
             {ocupado

@@ -509,16 +509,17 @@ export async function createProductSimple(
     if (!costoUnit.ok || !cantidad.ok) {
       return err({ code: "VALIDATION_FAILED", message: "Cantidad o costo no interpretables." });
     }
-    let almacen = input.initial_stock.warehouse_id ?? ajustes?.default_warehouse_id ?? null;
+    // Sin almacén explícito, EL PRINCIPAL (migración 60): el de ajustes si está activo, si no el
+    // activo más antiguo. Antes, con dos almacenes, el alta con existencia se negaba.
+    let almacen = input.initial_stock.warehouse_id ?? null;
     if (almacen === null) {
-      const almacenes = await sql<{ id: string }[]>`
-        select id from public.warehouses where company_id = ${input.company_id} limit 2`;
-      if (almacenes.length === 1) {
-        almacen = almacenes[0]!.id;
-      } else {
+      const [principal] = await sql<{ id: string | null }[]>`
+        select platform.default_warehouse(${input.company_id}) as id`;
+      almacen = principal?.id ?? null;
+      if (almacen === null) {
         return err({
           code: "VALIDATION_FAILED",
-          message: "Hay más de un almacén: indica en cuál entra la mercancía.",
+          message: "La empresa no tiene un depósito activo donde entre la mercancía.",
         });
       }
     }

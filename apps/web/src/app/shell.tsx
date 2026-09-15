@@ -476,7 +476,9 @@ function TopBar({
         <MenuContent>
           <div className="px-2.5 py-1.5">
             <p className="truncate text-[0.85rem] font-medium">{session.user.email}</p>
-            <p className="truncate text-[0.78rem] text-muted-foreground">{empresa.legal_name}</p>
+            <p className="truncate text-[0.78rem] text-muted-foreground">
+              {empresa.trade_name ?? empresa.legal_name}
+            </p>
           </div>
           <MenuSeparator />
           {app.disponible && (
@@ -523,7 +525,7 @@ function CompanySwitcher(): React.JSX.Element {
         className="flex min-w-0 max-w-64 items-center gap-2 rounded-sm px-2 py-2 text-[0.9rem] font-medium hover:bg-surface-muted lg:py-1"
       >
         <Building2 className="size-4 shrink-0 text-muted-foreground max-sm:hidden" />
-        <span className="truncate">{empresa.legal_name}</span>
+        <span className="truncate">{empresa.trade_name ?? empresa.legal_name}</span>
       </MenuTrigger>
       <MenuContent align="start" className="w-72 max-w-[calc(100vw-1.5rem)]">
         {companies.length > 5 && (

@@ -841,4 +841,51 @@ describe("compras de extremo a extremo", () => {
       select platform.supplier_invoice_balance(${COMPANY}, ${s.invoice["id"]})::text as s`;
     expect(saldo!.s).toBe("58.00000000");
   });
+
+  // ── QA de pantalla 2026-09-15 ─────────────────────────────────────────────
+
+  it("h. 48: el proveedor de la compra simple nace con nombre y RIF — tipo y contribuyente se infieren", async () => {
+    const r = await pedir("POST", "/v1/suppliers", COMPRADOR, {
+      company_id: COMPANY,
+      legal_name: `Distribuidora QA ${RUN}`,
+      tax_id: `J9${RUN.slice(-7)
+        .replace(/[^0-9]/g, "7")
+        .padStart(8, "7")}`,
+      supplier_kind: "nacional",
+    });
+    expect(r.status).toBe(201);
+    const p = (await r.json()) as { person_type_code: string; taxpayer_type_code: string };
+    expect(p.person_type_code).toBe("juridica");
+    expect(p.taxpayer_type_code).toBe("ordinario");
+  });
+
+  it("h. 86: una orden ya recibida y facturada NO acepta otra factura por lo mismo (409 OVER_INVOICED)", async () => {
+    const r = await pedir("POST", "/v1/purchases/simple", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      warehouse_id: W1,
+      currency: "USD",
+      supplier_document_number: `FS-DOBLE-${RUN}`,
+      supplier_control_number: `CTRL-FSD-${RUN}`,
+      lines: [{ product_id: PROD_A, quantity: "1", unit_price: "50" }],
+    });
+    expect(r.status).toBe(201);
+    const s = (await r.json()) as { order: { id: string } };
+    const segunda = await pedir("POST", "/v1/supplier-invoices", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      purchase_order_id: s.order.id,
+      supplier_document_number: `FS-DOBLE-2-${RUN}`,
+      supplier_control_number: `CTRL-FSD2-${RUN}`,
+      invoice_date: HOY,
+      currency: "USD",
+      lines: [{ product_id: PROD_A, quantity: "1", unit_price: "50" }],
+    });
+    expect(segunda.status).toBe(409);
+    expect(((await segunda.json()) as { code: string }).code).toBe("OVER_INVOICED");
+    // Y la deuda con el proveedor no se duplicó: una sola factura en esa orden.
+    const [n] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.supplier_invoices where purchase_order_id = ${s.order.id}`;
+    expect(n!.n).toBe("1");
+  });
 });

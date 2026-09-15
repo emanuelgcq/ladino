@@ -77,7 +77,11 @@ export function NuevaFactura(): React.JSX.Element {
   });
   const almacenes = useQuery({
     queryKey: ["almacenes", empresa.id],
-    queryFn: () => llamar<{ id: string; code: string; name: string }[]>("/v1/warehouses"),
+    // Solo los activos: un depósito apagado no recibe ni despacha (migración 60).
+    queryFn: () =>
+      llamar<({ id: string; code: string; name: string } & { status?: string })[]>(
+        "/v1/warehouses",
+      ).then((ws) => ws.filter((w) => w.status !== "inactive")),
   });
 
   // La lista preferida del cliente manda por defecto; cambiarla exige el

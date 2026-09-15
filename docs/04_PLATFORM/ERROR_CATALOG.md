@@ -88,6 +88,18 @@ el código y se corrige el espejo.
 | `GATEWAY_TIMEOUT` | Esto está tardando más de la cuenta. Revisa en un momento si quedó registrado antes de repetirlo. |
 | *(cualquier otro)* | Algo salió mal de nuestro lado. Vuelve a intentar; si sigue, avísanos. |
 
+### Códigos de dominio del QA de pantalla (2026-09-15)
+
+Estos viajan con el mensaje del DOMINIO como `person_message` (no están en la lista de mensajes
+fijos): el texto dice qué pasó y qué hacer con los datos del caso.
+
+| `code` | HTTP | Cuándo |
+|---|---|---|
+| `WAREHOUSE_IN_USE` | `409` | Apagar el depósito principal, o uno que todavía tiene mercancía (migración 60) |
+| `OVER_INVOICED` | `409` | Lo facturado de una mercancía (acumulado, facturas no anuladas) pasaría de lo recibido (h. 86) |
+| `MEMBER_NOT_REGISTERED` | `404` | Agregar a una persona cuyo correo no tiene cuenta en Ladino (h. 74) |
+| `ENTRY_GENERATED_BY_DOCUMENT` | `409` | Reversar desde el Diario un asiento generado por un documento: se corrige desde el documento (h. 67) |
+
 ## Códigos de una sola ejecución — NO llegan a la API
 
 `LAD26` y `LAD27` aparecen **también** en `20260810040143_create_audit_events.sql`, con otro

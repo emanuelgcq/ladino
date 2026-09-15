@@ -6,6 +6,7 @@ import {
   AdjustStockRequest,
   TransferStockRequest,
   CreateWarehouseRequest,
+  UpdateWarehouseRequest,
   SetRecipeRequest,
   ConsumeRecipeRequest,
   CreateProductTemplateRequest,
@@ -17,6 +18,9 @@ import {
   adjustStock,
   transferStock,
   consumeRecipe,
+  listWarehouses,
+  createWarehouse,
+  updateWarehouse,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -194,48 +198,37 @@ export function inventoryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
   app.get("/v1/warehouses", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
-    const filas = await withTransaction(
-      sql,
-      actor,
-      ({ sql: tx }) => tx<Record<string, unknown>[]>`
-        select id, tenant_id, company_id, branch_id, code, name, status
-          from public.warehouses where company_id = ${companyId} order by code`,
-    );
-    return c.json(filas, 200);
+    const r = await withTransaction(sql, actor, (uow) => listWarehouses(uow, companyId));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
   });
 
   // Alta de almacén: `warehouse.manage` (NO acotado — crear un almacén no puede
-  // exigir alcance sobre un almacén que todavía no existe).
+  // exigir alcance sobre un almacén que todavía no existe). El caso de uso ata
+  // el depósito nuevo a los dueños (migración 60).
   app.post("/v1/warehouses", idempotencia, async (c) => {
-    const { companyId, tenantId } = requireCompany(c);
+    const { companyId } = requireCompany(c);
     const parsed = CreateWarehouseRequest.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) throw new ValidacionError(parsed.error.issues);
     coherente(companyId, parsed.data.company_id);
     const { actor } = c.get("ladino.auth");
-    if (actor.kind !== "user") {
-      throw new DominioError({
-        code: "PERMISSION_REQUIRED",
-        message: "Crear un almacén exige un usuario real.",
-      });
-    }
-    const fila = await withTransaction(sql, actor, async ({ sql: tx }) => {
-      const [permiso] = await tx<{ autorizado: boolean }[]>`
-        select platform.ladino_user_has_permission(${actor.userId}, 'warehouse.manage', ${companyId})
-               as autorizado`;
-      if (!permiso?.autorizado) {
-        throw new DominioError({
-          code: "PERMISSION_REQUIRED",
-          message: "La operación exige el permiso warehouse.manage sobre esta empresa.",
-        });
-      }
-      const [creado] = await tx<Record<string, unknown>[]>`
-        insert into public.warehouses (tenant_id, company_id, branch_id, code, name)
-        values (${tenantId}, ${companyId}, ${parsed.data.branch_id ?? null},
-                ${parsed.data.code}, ${parsed.data.name})
-        returning id, tenant_id, company_id, branch_id, code, name, status`;
-      return creado!;
-    });
-    return c.json(fila, 201);
+    const r = await withTransaction(sql, actor, (uow) => createWarehouse(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
+  app.patch("/v1/warehouses/:id", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const id = c.req.param("id");
+    if (!UUID_RE.test(id))
+      throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    const parsed = UpdateWarehouseRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => updateWarehouse(uow, id, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
   });
 }
 

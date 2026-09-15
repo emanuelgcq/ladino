@@ -55,6 +55,7 @@ export {
   registerPayment,
   createReturn,
   confirmReturn,
+  cancelReturn,
   quotePos,
   quickSale,
   previsualizarCobro,
@@ -105,6 +106,12 @@ export {
   type GenerationOutcome,
   type JournalGenerationError,
 } from "./journal-generator.js";
+export {
+  listWarehouses,
+  createWarehouse,
+  updateWarehouse,
+  type WarehouseError,
+} from "./warehouses.js";
 export {
   getCompanySettings,
   setCompanySettings,

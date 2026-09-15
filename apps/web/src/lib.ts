@@ -491,6 +491,9 @@ export interface PurchaseOrderDetail {
     quantity_ordered: string;
     quantity_received: string;
     quantity_pending: string;
+    /** Lo facturado (facturas no anuladas) y lo recibido que falta por facturar. */
+    quantity_invoiced: string;
+    quantity_to_invoice: string;
   }[];
   receipts: {
     id: string;
@@ -688,6 +691,11 @@ export interface AccountPurposeRow {
   purpose: string;
   name: string;
   description: string;
+  /**
+   * No null: la cuenta de ese papel NO se asigna aquí — la resuelve su origen (p. ej. la
+   * cuenta de tesorería del movimiento, ADR-0060). No cuenta como «sin asignar».
+   */
+  resolved_by: string | null;
   /** null = papel sin cuenta asignada. Es lo que impide generar su asiento. */
   account_id: string | null;
   account_code: string | null;
@@ -814,6 +822,7 @@ export interface BalanceSheet {
   total_assets: string;
   total_liabilities: string;
   total_equity: string;
+  total_liabilities_and_equity: string;
   /** activo == pasivo + patrimonio. Lo comprueba el servidor, no el cliente. */
   balanced: boolean;
 }
