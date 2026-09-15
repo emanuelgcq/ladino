@@ -191,43 +191,42 @@ describe("Ola 0 · verificaciones ejecutadas", () => {
     },
   );
 
-  // V2 — BUG VIVO confirmado al ejecutarlo (2026-09-14): el asiento del cobro
-  // debita la cuenta de efectivo en BOLÍVARES aunque el dinero entró en dólares
-  // a una caja en dólares. Se invierte a `it` en la Ola 2 (ADR-1).
-  it.fails(
-    "V2 · un cobro en USD a una caja en USD debita la cuenta contable de efectivo en USD",
-    async () => {
-      const caja = await pedir("POST", "/v1/treasury/accounts", {
-        company_id: COMPANY,
-        name: `Caja USD ${RUN}`,
-        currency: "USD",
-        kind: "cash",
-      });
-      expect(caja.status).toBe(201);
-      const CAJA_USD = ((await caja.json()) as { id: string }).id;
+  // V2 — BUG confirmado al ejecutarlo (2026-09-14): el asiento del cobro debitaba
+  // la cuenta de efectivo en BOLÍVARES aunque el dinero entró en dólares a una
+  // caja en dólares. CERRADO en la Ola 2 (ADR-0060 §4, migración 56): pasó de
+  // `it.fails` a `it` sin cambiar su aserción.
+  it("V2 · un cobro en USD a una caja en USD debita la cuenta contable de efectivo en USD", async () => {
+    const caja = await pedir("POST", "/v1/treasury/accounts", {
+      company_id: COMPANY,
+      name: `Caja USD ${RUN}`,
+      currency: "USD",
+      kind: "cash",
+    });
+    expect(caja.status).toBe(201);
+    const CAJA_USD = ((await caja.json()) as { id: string }).id;
 
-      // Fiado a la vecina: el recibo nace con saldo y se cobra después en USD.
-      const venta = await pedir("POST", "/v1/pos/sales", {
-        company_id: COMPANY,
-        warehouse_id: W1,
-        customer_id: CLIENTE,
-        lines: [{ product_id: SERVICIO, quantity: "1" }],
-      });
-      expect(venta.status).toBe(201);
-      const recibo = ((await venta.json()) as { document: { id: string } }).document.id;
+    // Fiado a la vecina: el recibo nace con saldo y se cobra después en USD.
+    const venta = await pedir("POST", "/v1/pos/sales", {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      customer_id: CLIENTE,
+      lines: [{ product_id: SERVICIO, quantity: "1" }],
+    });
+    expect(venta.status).toBe(201);
+    const recibo = ((await venta.json()) as { document: { id: string } }).document.id;
 
-      const cobro = await pedir("POST", "/v1/payments", {
-        company_id: COMPANY,
-        document_id: recibo,
-        currency: "USD",
-        amount: "1.00000000",
-        instrument: "efectivo_usd",
-        account_id: CAJA_USD,
-      });
-      expect(cobro.status).toBe(201);
-      const pagoId = ((await cobro.json()) as { payment: { id: string } }).payment.id;
+    const cobro = await pedir("POST", "/v1/payments", {
+      company_id: COMPANY,
+      document_id: recibo,
+      currency: "USD",
+      amount: "1.00000000",
+      instrument: "efectivo_usd",
+      account_id: CAJA_USD,
+    });
+    expect(cobro.status).toBe(201);
+    const pagoId = ((await cobro.json()) as { payment: { id: string } }).payment.id;
 
-      const debitos = await sql<{ purpose: string }[]>`
+    const debitos = await sql<{ purpose: string }[]>`
         select s.purpose
           from public.journal_entries e
           join public.journal_lines l on l.entry_id = e.id
@@ -235,8 +234,7 @@ describe("Ola 0 · verificaciones ejecutadas", () => {
             on s.company_id = e.company_id and s.account_id = l.account_id
          where e.company_id = ${COMPANY} and e.source_kind = 'payment_received'
            and e.source_id = ${pagoId} and l.debit_amount > 0`;
-      expect(debitos.map((d) => d.purpose)).toContain("cash_usd");
-      expect(debitos.map((d) => d.purpose)).not.toContain("cash_bs");
-    },
-  );
+    expect(debitos.map((d) => d.purpose)).toContain("cash_usd");
+    expect(debitos.map((d) => d.purpose)).not.toContain("cash_bs");
+  });
 });

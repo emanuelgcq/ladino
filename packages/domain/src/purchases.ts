@@ -1591,18 +1591,37 @@ export async function registerSupplierPayment(
   // en un abono parcial exigiría prorratearla, y una retención prorrateada no
   // se corresponde con ninguna base declarable.
   const cancelaTodo = saldo.ok && bruto.value.amount.equals(saldo.value);
+  // La retención vive en MONEDA FUNCIONAL (supplier_retentions.functional_currency).
   const aRetener = cancelaTodo ? totalRetenido : totalRetenido.times(0);
-  const neto = bruto.value.amount.minus(aRetener);
+
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  const funcional = aFuncional(bruto.value, tasa.value.rate, ctx.value.functionalCurrency);
+  if (!funcional.ok) return funcional;
+
+  /**
+   * LAS DOS MONEDAS, SIN MEZCLAR (hallado por e2e-cuenta-de-caja, 2026-09-15).
+   * Antes el neto era «bruto en la moneda del pago − retención en funcional», y
+   * el asiento recibía ese neto en dólares contra un total en bolívares: todo
+   * pago a proveedor en divisa, con las plantillas cargadas, moría con 422
+   * «asiento descuadrado». Ahora:
+   *   · el NETO del pago (lo que cobra el proveedor, en la moneda del pago) resta
+   *     la retención CONVERTIDA a esa moneda con la tasa del pago;
+   *   · el asiento va entero en funcional: total = bruto × tasa, retenciones en
+   *     funcional, y el neto funcional es la resta de los dos — cuadra por
+   *     construcción, sin redondeo que lo descuadre.
+   */
+  const retencionEnPago =
+    input.currency === ctx.value.functionalCurrency
+      ? aRetener
+      : aRetener.dividedBy(tasa.value.rate).toDecimalPlaces(8, 4);
+  const neto = bruto.value.amount.minus(retencionEnPago);
   if (neto.isNegative()) {
     return err({
       code: "VALIDATION_FAILED",
       message: "La retención supera el pago: el proveedor no puede cobrar un importe negativo.",
     });
   }
-
-  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
-  const funcional = aFuncional(bruto.value, tasa.value.rate, ctx.value.functionalCurrency);
-  if (!funcional.ok) return funcional;
+  const netoFuncional = funcional.value.amount.minus(aRetener);
 
   // La cuenta de la que SALE el efectivo (migración 29): la explícita si el
   // llamante la eligió, si no la forma de pago configurada → «Sin asignar».
@@ -1759,7 +1778,7 @@ export async function registerSupplierPayment(
     functionalCurrency: ctx.value.functionalCurrency,
     amounts: {
       total: funcional.value.toAmountString(),
-      net_amount: neto.toFixed(8),
+      net_amount: netoFuncional.toFixed(8),
       retained_iva: cancelaTodo ? (porTributo?.iva ?? "0") : "0",
       retained_islr: cancelaTodo ? (porTributo?.islr ?? "0") : "0",
       retained_total: aRetener.toFixed(8),

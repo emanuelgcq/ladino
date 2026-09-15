@@ -110,17 +110,25 @@ select is(
   null::uuid,
   'Idempotente: la segunda llamada no hace nada');
 
--- 7 · VARIANTE ROTA: lo único que protege a la empresa en Bs es que su caja
--- tiene precio para un producto ACTIVO. Se le quita esa condición (el producto
--- pasa a inactivo, dentro de un savepoint) y la misma función SÍ la cambia.
-savepoint rota;
-update public.products set status = 'inactive'
- where id = 'aaaa0055-0000-4000-8000-0000000000d2';
+-- 9 · VARIANTE ROTA: lo único que protege a la empresa en Bs es que su caja
+-- tiene precio para un producto ACTIVO. Una GEMELA con la misma lista en Bs y
+-- el mismo precio, pero con el producto inactivo, SÍ se cambia de lista. (Sin
+-- savepoint: un rollback parcial borraría también el registro del test.)
+insert into public.companies (id, tenant_id, tax_id, legal_name) values
+  ('aaaa0055-0000-4000-8000-0000000000b2', 'aaaa0055-0000-4000-8000-00000000000a', 'J-55-B2', 'Gemela Bs 55');
+insert into public.products (id, tenant_id, company_id, sku, name, kind, status, unit_code, tax_category_code) values
+  ('aaaa0055-0000-4000-8000-0000000000f2', 'aaaa0055-0000-4000-8000-00000000000a',
+   'aaaa0055-0000-4000-8000-0000000000b2', 'P55-B2', 'Arroz gemelo 55', 'good', 'inactive', 'unidad', 'gravado_general');
+insert into public.price_lists (id, tenant_id, company_id, name, currency_code) values
+  ('aaaa0055-0000-4000-8000-0000000000f3', 'aaaa0055-0000-4000-8000-00000000000a',
+   'aaaa0055-0000-4000-8000-0000000000b2', 'detal', 'VES');
+insert into public.price_list_items (tenant_id, company_id, price_list_id, product_id, amount, effective_from) values
+  ('aaaa0055-0000-4000-8000-00000000000a', 'aaaa0055-0000-4000-8000-0000000000b2',
+   'aaaa0055-0000-4000-8000-0000000000f3', 'aaaa0055-0000-4000-8000-0000000000f2', 200, '2026-09-01T00:00:00Z');
 select isnt(
-  platform.assign_caja_default_price_list('aaaa0055-0000-4000-8000-0000000000a2'),
+  platform.assign_caja_default_price_list('aaaa0055-0000-4000-8000-0000000000b2'),
   null::uuid,
-  'VARIANTE ROTA: sin precio de un producto activo, la caja en Bs SÍ cambiaría de lista — la condición es la defensa');
-rollback to savepoint rota;
+  'VARIANTE ROTA: sin precio de un producto activo, la misma caja en Bs SÍ cambiaría de lista — la condición es la defensa');
 
 select * from finish();
 rollback;

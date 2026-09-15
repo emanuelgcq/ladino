@@ -377,6 +377,26 @@ describe("IGTF — la percepción es POR PAGO", () => {
     expect(asiento!.haber).toBe(esperado.funcional);
   });
 
+  it("QUINTO CAMINO (ADR-0060 §4) · el IGTF percibido se debita en la cuenta contable de la caja del pago, no en cash_usd fijo", async () => {
+    // Toda percepción asentada de la empresa: su débito es la cuenta contable
+    // mapeada a la caja donde entró el pago que la originó.
+    const filas = await sql<{ debe: string; esperada: string | null }[]>`
+      select l.account_id as debe, ca.ledger_account_id as esperada
+        from public.igtf_perceptions ip
+        join public.payments p on p.id = ip.payment_id
+        join public.company_accounts ca on ca.id = p.account_id
+        join public.journal_entries e
+          on e.company_id = ip.company_id and e.source_kind = 'igtf_perception'
+         and e.source_id = ip.id and e.status = 'posted'
+        join public.journal_lines l on l.entry_id = e.id and l.debit_amount > 0
+       where ip.company_id = ${COMPANY}`;
+    expect(filas.length).toBeGreaterThan(0);
+    for (const f of filas) {
+      expect(f.esperada).not.toBeNull();
+      expect(f.debe).toBe(f.esperada);
+    }
+  });
+
   it("las percepciones se listan con el total a enterar", async () => {
     const r = await pedir("GET", `/v1/igtf/perceptions?from=${HOY}&to=${HOY}`);
     expect(r.status).toBe(200);

@@ -29,6 +29,11 @@ import { RULES_VERSION } from "./create-company.js";
 export type JournalGenerationError =
   { code: "VALIDATION_FAILED"; message: string } | { code: "ENTRY_UNBALANCED"; message: string };
 
+/** El papel que se resuelve con la caja real del hecho (ADR-0060 §4). */
+const PAPEL_CAJA = "treasury_account";
+/** Motivo de cola cuando esa caja no tiene cuenta contable. Estable: lo buscan tests y pantalla. */
+export const MOTIVO_CAJA_SIN_MAPEO = "treasury_account_unmapped";
+
 /** El resultado, y las dos mitades del invariante son visibles en el tipo. */
 export type GenerationOutcome =
   | { readonly kind: "posted"; readonly entryId: string; readonly entryNumber: number }
@@ -256,16 +261,43 @@ export async function generateJournalFromDocument(
    * que el motivo del encolado no cambia ni gana papeles que no tocaban.
    */
   const papeles = [...new Set(lineasPlantilla.map((l) => l.account_purpose))];
-  const cuentasFilas = await sql<{ purpose: string; id: string }[]>`
-    select distinct on (purpose) purpose, account_id as id
-      from public.company_account_settings
-     where company_id = ${input.companyId} and purpose = any(${papeles}::text[])
-       -- El mismo día DE CARACAS que la vigencia de la plantilla (arriba).
-       and (effective_from at time zone 'America/Caracas')::date <= ${input.postingDate}::date
-       and (effective_to is null
-            or (effective_to at time zone 'America/Caracas')::date > ${input.postingDate}::date)
-     order by purpose, effective_from desc`;
-  const cuentaDe = new Map(cuentasFilas.map((c) => [c.purpose, c.id]));
+  const pideCaja = papeles.includes(PAPEL_CAJA);
+  /**
+   * EL PAPEL `treasury_account` (ADR-0060 §4) no es una cuenta configurada: es
+   * la cuenta contable mapeada a la caja REAL del hecho —la del cobro, el pago
+   * a proveedor, el gasto, el cierre o el pago que originó la percepción—,
+   * resuelta por `platform.treasury_account_of`, la única definición. Viaja en
+   * la MISMA consulta que los demás papeles: ni una espera de red más.
+   */
+  const cuentasFilas = await sql<{ purpose: string; id: string | null; caja: string | null }[]>`
+    (select distinct on (purpose) purpose, account_id as id, null::text as caja
+       from public.company_account_settings
+      where company_id = ${input.companyId} and purpose = any(${papeles}::text[])
+        -- El mismo día DE CARACAS que la vigencia de la plantilla (arriba).
+        and (effective_from at time zone 'America/Caracas')::date <= ${input.postingDate}::date
+        and (effective_to is null
+             or (effective_to at time zone 'America/Caracas')::date > ${input.postingDate}::date)
+      order by purpose, effective_from desc)
+    union all
+    select ${PAPEL_CAJA}, ca.ledger_account_id, ca.name
+      from public.company_accounts ca
+     where ${pideCaja}
+       and ca.company_id = ${input.companyId}
+       and ca.id = platform.treasury_account_of(${input.companyId}, ${input.sourceKind},
+                                                ${input.sourceId}::uuid)`;
+  const cuentaDe = new Map<string, string>();
+  let problemaCaja: string | null = null;
+  for (const c of cuentasFilas) {
+    if (c.id !== null) cuentaDe.set(c.purpose, c.id);
+  }
+  if (pideCaja) {
+    const caja = cuentasFilas.find((c) => c.purpose === PAPEL_CAJA);
+    if (caja === undefined) {
+      problemaCaja = `${MOTIVO_CAJA_SIN_MAPEO}: este hecho no tiene una cuenta de tesorería (caja, banco o billetera) de donde tomar la cuenta contable.`;
+    } else if (caja.id === null) {
+      problemaCaja = `${MOTIVO_CAJA_SIN_MAPEO}: la cuenta «${caja.caja ?? ""}» no tiene cuenta contable asignada. Asígnala en Tesorería y contabiliza este pendiente; no se asienta en otra caja.`;
+    }
+  }
 
   for (const l of lineasPlantilla) {
     const bruto = (input.amounts as Record<string, string | undefined>)[l.amount_source];
@@ -290,6 +322,11 @@ export async function generateJournalFromDocument(
     const absoluto = importe.value.isNegative() ? importe.value.negated() : importe.value;
     if (absoluto.isZero()) continue;
 
+    // La caja sin mapeo NO cae en otra cuenta: se encola diciendo cuál caja es
+    // (ADR-0060 §4). Solo si una línea que APLICA la necesita.
+    if (l.account_purpose === PAPEL_CAJA && problemaCaja !== null) {
+      return encolar(sql, input, problemaCaja);
+    }
     const cuentaId = cuentaDe.get(l.account_purpose);
     if (cuentaId === undefined) {
       papelesSinCuenta.add(l.account_purpose);

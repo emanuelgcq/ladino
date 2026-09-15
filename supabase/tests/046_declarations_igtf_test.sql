@@ -248,7 +248,8 @@ select is(
       and ((e.source_event = 'ar.retention_applied'
               and l.account_purpose in ('retention_iva_receivable', 'ar_general'))
         or (e.source_event = 'igtf.perception_recorded'
-              and l.account_purpose in ('cash_usd', 'igtf_percibido_por_enterar')))),
+              -- migración 56 (ADR-0060 §4): el IGTF entra a la caja DEL PAGO, no a cash_usd fijo
+              and l.account_purpose in ('treasury_account', 'igtf_percibido_por_enterar')))),
   4::bigint, 'los dos asientos nuevos del preset existen con sus líneas correctas');
 
 select * from finish();

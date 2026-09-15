@@ -99,8 +99,13 @@ select is((select count(*) from public.accounts), 0::bigint,
 -- Es la comprobación que evita el peor modo de fallo del gancho: importar plan
 -- y preset y que TODO siga yendo a la cola porque falta una cuenta.
 select is(
+  -- Ampliada con la migración 56 (ADR-0060 §4, autorizado 2026-09-15): la pregunta
+  -- es para los papeles cuya cuenta sale del plan (resolved_by = company_setting);
+  -- los que toman la cuenta de la caja lo DECLARAN en account_purposes.
   (select count(*) from public.journal_template_preset_lines l
-    where not exists (select 1 from public.chart_template_accounts a
+     join public.account_purposes p on p.code = l.account_purpose
+    where p.resolved_by = 'company_setting'
+      and not exists (select 1 from public.chart_template_accounts a
                        where a.template_code = 've_basico'
                          and a.suggested_purpose = l.account_purpose)),
   0::bigint,

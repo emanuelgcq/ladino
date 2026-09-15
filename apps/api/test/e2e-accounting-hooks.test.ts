@@ -253,13 +253,26 @@ describe("el gancho contable — R-20", () => {
     // Y todos los papeles que el preset usa tienen cuenta. Si faltara alguno,
     // el documento iría a la cola en vez de generar asiento — correcto, pero
     // no es lo que se está montando aquí.
+    //
+    // Aserción ampliada con autorización del dueño (2026-09-15, ADR-0060 §4):
+    // cada papel DECLARA de dónde sale su cuenta (account_purposes.resolved_by).
+    // Los del plan tienen que tener cuenta configurada, como siempre; los que
+    // se resuelven con la caja del movimiento exigen que ninguna caja de la
+    // empresa esté sin mapeo contable.
     const sinCuenta = await sql<{ purpose: string }[]>`
       select distinct l.account_purpose as purpose
         from public.journal_template_lines l
+        join public.account_purposes p on p.code = l.account_purpose
        where l.company_id = ${COMPANY}
-         and not exists (select 1 from public.company_account_settings s
-                          where s.company_id = ${COMPANY} and s.purpose = l.account_purpose
-                            and s.effective_to is null)`;
+         and case when p.resolved_by = 'treasury_account'
+                  then exists (select 1 from public.company_accounts ca
+                                where ca.company_id = ${COMPANY}
+                                  and ca.ledger_account_id is null)
+                  else not exists (select 1 from public.company_account_settings s
+                                    where s.company_id = ${COMPANY}
+                                      and s.purpose = l.account_purpose
+                                      and s.effective_to is null)
+             end`;
     expect(sinCuenta.map((x) => x.purpose)).toEqual([]);
   });
 
