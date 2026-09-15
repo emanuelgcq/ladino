@@ -552,6 +552,101 @@ export interface IssueStockBatchInput {
   readonly sourceDocumentId?: string | undefined;
 }
 
+/**
+ * FEFO OBLIGATORIO EN LA SALIDA SIN LOTE (ADR-0060 §3, migración 57).
+ *
+ * Una línea sin lote de un producto que se lleva por lotes descontaba del lote
+ * NULO —vacío por construcción— y la venta moría en NEGATIVE_STOCK con la
+ * mercancía en el depósito (V1). Aquí esa línea se reparte entre los lotes
+ * vigentes con `platform.allocate_lots_fefo`: primero el que vence antes, cada
+ * lote a su costo. Una línea que ya trae lote no se toca, y un producto sin
+ * lotes tampoco.
+ *
+ * Varias líneas del mismo producto se reparten JUNTAS: repartir cada una por
+ * separado asignaría dos veces la misma existencia.
+ *
+ * La fecha contra la que se juzga «vencido» es la misma expresión que usa el
+ * trigger LAD46 (`occurred_at::date`): si difirieran, el reparto podría elegir
+ * un lote que el trigger rechaza.
+ */
+async function repartirPorLotes(
+  sql: TransactionSql,
+  input: IssueStockBatchInput,
+  occurredAt: string | null,
+): Promise<Result<IssueStockLine[], InventoryError>> {
+  const sinLote = [...new Set(input.lines.filter((l) => !l.lot_id).map((l) => l.product_id))];
+  if (sinLote.length === 0) return ok([...input.lines]);
+
+  const conLotes = await sql<{ id: string; name: string }[]>`
+    select id, name from public.products
+     where company_id = ${input.company_id} and id = any(${sinLote}::uuid[]) and tracks_lots`;
+  if (conLotes.length === 0) return ok([...input.lines]);
+  const nombre = new Map(conLotes.map((p) => [p.id, p.name]));
+
+  // Lo pedido por producto, sumado.
+  const pedido = new Map<string, Decimal>();
+  for (const l of input.lines) {
+    if (l.lot_id || !nombre.has(l.product_id)) continue;
+    const q = cantidad(l.quantity);
+    if (!q.ok) return q;
+    const previo = pedido.get(l.product_id);
+    pedido.set(l.product_id, previo === undefined ? q.value : previo.plus(q.value));
+  }
+
+  const solicitud = [...pedido.entries()].map(([product_id, q]) => ({
+    product_id,
+    quantity: q.toFixed(),
+  }));
+  const asignado = await sql<{ product_id: string; lot_id: string; quantity: string }[]>`
+    select x.product_id, a.lot_id, a.quantity::text as quantity
+      from jsonb_to_recordset(${sql.json(solicitud)}::jsonb) as x(product_id uuid, quantity numeric),
+           lateral platform.allocate_lots_fefo(${input.company_id}, ${input.warehouse_id},
+                                               x.product_id, x.quantity,
+                                               (coalesce(${occurredAt}::timestamptz, now()))::date) a`;
+
+  const porProducto = new Map<string, { lot_id: string; restante: Decimal }[]>();
+  for (const a of asignado) {
+    const q = cantidad(a.quantity);
+    if (!q.ok) return q;
+    const lista = porProducto.get(a.product_id) ?? [];
+    lista.push({ lot_id: a.lot_id, restante: q.value });
+    porProducto.set(a.product_id, lista);
+  }
+  for (const [productId, q] of pedido) {
+    const disponible = (porProducto.get(productId) ?? []).reduce(
+      (s, a) => s.plus(a.restante),
+      q.minus(q),
+    );
+    if (disponible.lessThan(q)) {
+      return err({
+        code: "NEGATIVE_STOCK",
+        message: `No hay suficiente «${nombre.get(productId) ?? "producto"}» en lotes vigentes: se piden ${q.toFixed()} y hay ${disponible.toFixed()} sin vencer en este depósito. Lo vencido no se vende; se da de baja con un ajuste.`,
+      });
+    }
+  }
+
+  // Cada línea original consume los lotes en orden de vencimiento.
+  const resultado: IssueStockLine[] = [];
+  for (const l of input.lines) {
+    if (l.lot_id || !nombre.has(l.product_id)) {
+      resultado.push(l);
+      continue;
+    }
+    const q = cantidad(l.quantity);
+    if (!q.ok) return q;
+    let falta = q.value;
+    for (const a of porProducto.get(l.product_id)!) {
+      if (falta.isZero()) break;
+      if (a.restante.isZero()) continue;
+      const toma = a.restante.lessThan(falta) ? a.restante : falta;
+      resultado.push({ product_id: l.product_id, lot_id: a.lot_id, quantity: toma.toFixed() });
+      a.restante = a.restante.minus(toma);
+      falta = falta.minus(toma);
+    }
+  }
+  return ok(resultado);
+}
+
 export async function issueStockBatch(
   uow: UnitOfWork,
   input: IssueStockBatchInput,
@@ -572,19 +667,24 @@ export async function issueStockBatch(
   ]);
   if (!ctx.ok) return ctx;
 
+  const occurredAt = input.occurred_at ?? null;
+  const momentoTasa = ahora(input.occurred_at);
+
+  const repartidas = await repartirPorLotes(sql, input, occurredAt);
+  if (!repartidas.ok) return repartidas;
+  const lineas = repartidas.value;
+
   const cantidades: Decimal[] = [];
-  for (const l of input.lines) {
+  for (const l of lineas) {
     const q = cantidad(l.quantity);
     if (!q.ok) return q;
     cantidades.push(q.value);
   }
 
-  const occurredAt = input.occurred_at ?? null;
-  const momentoTasa = ahora(input.occurred_at);
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
   // TODAS las posiciones, bloqueadas de una vez y EN ORDEN DETERMINISTA.
-  const claves = [...new Set(input.lines.map((l) => `${l.product_id}|${l.lot_id ?? ""}`))].sort();
+  const claves = [...new Set(lineas.map((l) => `${l.product_id}|${l.lot_id ?? ""}`))].sort();
   const productos = claves.map((c) => c.split("|")[0]!);
   const lotes = claves.map((c) => (c.split("|")[1] === "" ? null : c.split("|")[1]!));
   const filasPos = await sql<
@@ -627,8 +727,8 @@ export async function issueStockBatch(
     costed: ReturnType<typeof costIssue> extends Result<infer C, infer _E> ? C : never;
     fact: MonetaryFact;
   }[] = [];
-  for (let i = 0; i < input.lines.length; i += 1) {
-    const l = input.lines[i]!;
+  for (let i = 0; i < lineas.length; i += 1) {
+    const l = lineas[i]!;
     const clave = `${l.product_id}|${l.lot_id ?? ""}`;
     const posicion = posiciones.get(clave)!;
     const costed = costIssue(posicion, cantidades[i]!, {

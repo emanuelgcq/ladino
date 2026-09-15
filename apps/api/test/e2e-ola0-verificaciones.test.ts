@@ -159,37 +159,35 @@ afterAll(async () => {
 });
 
 describe("Ola 0 · verificaciones ejecutadas", () => {
-  // V1 — BUG VIVO confirmado al ejecutarlo (2026-09-14): la venta descuenta del
-  // lote nulo y el producto con lote no se puede vender. Se invierte a `it` en
-  // la Ola 2 (ADR-1, selección de lote con suggest_lot_fefo).
-  it.fails(
-    "V1 · un producto con lote y existencia en ese lote se vende (descuenta del lote)",
-    async () => {
-      const entrada = await pedir("POST", "/v1/inventory/receipts", {
-        company_id: COMPANY,
-        warehouse_id: W1,
-        product_id: QUESO,
-        lot_id: LOTE,
-        quantity: "5",
-        amount: "150",
-        currency: "VES",
-      });
-      expect(entrada.status).toBe(201);
+  // V1 — BUG confirmado al ejecutarlo (2026-09-14): la venta descontaba del lote
+  // nulo y el producto con lote no se podía vender. CERRADO en la Ola 2
+  // (ADR-0060 §3, migración 57: reparto FEFO): pasó de `it.fails` a `it` sin
+  // cambiar su aserción.
+  it("V1 · un producto con lote y existencia en ese lote se vende (descuenta del lote)", async () => {
+    const entrada = await pedir("POST", "/v1/inventory/receipts", {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      product_id: QUESO,
+      lot_id: LOTE,
+      quantity: "5",
+      amount: "150",
+      currency: "VES",
+    });
+    expect(entrada.status).toBe(201);
 
-      const venta = await pedir("POST", "/v1/pos/sales", {
-        company_id: COMPANY,
-        warehouse_id: W1,
-        customer_id: CLIENTE,
-        lines: [{ product_id: QUESO, quantity: "1" }],
-        payments: [{ instrument: "efectivo_bs", amount: "50.00000000", currency: "VES" }],
-      });
-      expect(venta.status).toBe(201);
-      const [pos] = await sql<{ quantity: string }[]>`
+    const venta = await pedir("POST", "/v1/pos/sales", {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      customer_id: CLIENTE,
+      lines: [{ product_id: QUESO, quantity: "1" }],
+      payments: [{ instrument: "efectivo_bs", amount: "50.00000000", currency: "VES" }],
+    });
+    expect(venta.status).toBe(201);
+    const [pos] = await sql<{ quantity: string }[]>`
         select quantity::text as quantity from public.stock_balances
          where company_id = ${COMPANY} and product_id = ${QUESO} and lot_id = ${LOTE}`;
-      expect(pos!.quantity).toBe("4.00000000");
-    },
-  );
+    expect(pos!.quantity).toBe("4.00000000");
+  });
 
   // V2 — BUG confirmado al ejecutarlo (2026-09-14): el asiento del cobro debitaba
   // la cuenta de efectivo en BOLÍVARES aunque el dinero entró en dólares a una
