@@ -15,6 +15,8 @@ import type {
   CashClosingResponse,
   KeepDailyRateRequest,
   DailyRateResponse,
+  CreateTreasuryTransferRequest,
+  TreasuryTransferResponse,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
@@ -35,6 +37,7 @@ import { generateJournalFromDocument } from "./journal-generator.js";
 export type TreasuryError =
   | CompanyScopeError
   | { code: "VALIDATION_FAILED"; message: string }
+  | { code: "INSUFFICIENT_FUNDS"; message: string }
   | { code: "DUPLICATE"; message: string }
   | { code: "APPEND_ONLY_VIOLATION"; message: string }
   | { code: "EXCHANGE_RATE_MISSING"; message: string };
@@ -61,6 +64,43 @@ function traducir(e: unknown): TreasuryError | null {
  */
 const SIN_EFECTIVO = new Set(["saldo_a_favor", "nota_credito", "retencion_iva"]);
 
+/**
+ * En qué moneda vive cada instrumento, DEL LADO DEL SERVIDOR (ADR-0062 §2). La web tenía su
+ * propia copia y nada impedía apuntar un Zelle (USD) a una cuenta en bolívares: el cobro en
+ * divisa entraba a una caja en Bs y el arqueo mezclaba monedas (QA 2026-09-15, h. 27).
+ * `null` = cualquiera: una tarjeta o un «otro» pueden liquidar en la moneda que sea.
+ */
+export const MONEDA_DE_INSTRUMENTO: Record<string, "funcional" | "USD" | null> = {
+  efectivo_bs: "funcional",
+  pago_movil: "funcional",
+  transferencia: "funcional",
+  punto_venta: "funcional",
+  cashea: "funcional",
+  efectivo_usd: "USD",
+  zelle: "USD",
+  usdt: "USD",
+  tarjeta: null,
+  otro: null,
+};
+
+/**
+ * La FAMILIA de cuenta que le toca a cada instrumento cuando no hay forma configurada: el
+ * efectivo va a una caja física; lo digital, a un banco o a una billetera — nunca a la caja,
+ * porque el arqueo contaría billetes que no están.
+ */
+const FAMILIA_DE_INSTRUMENTO: Record<string, readonly string[]> = {
+  efectivo_bs: ["cash"],
+  efectivo_usd: ["cash"],
+  pago_movil: ["bank", "wallet"],
+  transferencia: ["bank", "wallet"],
+  punto_venta: ["bank", "wallet"],
+  tarjeta: ["bank", "wallet"],
+  cashea: ["bank", "wallet"],
+  zelle: ["wallet", "bank"],
+  usdt: ["wallet", "bank"],
+  otro: ["bank", "wallet", "cash"],
+};
+
 export async function resolverCuentaEfectivo(
   sql: TransactionSql,
   tenantId: string,
@@ -80,6 +120,22 @@ export async function resolverCuentaEfectivo(
      limit 1`;
   if (porMetodo) return porMetodo.id;
 
+  /**
+   * NUEVO (ADR-0062 §1): la cuenta PROPIA de la familia del instrumento, en la moneda del pago.
+   * Empezar obliga a crear cuentas prometiendo que «cada cobro va a caer en una de estas
+   * cuentas», y sin formas configuradas todo caía en «Sin asignar» mientras «Caja del local»
+   * quedaba en cero (QA de pantalla 2026-09-15, hallazgo 15).
+   */
+  const familia = FAMILIA_DE_INSTRUMENTO[instrument] ?? ["cash", "bank", "wallet"];
+  const [propia] = await sql<{ id: string }[]>`
+    select ca.id
+      from public.company_accounts ca
+     where ca.company_id = ${companyId} and ca.is_active and not ca.is_system
+       and ca.currency = ${currency} and ca.kind = any(${[...familia]}::text[])
+     order by array_position(${[...familia]}::text[], ca.kind), ca.created_at
+     limit 1`;
+  if (propia) return propia.id;
+
   const nombre = `Sin asignar (${currency})`;
   const [existente] = await sql<{ id: string }[]>`
     select id from public.company_accounts
@@ -94,6 +150,34 @@ export async function resolverCuentaEfectivo(
     select id from public.company_accounts
      where company_id = ${companyId} and is_system and name = ${nombre}`;
   return creada!.id;
+}
+
+/**
+ * ¿Alcanza el saldo para lo que va a salir? (ADR-0062 §4). La cuenta se BLOQUEA: dos egresos
+ * simultáneos del mismo saldo pasaban los dos. Un egreso que deja la cuenta en negativo exige
+ * `allow_negative_balance`, y la pantalla lo pide con el número delante (QA h. 33, 50, 77).
+ */
+export async function exigeSaldo(
+  sql: TransactionSql,
+  accountId: string,
+  monto: string,
+  permitirNegativo: boolean | undefined,
+): Promise<Result<true, TreasuryError>> {
+  if (permitirNegativo === true) return ok(true);
+  const [fila] = await sql<{ nombre: string; moneda: string; saldo: string; alcanza: boolean }[]>`
+    select ca.name as nombre, ca.currency as moneda,
+           coalesce(b.balance, 0)::text as saldo,
+           coalesce(b.balance, 0) >= ${monto}::numeric as alcanza
+      from public.company_accounts ca
+      left join public.company_account_balances b on b.account_id = ca.id
+     where ca.id = ${accountId}
+     for update of ca`;
+  if (!fila) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (fila.alcanza) return ok(true);
+  return err({
+    code: "INSUFFICIENT_FUNDS",
+    message: `«${fila.nombre}» tiene ${fila.saldo} ${fila.moneda} y esta operación saca ${monto}: quedaría en negativo. Revisa de qué cuenta sale, o confirma que quieres registrarlo igual.`,
+  });
 }
 
 /** La cuenta, validada: existe en ESTA empresa, activa, con su moneda. */
@@ -309,6 +393,28 @@ export async function listPaymentMethods(
   return ok(filas);
 }
 
+/** La moneda del instrumento contra la de la cuenta (ADR-0062 §2). */
+async function monedaDeFormaValida(
+  sql: TransactionSql,
+  companyId: string,
+  kind: string,
+  monedaCuenta: string,
+): Promise<Result<true, TreasuryError>> {
+  const exigida = MONEDA_DE_INSTRUMENTO[kind] ?? null;
+  if (exigida === null) return ok(true);
+  let esperada: string = exigida;
+  if (exigida === "funcional") {
+    const [empresa] = await sql<{ moneda: string }[]>`
+      select functional_currency_code as moneda from public.companies where id = ${companyId}`;
+    esperada = empresa?.moneda ?? "VES";
+  }
+  if (esperada === monedaCuenta) return ok(true);
+  return err({
+    code: "VALIDATION_FAILED",
+    message: `Esa forma de pago cobra en ${esperada} y la cuenta elegida vive en ${monedaCuenta}: el dinero entraría a una caja de otra moneda.`,
+  });
+}
+
 export async function createPaymentMethod(
   uow: UnitOfWork,
   input: CreatePaymentMethodRequest,
@@ -324,6 +430,13 @@ export async function createPaymentMethod(
   }
   const cuenta = await cuentaDe(sql, input.company_id, input.account_id);
   if (!cuenta.ok) return cuenta;
+  const monedaOk = await monedaDeFormaValida(
+    sql,
+    input.company_id,
+    input.kind,
+    cuenta.value.currency,
+  );
+  if (!monedaOk.ok) return monedaOk;
   try {
     const fila = await sql.savepoint(async (sp) => {
       const [r] = await sp<PaymentMethodResponse[]>`
@@ -420,7 +533,6 @@ export async function registerExpense(
 
   const importe = Money.of(input.amount, cuenta.value.currency);
   if (!importe.ok) return err({ code: "VALIDATION_FAILED", message: importe.error.message });
-
   const fecha = input.paid_at ?? new Date().toISOString();
   // Regla 8: la tasa es la EFECTIVA a la fecha del pago (día de Caracas), no la
   // de hoy — un gasto fechado el 1 se convertía con la tasa del 8 (auditoría
@@ -438,6 +550,17 @@ export async function registerExpense(
   const tasaDec = parseDecimal(tasa.value.rate);
   if (!tasaDec.ok) return err({ code: "VALIDATION_FAILED", message: tasaDec.error.message });
   const funcional = importe.value.amount.times(tasaDec.value).toDecimalPlaces(8, 4);
+
+  // El saldo se comprueba AQUÍ, después de la tasa y justo antes de escribir: sin tasa el
+  // gasto no se puede ni valorar, y decir «no alcanza» taparía el motivo real. Además, la
+  // cuenta queda bloqueada el menor tiempo posible (ADR-0062 §4).
+  const alcanza = await exigeSaldo(
+    sql,
+    input.account_id,
+    importe.value.toAmountString(),
+    input.allow_negative_balance,
+  );
+  if (!alcanza.ok) return alcanza;
 
   // El DÍA contable del gasto: si el llamante fechó el pago, su fecha manda;
   // si no, el día se decide con el reloj de Venezuela — a las 8 pm de Caracas
@@ -766,4 +889,142 @@ export async function previsualizarConversion(
     in_functional: calc!.in_functional,
     in_anchor: calc!.in_anchor,
   });
+}
+
+// ── Transferencia entre cuentas (ADR-0062 §3, migración 61) ─────────────────
+
+const TRANSFER_POLICY_ID = "treasury:transfer:8:HALF_UP";
+
+/**
+ * MOVER DINERO DE UNA CUENTA A OTRA: repartir lo que entró en «Sin asignar», llevar el efectivo
+ * al banco, pasar de una caja a otra. Un solo hecho con dos patas sobre los saldos, en la MISMA
+ * moneda — cambiar dólares por bolívares tiene tasa y diferencial, y no es esto.
+ *
+ * El QA de pantalla del 2026-09-15 (hallazgo 24) lo encontró prometido y ausente: la tarjeta de
+ * «Sin asignar» decía «Por repartir» y no había ninguna acción.
+ */
+export async function transferBetweenAccounts(
+  uow: UnitOfWork,
+  input: CreateTreasuryTransferRequest,
+): Promise<Result<TreasuryTransferResponse, TreasuryError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Transferir exige un usuario real." });
+  }
+  const ctx = await companyScope(sql, actor.userId, input.company_id, "treasury.reassign");
+  if (!ctx.ok) return ctx;
+  if (ctx.value.companyStatus === "suspended") {
+    return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
+  }
+  if (input.from_account_id === input.to_account_id) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "El origen y el destino son la misma cuenta.",
+    });
+  }
+  const origen = await cuentaDe(sql, input.company_id, input.from_account_id);
+  if (!origen.ok) return origen;
+  const destino = await cuentaDe(sql, input.company_id, input.to_account_id);
+  if (!destino.ok) return destino;
+  if (origen.value.currency !== destino.value.currency) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `«${origen.value.name}» está en ${origen.value.currency} y «${destino.value.name}» en ${destino.value.currency}: una transferencia mueve la misma moneda. Cambiar de moneda se registra como venta o compra de divisas.`,
+    });
+  }
+  const importe = Money.of(input.amount, origen.value.currency);
+  if (!importe.ok) return err({ code: "VALIDATION_FAILED", message: importe.error.message });
+  const alcanza = await exigeSaldo(
+    sql,
+    input.from_account_id,
+    importe.value.toAmountString(),
+    input.allow_negative_balance,
+  );
+  if (!alcanza.ok) return alcanza;
+
+  const [empresa] = await sql<{ moneda: string }[]>`
+    select functional_currency_code as moneda from public.companies where id = ${input.company_id}`;
+  const funcionalCode = empresa!.moneda;
+  const [hoy] = await sql<{ d: string }[]>`
+    select (now() at time zone 'America/Caracas')::date::text as d`;
+  let tasaDec = parseDecimal("1");
+  let fuenteTasa = "identidad";
+  if (origen.value.currency !== funcionalCode) {
+    const tasa = await tasaHoy(sql, input.company_id, origen.value.currency, funcionalCode, hoy!.d);
+    if (!tasa.ok) return tasa;
+    tasaDec = parseDecimal(tasa.value.rate);
+    fuenteTasa = tasa.value.source;
+  }
+  if (!tasaDec.ok) return err({ code: "VALIDATION_FAILED", message: "Tasa no interpretable." });
+  const funcional = importe.value.amount.times(tasaDec.value).toDecimalPlaces(8, 4);
+
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  let transferencia: Record<string, unknown>;
+  try {
+    transferencia = await sql.savepoint(async (sp) => {
+      const [t] = await sp<Record<string, unknown>[]>`
+        insert into public.treasury_transfers
+          (tenant_id, company_id, from_account_id, to_account_id, reason,
+           amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
+           functional_currency, rate_source, rate_timestamp, rounding_policy_id)
+        values (${ctx.value.tenantId}, ${input.company_id}, ${input.from_account_id},
+                ${input.to_account_id}, ${input.reason},
+                ${importe.value.toAmountString()}, ${origen.value.currency},
+                ${tasaDec.value.toFixed()}, ${funcional.toFixed(8)}, ${funcionalCode},
+                ${fuenteTasa}, now(), ${TRANSFER_POLICY_ID})
+        returning id, from_account_id, to_account_id, reason,
+                  to_char(transferred_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+                    as transferred_at,
+                  amount_transaction_currency::text as amount, transaction_currency as currency,
+                  functional_amount::text as functional_amount, functional_currency,
+                  fx_rate::text as fx_rate`;
+      return t!;
+    });
+  } catch (e) {
+    const conocido = traducir(e);
+    if (conocido) return err(conocido);
+    throw e;
+  }
+
+  const generado = await generateJournalFromDocument(sql, {
+    tenantId: ctx.value.tenantId,
+    companyId: input.company_id,
+    sourceKind: "treasury_transfer",
+    sourceEvent: "treasury.transfer.registered",
+    sourceId: transferencia["id"] as string,
+    postingDate: hoy!.d,
+    postedBy: actor.userId,
+    description: `Transferencia: ${origen.value.name} → ${destino.value.name}`,
+    functionalCurrency: funcionalCode,
+    amounts: { functional_amount: funcional.toFixed(8) },
+    backlink: { table: "treasury_transfers", id: transferencia["id"] as string },
+  });
+  if (!generado.ok) {
+    return err({ code: "VALIDATION_FAILED", message: generado.error.message });
+  }
+
+  await auditarTesoreria(
+    sql,
+    ctx.value.tenantId,
+    input.company_id,
+    "treasury_transfer",
+    transferencia["id"] as string,
+    "treasury.transfer.registered",
+    {
+      from_account_id: input.from_account_id,
+      to_account_id: input.to_account_id,
+      amount_transaction_currency: transferencia["amount"] as string,
+      transaction_currency: origen.value.currency,
+      functional_amount: transferencia["functional_amount"] as string,
+      functional_currency: funcionalCode,
+      reason: input.reason,
+      rounding_policy_id: TRANSFER_POLICY_ID,
+    },
+  );
+
+  return ok({
+    ...(transferencia as object),
+    journal_entry_id: generado.value.kind === "queued" ? null : generado.value.entryId,
+    accounting: generado.value.kind === "queued" ? "queued" : "posted",
+  } as TreasuryTransferResponse);
 }

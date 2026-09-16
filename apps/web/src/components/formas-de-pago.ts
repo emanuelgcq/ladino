@@ -94,3 +94,19 @@ export function opcionesDeCobro(formas: readonly FormaDePago[] | undefined): Opc
   }
   return opciones;
 }
+
+/**
+ * El nombre con el que el NEGOCIO llama a un instrumento ya cobrado. Un pago guarda el
+ * instrumento, no la forma configurada, así que la única lectura honesta es: si el negocio
+ * tiene UNA sola forma activa de ese tipo, ese es su nombre; si tiene varias o ninguna, la
+ * etiqueta genérica. Nunca el código crudo («efectivo_bs»), que es lo que se veía antes
+ * (QA de pantalla 2026-09-15, h. 39).
+ */
+export function nombreDeInstrumento(
+  instrument: string,
+  formas: readonly FormaDePago[] | undefined,
+): string {
+  const candidatas = (formas ?? []).filter((f) => f.is_active && f.kind === instrument);
+  if (candidatas.length === 1) return candidatas[0]!.name;
+  return ETIQUETA_FORMA[instrument] ?? instrument.replace(/_/g, " ");
+}

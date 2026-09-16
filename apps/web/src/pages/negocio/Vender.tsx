@@ -1368,6 +1368,11 @@ interface PagoElegido {
   amount: string;
   reference?: string;
   account_id?: string;
+  /**
+   * El nombre con el que el negocio llama a esta forma («Pago móvil Banesco»). La fila lo
+   * perdía y se rotulaba con el nombre genérico del tipo (QA de pantalla 2026-09-15, h. 35).
+   */
+  etiqueta?: string;
 }
 
 function Cobrar({
@@ -1515,6 +1520,7 @@ function Cobrar({
         instrument: b.instrument,
         currency: b.currency,
         amount: sugerida === null ? "" : sinCeros(sugerida),
+        etiqueta: b.etiqueta,
         ...(b.account_id === undefined ? {} : { account_id: b.account_id }),
       },
     ]);
@@ -1782,7 +1788,7 @@ function PagoFila({
       <div className="flex items-center justify-between">
         <span className="flex items-center gap-1.5 text-[0.9rem] font-medium">
           {esEfectivo ? <Banknote className="size-4" /> : <CreditCard className="size-4" />}
-          {ETIQUETA_FORMA[pago.instrument] ?? pago.instrument}
+          {pago.etiqueta ?? ETIQUETA_FORMA[pago.instrument] ?? pago.instrument}
         </span>
         <Button variant="ghost" size="iconSm" aria-label="Quitar esta forma" onClick={onQuitar}>
           <X />

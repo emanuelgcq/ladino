@@ -31,6 +31,8 @@ export type JournalGenerationError =
 
 /** El papel que se resuelve con la caja real del hecho (ADR-0060 §4). */
 const PAPEL_CAJA = "treasury_account";
+/** Y la caja de ORIGEN, para un hecho que mueve dinero entre dos (ADR-0062 §3). */
+const PAPEL_CAJA_ORIGEN = "treasury_account_from";
 /** Motivo de cola cuando esa caja no tiene cuenta contable. Estable: lo buscan tests y pantalla. */
 export const MOTIVO_CAJA_SIN_MAPEO = "treasury_account_unmapped";
 
@@ -121,7 +123,18 @@ const TABLAS_BACKLINK = new Set([
   "cash_closings",
   // ADR-0061: el reembolso lleva el mismo guard de «solo backlink».
   "customer_refunds",
+  // ADR-0062 §3 (migración 61): la transferencia entre cuentas, con el mismo guard.
+  "treasury_transfers",
 ]);
+
+/**
+ * Las tablas que pasan `backlink` a sabiendas de que NO se escribirá: append-only sin GRANT
+ * de UPDATE (ver arriba). Existe para que la lista de arriba pueda EXIGIR que toda tabla esté
+ * declarada en una de las dos: una tabla en ninguna es un olvido, y el olvido no puede
+ * seguir siendo silencioso — así quedó `treasury_transfers` con su asiento posteado y sin
+ * enlace, y lo destapó `accounting_coverage_gaps`, no esta función.
+ */
+const TABLAS_SIN_BACKLINK = new Set(["payments", "supplier_payments", "retention_receipts"]);
 
 /**
  * Decide si la línea aplica. Ocho predicados, resueltos con un `switch`: **no
@@ -267,6 +280,7 @@ export async function generateJournalFromDocument(
    */
   const papeles = [...new Set(lineasPlantilla.map((l) => l.account_purpose))];
   const pideCaja = papeles.includes(PAPEL_CAJA);
+  const pideCajaOrigen = papeles.includes(PAPEL_CAJA_ORIGEN);
   /**
    * EL PAPEL `treasury_account` (ADR-0060 §4) no es una cuenta configurada: es
    * la cuenta contable mapeada a la caja REAL del hecho —la del cobro, el pago
@@ -289,20 +303,29 @@ export async function generateJournalFromDocument(
      where ${pideCaja}
        and ca.company_id = ${input.companyId}
        and ca.id = platform.treasury_account_of(${input.companyId}, ${input.sourceKind},
-                                                ${input.sourceId}::uuid)`;
+                                                ${input.sourceId}::uuid)
+    union all
+    select ${PAPEL_CAJA_ORIGEN}, ca.ledger_account_id, ca.name
+      from public.company_accounts ca
+     where ${pideCajaOrigen}
+       and ca.company_id = ${input.companyId}
+       and ca.id = platform.treasury_from_account_of(${input.companyId}, ${input.sourceKind},
+                                                     ${input.sourceId}::uuid)`;
   const cuentaDe = new Map<string, string>();
   let problemaCaja: string | null = null;
   for (const c of cuentasFilas) {
     if (c.id !== null) cuentaDe.set(c.purpose, c.id);
   }
-  if (pideCaja) {
-    const caja = cuentasFilas.find((c) => c.purpose === PAPEL_CAJA);
+  const revisarCaja = (papel: string): void => {
+    const caja = cuentasFilas.find((c) => c.purpose === papel);
     if (caja === undefined) {
       problemaCaja = `${MOTIVO_CAJA_SIN_MAPEO}: este hecho no tiene una cuenta de tesorería (caja, banco o billetera) de donde tomar la cuenta contable.`;
     } else if (caja.id === null) {
       problemaCaja = `${MOTIVO_CAJA_SIN_MAPEO}: la cuenta «${caja.caja ?? ""}» no tiene cuenta contable asignada. Asígnala en Tesorería y contabiliza este pendiente; no se asienta en otra caja.`;
     }
-  }
+  };
+  if (pideCaja) revisarCaja(PAPEL_CAJA);
+  if (pideCajaOrigen && problemaCaja === null) revisarCaja(PAPEL_CAJA_ORIGEN);
 
   for (const l of lineasPlantilla) {
     const bruto = (input.amounts as Record<string, string | undefined>)[l.amount_source];
@@ -445,11 +468,29 @@ export async function generateJournalFromDocument(
   // valida contra una lista cerrada antes de interpolarlo: `sql.unsafe` con un
   // identificador que viniera del llamante sería inyección, aunque el llamante
   // sea código nuestro.
-  if (input.backlink !== undefined && TABLAS_BACKLINK.has(input.backlink.table)) {
-    await sql`
-      update ${sql.unsafe(`public.${input.backlink.table}`)}
-         set journal_entry_id = ${posteado!.id}
-       where id = ${input.backlink.id} and company_id = ${input.companyId}`;
+  if (input.backlink !== undefined) {
+    /**
+     * Una tabla que no está en NINGUNA de las dos listas es un olvido, y se rompe aquí. El
+     * silencio es lo que dejó `treasury_transfers` sin enlace al añadirla (migración 61): el
+     * hecho quedaba con su asiento posteado y, para `accounting_coverage_gaps`, sin asiento.
+     * Lo cazó el invariante cruzado, no esta función — y un hueco que solo ve el invariante
+     * es un hueco que puede llegar a producción entre dos corridas.
+     */
+    if (
+      !TABLAS_BACKLINK.has(input.backlink.table) &&
+      !TABLAS_SIN_BACKLINK.has(input.backlink.table)
+    ) {
+      throw new Error(
+        `backlink a una tabla no declarada: ${input.backlink.table}. Declárala en ` +
+          `TABLAS_BACKLINK (si admite el UPDATE de solo-enlace) o en TABLAS_SIN_BACKLINK.`,
+      );
+    }
+    if (TABLAS_BACKLINK.has(input.backlink.table)) {
+      await sql`
+        update ${sql.unsafe(`public.${input.backlink.table}`)}
+           set journal_entry_id = ${posteado!.id}
+         where id = ${input.backlink.id} and company_id = ${input.companyId}`;
+    }
   }
 
   // Y si el hecho estaba encolado —porque se emitió antes de configurar el

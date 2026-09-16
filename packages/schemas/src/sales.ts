@@ -870,6 +870,11 @@ export const RefundCustomerCreditRequest = z
     account_id: uuid,
     amount,
     reason: z.string().trim().min(3).max(300),
+    /**
+     * Confirmar EXPLÍCITAMENTE que la cuenta quede en negativo (ADR-0062 §4). Sin esto, un
+     * egreso mayor que el saldo responde 409 INSUFFICIENT_FUNDS con el número delante.
+     */
+    allow_negative_balance: z.boolean().optional(),
   })
   .strict();
 export type RefundCustomerCreditRequest = z.infer<typeof RefundCustomerCreditRequest>;

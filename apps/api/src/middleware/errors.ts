@@ -183,6 +183,9 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   MEMBER_NOT_REGISTERED: 404,
   // QA 2026-09-15 h. 67: un asiento generado por un documento se corrige desde el documento.
   ENTRY_GENERATED_BY_DOCUMENT: 409,
+  // ADR-0062 §4: el egreso deja la cuenta en negativo y nadie lo confirmó. 409: el cuerpo está
+  // bien; lo que no alcanza es el saldo, y el mensaje dice cuánto hay.
+  INSUFFICIENT_FUNDS: 409,
   // El adaptador BCV (DolarAPI) no respondió o respondió irreconocible. 502:
   // el cuerpo del cliente está bien; lo que falló está aguas arriba, y el
   // fallback es la carga manual de siempre.

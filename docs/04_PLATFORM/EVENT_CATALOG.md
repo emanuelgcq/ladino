@@ -91,7 +91,13 @@ Cada evento incluye schema version.
   (importes como string). Con diferencia cero el evento SÍ se emite —el cierre es un
   hecho aunque cuadre—, pero no genera asiento: no hay hecho contable.
 
-Ambos nombres los referencia ya el preset `ve_basico` (migraciones 30 y 31) y los
+- `treasury.transfer.registered` — lo emite `transferBetweenAccounts()` (migración 61,
+  ADR-0062 §3): mover dinero entre dos cuentas de la MISMA moneda — repartir lo que entró
+  en «Sin asignar», llevar el efectivo al banco. El payload lleva
+  `{from_account_id, to_account_id, amount, currency, reason}` (importes como string). Es
+  también el `source_event` de su plantilla contable en el preset `ve_basico`.
+
+Los tres nombres los referencia ya el preset `ve_basico` (migraciones 30, 31 y 61) y los
 asevera el pgTAP 26; los casos de uso emisores son parte de la misma fase.
 
 Configuración de tesorería (casos de uso de `treasury.ts`, `schema_version` 1):

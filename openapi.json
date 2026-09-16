@@ -4744,6 +4744,9 @@
             "type": "string",
             "minLength": 3,
             "maxLength": 300
+          },
+          "allow_negative_balance": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -8456,6 +8459,9 @@
           "account_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "allow_negative_balance": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -9015,6 +9021,9 @@
               "account_id": {
                 "type": "string",
                 "format": "uuid"
+              },
+              "allow_negative_balance": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -13282,6 +13291,9 @@
             "type": "string",
             "minLength": 3,
             "maxLength": 300
+          },
+          "allow_negative_balance": {
+            "type": "boolean"
           }
         },
         "required": [

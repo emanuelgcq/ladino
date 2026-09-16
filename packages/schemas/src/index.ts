@@ -199,6 +199,8 @@ export {
   ListPaymentMethodsResponse,
   AccountingOutcome,
   RegisterExpenseRequest,
+  CreateTreasuryTransferRequest,
+  TreasuryTransferResponse,
   ExpenseResponse,
   ListExpensesResponse,
   CloseCashRegisterRequest,

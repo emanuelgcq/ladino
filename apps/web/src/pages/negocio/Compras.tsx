@@ -25,6 +25,7 @@ import {
   importeValido,
   type EntityOption,
 } from "../../components/forms.js";
+import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import { AVISO_PRECIO_COMPRA } from "../../components/capa-fiscal/textos.js";
 import { fechaRelativa } from "./comunes.js";
 
@@ -481,8 +482,12 @@ function RegistrarGasto({
   const listo =
     categoriaFinal.length >= 2 && cuenta !== null && importeValido(monto.trim().replace(",", "."));
 
+  // Sobregiro: el servidor rechaza con 409 el gasto que deja la cuenta en negativo y aquí se
+  // pregunta antes de reenviarlo confirmado (ADR-0062 §4; QA 2026-09-15, h. 71).
+  const [sinSaldo, setSinSaldo] = useState<string | null>(null);
+
   const registrar = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (forzar: boolean) => {
       let attachment: string | undefined;
       if (adjunto !== null) {
         if (adjuntoSubido !== null && adjuntoSubido.archivo === adjunto) {
@@ -508,6 +513,7 @@ function RegistrarGasto({
           account_id: cuenta,
           amount: monto.trim().replace(",", "."),
           ...(recurrente ? { is_recurring: true } : {}),
+          ...(forzar ? { allow_negative_balance: true } : {}),
           ...(attachment === undefined ? {} : { attachment_path: attachment }),
         }),
       });
@@ -517,137 +523,156 @@ function RegistrarGasto({
       onListo();
       onCerrar();
     },
-    onError: (e) => toast.error("No se pudo registrar", errorDePersona(e)),
+    onError: (e) => {
+      const falta = esSinSaldo(e);
+      if (falta !== null) {
+        setSinSaldo(falta);
+        return;
+      }
+      toast.error("No se pudo registrar", errorDePersona(e));
+    },
   });
 
   return (
-    <Dialog open onOpenChange={(v) => !v && onCerrar()}>
-      <DialogContent className="max-w-md">
-        <DialogTitle>Registrar gasto</DialogTitle>
-        <DialogDescription>Lo que pagas y no es mercancía para vender.</DialogDescription>
-        <div className="space-y-3 pt-2">
-          <div>
-            <p className="pb-1.5 text-[0.88rem] font-medium" id="gasto-categoria-titulo">
-              ¿Qué pagaste?
-            </p>
-            <div
-              className="flex flex-wrap gap-1.5"
-              role="group"
-              aria-labelledby="gasto-categoria-titulo"
-            >
-              {CATEGORIAS_GASTO.map((cat) => (
+    <>
+      <Dialog open onOpenChange={(v) => !v && onCerrar()}>
+        <DialogContent className="max-w-md">
+          <DialogTitle>Registrar gasto</DialogTitle>
+          <DialogDescription>Lo que pagas y no es mercancía para vender.</DialogDescription>
+          <div className="space-y-3 pt-2">
+            <div>
+              <p className="pb-1.5 text-[0.88rem] font-medium" id="gasto-categoria-titulo">
+                ¿Qué pagaste?
+              </p>
+              <div
+                className="flex flex-wrap gap-1.5"
+                role="group"
+                aria-labelledby="gasto-categoria-titulo"
+              >
+                {CATEGORIAS_GASTO.map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    aria-pressed={categoria === cat}
+                    onClick={() => setCategoria(cat)}
+                    className={`rounded-full border px-3 py-1.5 text-[0.85rem] ${
+                      categoria === cat
+                        ? "border-accent bg-accent-soft text-accent-soft-foreground"
+                        : "border-border hover:bg-surface-muted"
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
                 <button
-                  key={cat}
                   type="button"
-                  aria-pressed={categoria === cat}
-                  onClick={() => setCategoria(cat)}
+                  aria-pressed={categoria === "otro"}
+                  onClick={() => setCategoria("otro")}
                   className={`rounded-full border px-3 py-1.5 text-[0.85rem] ${
-                    categoria === cat
+                    categoria === "otro"
                       ? "border-accent bg-accent-soft text-accent-soft-foreground"
                       : "border-border hover:bg-surface-muted"
                   }`}
                 >
-                  {cat}
+                  Otro…
                 </button>
-              ))}
-              <button
-                type="button"
-                aria-pressed={categoria === "otro"}
-                onClick={() => setCategoria("otro")}
-                className={`rounded-full border px-3 py-1.5 text-[0.85rem] ${
-                  categoria === "otro"
-                    ? "border-accent bg-accent-soft text-accent-soft-foreground"
-                    : "border-border hover:bg-surface-muted"
-                }`}
-              >
-                Otro…
-              </button>
+              </div>
+              {categoria === "otro" && (
+                <Input
+                  className="mt-2"
+                  value={otraCategoria}
+                  onChange={(e) => setOtraCategoria(e.target.value)}
+                  placeholder="¿Qué fue?"
+                  aria-label="Categoría del gasto"
+                  autoFocus
+                />
+              )}
             </div>
-            {categoria === "otro" && (
-              <Input
-                className="mt-2"
-                value={otraCategoria}
-                onChange={(e) => setOtraCategoria(e.target.value)}
-                placeholder="¿Qué fue?"
-                aria-label="Categoría del gasto"
-                autoFocus
-              />
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <FormField label="¿De qué cuenta salió?" required>
+            <div className="grid grid-cols-2 gap-2">
+              <FormField label="¿De qué cuenta salió?" required>
+                {(p) => (
+                  <SimpleSelect
+                    id={p.id}
+                    value={cuenta}
+                    onValueChange={setCuenta}
+                    options={activas.map((c) => ({
+                      value: c.id,
+                      label: `${c.name} (${c.currency === "VES" ? "Bs." : c.currency})`,
+                    }))}
+                    placeholder={activas.length === 0 ? "Crea una cuenta en Mi dinero" : "Elige…"}
+                  />
+                )}
+              </FormField>
+              <FormField label="¿Cuánto?" required>
+                {(p) => (
+                  <MoneyInput
+                    {...p}
+                    value={monto}
+                    onChange={setMonto}
+                    currency={monedaCuenta === "VES" ? "Bs." : monedaCuenta}
+                  />
+                )}
+              </FormField>
+            </div>
+            <FormField label="Algo más que anotar">
               {(p) => (
-                <SimpleSelect
-                  id={p.id}
-                  value={cuenta}
-                  onValueChange={setCuenta}
-                  options={activas.map((c) => ({
-                    value: c.id,
-                    label: `${c.name} (${c.currency === "VES" ? "Bs." : c.currency})`,
-                  }))}
-                  placeholder={activas.length === 0 ? "Crea una cuenta en Mi dinero" : "Elige…"}
-                />
-              )}
-            </FormField>
-            <FormField label="¿Cuánto?" required>
-              {(p) => (
-                <MoneyInput
+                <Input
                   {...p}
-                  value={monto}
-                  onChange={setMonto}
-                  currency={monedaCuenta === "VES" ? "Bs." : monedaCuenta}
+                  value={descripcion}
+                  onChange={(e) => setDescripcion(e.target.value)}
+                  placeholder="Alquiler de septiembre"
                 />
               )}
             </FormField>
-          </div>
-          <FormField label="Algo más que anotar">
-            {(p) => (
-              <Input
-                {...p}
-                value={descripcion}
-                onChange={(e) => setDescripcion(e.target.value)}
-                placeholder="Alquiler de septiembre"
-              />
-            )}
-          </FormField>
-          <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
-            <span className="text-[0.9rem]">
-              Se paga todos los meses
-              <span className="block text-[0.78rem] text-muted-foreground">
-                Para recordártelo cuando toque.
+            <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+              <span className="text-[0.9rem]">
+                Se paga todos los meses
+                <span className="block text-[0.78rem] text-muted-foreground">
+                  Para recordártelo cuando toque.
+                </span>
               </span>
-            </span>
-            <Switch
-              checked={recurrente}
-              onCheckedChange={setRecurrente}
-              aria-label="Se paga todos los meses"
-            />
-          </label>
-          <label className="flex cursor-pointer items-center gap-2 text-[0.88rem] text-muted-foreground">
-            <Paperclip className="size-4" />
-            {adjunto === null ? "Adjuntar el comprobante (foto o PDF)" : adjunto.name}
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp,application/pdf"
-              className="hidden"
-              onChange={(e) => setAdjunto(e.target.files?.[0] ?? null)}
-            />
-          </label>
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onCerrar}>
-            Cancelar
-          </Button>
-          <Button
-            variant="primary"
-            disabled={!listo || registrar.isPending}
-            onClick={() => registrar.mutate()}
-          >
-            {registrar.isPending ? "Guardando…" : "Registrar gasto"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+              <Switch
+                checked={recurrente}
+                onCheckedChange={setRecurrente}
+                aria-label="Se paga todos los meses"
+              />
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-[0.88rem] text-muted-foreground">
+              <Paperclip className="size-4" />
+              {adjunto === null ? "Adjuntar el comprobante (foto o PDF)" : adjunto.name}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,application/pdf"
+                className="hidden"
+                onChange={(e) => setAdjunto(e.target.files?.[0] ?? null)}
+              />
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={onCerrar}>
+              Cancelar
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!listo || registrar.isPending}
+              onClick={() => registrar.mutate(false)}
+            >
+              {registrar.isPending ? "Guardando…" : "Registrar gasto"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {sinSaldo !== null && (
+        <ConfirmarSobregiro
+          mensaje={sinSaldo}
+          onCancelar={() => setSinSaldo(null)}
+          onConfirmar={async () => {
+            await registrar.mutateAsync(true);
+            setSinSaldo(null);
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -786,8 +811,11 @@ function RegistrarCompra({
     lineasValidas.length === lineas.filter((l) => l.producto !== null).length &&
     (!pagarAhora || forma !== null);
 
+  // Sobregiro al pagar en el acto (ADR-0062 §4): se pregunta y se reenvía confirmado.
+  const [sinSaldo, setSinSaldo] = useState<string | null>(null);
+
   const registrar = useMutation({
-    mutationFn: () => {
+    mutationFn: (forzar: boolean) => {
       const configurada = (formas.data?.methods ?? []).find((f) => f.id === forma);
       // La forma configurada manda su forma de pago Y su cuenta; una forma base
       // manda solo la forma de pago. Nada fuera del enum sale de aquí.
@@ -796,10 +824,14 @@ function RegistrarCompra({
           ? null
           : configurada !== undefined
             ? esFormaDeCompra(configurada.kind)
-              ? { instrument: configurada.kind, account_id: configurada.account_id }
+              ? {
+                  instrument: configurada.kind,
+                  account_id: configurada.account_id,
+                  ...(forzar ? { allow_negative_balance: true } : {}),
+                }
               : null
             : esFormaDeCompra(forma)
-              ? { instrument: forma }
+              ? { instrument: forma, ...(forzar ? { allow_negative_balance: true } : {}) }
               : null;
       if (pagarAhora && pago === null) {
         return Promise.reject(new Error("Esa forma no sirve para pagar a un proveedor."));
@@ -833,232 +865,261 @@ function RegistrarCompra({
       onListo();
       onCerrar();
     },
-    onError: (e) => toast.error("No se pudo registrar la compra", errorDePersona(e)),
+    onError: (e) => {
+      const falta = esSinSaldo(e);
+      if (falta !== null) {
+        setSinSaldo(falta);
+        return;
+      }
+      toast.error("No se pudo registrar la compra", errorDePersona(e));
+    },
   });
 
   const etiquetaMoneda = moneda === "VES" ? "Bs." : moneda;
 
   return (
-    <Dialog open onOpenChange={(v) => !v && onCerrar()}>
-      <DialogContent className="max-w-lg">
-        <DialogTitle>Registrar compra</DialogTitle>
-        <DialogDescription>
-          Mercancía con la factura del proveedor: entra al depósito y a lo que debes.
-        </DialogDescription>
-        <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1 pt-2">
-          {!creandoProveedor ? (
-            <div className="flex items-end gap-2">
-              <FormField label="Proveedor" required className="flex-1">
-                {(p) => (
-                  <SimpleSelect
-                    id={p.id}
-                    value={proveedor}
-                    onValueChange={setProveedor}
-                    options={proveedores.map((s) => ({ value: s.id, label: s.legal_name }))}
-                    placeholder="Elige el proveedor…"
-                  />
-                )}
-              </FormField>
-              <Button variant="secondary" onClick={() => setCreandoProveedor(true)}>
-                <Plus /> Nuevo
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-2 rounded-md border border-border p-3">
-              <FormField label="Nombre del proveedor" required>
+    <>
+      <Dialog open onOpenChange={(v) => !v && onCerrar()}>
+        <DialogContent className="max-w-lg">
+          <DialogTitle>Registrar compra</DialogTitle>
+          <DialogDescription>
+            Mercancía con la factura del proveedor: entra al depósito y a lo que debes.
+          </DialogDescription>
+          <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1 pt-2">
+            {!creandoProveedor ? (
+              <div className="flex items-end gap-2">
+                <FormField label="Proveedor" required className="flex-1">
+                  {(p) => (
+                    <SimpleSelect
+                      id={p.id}
+                      value={proveedor}
+                      onValueChange={setProveedor}
+                      options={proveedores.map((s) => ({ value: s.id, label: s.legal_name }))}
+                      placeholder="Elige el proveedor…"
+                    />
+                  )}
+                </FormField>
+                <Button variant="secondary" onClick={() => setCreandoProveedor(true)}>
+                  <Plus /> Nuevo
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2 rounded-md border border-border p-3">
+                <FormField label="Nombre del proveedor" required>
+                  {(p) => (
+                    <Input
+                      {...p}
+                      value={nuevoNombre}
+                      onChange={(e) => setNuevoNombre(e.target.value)}
+                      autoFocus
+                    />
+                  )}
+                </FormField>
+                <FormField label="Cédula o RIF" required hint="El de la factura que te entregó.">
+                  {(p) => (
+                    <Input {...p} value={nuevoRif} onChange={(e) => setNuevoRif(e.target.value)} />
+                  )}
+                </FormField>
+                <div className="flex justify-end gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => setCreandoProveedor(false)}>
+                    Cancelar
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={
+                      nuevoNombre.trim() === "" ||
+                      nuevoRif.trim() === "" ||
+                      crearProveedor.isPending
+                    }
+                    onClick={() => crearProveedor.mutate()}
+                  >
+                    Agregar
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2">
+              <FormField label="N° de la factura" required>
                 {(p) => (
                   <Input
                     {...p}
-                    value={nuevoNombre}
-                    onChange={(e) => setNuevoNombre(e.target.value)}
-                    autoFocus
+                    value={nroFactura}
+                    onChange={(e) => setNroFactura(e.target.value)}
                   />
                 )}
               </FormField>
-              <FormField label="Cédula o RIF" required hint="El de la factura que te entregó.">
+              <FormField
+                label="N° impreso de la factura"
+                required
+                hint="El que trae impresa la factura del proveedor."
+              >
                 {(p) => (
-                  <Input {...p} value={nuevoRif} onChange={(e) => setNuevoRif(e.target.value)} />
+                  <Input
+                    {...p}
+                    value={nroControl}
+                    onChange={(e) => setNroControl(e.target.value)}
+                  />
                 )}
               </FormField>
-              <div className="flex justify-end gap-2">
-                <Button variant="ghost" size="sm" onClick={() => setCreandoProveedor(false)}>
-                  Cancelar
-                </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  disabled={
-                    nuevoNombre.trim() === "" || nuevoRif.trim() === "" || crearProveedor.isPending
-                  }
-                  onClick={() => crearProveedor.mutate()}
-                >
-                  Agregar
-                </Button>
-              </div>
             </div>
-          )}
 
-          <div className="grid grid-cols-2 gap-2">
-            <FormField label="N° de la factura" required>
+            <FormField label="Moneda de la factura" required hint="La de los precios que trae.">
               {(p) => (
-                <Input {...p} value={nroFactura} onChange={(e) => setNroFactura(e.target.value)} />
-              )}
-            </FormField>
-            <FormField
-              label="N° impreso de la factura"
-              required
-              hint="El que trae impresa la factura del proveedor."
-            >
-              {(p) => (
-                <Input {...p} value={nroControl} onChange={(e) => setNroControl(e.target.value)} />
-              )}
-            </FormField>
-          </div>
-
-          <FormField label="Moneda de la factura" required hint="La de los precios que trae.">
-            {(p) => (
-              <SimpleSelect
-                id={p.id}
-                value={moneda}
-                onValueChange={setMoneda}
-                options={MONEDAS_COMPRA}
-              />
-            )}
-          </FormField>
-
-          <div className="space-y-2">
-            <p className="text-[0.88rem] font-medium">¿Qué llegó?</p>
-            {lineas.map((l, i) => (
-              <div key={l.id} className="flex items-start gap-2">
-                <div className="flex-1">
-                  <label htmlFor={`compra-producto-${l.id}`} className="sr-only">
-                    Producto de la línea {i + 1}
-                  </label>
-                  <EntityPicker
-                    id={`compra-producto-${l.id}`}
-                    value={l.producto}
-                    onChange={(v) =>
-                      setLineas((prev) =>
-                        prev.map((x) => (x.id === l.id ? { ...x, producto: v } : x)),
-                      )
-                    }
-                    buscar={buscarProducto}
-                    placeholder="Producto…"
-                  />
-                </div>
-                <Input
-                  inputMode="decimal"
-                  value={l.cantidad}
-                  onChange={(e) =>
-                    setLineas((prev) =>
-                      prev.map((x) => (x.id === l.id ? { ...x, cantidad: e.target.value } : x)),
-                    )
-                  }
-                  placeholder="Cant."
-                  className="w-20"
-                  aria-label={`Cantidad de la línea ${i + 1}`}
+                <SimpleSelect
+                  id={p.id}
+                  value={moneda}
+                  onValueChange={setMoneda}
+                  options={MONEDAS_COMPRA}
                 />
-                <div className="w-32">
-                  <label htmlFor={`compra-precio-${l.id}`} className="sr-only">
-                    Precio de la línea {i + 1}
-                  </label>
-                  <MoneyInput
-                    id={`compra-precio-${l.id}`}
-                    value={l.precio}
-                    onChange={(v) =>
+              )}
+            </FormField>
+
+            <div className="space-y-2">
+              <p className="text-[0.88rem] font-medium">¿Qué llegó?</p>
+              {lineas.map((l, i) => (
+                <div key={l.id} className="flex items-start gap-2">
+                  <div className="flex-1">
+                    <label htmlFor={`compra-producto-${l.id}`} className="sr-only">
+                      Producto de la línea {i + 1}
+                    </label>
+                    <EntityPicker
+                      id={`compra-producto-${l.id}`}
+                      value={l.producto}
+                      onChange={(v) =>
+                        setLineas((prev) =>
+                          prev.map((x) => (x.id === l.id ? { ...x, producto: v } : x)),
+                        )
+                      }
+                      buscar={buscarProducto}
+                      placeholder="Producto…"
+                    />
+                  </div>
+                  <Input
+                    inputMode="decimal"
+                    value={l.cantidad}
+                    onChange={(e) =>
                       setLineas((prev) =>
-                        prev.map((x) => (x.id === l.id ? { ...x, precio: v } : x)),
+                        prev.map((x) => (x.id === l.id ? { ...x, cantidad: e.target.value } : x)),
                       )
                     }
-                    currency={etiquetaMoneda}
+                    placeholder="Cant."
+                    className="w-20"
+                    aria-label={`Cantidad de la línea ${i + 1}`}
                   />
+                  <div className="w-32">
+                    <label htmlFor={`compra-precio-${l.id}`} className="sr-only">
+                      Precio de la línea {i + 1}
+                    </label>
+                    <MoneyInput
+                      id={`compra-precio-${l.id}`}
+                      value={l.precio}
+                      onChange={(v) =>
+                        setLineas((prev) =>
+                          prev.map((x) => (x.id === l.id ? { ...x, precio: v } : x)),
+                        )
+                      }
+                      currency={etiquetaMoneda}
+                    />
+                  </div>
+                  {lineas.length > 1 && (
+                    <Button
+                      variant="ghost"
+                      size="iconSm"
+                      aria-label={`Quitar la línea ${i + 1}`}
+                      onClick={() => setLineas((prev) => prev.filter((x) => x.id !== l.id))}
+                    >
+                      <Trash2 />
+                    </Button>
+                  )}
                 </div>
-                {lineas.length > 1 && (
-                  <Button
-                    variant="ghost"
-                    size="iconSm"
-                    aria-label={`Quitar la línea ${i + 1}`}
-                    onClick={() => setLineas((prev) => prev.filter((x) => x.id !== l.id))}
-                  >
-                    <Trash2 />
-                  </Button>
-                )}
-              </div>
-            ))}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLineas((prev) => [...prev, lineaVacia()])}
-            >
-              <Plus /> Otro producto
-            </Button>
-            <p className="text-[0.8rem] text-faint-foreground">{AVISO_PRECIO_COMPRA}</p>
-          </div>
+              ))}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setLineas((prev) => [...prev, lineaVacia()])}
+              >
+                <Plus /> Otro producto
+              </Button>
+              <p className="text-[0.8rem] text-faint-foreground">{AVISO_PRECIO_COMPRA}</p>
+            </div>
 
-          <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
-            <span className="text-[0.9rem]">
-              La pagué completa ya
-              <span className="block text-[0.78rem] text-muted-foreground">
-                Si no, queda en «lo que debo» hasta que la pagues.
+            <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+              <span className="text-[0.9rem]">
+                La pagué completa ya
+                <span className="block text-[0.78rem] text-muted-foreground">
+                  Si no, queda en «lo que debo» hasta que la pagues.
+                </span>
               </span>
-            </span>
-            <Switch
-              checked={pagarAhora}
-              onCheckedChange={setPagarAhora}
-              aria-label="La pagué completa"
-            />
-          </label>
-          {pagarAhora && (
-            <FormField label="¿Con qué la pagaste?" required>
-              {(p) => (
-                <SimpleSelect
-                  id={p.id}
-                  value={forma}
-                  onValueChange={elegirForma}
-                  options={opcionesDePago}
-                  placeholder={formas.isPending ? "Cargando…" : "Elige…"}
-                />
-              )}
-            </FormField>
-          )}
+              <Switch
+                checked={pagarAhora}
+                onCheckedChange={setPagarAhora}
+                aria-label="La pagué completa"
+              />
+            </label>
+            {pagarAhora && (
+              <FormField label="¿Con qué la pagaste?" required>
+                {(p) => (
+                  <SimpleSelect
+                    id={p.id}
+                    value={forma}
+                    onValueChange={elegirForma}
+                    options={opcionesDePago}
+                    placeholder={formas.isPending ? "Cargando…" : "Elige…"}
+                  />
+                )}
+              </FormField>
+            )}
 
-          {activos.length > 1 && (
-            <FormField label="¿A qué depósito llega?" required>
-              {(p) => (
-                <SimpleSelect
-                  id={p.id}
-                  value={deposito}
-                  onValueChange={setDepositoElegido}
-                  options={activos.map((d) => ({
-                    value: d.id,
-                    label: d.is_default ? `${d.name} (principal)` : d.name,
-                  }))}
-                />
-              )}
-            </FormField>
-          )}
+            {activos.length > 1 && (
+              <FormField label="¿A qué depósito llega?" required>
+                {(p) => (
+                  <SimpleSelect
+                    id={p.id}
+                    value={deposito}
+                    onValueChange={setDepositoElegido}
+                    options={activos.map((d) => ({
+                      value: d.id,
+                      label: d.is_default ? `${d.name} (principal)` : d.name,
+                    }))}
+                  />
+                )}
+              </FormField>
+            )}
 
-          {deposito === null && !buscandoDeposito && (
-            <p role="alert" className="text-[0.85rem] text-warning-soft-foreground">
-              Falta un depósito: lo configura quien administra el negocio (Administración →
-              Inventario). Sin él, la mercancía no tiene dónde entrar.
-            </p>
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onCerrar}>
-            Cancelar
-          </Button>
-          <Button
-            variant="primary"
-            disabled={!listo || registrar.isPending}
-            onClick={() => registrar.mutate()}
-          >
-            {registrar.isPending ? "Registrando…" : "Registrar compra"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            {deposito === null && !buscandoDeposito && (
+              <p role="alert" className="text-[0.85rem] text-warning-soft-foreground">
+                Falta un depósito: lo configura quien administra el negocio (Administración →
+                Inventario). Sin él, la mercancía no tiene dónde entrar.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={onCerrar}>
+              Cancelar
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!listo || registrar.isPending}
+              onClick={() => registrar.mutate(false)}
+            >
+              {registrar.isPending ? "Registrando…" : "Registrar compra"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {sinSaldo !== null && (
+        <ConfirmarSobregiro
+          mensaje={sinSaldo}
+          onCancelar={() => setSinSaldo(null)}
+          onConfirmar={async () => {
+            await registrar.mutateAsync(true);
+            setSinSaldo(null);
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -1082,11 +1143,42 @@ function PagarFactura({
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [monto, setMonto] = useState(factura.balance);
-  const [forma, setForma] = useState<string | null>("transferencia");
+  const [forma, setForma] = useState<string | null>(null);
+  // Sobregiro: sin saldo se pregunta antes de dejar la cuenta en negativo (ADR-0062 §4).
+  const [sinSaldo, setSinSaldo] = useState<string | null>(null);
+
+  /**
+   * De dónde sale el dinero: las formas CONFIGURADAS mandan su cuenta, igual que al registrar
+   * la compra. Antes solo se elegía la FORMA y el pago salía de «Sin asignar», que quedaba
+   * en negativo (QA de pantalla 2026-09-15, h. 77). Sin ninguna configurada, siguen las base y
+   * el servidor resuelve la cuenta propia de esa familia (ADR-0062 §1).
+   */
+  const formas = useQuery({
+    queryKey: ["formas-pago", empresa.id],
+    queryFn: () => llamar<{ methods: FormaDePago[] }>("/v1/payment-methods"),
+  });
+  const opcionesDePago = useMemo(() => {
+    const configuradas = (formas.data?.methods ?? []).filter(
+      (f) => f.is_active && esFormaDeCompra(f.kind),
+    );
+    const cubiertos = new Set(configuradas.map((f) => f.kind));
+    return [
+      ...configuradas.map((f) => ({ value: f.id, label: f.name })),
+      ...FORMAS_DE_COMPRA.filter((i) => !cubiertos.has(i.value)).map((i) => ({
+        value: i.value,
+        label: i.label,
+      })),
+    ];
+  }, [formas.data]);
 
   const pagar = useMutation({
-    mutationFn: () =>
-      llamar("/v1/supplier-payments", {
+    mutationFn: (forzar: boolean) => {
+      const configurada = (formas.data?.methods ?? []).find((f) => f.id === forma);
+      const tipoDePago = configurada?.kind ?? forma;
+      if (tipoDePago === null || !esFormaDeCompra(tipoDePago)) {
+        return Promise.reject(new Error("Esa forma no sirve para pagar a un proveedor."));
+      }
+      return llamar("/v1/supplier-payments", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
@@ -1094,64 +1186,91 @@ function PagarFactura({
           supplier_invoice_id: factura.id,
           gross_amount: monto.trim().replace(",", "."),
           currency: factura.transaction_currency,
-          instrument: forma,
+          instrument: tipoDePago,
+          ...(configurada === undefined ? {} : { account_id: configurada.account_id }),
+          ...(forzar ? { allow_negative_balance: true } : {}),
         }),
-      }),
+      });
+    },
     onSuccess: () => {
       toast.success("Pago registrado", `La deuda con ${proveedor} bajó.`);
       onPagada();
     },
-    onError: (e) => toast.error("No se pudo pagar", errorDePersona(e)),
+    onError: (e) => {
+      const falta = esSinSaldo(e);
+      if (falta !== null) {
+        setSinSaldo(falta);
+        return;
+      }
+      toast.error("No se pudo pagar", errorDePersona(e));
+    },
   });
 
   return (
-    <Dialog open onOpenChange={(v) => !v && onCerrar()}>
-      <DialogContent className="max-w-sm">
-        <DialogTitle>Pagar a {proveedor}</DialogTitle>
-        <DialogDescription>
-          Factura {factura.supplier_document_number} — debes{" "}
-          {mostrarImporte({ amount: factura.balance, currency: factura.transaction_currency })}.
-          Puede ser un abono: lo que pagues se resta.
-        </DialogDescription>
-        <div className="space-y-3 pt-2">
-          <FormField label="¿Cuánto pagas?" required>
-            {(p) => (
-              <MoneyInput
-                {...p}
-                value={monto}
-                onChange={setMonto}
-                currency={
-                  factura.transaction_currency === "VES" ? "Bs." : factura.transaction_currency
-                }
-              />
-            )}
-          </FormField>
-          <FormField label="¿Con qué pagas?" required>
-            {(p) => (
-              <SimpleSelect
-                id={p.id}
-                value={forma}
-                onValueChange={setForma}
-                options={FORMAS_DE_COMPRA.map((f) => ({ value: f.value, label: f.label }))}
-              />
-            )}
-          </FormField>
-        </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onCerrar}>
-            Cancelar
-          </Button>
-          <Button
-            variant="primary"
-            disabled={
-              forma === null || !importeValido(monto.trim().replace(",", ".")) || pagar.isPending
-            }
-            onClick={() => pagar.mutate()}
-          >
-            {pagar.isPending ? "Pagando…" : "Registrar pago"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <>
+      <Dialog open onOpenChange={(v) => !v && onCerrar()}>
+        <DialogContent className="max-w-sm">
+          <DialogTitle>Pagar a {proveedor}</DialogTitle>
+          <DialogDescription>
+            Factura {factura.supplier_document_number} — debes{" "}
+            {mostrarImporte({ amount: factura.balance, currency: factura.transaction_currency })}.
+            Puede ser un abono: lo que pagues se resta.
+          </DialogDescription>
+          <div className="space-y-3 pt-2">
+            <FormField label="¿Cuánto pagas?" required>
+              {(p) => (
+                <MoneyInput
+                  {...p}
+                  value={monto}
+                  onChange={setMonto}
+                  currency={
+                    factura.transaction_currency === "VES" ? "Bs." : factura.transaction_currency
+                  }
+                />
+              )}
+            </FormField>
+            <FormField
+              label="¿Con qué pagas?"
+              required
+              hint="Si la forma tiene cuenta configurada, el dinero sale de ESA cuenta."
+            >
+              {(p) => (
+                <SimpleSelect
+                  id={p.id}
+                  value={forma}
+                  onValueChange={setForma}
+                  placeholder={formas.isPending ? "Cargando…" : "Elige…"}
+                  options={opcionesDePago}
+                />
+              )}
+            </FormField>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={onCerrar}>
+              Cancelar
+            </Button>
+            <Button
+              variant="primary"
+              disabled={
+                forma === null || !importeValido(monto.trim().replace(",", ".")) || pagar.isPending
+              }
+              onClick={() => pagar.mutate(false)}
+            >
+              {pagar.isPending ? "Pagando…" : "Registrar pago"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {sinSaldo !== null && (
+        <ConfirmarSobregiro
+          mensaje={sinSaldo}
+          onCancelar={() => setSinSaldo(null)}
+          onConfirmar={async () => {
+            await pagar.mutateAsync(true);
+            setSinSaldo(null);
+          }}
+        />
+      )}
+    </>
   );
 }

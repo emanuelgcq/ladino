@@ -6,6 +6,7 @@ import {
   CreatePaymentMethodRequest,
   UpdatePaymentMethodRequest,
   RegisterExpenseRequest,
+  CreateTreasuryTransferRequest,
   CloseCashRegisterRequest,
   KeepDailyRateRequest,
 } from "@ladino/schemas";
@@ -17,6 +18,7 @@ import {
   createPaymentMethod,
   updatePaymentMethod,
   registerExpense,
+  transferBetweenAccounts,
   closeCashRegister,
   keepDailyRate,
 } from "@ladino/domain";
@@ -268,6 +270,21 @@ export function treasuryRoutes(
     const r = await withTransaction(sql, actor, (uow) =>
       keepDailyRate(uow, companyId, parsed.data),
     );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
+  /**
+   * Mover dinero entre dos cuentas de la empresa (ADR-0062 §3): repartir lo que entró en
+   * «Sin asignar», llevar el efectivo al banco. Exige `treasury.reassign`.
+   */
+  app.post("/v1/treasury/transfers", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = CreateTreasuryTransferRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => transferBetweenAccounts(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
   });

@@ -127,6 +127,8 @@ export {
   createPaymentMethod,
   updatePaymentMethod,
   registerExpense,
+  transferBetweenAccounts,
+  exigeSaldo,
   closeCashRegister,
   keepDailyRate,
   resolverCuentaEfectivo,

@@ -22,9 +22,13 @@ import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
 import { EntityPicker, type EntityOption } from "../../components/forms.js";
+import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import { KIND_LABEL, MensajeError, numeroDe } from "./comunes.js";
 import { CobrarDocumento } from "../../components/CobrarDocumento.js";
-import { ETIQUETA_FORMA } from "../../components/formas-de-pago.js";
+import {
+  nombreDeInstrumento,
+  type FormaDePago as FormaConfigurada,
+} from "../../components/formas-de-pago.js";
 import { numeroDocumento } from "../../components/documento.js";
 import { errorDePersona } from "../../lib.js";
 import { fechaLocal } from "../../fechas.js";
@@ -137,6 +141,14 @@ export function DetalleFactura(): React.JSX.Element {
       ).then((ws) => ws.filter((w) => w.status !== "inactive")),
   });
   const [errorAccion, setErrorAccion] = useState<unknown>(null);
+  // Las formas configuradas: para llamar a cada cobro por su nombre, no por el código del
+  // instrumento (QA de pantalla 2026-09-15, h. 39).
+  const formasPago = useQuery({
+    queryKey: ["formas-pago", empresa.id],
+    staleTime: 5 * 60_000,
+    queryFn: () => llamar<{ methods: FormaConfigurada[] }>("/v1/payment-methods"),
+  });
+  const nombreDeForma = (i: string): string => nombreDeInstrumento(i, formasPago.data?.methods);
 
   const detalle = useQuery({
     queryKey: ["documento", empresa.id, id],
@@ -422,7 +434,7 @@ export function DetalleFactura(): React.JSX.Element {
                   <THead>
                     <TR>
                       <TH>Fecha</TH>
-                      <TH>Instrumento</TH>
+                      <TH>Forma de pago</TH>
                       <TH>Referencia</TH>
                       <TH className="text-right">Importe</TH>
                       <TH className="text-right">Diferencial</TH>
@@ -434,7 +446,7 @@ export function DetalleFactura(): React.JSX.Element {
                       return (
                         <TR key={p.id}>
                           <TD>{fechaLocal(p.paid_at)}</TD>
-                          <TD>{ETIQUETA_FORMA[p.instrument] ?? p.instrument.replace(/_/g, " ")}</TD>
+                          <TD>{nombreDeForma(p.instrument)}</TD>
                           <TD className="text-muted-foreground">{p.reference ?? "—"}</TD>
                           <TD>
                             <DualMoney
@@ -844,6 +856,16 @@ function Devolucion({
   const esRecibo = documento.kind === "receipt";
   /** La caja de la que sale el dinero, si se reembolsa en el acto (ADR-0061 §8). */
   const [cajaReembolso, setCajaReembolso] = useState<string | null>(null);
+  /**
+   * El reembolso que el servidor rechazó por falta de saldo (ADR-0062 §4). La devolución YA
+   * quedó confirmada —son dos operaciones—, así que lo que se reintenta es solo el pago: o se
+   * confirma el sobregiro, o el cliente se queda con el saldo a favor (QA 2026-09-15, h. 33).
+   */
+  const [sinSaldo, setSinSaldo] = useState<{
+    mensaje: string;
+    creditId: string;
+    monto: string;
+  } | null>(null);
   const cuentas = useQuery({
     queryKey: ["cuentas-reembolso", empresa.id],
     queryFn: () =>
@@ -907,6 +929,21 @@ function Devolucion({
     }
   }
 
+  /** El pago del saldo a favor, en su propio paso: la misma llave, con o sin confirmación. */
+  async function reembolsar(creditId: string, monto: string, forzar: boolean): Promise<void> {
+    await llamar(`/v1/customer-credits/${creditId}/refunds`, {
+      method: "POST",
+      headers: { "Idempotency-Key": llaveReembolso.current },
+      body: JSON.stringify({
+        company_id: empresa.id,
+        account_id: cajaReembolso,
+        amount: monto,
+        reason: `Reembolso de la devolución: ${motivo.trim()}`,
+        ...(forzar ? { allow_negative_balance: true } : {}),
+      }),
+    });
+  }
+
   async function devolver(): Promise<void> {
     setError(null);
     setOcupado(true);
@@ -944,16 +981,19 @@ function Devolucion({
         const nota = await llamar<{ document: { total_amount: string } }>(
           `/v1/documents/${confirmada.credit_note_id}`,
         );
-        await llamar(`/v1/customer-credits/${confirmada.customer_credit_id}/refunds`, {
-          method: "POST",
-          headers: { "Idempotency-Key": llaveReembolso.current },
-          body: JSON.stringify({
-            company_id: empresa.id,
-            account_id: cajaReembolso,
-            amount: nota.document.total_amount,
-            reason: `Reembolso de la devolución: ${motivo.trim()}`,
-          }),
-        });
+        try {
+          await reembolsar(confirmada.customer_credit_id, nota.document.total_amount, false);
+        } catch (e) {
+          const falta = esSinSaldo(e);
+          if (falta === null) throw e;
+          setSinSaldo({
+            mensaje: falta,
+            creditId: confirmada.customer_credit_id,
+            monto: nota.document.total_amount,
+          });
+          setOcupado(false);
+          return;
+        }
       }
       toast.success(
         "Devolución confirmada",
@@ -971,102 +1011,127 @@ function Devolucion({
   }
 
   return (
-    <Dialog open onOpenChange={(v) => !v && onClose(false)}>
-      <DialogContent className="max-w-lg">
-        <DialogTitle>Devolución de {numeroDe(documento)}</DialogTitle>
-        <DialogDescription>
-          La mercancía reingresa <strong>al costo y lote con los que salió</strong> —no al de hoy—,
-          y se emite{" "}
-          {esRecibo
-            ? "un recibo de devolución (no fiscal, sin IVA)"
-            : "una nota de crédito (exige su propio rango de numeración)"}{" "}
-          que deja el saldo a favor del cliente. Si el cliente quiere su dinero, elige de qué caja
-          sale.
-        </DialogDescription>
-        <div className="space-y-3 pt-2">
-          <div className="divide-y divide-border rounded-md border border-border">
-            {lineas.map((l) => (
-              <div key={l.id} className="flex items-center gap-2 px-3 py-2 text-[0.9rem]">
-                <span className="min-w-0 flex-1 truncate">{l.description}</span>
-                <span className="text-[0.8rem] text-muted-foreground tabular-nums">
-                  vendidos {mostrarCantidad(l.quantity)}
-                </span>
-                <Input
-                  aria-label={`Cantidad a devolver de ${l.description}`}
-                  inputMode="decimal"
-                  placeholder="0"
-                  className="w-20 text-right font-mono"
-                  value={cantidades[l.id] ?? ""}
+    <>
+      <Dialog open onOpenChange={(v) => !v && onClose(false)}>
+        <DialogContent className="max-w-lg">
+          <DialogTitle>Devolución de {numeroDe(documento)}</DialogTitle>
+          <DialogDescription>
+            La mercancía reingresa <strong>al costo y lote con los que salió</strong> —no al de
+            hoy—, y se emite{" "}
+            {esRecibo
+              ? "un recibo de devolución (no fiscal, sin IVA)"
+              : "una nota de crédito (exige su propio rango de numeración)"}{" "}
+            que deja el saldo a favor del cliente. Si el cliente quiere su dinero, elige de qué caja
+            sale.
+          </DialogDescription>
+          <div className="space-y-3 pt-2">
+            <div className="divide-y divide-border rounded-md border border-border">
+              {lineas.map((l) => (
+                <div key={l.id} className="flex items-center gap-2 px-3 py-2 text-[0.9rem]">
+                  <span className="min-w-0 flex-1 truncate">{l.description}</span>
+                  <span className="text-[0.8rem] text-muted-foreground tabular-nums">
+                    vendidos {mostrarCantidad(l.quantity)}
+                  </span>
+                  <Input
+                    aria-label={`Cantidad a devolver de ${l.description}`}
+                    inputMode="decimal"
+                    placeholder="0"
+                    className="w-20 text-right font-mono"
+                    value={cantidades[l.id] ?? ""}
+                    disabled={creada !== null}
+                    onChange={(e) => setCantidades({ ...cantidades, [l.id]: e.target.value })}
+                  />
+                </div>
+              ))}
+            </div>
+            {(depositos.data?.length ?? 0) > 1 && (
+              <div className="w-full sm:w-56">
+                <SimpleSelect
+                  ariaLabel="Depósito al que reingresa"
+                  value={deposito}
+                  onValueChange={setDeposito}
                   disabled={creada !== null}
-                  onChange={(e) => setCantidades({ ...cantidades, [l.id]: e.target.value })}
+                  options={(depositos.data ?? []).map((d) => ({ value: d.id, label: d.name }))}
                 />
               </div>
-            ))}
-          </div>
-          {(depositos.data?.length ?? 0) > 1 && (
-            <div className="w-full sm:w-56">
+            )}
+            <div className="w-full sm:w-72">
               <SimpleSelect
-                ariaLabel="Depósito al que reingresa"
-                value={deposito}
-                onValueChange={setDeposito}
+                ariaLabel="Devolver el dinero desde"
+                value={cajaReembolso ?? (mostrador ? null : "saldo")}
+                onValueChange={(v) => setCajaReembolso(v === "saldo" ? null : v)}
                 disabled={creada !== null}
-                options={(depositos.data ?? []).map((d) => ({ value: d.id, label: d.name }))}
+                placeholder="¿De qué caja sale el dinero?"
+                options={[
+                  ...(mostrador
+                    ? []
+                    : [{ value: "saldo", label: "Dejar saldo a favor del cliente" }]),
+                  ...(cuentas.data?.accounts ?? [])
+                    // «Sin asignar» es de sistema: de ahí no sale un reembolso (QA 2026-09-15, h. 36).
+                    .filter(
+                      (c) =>
+                        c.is_active &&
+                        c.is_system !== true &&
+                        c.currency === documento.functional_currency,
+                    )
+                    .map((c) => ({ value: c.id, label: `Devolver el dinero desde «${c.name}»` })),
+                ]}
               />
             </div>
-          )}
-          <div className="w-full sm:w-72">
-            <SimpleSelect
-              ariaLabel="Devolver el dinero desde"
-              value={cajaReembolso ?? (mostrador ? null : "saldo")}
-              onValueChange={(v) => setCajaReembolso(v === "saldo" ? null : v)}
+            <Textarea
+              aria-label="Motivo de la devolución"
+              rows={2}
+              placeholder="Motivo (obligatorio): qué devolvió y por qué"
+              value={motivo}
               disabled={creada !== null}
-              placeholder="¿De qué caja sale el dinero?"
-              options={[
-                ...(mostrador
-                  ? []
-                  : [{ value: "saldo", label: "Dejar saldo a favor del cliente" }]),
-                ...(cuentas.data?.accounts ?? [])
-                  // «Sin asignar» es de sistema: de ahí no sale un reembolso (QA 2026-09-15, h. 36).
-                  .filter(
-                    (c) =>
-                      c.is_active &&
-                      c.is_system !== true &&
-                      c.currency === documento.functional_currency,
-                  )
-                  .map((c) => ({ value: c.id, label: `Devolver el dinero desde «${c.name}»` })),
-              ]}
+              onChange={(e) => setMotivo(e.target.value)}
             />
+            {creada !== null && (
+              <p className="text-[0.85rem] text-warning-soft-foreground">
+                El borrador de la devolución ya existe; falta confirmarlo. Reintenta la confirmación
+                — no se crea otro borrador.
+              </p>
+            )}
+            {error !== null && <MensajeError error={error} />}
           </div>
-          <Textarea
-            aria-label="Motivo de la devolución"
-            rows={2}
-            placeholder="Motivo (obligatorio): qué devolvió y por qué"
-            value={motivo}
-            disabled={creada !== null}
-            onChange={(e) => setMotivo(e.target.value)}
-          />
-          {creada !== null && (
-            <p className="text-[0.85rem] text-warning-soft-foreground">
-              El borrador de la devolución ya existe; falta confirmarlo. Reintenta la confirmación —
-              no se crea otro borrador.
-            </p>
-          )}
-          {error !== null && <MensajeError error={error} />}
-        </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <Button variant="ghost" onClick={() => void cancelar()} disabled={ocupado}>
-            {creada !== null ? "Descartar el borrador" : "Cancelar"}
-          </Button>
-          <Button variant="primary" disabled={!listo || ocupado} onClick={() => void devolver()}>
-            {ocupado
-              ? "Devolviendo…"
-              : creada !== null
-                ? "Reintentar la confirmación"
-                : "Confirmar la devolución"}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => void cancelar()} disabled={ocupado}>
+              {creada !== null ? "Descartar el borrador" : "Cancelar"}
+            </Button>
+            <Button variant="primary" disabled={!listo || ocupado} onClick={() => void devolver()}>
+              {ocupado
+                ? "Devolviendo…"
+                : creada !== null
+                  ? "Reintentar la confirmación"
+                  : "Confirmar la devolución"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {sinSaldo !== null && (
+        <ConfirmarSobregiro
+          mensaje={sinSaldo.mensaje}
+          onCancelar={() => {
+            // La devolución ya está confirmada: sin el pago, el cliente queda con saldo a favor.
+            setSinSaldo(null);
+            toast.success(
+              "Devolución confirmada",
+              "La mercancía reingresó y el saldo quedó a favor del cliente: no salió dinero de la caja.",
+            );
+            onClose(true);
+          }}
+          onConfirmar={async () => {
+            await reembolsar(sinSaldo.creditId, sinSaldo.monto, true);
+            setSinSaldo(null);
+            toast.success(
+              "Devolución confirmada",
+              "La mercancía reingresó y el dinero salió de la caja elegida, que quedó en negativo.",
+            );
+            onClose(true);
+          }}
+        />
+      )}
+    </>
   );
 }
 

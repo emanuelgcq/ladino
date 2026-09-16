@@ -31,7 +31,7 @@ import { RULES_VERSION } from "./create-company.js";
 import { clasificacionPorPrefijo } from "./customers.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { receiveStock, revalueStock, revalorizar } from "./inventory.js";
-import { resolverCuentaEfectivo } from "./treasury.js";
+import { exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 
 /**
@@ -61,6 +61,7 @@ export type PurchaseError =
   | { code: "FISCAL_NUMBERING_INVALID"; message: string }
   | { code: "NEGATIVE_STOCK"; message: string }
   | { code: "OVER_INVOICED"; message: string }
+  | { code: "INSUFFICIENT_FUNDS"; message: string }
   | { code: "APPEND_ONLY_VIOLATION"; message: string };
 
 const POLICY: RoundingPolicy = { id: "purchases:document:8:HALF_UP", scale: 8, mode: "HALF_UP" };
@@ -1938,6 +1939,12 @@ export async function registerSupplierPayment(
       input.currency,
     );
   }
+  // El NETO es lo que sale de la cuenta: sin saldo, se confirma o no se registra
+  // (ADR-0062 §4; QA de pantalla 2026-09-15, h. 77).
+  if (cuentaId !== null) {
+    const alcanza = await exigeSaldo(sql, cuentaId, neto.toFixed(8), input.allow_negative_balance);
+    if (!alcanza.ok) return err(alcanza.error);
+  }
 
   let pago: Record<string, unknown>;
   try {
@@ -2197,6 +2204,9 @@ export async function simplePurchase(
       instrument: input.payment.instrument,
       ...(input.payment.reference === undefined ? {} : { reference: input.payment.reference }),
       ...(input.payment.account_id === undefined ? {} : { account_id: input.payment.account_id }),
+      ...(input.payment.allow_negative_balance === undefined
+        ? {}
+        : { allow_negative_balance: input.payment.allow_negative_balance }),
     });
     if (!pagado.ok) return pagado;
     pago = pagado.value;

@@ -284,6 +284,9 @@ describe("la cuenta de efectivo sale de la caja real del movimiento", () => {
       currency: "USD",
       instrument: "zelle",
       account_id: BANCO_USD,
+      // Lo que se prueba aquí es CONTRA QUÉ CUENTA asienta, no el saldo: el banco tiene lo
+      // cobrado antes y no llega. Se confirma el sobregiro (ADR-0062 §4).
+      allow_negative_balance: true,
     });
     expect(pago.status).toBe(201);
     const p = ((await pago.json()) as { payment: { id: string } }).payment.id;
@@ -302,6 +305,7 @@ describe("la cuenta de efectivo sale de la caja real del movimiento", () => {
       category: "Publicidad",
       account_id: BANCO_USD,
       amount: "3.00000000",
+      allow_negative_balance: true,
     });
     expect(r.status).toBe(201);
     const g = (await r.json()) as { id: string; accounting: string };
@@ -343,6 +347,7 @@ describe("la cuenta de efectivo sale de la caja real del movimiento", () => {
       category: "Transporte",
       account_id: CAJA_USD,
       amount: "2.00000000",
+      allow_negative_balance: true,
     });
     expect(r.status).toBe(201);
     const g = (await r.json()) as { id: string; accounting: string };

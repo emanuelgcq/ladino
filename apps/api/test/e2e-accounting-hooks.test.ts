@@ -264,7 +264,7 @@ describe("el gancho contable — R-20", () => {
         from public.journal_template_lines l
         join public.account_purposes p on p.code = l.account_purpose
        where l.company_id = ${COMPANY}
-         and case when p.resolved_by = 'treasury_account'
+         and case when p.resolved_by in ('treasury_account', 'treasury_account_from')
                   then exists (select 1 from public.company_accounts ca
                                 where ca.company_id = ${COMPANY}
                                   and ca.ledger_account_id is null)
@@ -468,6 +468,8 @@ describe("el gancho contable — R-20", () => {
       gross_amount: compra!.total,
       currency: "VES",
       instrument: "transferencia",
+      // La cuenta no tiene con qué: aquí se prueba el ASIENTO, no el saldo (ADR-0062 §4).
+      allow_negative_balance: true,
     });
     expect(pago.status).toBe(201);
     const p = (await pago.json()) as { payment: { id: string } };

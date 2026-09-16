@@ -711,6 +711,9 @@ describe("compras de extremo a extremo", () => {
       instrument: "transferencia",
       reference: "TRF-E2E-1",
       issue_retention_receipt: true,
+      // Lo que se prueba es la RETENCIÓN, no el saldo: la cuenta no tiene con qué y el
+      // sobregiro se confirma explícitamente (ADR-0062 §4).
+      allow_negative_balance: true,
     });
     expect(p.status).toBe(201);
     const cuerpo = (await p.json()) as {
@@ -790,7 +793,12 @@ describe("compras de extremo a extremo", () => {
       supplier_document_number: `FS-${RUN}`,
       supplier_control_number: `CTRL-FS-${RUN}`,
       lines: [{ product_id: PROD_A, quantity: "2", unit_price: "50" }],
-      payment: { instrument: "transferencia", reference: `TRF-${RUN}` },
+      payment: {
+        instrument: "transferencia",
+        reference: `TRF-${RUN}`,
+        // Se prueba la compra en un paso, no el saldo: el sobregiro se confirma (ADR-0062 §4).
+        allow_negative_balance: true,
+      },
     });
     expect(r.status).toBe(201);
     const s = (await r.json()) as {

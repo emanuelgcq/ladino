@@ -139,9 +139,51 @@ export const RegisterExpenseRequest = z
     branch_id: uuid.optional(),
     /** Ruta en el bucket `receipts`, si ya se subió el comprobante. */
     attachment_path: z.string().trim().min(3).max(300).optional(),
+    /**
+     * Confirmar EXPLÍCITAMENTE que la cuenta quede en negativo (ADR-0062 §4). Sin esto, un
+     * egreso mayor que el saldo responde 409 INSUFFICIENT_FUNDS con el número delante.
+     */
+    allow_negative_balance: z.boolean().optional(),
   })
   .strict();
 export type RegisterExpenseRequest = z.infer<typeof RegisterExpenseRequest>;
+
+/** Mover dinero entre dos cuentas de la misma moneda (ADR-0062 §3, migración 61). */
+export const CreateTreasuryTransferRequest = z
+  .object({
+    company_id: uuid,
+    from_account_id: uuid,
+    to_account_id: uuid,
+    amount,
+    /** Por qué se mueve: «repartir lo cobrado del día», «depósito en el banco». */
+    reason: z.string().trim().min(3).max(300),
+    /**
+     * Confirmar EXPLÍCITAMENTE que la cuenta quede en negativo (ADR-0062 §4). Sin esto, un
+     * egreso mayor que el saldo responde 409 INSUFFICIENT_FUNDS con el número delante.
+     */
+    allow_negative_balance: z.boolean().optional(),
+  })
+  .strict();
+export type CreateTreasuryTransferRequest = z.infer<typeof CreateTreasuryTransferRequest>;
+
+export const TreasuryTransferResponse = z
+  .object({
+    id: uuid,
+    from_account_id: uuid,
+    to_account_id: uuid,
+    amount: z.string(),
+    currency: z.string(),
+    functional_amount: z.string(),
+    functional_currency: z.string(),
+    fx_rate: z.string(),
+    reason: z.string(),
+    transferred_at: z.string().datetime({ offset: true }),
+    /** posted = asentado; queued = en la cola contable (ADR-0042). */
+    accounting: z.enum(["posted", "queued"]),
+    journal_entry_id: uuid.nullable(),
+  })
+  .strict();
+export type TreasuryTransferResponse = z.infer<typeof TreasuryTransferResponse>;
 
 export const ExpenseResponse = z
   .object({

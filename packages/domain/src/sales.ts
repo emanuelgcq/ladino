@@ -47,7 +47,7 @@ import type {
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { issueStockBatch, receiveStock, reponerSalidasDeDocumento } from "./inventory.js";
-import { resolverCuentaEfectivo } from "./treasury.js";
+import { exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 import { reverseJournalEntry } from "./accounting.js";
 import { modoDeVenta } from "./modo-venta.js";
@@ -79,7 +79,8 @@ export type SalesError =
   | { code: "NEGATIVE_STOCK"; message: string }
   | { code: "APPEND_ONLY_VIOLATION"; message: string }
   | { code: "REGIME_KIND_NOT_ALLOWED"; message: string }
-  | { code: "DOCUMENT_HAS_PAYMENTS"; message: string };
+  | { code: "DOCUMENT_HAS_PAYMENTS"; message: string }
+  | { code: "INSUFFICIENT_FUNDS"; message: string };
 
 /**
  * Redondeo de la VALORACIÓN (cobros y diferencial cambiario): la escala de
@@ -1734,6 +1735,16 @@ export async function refundCustomerCredit(
       message: `El saldo a favor disponible es ${disponible.toFixed()} y se intentó reembolsar ${pedido.value.toFixed()}.`,
     });
   }
+
+  // El reembolso sale de una caja real: sin saldo, se confirma o no se registra (ADR-0062 §4;
+  // QA de pantalla 2026-09-15, h. 33 — un reembolso dejó «Caja del local» en −4.716,36).
+  const alcanzaCaja = await exigeSaldo(
+    sql,
+    input.account_id,
+    pedido.value.toFixed(8),
+    input.allow_negative_balance,
+  );
+  if (!alcanzaCaja.ok) return err(alcanzaCaja.error);
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   const nuevo = aplicado.value.plus(pedido.value);

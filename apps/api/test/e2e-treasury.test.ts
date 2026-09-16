@@ -209,12 +209,21 @@ describe("tesorería de extremo a extremo", () => {
   });
 
   it("el gasto sin mapeo contable queda EN COLA, y el saldo baja igual", async () => {
-    const r = await pedir("POST", "/v1/expenses", GESTOR, {
+    const cuerpo = {
       company_id: COMPANY,
       category: "Alquiler",
       description: "Alquiler del local",
       account_id: CAJA,
       amount: "250.00000000",
+    };
+    // La caja está en cero: sin confirmar, el gasto no pasa (ADR-0062 §4).
+    const sinConfirmar = await pedir("POST", "/v1/expenses", GESTOR, cuerpo);
+    expect(sinConfirmar.status).toBe(409);
+    expect(((await sinConfirmar.json()) as { code: string }).code).toBe("INSUFFICIENT_FUNDS");
+
+    const r = await pedir("POST", "/v1/expenses", GESTOR, {
+      ...cuerpo,
+      allow_negative_balance: true,
     });
     expect(r.status).toBe(201);
     const g = (await r.json()) as Record<string, unknown>;
@@ -238,6 +247,8 @@ describe("tesorería de extremo a extremo", () => {
       amount: "10.00000000",
     });
     expect(r.status).toBe(409);
+    // El Zelle también está en cero, y aun así el motivo es la TASA: sin ella el gasto no se
+    // puede ni valorar, y decir «no alcanza» taparía el motivo real (ADR-0062 §4).
     expect(((await r.json()) as { code: string }).code).toBe("EXCHANGE_RATE_MISSING");
   });
 
@@ -272,6 +283,7 @@ describe("tesorería de extremo a extremo", () => {
       category: "Publicidad",
       account_id: ZELLE,
       amount: "10.00000000",
+      allow_negative_balance: true,
     });
     expect(gasto.status).toBe(201);
     const g = (await gasto.json()) as Record<string, string>;
@@ -334,6 +346,7 @@ describe("tesorería de extremo a extremo", () => {
       category: "Luz",
       account_id: CAJA,
       amount: "100.00000000",
+      allow_negative_balance: true,
     });
     expect(r.status).toBe(201);
     const g = (await r.json()) as Record<string, unknown>;

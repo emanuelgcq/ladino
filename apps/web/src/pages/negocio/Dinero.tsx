@@ -6,6 +6,7 @@ import {
   ArrowUpFromLine,
   Banknote,
   CreditCard,
+  ArrowLeftRight,
   Landmark,
   Lock,
   Plus,
@@ -31,6 +32,7 @@ import { SimpleSelect } from "../../ui/select.js";
 import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
+import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import { fechaLocal, fuenteDeTasa } from "../../fechas.js";
 
 /**
@@ -109,6 +111,24 @@ const MONEDAS = [
   { value: "VES", label: "Bolívares (Bs.)" },
   { value: "USD", label: "Dólares (USD)" },
 ];
+/**
+ * En qué moneda cobra cada forma. Espejo de `MONEDA_DE_INSTRUMENTO` en el dominio: la
+ * regla vive allá (ADR-0062 §2), esto solo filtra la lista para no ofrecer lo imposible.
+ * `null` = la forma sirve para cualquier moneda (tarjeta, otra).
+ */
+const MONEDA_DE_FORMA: Record<string, "funcional" | "USD" | null> = {
+  efectivo_bs: "funcional",
+  pago_movil: "funcional",
+  transferencia: "funcional",
+  punto_venta: "funcional",
+  cashea: "funcional",
+  efectivo_usd: "USD",
+  zelle: "USD",
+  usdt: "USD",
+  tarjeta: null,
+  otro: null,
+};
+
 const FORMAS = [
   { value: "efectivo_bs", label: "Efectivo en bolívares" },
   { value: "efectivo_usd", label: "Efectivo en dólares" },
@@ -253,7 +273,7 @@ export function Dinero(): React.JSX.Element {
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {lista.map((c) => (
-              <TarjetaCuenta key={c.id} cuenta={c} onCerrada={recargar} />
+              <TarjetaCuenta key={c.id} cuenta={c} cuentas={lista} onCerrada={recargar} />
             ))}
           </div>
         )}
@@ -502,15 +522,24 @@ function TarjetaTasa({
 
 function TarjetaCuenta({
   cuenta,
+  cuentas,
   onCerrada,
 }: {
   cuenta: Cuenta;
+  cuentas: Cuenta[];
   onCerrada: () => void;
 }): React.JSX.Element {
   const { puede } = useSesion();
   const puedeCerrar = puede("cash.close");
   const puedeEditar = puede("treasury.account.manage");
   const [editando, setEditando] = useState(false);
+  const [moviendo, setMoviendo] = useState(false);
+  // Mover exige `treasury.reassign` (ADR-0062 §3) y que haya otra cuenta ACTIVA de la
+  // misma moneda a donde llevarlo: un traslado no cambia de moneda.
+  const destinos = cuentas.filter(
+    (c) => c.id !== cuenta.id && c.is_active && !c.is_system && c.currency === cuenta.currency,
+  );
+  const puedeMover = puede("treasury.reassign") && destinos.length > 0;
   const Icono = ICONO_CUENTA[cuenta.kind];
   return (
     <Card className={cuenta.is_system ? "border-dashed" : undefined}>
@@ -527,9 +556,18 @@ function TarjetaCuenta({
         <p className="mt-2 text-xl font-semibold tabular-nums">
           {mostrarImporte({ amount: cuenta.balance, currency: cuenta.currency })}
         </p>
-        <div className="mt-2 flex gap-2">
+        <div className="mt-2 flex flex-wrap gap-2">
           {cuenta.kind === "cash" && !cuenta.is_system && puedeCerrar && (
             <CerrarCaja cuenta={cuenta} onCerrada={onCerrada} />
+          )}
+          {puedeMover && (
+            <Button
+              variant={cuenta.is_system ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setMoviendo(true)}
+            >
+              <ArrowLeftRight /> {cuenta.is_system ? "Repartir" : "Mover plata"}
+            </Button>
           )}
           {!cuenta.is_system && puedeEditar && (
             <Button variant="ghost" size="sm" onClick={() => setEditando(true)}>
@@ -538,6 +576,17 @@ function TarjetaCuenta({
           )}
         </div>
       </CardContent>
+      {moviendo && (
+        <MoverPlata
+          key={`${cuenta.id}:${cuenta.balance}`}
+          origen={cuenta}
+          destinos={destinos}
+          onCerrar={(hecho) => {
+            setMoviendo(false);
+            if (hecho) onCerrada();
+          }}
+        />
+      )}
       {editando && (
         <EditarCuenta
           // El diálogo copia nombre y estado al montarse: si la cuenta cambia
@@ -551,6 +600,136 @@ function TarjetaCuenta({
         />
       )}
     </Card>
+  );
+}
+
+/**
+ * MOVER PLATA de una cuenta a otra (ADR-0062 §3, migración 61). Lo que entró a «Sin asignar»
+ * porque se cobró con una forma sin cuenta se reparte aquí; y el efectivo que se llevó al
+ * banco se registra igual. El traslado NO cambia de moneda: los destinos ya vienen filtrados.
+ * Ningún número se calcula en la pantalla: el servidor escribe la salida, la entrada y lo que
+ * corresponda en los libros.
+ */
+function MoverPlata({
+  origen,
+  destinos,
+  onCerrar,
+}: {
+  origen: Cuenta;
+  destinos: Cuenta[];
+  onCerrar: (hecho: boolean) => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [destino, setDestino] = useState<string | null>(destinos[0]?.id ?? null);
+  const [monto, setMonto] = useState("");
+  const [motivo, setMotivo] = useState("");
+  // Sobregiro: el servidor rechaza el egreso sin saldo con el número delante, y aquí se
+  // pregunta antes de reenviar con la confirmación (ADR-0062 §4).
+  const [sinSaldo, setSinSaldo] = useState<string | null>(null);
+
+  const limpio = monto.trim().replace(",", ".");
+  const montoOk = importeValido(limpio) && compararImportes(limpio, "0") > 0;
+  const listo = montoOk && destino !== null && motivo.trim().length >= 3;
+
+  const mover = useMutation({
+    mutationFn: (forzar: boolean) =>
+      llamar("/v1/treasury/transfers", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          from_account_id: origen.id,
+          to_account_id: destino,
+          amount: limpio,
+          reason: motivo.trim(),
+          ...(forzar ? { allow_negative_balance: true } : {}),
+        }),
+      }),
+    onSuccess: () => {
+      toast.success(
+        "Plata movida",
+        `Salió de ${origen.name} y entró a ${destinos.find((d) => d.id === destino)?.name ?? "la otra cuenta"}.`,
+      );
+      onCerrar(true);
+    },
+    onError: (e) => {
+      const falta = esSinSaldo(e);
+      if (falta !== null) {
+        setSinSaldo(falta);
+        return;
+      }
+      toast.error("No se pudo mover", errorDePersona(e));
+    },
+  });
+
+  return (
+    <>
+      <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
+        <DialogContent>
+          <DialogTitle>Mover plata desde {origen.name}</DialogTitle>
+          <DialogDescription>
+            Hoy hay{" "}
+            <strong className="tabular-nums">
+              {mostrarImporte({ amount: origen.balance, currency: origen.currency })}
+            </strong>
+            . Esto no gasta ni cobra nada: la misma plata cambia de sitio.
+          </DialogDescription>
+          <div className="space-y-3 pt-2">
+            <FormField label="¿A qué cuenta va?" required>
+              {(p) => (
+                <SimpleSelect
+                  id={p.id}
+                  value={destino}
+                  onValueChange={setDestino}
+                  options={destinos.map((d) => ({
+                    value: d.id,
+                    label: `${d.name} (${mostrarImporte({ amount: d.balance, currency: d.currency })})`,
+                  }))}
+                />
+              )}
+            </FormField>
+            <FormField label={`¿Cuánto (${origen.currency})?`} required>
+              {(p) => (
+                <MoneyInput {...p} value={monto} onChange={setMonto} currency={origen.currency} />
+              )}
+            </FormField>
+            <FormField label="¿Por qué?" required hint="Queda escrito en el historial del negocio.">
+              {(p) => (
+                <Input
+                  {...p}
+                  value={motivo}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMotivo(e.target.value)}
+                  placeholder="Reparto de lo cobrado hoy"
+                />
+              )}
+            </FormField>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => onCerrar(false)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!listo || mover.isPending}
+              onClick={() => mover.mutate(false)}
+            >
+              Mover
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {sinSaldo !== null && (
+        <ConfirmarSobregiro
+          mensaje={sinSaldo}
+          onCancelar={() => setSinSaldo(null)}
+          onConfirmar={async () => {
+            await mover.mutateAsync(true);
+            setSinSaldo(null);
+          }}
+        />
+      )}
+    </>
   );
 }
 
@@ -846,6 +1025,13 @@ function CrearFormaDePago({
   const [cuenta, setCuenta] = useState<string | null>(null);
 
   const activas = cuentas.filter((c) => c.is_active && !c.is_system);
+  // Elegido el tipo, la lista se reduce a las cuentas donde ese dinero PUEDE entrar: un
+  // «Zelle» no entra a una caja en bolívares. Sin tipo elegido, se ven todas.
+  const exigida = tipo === null ? null : (MONEDA_DE_FORMA[tipo] ?? null);
+  const compatibles =
+    exigida === null
+      ? activas
+      : activas.filter((c) => (exigida === "USD" ? c.currency === "USD" : c.currency !== "USD"));
 
   const crear = useMutation({
     mutationFn: () =>
@@ -900,16 +1086,32 @@ function CrearFormaDePago({
               </FormField>
               <FormField label="Tipo" required>
                 {(p) => (
-                  <SimpleSelect id={p.id} value={tipo} onValueChange={setTipo} options={FORMAS} />
+                  <SimpleSelect
+                    id={p.id}
+                    value={tipo}
+                    onValueChange={(v) => {
+                      setTipo(v);
+                      setCuenta(null);
+                    }}
+                    options={FORMAS}
+                  />
                 )}
               </FormField>
-              <FormField label="A qué cuenta entra" required>
+              <FormField
+                label="A qué cuenta entra"
+                required
+                {...(exigida !== null && compatibles.length === 0
+                  ? {
+                      hint: `No hay ninguna cuenta en ${exigida === "USD" ? "dólares" : "bolívares"}: crea una arriba y vuelve.`,
+                    }
+                  : {})}
+              >
                 {(p) => (
                   <SimpleSelect
                     id={p.id}
                     value={cuenta}
                     onValueChange={setCuenta}
-                    options={activas.map((c) => ({
+                    options={compatibles.map((c) => ({
                       value: c.id,
                       label: `${c.name} (${c.currency})`,
                     }))}

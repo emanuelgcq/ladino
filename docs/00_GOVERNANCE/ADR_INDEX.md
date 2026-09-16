@@ -67,6 +67,7 @@ Usa la skill `adr` de Claude Code.
 | [0059](adr/ADR-0059-la-caja-cobra-con-el-igtf-dentro-de-lo-recibido.md) | Lo tecleado en caja es lo ENTREGADO: un solo cálculo (vista previa y venta) reparte venta, IGTF y vuelto; tolerancia de una unidad mínima; vuelto solo en efectivo y hacia abajo; el IGTF cobrado entra al saldo de caja (migración 53); hasta cuatro formas | Aceptado | NO |
 | [0060](adr/ADR-0060-el-costo-de-lo-vendido-y-el-inventario-en-el-mayor.md) | El costo de ventas es un hecho propio; toda entrada de kardex asienta; FEFO en la venta con lotes; la cuenta de efectivo sale de la cuenta de tesorería real en cobro, pago a proveedor, gasto y cierre (sin mapeo → cola con motivo, nunca `cash_bs`); invariante kardex ↔ mayor de inventario; regularización por empresa con ensayo en seco; marca de semilla por registro | Aceptado | NO |
 | [0061](adr/ADR-0061-corregir-una-venta.md) | Anular solo factura/recibo sin cobros y repone al costo exacto que salió; una venta cobrada se deshace por devolución (NC o recibo de devolución) con saldo a favor o reembolso; tope acumulado de devolución; invariante de ventas anuladas | Aceptado | NO |
+| [0062](adr/ADR-0062-el-dinero-del-negocio.md) | La caja de un cobro se resuelve por forma configurada y, si no hay, por la cuenta propia de esa familia; la moneda de la forma manda sobre la cuenta; transferencia entre cuentas de la misma moneda como hecho con dos patas; todo egreso sin saldo exige confirmación explícita | Aceptado | NO |
 
 ## Decisiones aún abiertas
 

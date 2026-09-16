@@ -244,6 +244,11 @@ export const RegisterSupplierPaymentRequest = z
      * término por «Sin asignar (<moneda>)». Con `nota_credito` no se admite.
      */
     account_id: uuid.optional(),
+    /**
+     * Confirmar EXPLÍCITAMENTE que la cuenta quede en negativo (ADR-0062 §4). Sin esto, un
+     * egreso mayor que el saldo responde 409 INSUFFICIENT_FUNDS con el número delante.
+     */
+    allow_negative_balance: z.boolean().optional(),
   })
   .strict();
 export type RegisterSupplierPaymentRequest = z.infer<typeof RegisterSupplierPaymentRequest>;
@@ -273,6 +278,8 @@ export const SimplePurchaseRequest = z
         instrument: PurchaseInstrument,
         reference: z.string().trim().min(1).max(100).optional(),
         account_id: uuid.optional(),
+        /** Igual que en el pago suelto: confirmar que la cuenta quede en negativo (ADR-0062 §4). */
+        allow_negative_balance: z.boolean().optional(),
       })
       .strict()
       .optional(),

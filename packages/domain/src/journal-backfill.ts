@@ -53,6 +53,8 @@ const TABLA_DE: Record<string, string> = {
   cash_closing: "cash_closings",
   sales_receipt_return: "documents",
   customer_refund: "customer_refunds",
+  // ADR-0062 §3 (migración 61): una transferencia encolada también recupera su enlace.
+  treasury_transfer: "treasury_transfers",
 };
 
 interface FilaCola {

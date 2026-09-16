@@ -140,7 +140,9 @@ select is(
                                -- reserva «para el COGS»; el origen va en source_kind.
                                'stock.shipped', 'stock.received',
                                -- Corregir una venta (migración 59, ADR-0061):
-                               'sales.receipt_return.issued', 'ar.credit_refunded')),
+                               'sales.receipt_return.issued', 'ar.credit_refunded',
+                               -- Mover dinero entre cuentas (migración 61, ADR-0062 §3):
+                               'treasury.transfer.registered')),
   0::bigint,
   'los eventos del preset son los del OUTBOX, con su nombre real: no se inventa un vocabulario paralelo');
 
