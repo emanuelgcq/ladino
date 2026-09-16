@@ -42,6 +42,7 @@ import type {
   TrialBalance,
 } from "../../lib.js";
 import { hoyLocal } from "../../fechas.js";
+import { sufijoDeArchivo } from "../../app/rif.js";
 
 /**
  * Contabilidad — Fase B. Siete superficies en pestañas; la pantalla NO calcula
@@ -863,7 +864,7 @@ function Diario(): React.JSX.Element {
         getRowId={(e) => e.id}
         onRowClick={(e) => setAbierto(e.id)}
         density="compact"
-        exportCsv={{ filename: `diario-${empresa.tax_id}.csv` }}
+        exportCsv={{ filename: `diario-${sufijoDeArchivo(empresa)}.csv` }}
         pagination={{
           total: asientos.data?.total ?? 0,
           page: pagina,

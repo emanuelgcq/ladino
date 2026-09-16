@@ -23,6 +23,7 @@ import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
 import { EntityPicker, type EntityOption } from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
+import { useConFacturas } from "../../app/modo-venta.js";
 import { KIND_LABEL, MensajeError, numeroDe } from "./comunes.js";
 import { CobrarDocumento } from "../../components/CobrarDocumento.js";
 import {
@@ -120,6 +121,8 @@ interface DocumentoRelacionado {
 export function DetalleFactura(): React.JSX.Element {
   const { id } = useParams<{ id: string }>();
   const { empresa, llamar, puede } = useSesion();
+  // Sin RIF: recibos y lenguaje sencillo — nada de correlativos, asientos ni versión de reglas.
+  const conFacturas = useConFacturas();
   const activos = useModulosActivos();
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -284,7 +287,9 @@ export function DetalleFactura(): React.JSX.Element {
       });
       toast.success(
         doc.kind === "receipt" ? "Recibo anulado" : "Factura anulada",
-        "El correlativo se conserva, la mercancía volvió al inventario y el asiento se reversó.",
+        conFacturas
+          ? "El correlativo se conserva, la mercancía volvió al inventario y el asiento se reversó."
+          : "La mercancía volvió al inventario.",
       );
       invalidarTrasCambio();
     } catch (e) {
@@ -521,7 +526,9 @@ export function DetalleFactura(): React.JSX.Element {
                   </div>
                 ) : notas.data.items.length === 0 ? (
                   <p className="px-4 pb-3 text-[0.88rem] text-muted-foreground">
-                    Ninguna nota emitida sobre este documento.
+                    {conFacturas
+                      ? "Ninguna nota emitida sobre este documento."
+                      : "Ninguna devolución sobre este recibo."}
                   </p>
                 ) : (
                   <Table>
@@ -620,43 +627,49 @@ export function DetalleFactura(): React.JSX.Element {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Trazabilidad</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-[0.85rem]">
-              {doc.control_number !== null && (
-                <Fila etiqueta="N.º de control">
-                  <span className="font-mono">{doc.control_number}</span>
-                </Fila>
-              )}
-              <Fila etiqueta="Versión de reglas">
-                <span className="font-mono text-[0.8rem]">{doc.rules_version ?? "—"}</span>
-              </Fila>
-              {doc.annul_reason !== null && (
-                <Fila etiqueta="Motivo de anulación">{doc.annul_reason}</Fila>
-              )}
-              <div className="pt-1">
-                {!activos.contabilidad ? (
-                  <p className="text-muted-foreground">Contabilidad no configurada.</p>
-                ) : asiento.isPending ? (
-                  <Skeleton className="h-6 w-40" />
-                ) : asiento.data?.estado === "posted" ? (
-                  <Link
-                    to={`/admin/contabilidad?asiento=${asiento.data.entrada.id}`}
-                    className="inline-flex items-center gap-1.5 font-medium text-accent-soft-foreground hover:underline"
-                  >
-                    <BookOpenCheck className="size-4" /> Asiento n.º{" "}
-                    {asiento.data.entrada.entry_number ?? "—"} en el diario
-                  </Link>
-                ) : asiento.data?.estado === "queued" ? (
-                  <FiscalStatusBadge estado="queued" />
-                ) : (
-                  <FiscalStatusBadge estado="pending_accounting" />
+          {(conFacturas || doc.annul_reason !== null) && (
+            <Card>
+              <CardHeader>
+                <CardTitle>{conFacturas ? "Trazabilidad" : "Anulación"}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-[0.85rem]">
+                {doc.control_number !== null && (
+                  <Fila etiqueta="N.º de control">
+                    <span className="font-mono">{doc.control_number}</span>
+                  </Fila>
                 )}
-              </div>
-            </CardContent>
-          </Card>
+                {conFacturas && (
+                  <Fila etiqueta="Versión de reglas">
+                    <span className="font-mono text-[0.8rem]">{doc.rules_version ?? "—"}</span>
+                  </Fila>
+                )}
+                {doc.annul_reason !== null && (
+                  <Fila etiqueta="Motivo de anulación">{doc.annul_reason}</Fila>
+                )}
+                {conFacturas && (
+                  <div className="pt-1">
+                    {!activos.contabilidad ? (
+                      <p className="text-muted-foreground">Contabilidad no configurada.</p>
+                    ) : asiento.isPending ? (
+                      <Skeleton className="h-6 w-40" />
+                    ) : asiento.data?.estado === "posted" ? (
+                      <Link
+                        to={`/admin/contabilidad?asiento=${asiento.data.entrada.id}`}
+                        className="inline-flex items-center gap-1.5 font-medium text-accent-soft-foreground hover:underline"
+                      >
+                        <BookOpenCheck className="size-4" /> Asiento n.º{" "}
+                        {asiento.data.entrada.entry_number ?? "—"} en el diario
+                      </Link>
+                    ) : asiento.data?.estado === "queued" ? (
+                      <FiscalStatusBadge estado="queued" />
+                    ) : (
+                      <FiscalStatusBadge estado="pending_accounting" />
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
 
@@ -670,13 +683,20 @@ export function DetalleFactura(): React.JSX.Element {
         onConfirm={anular}
       >
         <div className="space-y-2">
-          <p>
-            {doc.kind === "receipt" ? "El recibo quedará " : "La factura quedará "}
-            <Badge tone="destructive">{doc.kind === "receipt" ? "Anulado" : "Anulada"}</Badge>, su
-            correlativo <strong>se conserva</strong> (nunca se reutiliza), la mercancía que salió{" "}
-            <strong>vuelve al inventario</strong> al mismo costo con que salió, y su asiento
-            contable se <strong>reversa</strong> con un contra-asiento. Esto no se puede deshacer.
-          </p>
+          {conFacturas ? (
+            <p>
+              {doc.kind === "receipt" ? "El recibo quedará " : "La factura quedará "}
+              <Badge tone="destructive">{doc.kind === "receipt" ? "Anulado" : "Anulada"}</Badge>, su
+              correlativo <strong>se conserva</strong> (nunca se reutiliza), la mercancía que salió{" "}
+              <strong>vuelve al inventario</strong> al mismo costo con que salió, y su asiento
+              contable se <strong>reversa</strong> con un contra-asiento. Esto no se puede deshacer.
+            </p>
+          ) : (
+            <p>
+              El recibo quedará <Badge tone="destructive">Anulado</Badge> y la mercancía que salió{" "}
+              <strong>vuelve al inventario</strong>. Esto no se puede deshacer.
+            </p>
+          )}
           <p className="text-[0.88rem] text-muted-foreground">
             Solo se anula un {nombreDoc} sin cobros. Si ya se cobró, no se anula: registra una
             devolución, que repone la mercancía y devuelve el dinero como saldo a favor o reembolso.
@@ -1019,7 +1039,7 @@ function Devolucion({
             La mercancía reingresa <strong>al costo y lote con los que salió</strong> —no al de
             hoy—, y se emite{" "}
             {esRecibo
-              ? "un recibo de devolución (no fiscal, sin IVA)"
+              ? "un recibo de devolución"
               : "una nota de crédito (exige su propio rango de numeración)"}{" "}
             que deja el saldo a favor del cliente. Si el cliente quiere su dinero, elige de qué caja
             sale.

@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronRight, FileSpreadsheet, Package, Plus, Store } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { tieneRif as tieneRifEmpresa } from "../../app/rif.js";
 import { LogoLadino } from "../../components/LogoLadino.js";
 import { errorDePersona } from "../../lib.js";
 import { mostrarCantidad } from "../../money.js";
@@ -49,6 +50,7 @@ interface Resumen {
 
 export function Empezar(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
+  const conRif = tieneRifEmpresa(empresa);
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [paso, setPaso] = useState(0);
@@ -104,7 +106,8 @@ export function Empezar(): React.JSX.Element {
     { titulo: "Tus productos", listo: hayProductos, saltable: true },
     { titulo: "Tu dinero", listo: hayCuentas, saltable: false },
     { titulo: "La tasa del día", listo: hayTasa, saltable: false },
-    { titulo: "Tus facturas", listo: fiscalListo, saltable: false },
+    // Sin RIF no hay facturas: el paso es «Tus recibos» (regla del dueño, 2026-09-16).
+    { titulo: conRif ? "Tus facturas" : "Tus recibos", listo: fiscalListo, saltable: false },
   ];
   const todoListo = pasos.every((p) => p.listo);
   // La puerta de salida abre cuando lo OBLIGATORIO está listo: productos es
@@ -119,7 +122,9 @@ export function Empezar(): React.JSX.Element {
     "Con dos o tres basta para arrancar. Puedes traerlos desde Excel.",
     "Dónde te pagan: efectivo, pago móvil, tu cuenta del banco.",
     "Un toque al día y todos tus precios quedan al día.",
-    "Cómo factura tu negocio, con su norma delante. Tú decides.",
+    conRif
+      ? "Cómo factura tu negocio, con su norma delante. Tú decides."
+      : "Tus ventas salen como recibos. Cuando tengas RIF, das facturas.",
   ];
   return (
     <div className="fixed inset-0 z-40 overflow-y-auto bg-background">
@@ -479,8 +484,10 @@ function PasoFacturas({
   // Si el registro ya trajo el RIF (no es PEND-*), no se vuelve a preguntar: la ferretería que
   // cargó J-… en el registro veía otra vez «¿Tu negocio ya tiene RIF?» y podía responder
   // «Todavía no» teniéndolo (QA de pantalla 2026-09-15, h. 53).
-  const rifDelRegistro = !empresa.tax_id.startsWith("PEND-");
-  const [tieneRif, setTieneRif] = useState<boolean | null>(rifDelRegistro ? true : null);
+  // LA REGLA (dueño, 2026-09-16): con RIF facturas, sin RIF recibos. Ya no se pregunta
+  // «¿tienes RIF?»: lo dice la empresa. Quien lo saca, lo pone en Configuración y vuelve.
+  const rifDelRegistro = tieneRifEmpresa(empresa);
+  const [tieneRif, setTieneRif] = useState<boolean | null>(rifDelRegistro);
   // Y si viene del modo recibos con su RIF nuevo, este flag reabre el flujo.
   const [activandoFacturacion, setActivandoFacturacion] = useState(false);
   // Las dos preguntas que deciden la vía (PA 00071): a quién le vendes, y si
@@ -576,11 +583,22 @@ function PasoFacturas({
     <Card>
       <CardContent className="space-y-5 py-5">
         <div>
-          <h2 className="text-[1.05rem] font-semibold">¿Vas a dar facturas?</h2>
-          <p className="mt-1 text-[0.9rem] text-muted-foreground">
-            Esto define cómo emite tu negocio. Se elige UNA vez: si más adelante cambia, se hace con
-            tu contador desde el mundo de administración.
-          </p>
+          {rifDelRegistro ? (
+            <>
+              <h2 className="text-[1.05rem] font-semibold">¿Vas a dar facturas?</h2>
+              <p className="mt-1 text-[0.9rem] text-muted-foreground">
+                Esto define cómo emite tu negocio. Se elige UNA vez: si más adelante cambia, se hace
+                con tu contador desde el mundo de administración.
+              </p>
+            </>
+          ) : (
+            <>
+              <h2 className="text-[1.05rem] font-semibold">Tus recibos</h2>
+              <p className="mt-1 text-[0.9rem] text-muted-foreground">
+                Sin RIF, cada venta sale con un recibo para tu cliente.
+              </p>
+            </>
+          )}
         </div>
 
         {/* El domicilio fiscal va primero: la factura lo lleva (art. 13.5).
@@ -663,18 +681,8 @@ function PasoFacturas({
                   deudas, cuentas y gastos. Cuando tengas tu RIF, activas la facturación en minutos.
                 </p>
                 <p className="text-[0.82rem] text-muted-foreground">
-                  Tus ventas saldrán como <span className="font-medium">recibos</span>, rotulados
-                  como documento no fiscal — sin RIF, la ley no permite emitir facturas. Sacar el
-                  RIF es un trámite digital en el portal oficial (
-                  <a
-                    href="https://www.seniat.gob.ve"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline"
-                  >
-                    seniat.gob.ve
-                  </a>
-                  ) y ya no caduca.
+                  Tus ventas saldrán como <span className="font-medium">recibos</span>. El día que
+                  saques tu RIF, lo pones en Configuración y empiezas a dar facturas.
                 </p>
                 <Button
                   variant="primary"
@@ -804,8 +812,10 @@ function PasoFacturas({
           <div className="space-y-1">
             <p className="flex items-center gap-2 text-[0.95rem]">
               <Check className="size-4 text-success-soft-foreground" />
-              {vigente?.name ?? setup.current_regime}
-              {vigente !== null && (
+              {setup.sales_mode === "recibos"
+                ? "Vendes con recibos"
+                : (vigente?.name ?? setup.current_regime)}
+              {vigente !== null && setup.sales_mode !== "recibos" && (
                 <span className="text-[0.78rem] text-faint-foreground">
                   · {vigente.legal_source}
                 </span>
@@ -820,19 +830,27 @@ function PasoFacturas({
             {setup.sales_mode === "recibos" && (
               <div className="space-y-2">
                 <p className="text-[0.85rem] text-muted-foreground">
-                  Vendes con recibos (documento no fiscal). Todo lo demás — inventario, clientes,
-                  deudas, cuentas, gastos — funciona completo.
+                  Todo lo demás — inventario, clientes, deudas, cuentas, gastos — funciona completo.
                 </p>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    setTieneRif(true);
-                    setActivandoFacturacion(true);
-                  }}
-                >
-                  Ya tengo RIF: activar facturación
-                </Button>
+                {rifDelRegistro ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      setTieneRif(true);
+                      setActivandoFacturacion(true);
+                    }}
+                  >
+                    Ya puse mi RIF: activar facturas
+                  </Button>
+                ) : (
+                  <Link
+                    to="/admin/configuracion"
+                    className="inline-block text-[0.85rem] text-accent-soft-foreground underline"
+                  >
+                    ¿Ya sacaste tu RIF? Ponlo aquí
+                  </Link>
+                )}
               </div>
             )}
           </div>

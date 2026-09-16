@@ -20,7 +20,12 @@ export const CreateProductRequest = z
     name: z.string().trim().min(1).max(200),
     kind: z.enum(["good", "service"]),
     unit_code: z.string().regex(CODE_RE),
-    tax_category_code: z.string().regex(CODE_RE),
+    /**
+     * Clasificación para el IVA. OPCIONAL: sin ella el producto nace con la clasificación por
+     * omisión de la empresa, igual que el alta simple y la importación. Un negocio sin RIF no
+     * cobra IVA y su pantalla no la pregunta (regla del dueño, 2026-09-16).
+     */
+    tax_category_code: z.string().regex(CODE_RE).optional(),
     category_id: uuid.optional(),
     barcode: z.string().trim().min(1).max(64).optional(),
     /**

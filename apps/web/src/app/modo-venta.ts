@@ -1,5 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useSesion } from "./session.js";
+import { tieneRif } from "./rif.js";
+
+export { tieneRif } from "./rif.js";
 
 /**
  * EL MODO DE VENTA DE LA EMPRESA (migración 54): facturas, recibos o ninguno.
@@ -33,4 +36,13 @@ export function useModoDeVenta(): { modo: ModoDeVenta | null; cargando: boolean 
 /** Vende con recibos: la capa fiscal no existe para esta empresa. */
 export function esModoRecibos(modo: ModoDeVenta | null): boolean {
   return modo === "recibos";
+}
+
+/**
+ * ¿Esta empresa factura? Es decir: ¿tiene RIF? (la regla, en ./rif.ts). Con RIF se ve todo lo
+ * fiscal; sin RIF, recibos y lenguaje sencillo.
+ */
+export function useConFacturas(): boolean {
+  const { empresa } = useSesion();
+  return tieneRif(empresa);
 }

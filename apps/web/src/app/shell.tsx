@@ -33,7 +33,7 @@ import {
   rutaInicial,
   type NavItem,
 } from "./nav.js";
-import { useModoDeVenta } from "./modo-venta.js";
+import { rifParaMostrar, tieneRif } from "./rif.js";
 import { sondearModulosActivos, type ModulosActivos } from "./modulos-activos.js";
 import { CommandPalette } from "./palette.js";
 import { LogoLadino } from "../components/LogoLadino.js";
@@ -124,6 +124,12 @@ function useEmpezarPendiente(): boolean {
   return q.data ?? false;
 }
 
+/**
+ * Pantallas que solo existen para quien factura y que no tienen entrada propia en el menú:
+ * emitir una factura a mano. Sin RIF se aterriza en la ruta inicial.
+ */
+const RUTAS_SOLO_FACTURAS = ["/admin/ventas/nueva"] as const;
+
 export function AppShell(): React.JSX.Element {
   const [colapsada, setColapsada] = useState(() => leerBandera(CLAVE_SIDEBAR));
   const [paleta, setPaleta] = useState(false);
@@ -134,7 +140,7 @@ export function AppShell(): React.JSX.Element {
     leerBandera(claveDe(CLAVE_ADMIN_ABIERTO, empresa.id)),
   );
   const activos = useModulosActivos();
-  const { modo } = useModoDeVenta();
+  const conRif = tieneRif(empresa);
   const empezar = useEmpezarPendiente();
   const [todos, setTodos] = useState(() => mostrarTodosLosModulos(empresa.id));
   const location = useLocation();
@@ -177,7 +183,7 @@ export function AppShell(): React.JSX.Element {
     if (item.permiso !== undefined && !puede(item.permiso)) return false;
     // Después, la EMPRESA: la capa fiscal no existe para quien vende con recibos,
     // tenga el rol que tenga (A9). Filtro aparte del permiso, nunca mezclado.
-    if (item.fiscal === true && !capaFiscalVisible(modo)) return false;
+    if (item.fiscal === true && !capaFiscalVisible(conRif)) return false;
     if (item.advanced === undefined) return true;
     return todos || activos[item.advanced];
   };
@@ -204,6 +210,9 @@ export function AppShell(): React.JSX.Element {
     (entradaActual !== undefined &&
       entradaActual.permiso !== undefined &&
       !puede(entradaActual.permiso)) ||
+    // Sin RIF la capa fiscal no existe: ni por el menú ni escribiendo la dirección.
+    (entradaActual?.fiscal === true && !capaFiscalVisible(conRif)) ||
+    (!conRif && RUTAS_SOLO_FACTURAS.some((r) => location.pathname.startsWith(r))) ||
     // El Dashboard (/admin, sin entrada propia) es dinero agregado: reportes.
     (location.pathname === "/admin" && !puede("report.export"));
   if (sinAcceso) return <Navigate to={rutaInicial(puede)} replace />;
@@ -544,7 +553,7 @@ function CompanySwitcher(): React.JSX.Element {
             <span className="min-w-0 flex-1">
               <span className="block truncate">{c.legal_name}</span>
               <span className="block truncate text-[0.78rem] text-muted-foreground">
-                {c.tax_id}
+                {rifParaMostrar(c)}
               </span>
             </span>
             {c.id === empresa.id && <Check className="size-4 text-accent" />}

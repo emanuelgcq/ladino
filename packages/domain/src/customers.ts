@@ -105,8 +105,14 @@ export async function createCustomer(
   }
   // Una factura a una empresa o a un ente público lleva su domicilio fiscal
   // (ADR-0033; el snapshot de la migración 33 lo congela en el documento).
-  // Para persona natural o extranjera es opcional.
+  // Para persona natural o extranjera es opcional. Y solo lo exige quien FACTURA: un negocio
+  // sin RIF da recibos, que no imprimen domicilio fiscal (regla del dueño, 2026-09-16: con
+  // RIF facturas, sin RIF recibos). Sin RIF, la empresa lleva el marcador PEND-… del registro.
+  const [emisor] = await sql<{ factura: boolean }[]>`
+    select tax_id not like 'PEND-%' as factura from public.companies
+     where id = ${input.company_id}`;
   if (
+    emisor?.factura === true &&
     (personTypeCode === "juridica" || personTypeCode === "gobierno") &&
     (input.fiscal_address ?? "").trim() === ""
   ) {

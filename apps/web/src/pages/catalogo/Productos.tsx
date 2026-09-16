@@ -27,10 +27,11 @@ import {
 import { useToast } from "../../ui/toast.js";
 import { mostrarImporte } from "../../money.js";
 import { MensajeError } from "../ventas/comunes.js";
-import { useModoDeVenta } from "../../app/modo-venta.js";
+import { useConFacturas } from "../../app/modo-venta.js";
 import { errorDePersona } from "../../lib.js";
 import { BotonEscanear } from "../../components/EscanerCodigo.js";
 import type { Product, PriceList, PriceItem, Unit, TaxCategory } from "../../lib.js";
+import { sufijoDeArchivo } from "../../app/rif.js";
 
 /**
  * Productos — Fase B. Lo mismo que hacía la pantalla anterior, con el sistema:
@@ -53,8 +54,8 @@ export function Productos(): React.JSX.Element {
   const { empresa, llamar, puede } = useSesion();
   // ADR-0048: los verbos del catálogo aparecen según el rol; el servidor decide.
   const gestiona = puede("product.manage");
-  const { modo } = useModoDeVenta();
-  const modoRecibos = modo === "recibos";
+  // Sin RIF: recibos y lenguaje sencillo, nada de IVA (regla del dueño, 2026-09-16).
+  const sinRif = !useConFacturas();
   const [busqueda, setBusqueda] = useState("");
   const [pagina, setPagina] = useState(1);
   const [creando, setCreando] = useState(false);
@@ -77,7 +78,7 @@ export function Productos(): React.JSX.Element {
     () => [
       {
         id: "sku",
-        header: "SKU",
+        header: sinRif ? "Código" : "SKU",
         accessorKey: "sku",
         cell: (c) => <span className="font-mono text-[0.84rem]">{c.getValue<string>()}</span>,
       },
@@ -86,13 +87,13 @@ export function Productos(): React.JSX.Element {
         id: "tipo",
         header: "Tipo",
         enableSorting: false,
-        accessorFn: (p) => (p.kind === "good" ? "Bien" : "Servicio"),
+        accessorFn: (p) => (p.kind === "good" ? (sinRif ? "Producto" : "Bien") : "Servicio"),
       },
       { id: "unidad", header: "Unidad", accessorKey: "unit_code", enableSorting: false },
       // La clasificación tributaria es de quien factura (A4): en modo recibos
       // no existe la columna. El producto la conserva por debajo para el día
       // en que el negocio saque su RIF.
-      ...(modoRecibos
+      ...(sinRif
         ? []
         : [
             {
@@ -119,7 +120,7 @@ export function Productos(): React.JSX.Element {
         },
       },
     ],
-    [modoRecibos],
+    [sinRif],
   );
 
   return (
@@ -127,7 +128,7 @@ export function Productos(): React.JSX.Element {
       <PageHeader
         title="Productos"
         description={
-          modoRecibos
+          sinRif
             ? "El catálogo: código y unidad de cada producto. El precio se pone en Listas de precios."
             : "El catálogo: SKU, unidad y clasificación tributaria — la clasificación se congela en cada documento al emitir."
         }
@@ -169,7 +170,7 @@ export function Productos(): React.JSX.Element {
             setBusqueda(v);
             setPagina(1);
           },
-          placeholder: "Buscar por SKU o nombre…",
+          placeholder: sinRif ? "Buscar por código o nombre…" : "Buscar por SKU o nombre…",
         }}
         pagination={{
           total: productos.data?.total ?? 0,
@@ -177,13 +178,15 @@ export function Productos(): React.JSX.Element {
           perPage: PER_PAGE,
           onPageChange: setPagina,
         }}
-        exportCsv={{ filename: `productos-${empresa.tax_id}.csv` }}
+        exportCsv={{ filename: `productos-${sufijoDeArchivo(empresa)}.csv` }}
         empty={{
           title: busqueda === "" ? "El catálogo está vacío" : "Nada con esa búsqueda",
           description:
             busqueda === ""
               ? "Sin productos no hay precios, ni inventario, ni ventas: es la primera pieza."
-              : "La búsqueda es del servidor: prueba con parte del SKU o del nombre.",
+              : sinRif
+                ? "Prueba con parte del código o del nombre."
+                : "La búsqueda es del servidor: prueba con parte del SKU o del nombre.",
           action:
             busqueda === "" && gestiona ? (
               <Button variant="primary" size="sm" onClick={() => setCreando(true)}>
@@ -205,8 +208,7 @@ export function Productos(): React.JSX.Element {
 }
 
 function NuevoProducto({ onCerrar }: { onCerrar: (hecho: boolean) => void }): React.JSX.Element {
-  const { modo: modoAlta } = useModoDeVenta();
-  const modoRecibos = modoAlta === "recibos";
+  const sinRif = !useConFacturas();
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [form, setForm] = useState({
@@ -221,12 +223,12 @@ function NuevoProducto({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
   const [guardando, setGuardando] = useState(false);
 
   const catalogos = useQuery({
-    queryKey: ["catalogos-producto"],
+    queryKey: ["catalogos-producto", sinRif],
     staleTime: 300_000,
     queryFn: async () => {
       const [unidades, clasifs] = await Promise.all([
         llamar<Unit[]>("/v1/units"),
-        llamar<TaxCategory[]>("/v1/tax-categories"),
+        sinRif ? Promise.resolve<TaxCategory[]>([]) : llamar<TaxCategory[]>("/v1/tax-categories"),
       ]);
       return { unidades, clasifs };
     },
@@ -245,11 +247,13 @@ function NuevoProducto({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
           name: form.name,
           kind: form.kind,
           unit_code: form.unit_code,
-          tax_category_code: form.tax_category_code,
+          // Sin RIF no se envía: el producto nace con la clasificación de la empresa, que solo
+          // contará el día que facture.
+          ...(sinRif ? {} : { tax_category_code: form.tax_category_code }),
           ...(form.barcode.trim() === "" ? {} : { barcode: form.barcode.trim() }),
         }),
       });
-      toast.success("Producto creado", form.sku);
+      toast.success("Producto creado", sinRif ? form.name : form.sku);
       onCerrar(true);
     } catch (e) {
       setError(e);
@@ -263,12 +267,12 @@ function NuevoProducto({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
       <DialogContent className="max-w-xl">
         <DialogTitle>Nuevo producto</DialogTitle>
         <DialogDescription>
-          {modoRecibos
-            ? "El tipo (bien/servicio) no podrá cambiarse una vez activo."
+          {sinRif
+            ? "Si es un producto o un servicio no se podrá cambiar después."
             : "El tipo (bien/servicio) no podrá cambiarse una vez activo, y la clasificación tributaria elegida es la que se congelará en cada emisión."}
         </DialogDescription>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <FormField label="SKU" required>
+          <FormField label={sinRif ? "Código" : "SKU"} required>
             {(a) => (
               <Input
                 id={a.id}
@@ -294,7 +298,10 @@ function NuevoProducto({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
                 value={form.kind}
                 onValueChange={(v) => setForm({ ...form, kind: v as "good" | "service" })}
                 options={[
-                  { value: "good", label: "Bien (con inventario)" },
+                  {
+                    value: "good",
+                    label: sinRif ? "Producto (lleva inventario)" : "Bien (con inventario)",
+                  },
                   { value: "service", label: "Servicio" },
                 ]}
               />
@@ -315,7 +322,7 @@ function NuevoProducto({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
           </FormField>
           {/* En modo recibos no se pide (A4): el producto nace con la clasificación
               por omisión de la empresa, que solo cuenta el día que facture. */}
-          {!modoRecibos && (
+          {!sinRif && (
             <FormField
               label="Clasificación tributaria"
               required
@@ -385,8 +392,7 @@ function DetalleProducto({
     status: producto.status,
     barcode: producto.barcode ?? "",
   });
-  const { modo: modoDetalle } = useModoDeVenta();
-  const modoRecibos = modoDetalle === "recibos";
+  const sinRif = !useConFacturas();
   const [clasif, setClasif] = useState(producto.tax_category_code);
   const [confirmandoClasif, setConfirmandoClasif] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -501,8 +507,14 @@ function DetalleProducto({
           <span className="font-mono">{producto.sku}</span> — {producto.name}
         </DialogTitle>
         <DialogDescription>
-          {producto.kind === "good" ? "Bien" : "Servicio"} · unidad {producto.unit_code} ·{" "}
-          <span className="font-mono">{producto.tax_category_code}</span>
+          {producto.kind === "good" ? (sinRif ? "Producto" : "Bien") : "Servicio"} · unidad{" "}
+          {producto.unit_code}
+          {sinRif ? null : (
+            <>
+              {" · "}
+              <span className="font-mono">{producto.tax_category_code}</span>
+            </>
+          )}
           {producto.barcode !== null && producto.barcode !== undefined && producto.barcode !== ""
             ? ` · ${producto.barcode}`
             : ""}
@@ -546,7 +558,9 @@ function DetalleProducto({
                               <span className="text-warning-soft-foreground">sin precio</span>
                             )}
                             <span className="ml-2 text-[0.78rem] text-faint-foreground">
-                              {v.data.historial} vigencia{v.data.historial === 1 ? "" : "s"}
+                              {sinRif
+                                ? `${v.data.historial} precio${v.data.historial === 1 ? "" : "s"}`
+                                : `${v.data.historial} vigencia${v.data.historial === 1 ? "" : "s"}`}
                             </span>
                           </>
                         )}
@@ -583,7 +597,7 @@ function DetalleProducto({
                 </Button>
               </div>
             )}
-            {modoRecibos ? null : puede("product.tax_category.set") ? (
+            {sinRif ? null : puede("product.tax_category.set") ? (
               <div className="rounded-md border border-border bg-surface-muted/40 p-3">
                 <p className="text-[0.85rem] font-medium">
                   Clasificación tributaria — permiso del contador, auditada

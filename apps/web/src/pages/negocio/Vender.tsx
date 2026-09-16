@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
-import { useModoDeVenta } from "../../app/modo-venta.js";
+import { useConFacturas } from "../../app/modo-venta.js";
 import { AvisoFacturacion } from "../../components/capa-fiscal/AvisoFacturacion.js";
 import { FilasImpuesto } from "../../components/capa-fiscal/FilasImpuesto.js";
 import {
@@ -328,9 +328,9 @@ function VenderDeEmpresa(): React.JSX.Element {
         default_warehouse_id: string | null;
       }>("/v1/company-settings"),
   });
-  // Modo recibos (migración 54, definición única): el POS es el MISMO; cambia el documento.
-  const { modo: modoDeVenta } = useModoDeVenta();
-  const modoRecibos = modoDeVenta === "recibos";
+  // Quien da recibos (la regla de app/rif.ts): el POS es el MISMO; cambia el documento, y
+  // desaparece todo lo de impuestos.
+  const modoRecibos = !useConFacturas();
 
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],
@@ -1112,6 +1112,7 @@ function IdentificarCliente({
   onCambiar: () => void;
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
+  const conFacturas = useConFacturas();
   const toast = useToast();
   const [prefijo, setPrefijo] = useState<string | null>("V");
   const [digitos, setDigitos] = useState("");
@@ -1188,7 +1189,8 @@ function IdentificarCliente({
   const listoParaCrear =
     nombre.trim().length > 0 &&
     digitos.trim().length > 0 &&
-    (!esEmpresa || direccion.trim() !== "");
+    // La dirección de una empresa solo la exige la FACTURA; un recibo no la imprime.
+    (!esEmpresa || !conFacturas || direccion.trim() !== "");
 
   // Identificado (o decidido): el chip con «Cambiar».
   if (cliente !== null || sinIdentificar) {
@@ -1282,7 +1284,16 @@ function IdentificarCliente({
             está registrado. Se guarda ahora mismo:
           </p>
           {/* Documento J o G: persona jurídica, su nombre es la razón social (QA 2026-09-15, h. 58). */}
-          <FormField label={esEmpresa ? "Razón social" : "Nombre completo"} required>
+          <FormField
+            label={
+              esEmpresa
+                ? conFacturas
+                  ? "Razón social"
+                  : "Nombre de la empresa"
+                : "Nombre completo"
+            }
+            required
+          >
             {(p) => (
               <Input
                 {...p}
@@ -1312,7 +1323,7 @@ function IdentificarCliente({
           </FormField>
           <FormField
             label="Dirección"
-            {...(esEmpresa
+            {...(esEmpresa && conFacturas
               ? { required: true, hint: "Una factura a una empresa lleva su domicilio fiscal." }
               : {})}
           >

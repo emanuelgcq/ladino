@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { ClipboardCheck } from "lucide-react";
 import { errorDePersona, LlamadaApiError } from "../../lib.js";
+import { useConFacturas } from "../../app/modo-venta.js";
 
 /**
  * Los 409 de puesta a punto NO son averías: son pasos pendientes de la
@@ -25,11 +26,46 @@ const CODIGOS_DE_QUIEN_FACTURA: Record<string, string> = {
   REGIME_KIND_NOT_ALLOWED: "Esto es de quien factura",
 };
 
+/**
+ * Lo mismo, dicho a quien NO tiene RIF: nada de alícuotas, regímenes ni puesta a punto
+ * fiscal (regla del dueño, 2026-09-16). La tasa sí existe para todos: se carga en Mi dinero.
+ */
+const CODIGOS_SIN_RIF: Record<string, { titulo: string; ir?: { to: string; texto: string } }> = {
+  EXCHANGE_RATE_MISSING: {
+    titulo: "Falta la tasa del día",
+    ir: { to: "/dinero", texto: "Cargar la tasa en Mi dinero" },
+  },
+};
+
 export function MensajeError({ error }: { error: unknown }): React.JSX.Element | null {
+  const conFacturas = useConFacturas();
   // Sin error no hay mensaje. Quien lo pinta sin condición —Declarar IVA e
   // IGTF— mostraba un «null» rojo debajo de las pestañas nada más entrar,
   // porque `String(null)` es un texto perfectamente válido.
   if (error == null) return null;
+  if (error instanceof LlamadaApiError && !conFacturas) {
+    const sinRif = CODIGOS_SIN_RIF[error.body.code];
+    return (
+      <div
+        role="alert"
+        className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-[0.88rem]"
+      >
+        <p className="font-medium text-warning-soft-foreground">
+          {sinRif?.titulo ?? "No se pudo completar"}
+        </p>
+        {/* El mensaje EN VOZ DE PERSONA, nunca el técnico. */}
+        <p className="mt-0.5 text-muted-foreground">{errorDePersona(error)}</p>
+        {sinRif?.ir !== undefined && (
+          <Link
+            to={sinRif.ir.to}
+            className="mt-1.5 inline-flex items-center gap-1.5 font-medium text-accent-soft-foreground hover:underline"
+          >
+            <ClipboardCheck className="size-3.5" /> {sinRif.ir.texto}
+          </Link>
+        )}
+      </div>
+    );
+  }
   if (error instanceof LlamadaApiError) {
     const guia = CODIGOS_PUESTA_A_PUNTO[error.body.code];
     const deQuienFactura = CODIGOS_DE_QUIEN_FACTURA[error.body.code];

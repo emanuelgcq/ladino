@@ -1,10 +1,10 @@
-import { useMemo, useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Receipt } from "lucide-react";
 import { useSesion } from "../../app/session.js";
-import { useModoDeVenta } from "../../app/modo-venta.js";
+import { useConFacturas } from "../../app/modo-venta.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
 import { DualMoney } from "../../components/DualMoney.js";
@@ -17,6 +17,7 @@ import { KIND_LABEL } from "./comunes.js";
 import { numeroDocumento } from "../../components/documento.js";
 import { errorDePersona } from "../../lib.js";
 import { fechaLocal } from "../../fechas.js";
+import { sufijoDeArchivo } from "../../app/rif.js";
 
 /**
  * Listado de ventas: DataTable con los filtros DEL SERVIDOR (estado, fechas,
@@ -52,14 +53,11 @@ export function Ventas(): React.JSX.Element {
   const navigate = useNavigate();
   const [pagina, setPagina] = useState(1);
   const [estado, setEstado] = useState("");
-  // En modo recibos la lista arranca en recibos (A11): filtrar por facturas
-  // enseñaba una lista vacía a quien no factura.
-  const { modo } = useModoDeVenta();
-  const [kind, setKind] = useState("invoice");
-  const [kindElegido, setKindElegido] = useState(false);
-  useEffect(() => {
-    if (!kindElegido && modo === "recibos") setKind("receipt");
-  }, [modo, kindElegido]);
+  // Sin RIF la lista arranca en recibos (regla del dueño: sin RIF, recibos). Filtrar por
+  // facturas enseñaba una lista vacía a quien no factura. El RIF viene en la sesión: no hay
+  // que esperar a nadie para decidirlo.
+  const conFacturas = useConFacturas();
+  const [kind, setKind] = useState(conFacturas ? "invoice" : "receipt");
   const [rango, setRango] = useState({ from: "", to: "" });
   const [cliente, setCliente] = useState<EntityOption | null>(null);
 
@@ -171,11 +169,17 @@ export function Ventas(): React.JSX.Element {
     <div>
       <PageHeader
         title="Ventas"
-        description="Cotizaciones, pedidos, facturas y notas — con su estado fiscal a la vista."
+        description={
+          conFacturas
+            ? "Cotizaciones, pedidos, facturas y notas — con su estado fiscal a la vista."
+            : "Tus recibos, las cotizaciones y los pedidos. Las ventas se hacen en Vender."
+        }
         actions={
-          <Button variant="primary" onClick={() => void navigate("/admin/ventas/nueva")}>
-            <Receipt /> Nueva factura
-          </Button>
+          conFacturas ? (
+            <Button variant="primary" onClick={() => void navigate("/admin/ventas/nueva")}>
+              <Receipt /> Nueva factura
+            </Button>
+          ) : undefined
         }
       />
       <DataTable
@@ -185,7 +189,7 @@ export function Ventas(): React.JSX.Element {
         onRetry={() => void documentos.refetch()}
         onRowClick={(d) => void navigate(`/admin/ventas/${d.id}`)}
         getRowId={(d) => d.id}
-        exportCsv={{ filename: `ventas-${empresa.tax_id}.csv` }}
+        exportCsv={{ filename: `ventas-${sufijoDeArchivo(empresa)}.csv` }}
         pagination={{
           total: documentos.data?.total ?? 0,
           page: pagina,
@@ -199,19 +203,28 @@ export function Ventas(): React.JSX.Element {
                 ariaLabel="Tipo de documento"
                 value={kind}
                 onValueChange={(v) => {
-                  setKindElegido(true);
                   setKind(v === "todos" ? "" : v);
                   setPagina(1);
                 }}
-                options={[
-                  { value: "todos", label: "Todos los tipos" },
-                  { value: "receipt", label: "Recibos" },
-                  { value: "invoice", label: "Facturas" },
-                  { value: "credit_note", label: "Notas de crédito" },
-                  { value: "debit_note", label: "Notas de débito" },
-                  { value: "quote", label: "Cotizaciones" },
-                  { value: "order", label: "Pedidos" },
-                ]}
+                options={
+                  conFacturas
+                    ? [
+                        { value: "todos", label: "Todos los tipos" },
+                        { value: "receipt", label: "Recibos" },
+                        { value: "invoice", label: "Facturas" },
+                        { value: "credit_note", label: "Notas de crédito" },
+                        { value: "debit_note", label: "Notas de débito" },
+                        { value: "quote", label: "Cotizaciones" },
+                        { value: "order", label: "Pedidos" },
+                      ]
+                    : [
+                        { value: "todos", label: "Todo" },
+                        { value: "receipt", label: "Recibos" },
+                        { value: "receipt_return", label: "Devoluciones" },
+                        { value: "quote", label: "Cotizaciones" },
+                        { value: "order", label: "Pedidos" },
+                      ]
+                }
               />
             </div>
             <div className="w-36">
@@ -266,15 +279,20 @@ export function Ventas(): React.JSX.Element {
         empty={{
           icon: Receipt,
           title: "Sin documentos con estos filtros",
-          description:
-            "Cambia el filtro o emite la primera factura — aparecerá aquí con su estado fiscal.",
-          action: (
+          description: conFacturas
+            ? "Cambia el filtro o emite la primera factura — aparecerá aquí con su estado fiscal."
+            : "Cambia el filtro, o haz tu primera venta en Vender: aparecerá aquí.",
+          action: conFacturas ? (
             <Button
               variant="primary"
               size="sm"
               onClick={() => void navigate("/admin/ventas/nueva")}
             >
               Nueva factura
+            </Button>
+          ) : (
+            <Button variant="primary" size="sm" onClick={() => void navigate("/vender")}>
+              Ir a Vender
             </Button>
           ),
         }}

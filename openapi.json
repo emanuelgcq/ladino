@@ -829,8 +829,7 @@
           "sku",
           "name",
           "kind",
-          "unit_code",
-          "tax_category_code"
+          "unit_code"
         ],
         "additionalProperties": false
       },

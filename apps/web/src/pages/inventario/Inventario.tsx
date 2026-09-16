@@ -35,6 +35,7 @@ import type {
   Warehouse,
 } from "../../lib.js";
 import { fechaLocal, fechaHoraLocal } from "../../fechas.js";
+import { sufijoDeArchivo } from "../../app/rif.js";
 
 /**
  * Inventario — Fase B. Cuatro superficies en pestañas: existencias (con el
@@ -228,7 +229,7 @@ export function Inventario(): React.JSX.Element {
             onRetry={() => void stock.refetch()}
             onRowClick={setKardexDe}
             density="compact"
-            exportCsv={{ filename: `existencias-${empresa.tax_id}.csv` }}
+            exportCsv={{ filename: `existencias-${sufijoDeArchivo(empresa)}.csv` }}
             pagination={{
               total: stock.data?.total ?? 0,
               page: pagina,

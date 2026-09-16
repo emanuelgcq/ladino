@@ -33,6 +33,8 @@ import { mostrarImporte } from "../../money.js";
 import { compararImportes, esCero } from "../../components/decimal-compare.js";
 import { errorDePersona } from "../../lib.js";
 import type { Customer, CodeCatalog, PriceList } from "../../lib.js";
+import { sufijoDeArchivo } from "../../app/rif.js";
+import { useConFacturas } from "../../app/modo-venta.js";
 
 /** La fila con la deuda funcional de HOY que calcula el servidor (ADR-0047). */
 type ClienteConDeuda = Customer & { readonly debt?: string };
@@ -97,27 +99,33 @@ export function Clientes(): React.JSX.Element {
 
   const recargar = () => void qc.invalidateQueries({ queryKey: ["clientes", empresa.id] });
 
+  // Sin RIF: cédula y nombre, nada de clasificación fiscal (regla del dueño, 2026-09-16).
+  const conFacturas = useConFacturas();
   const columnas = useMemo<ColumnDef<ClienteConDeuda, unknown>[]>(
     () => [
       {
         id: "rif",
-        header: "RIF",
+        header: conFacturas ? "RIF" : "Cédula o RIF",
         accessorFn: (c) => c.tax_id ?? "—",
         cell: (c) => <span className="font-mono text-[0.84rem]">{c.getValue<string>()}</span>,
       },
-      { id: "nombre", header: "Razón social", accessorKey: "legal_name" },
-      {
-        id: "persona",
-        header: "Persona",
-        accessorKey: "person_type_code",
-        enableSorting: false,
-      },
-      {
-        id: "fiscal",
-        header: "Clasif. fiscal",
-        accessorKey: "taxpayer_type_code",
-        enableSorting: false,
-      },
+      { id: "nombre", header: conFacturas ? "Razón social" : "Nombre", accessorKey: "legal_name" },
+      ...(conFacturas
+        ? ([
+            {
+              id: "persona",
+              header: "Persona",
+              accessorKey: "person_type_code",
+              enableSorting: false,
+            },
+            {
+              id: "fiscal",
+              header: "Clasif. fiscal",
+              accessorKey: "taxpayer_type_code",
+              enableSorting: false,
+            },
+          ] as ColumnDef<ClienteConDeuda, unknown>[])
+        : []),
       {
         id: "estado",
         header: "Estado",
@@ -164,14 +172,18 @@ export function Clientes(): React.JSX.Element {
         ),
       },
     ],
-    [],
+    [conFacturas],
   );
 
   return (
     <div>
       <PageHeader
         title="Clientes"
-        description="El maestro de contrapartes de venta: RIF, clasificación fiscal y bloqueo de cobranzas."
+        description={
+          conFacturas
+            ? "El maestro de contrapartes de venta: RIF, clasificación fiscal y bloqueo de cobranzas."
+            : "Quién te compra, cómo contactarlo y quién te debe."
+        }
         actions={
           <>
             <Button variant="secondary" onClick={() => setImportando(true)}>
@@ -208,7 +220,9 @@ export function Clientes(): React.JSX.Element {
             setBusqueda(v);
             setPagina(1);
           },
-          placeholder: "Buscar por RIF o razón social…",
+          placeholder: conFacturas
+            ? "Buscar por RIF o razón social…"
+            : "Buscar por cédula o nombre…",
         }}
         pagination={{
           total: clientes.data?.total ?? 0,
@@ -216,13 +230,17 @@ export function Clientes(): React.JSX.Element {
           perPage: PER_PAGE,
           onPageChange: setPagina,
         }}
-        exportCsv={{ filename: `clientes-${empresa.tax_id}.csv` }}
+        exportCsv={{ filename: `clientes-${sufijoDeArchivo(empresa)}.csv` }}
         empty={{
           title: busqueda === "" ? "Todavía no hay clientes" : "Nada con esa búsqueda",
           description:
             busqueda === ""
-              ? "El primer cliente habilita las ventas: la factura exige contraparte."
-              : "La búsqueda es del servidor: prueba con parte del RIF o del nombre.",
+              ? conFacturas
+                ? "El primer cliente habilita las ventas: la factura exige contraparte."
+                : "Registra a quien te compra fiado o quiere su nombre en el recibo."
+              : conFacturas
+                ? "La búsqueda es del servidor: prueba con parte del RIF o del nombre."
+                : "Prueba con parte de la cédula o del nombre.",
           action:
             busqueda === "" ? (
               <Button variant="primary" size="sm" onClick={() => setCreando(true)}>
@@ -245,6 +263,7 @@ export function Clientes(): React.JSX.Element {
 
 function NuevoCliente({ onCerrar }: { onCerrar: (hecho: boolean) => void }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
+  const conFacturas = useConFacturas();
   const toast = useToast();
   const [form, setForm] = useState({
     tax_id: "",
@@ -284,8 +303,13 @@ function NuevoCliente({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Rea
           company_id: empresa.id,
           tax_id: form.tax_id.trim() === "" ? null : form.tax_id.trim(),
           legal_name: form.legal_name,
-          person_type_code: form.person_type_code,
-          taxpayer_type_code: form.taxpayer_type_code,
+          // Sin RIF no se preguntan: el servidor los deduce de la letra del documento.
+          ...(conFacturas
+            ? {
+                person_type_code: form.person_type_code,
+                taxpayer_type_code: form.taxpayer_type_code,
+              }
+            : {}),
           fiscal_address: opcional(form.fiscal_address),
           email: opcional(form.email),
           phone: opcional(form.phone),
@@ -306,11 +330,15 @@ function NuevoCliente({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Rea
       <DialogContent className="max-w-xl">
         <DialogTitle>Nuevo cliente</DialogTitle>
         <DialogDescription>
-          El RIF puede quedar vacío SOLO para persona natural; la clasificación fiscal la confirma
-          el contador (VALIDAR-TRIBUTARIO).
+          {conFacturas
+            ? "El RIF puede quedar vacío SOLO para persona natural; la clasificación fiscal la confirma el contador (VALIDAR-TRIBUTARIO)."
+            : "Con el nombre basta. La cédula ayuda a encontrarlo después."}
         </DialogDescription>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <FormField label="RIF" hint="Vacío solo para persona natural.">
+          <FormField
+            label={conFacturas ? "RIF" : "Cédula o RIF"}
+            hint={conFacturas ? "Vacío solo para persona natural." : "Opcional para una persona."}
+          >
             {(a) => (
               <Input
                 id={a.id}
@@ -320,7 +348,7 @@ function NuevoCliente({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Rea
               />
             )}
           </FormField>
-          <FormField label="Razón social / nombre" required>
+          <FormField label={conFacturas ? "Razón social / nombre" : "Nombre"} required>
             {(a) => (
               <Input
                 id={a.id}
@@ -329,32 +357,36 @@ function NuevoCliente({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Rea
               />
             )}
           </FormField>
-          <FormField label="Tipo de persona" required>
-            {(a) => (
-              <SimpleSelect
-                id={a.id}
-                value={form.person_type_code}
-                onValueChange={(v) => setForm({ ...form, person_type_code: v })}
-                options={(catalogos.data?.personas ?? []).map((p) => ({
-                  value: p.code,
-                  label: p.name,
-                }))}
-              />
-            )}
-          </FormField>
-          <FormField label="Clasificación fiscal" required>
-            {(a) => (
-              <SimpleSelect
-                id={a.id}
-                value={form.taxpayer_type_code}
-                onValueChange={(v) => setForm({ ...form, taxpayer_type_code: v })}
-                options={(catalogos.data?.fiscales ?? []).map((t) => ({
-                  value: t.code,
-                  label: t.name,
-                }))}
-              />
-            )}
-          </FormField>
+          {conFacturas && (
+            <>
+              <FormField label="Tipo de persona" required>
+                {(a) => (
+                  <SimpleSelect
+                    id={a.id}
+                    value={form.person_type_code}
+                    onValueChange={(v) => setForm({ ...form, person_type_code: v })}
+                    options={(catalogos.data?.personas ?? []).map((p) => ({
+                      value: p.code,
+                      label: p.name,
+                    }))}
+                  />
+                )}
+              </FormField>
+              <FormField label="Clasificación fiscal" required>
+                {(a) => (
+                  <SimpleSelect
+                    id={a.id}
+                    value={form.taxpayer_type_code}
+                    onValueChange={(v) => setForm({ ...form, taxpayer_type_code: v })}
+                    options={(catalogos.data?.fiscales ?? []).map((t) => ({
+                      value: t.code,
+                      label: t.name,
+                    }))}
+                  />
+                )}
+              </FormField>
+            </>
+          )}
           <FormField label="Lista de precios preferida">
             {(a) => (
               <SimpleSelect
@@ -370,8 +402,9 @@ function NuevoCliente({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Rea
             )}
           </FormField>
           <FormField
-            label="Dirección fiscal"
-            {...(form.person_type_code === "juridica" || form.person_type_code === "gobierno"
+            label={conFacturas ? "Dirección fiscal" : "Dirección"}
+            {...(conFacturas &&
+            (form.person_type_code === "juridica" || form.person_type_code === "gobierno")
               ? { required: true, hint: "Obligatoria para jurídica y ente público (migración 33)." }
               : {})}
           >
@@ -438,6 +471,7 @@ function DetalleCliente({
   onCerrar: (hecho: boolean) => void;
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
+  const conFacturasFicha = useConFacturas();
   const toast = useToast();
   const [editando, setEditando] = useState(false);
   const [form, setForm] = useState({
@@ -526,8 +560,14 @@ function DetalleCliente({
       <DialogContent className="max-w-xl">
         <DialogTitle>{cliente.legal_name}</DialogTitle>
         <DialogDescription>
-          <span className="font-mono">{cliente.tax_id ?? "sin RIF"}</span> ·{" "}
-          {cliente.person_type_code} · {cliente.taxpayer_type_code}
+          {conFacturasFicha ? (
+            <>
+              <span className="font-mono">{cliente.tax_id ?? "sin RIF"}</span> ·{" "}
+              {cliente.person_type_code} · {cliente.taxpayer_type_code}
+            </>
+          ) : (
+            <span className="tabular-nums">{cliente.tax_id ?? "Sin cédula"}</span>
+          )}
         </DialogDescription>
         <div className="mt-1">
           <Badge tone={estado.tone}>{estado.etiqueta}</Badge>
@@ -550,12 +590,17 @@ function DetalleCliente({
                 to={`/admin/cuentas?cliente=${cliente.id}`}
                 className="inline-flex items-center gap-1.5 text-accent-soft-foreground hover:underline"
               >
-                <Banknote className="size-4" /> Estado de cuenta y aging
+                <Banknote className="size-4" />{" "}
+                {conFacturasFicha ? "Estado de cuenta y aging" : "Lo que me debe"}
               </Link>
             </div>
 
             <div className="rounded-md border border-border bg-surface-muted/40 p-3">
-              <p className="text-[0.85rem] font-medium">Cambiar RIF — permiso propio, auditado</p>
+              <p className="text-[0.85rem] font-medium">
+                {conFacturasFicha
+                  ? "Cambiar RIF — permiso propio, auditado"
+                  : "Cambiar la cédula o el RIF"}
+              </p>
               <div className="mt-2 flex gap-2">
                 <Input
                   aria-label="Nuevo RIF"
@@ -631,7 +676,7 @@ function DetalleCliente({
                 />
               )}
             </FormField>
-            <FormField label="Dirección fiscal">
+            <FormField label={conFacturasFicha ? "Dirección fiscal" : "Dirección"}>
               {(a) => (
                 <Input
                   id={a.id}
@@ -808,7 +853,7 @@ function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element 
 
       {abiertas.length > 0 && (
         <div className="mt-3">
-          <p className="pb-1.5 text-[0.9rem] font-medium">Facturas pendientes</p>
+          <p className="pb-1.5 text-[0.9rem] font-medium">Pendientes de cobro</p>
           <div className="divide-y divide-border rounded-md border border-border bg-surface">
             {abiertas.map((d) => (
               <div key={d.id} className="flex items-center gap-2 px-3 py-2 text-[0.9rem]">

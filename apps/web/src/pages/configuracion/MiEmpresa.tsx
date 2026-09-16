@@ -19,6 +19,7 @@ import { FormField } from "../../components/forms.js";
 import { Link } from "react-router";
 import { formatearDocumento } from "../negocio/comunes.js";
 import { Recortador } from "../registro/Registro.js";
+import { tieneRif } from "../../app/rif.js";
 
 /**
  * MI EMPRESA (Configuración → la tarjeta del negocio): todos los campos del
@@ -96,7 +97,7 @@ export function MiEmpresa(): React.JSX.Element {
   const recargar = () => void qc.invalidateQueries({ queryKey: ["mi-empresa", empresa.id] });
 
   const e = empresas.data;
-  const sinRif = e !== null && e !== undefined && e.tax_id.startsWith("PEND-");
+  const sinRif = e !== null && e !== undefined && !tieneRif(e);
   // «Vendes con recibos» lo dice el modo (migración 54); los demás rótulos
   // distinguen regímenes que facturan, y esos sí dependen del régimen.
   const modo =
@@ -111,7 +112,10 @@ export function MiEmpresa(): React.JSX.Element {
       return llamar(`/v1/companies/logo`, { method: "POST", body: form });
     },
     onSuccess: () => {
-      toast.success("Logo actualizado", "Sale en la app y en tus facturas.");
+      toast.success(
+        "Logo actualizado",
+        sinRif ? "Sale en la app y en tus recibos." : "Sale en la app y en tus facturas.",
+      );
       setLogoAbierto(false);
       recargar();
     },
@@ -202,42 +206,61 @@ export function MiEmpresa(): React.JSX.Element {
           </Button>
         </div>
 
-        {/* Los datos fiscales, visualmente APARTE: son otra liga. */}
-        <div className="rounded-lg border border-border p-4">
-          <div className="flex items-center gap-2 text-[0.85rem] font-medium text-muted-foreground">
-            <Building2 className="size-4" /> Datos fiscales
+        {/* Sin RIF: nada de «datos fiscales». Una sola pregunta, y la puerta para ponerlo
+            (regla del dueño, 2026-09-16: con RIF facturas, sin RIF recibos). */}
+        {sinRif ? (
+          <div className="rounded-lg border border-border p-4">
+            <p className="font-medium">Vendes con recibos</p>
+            <p className="mt-1 text-[0.9rem] text-muted-foreground">
+              ¿Ya sacaste tu RIF? Ponlo aquí y empiezas a dar facturas.
+            </p>
+            <Button
+              className="mt-3"
+              variant="primary"
+              size="sm"
+              onClick={() => setRifAbierto("poner")}
+            >
+              Poner mi RIF
+            </Button>
           </div>
-          <div className="mt-2 grid gap-1 text-[0.92rem] sm:grid-cols-2">
-            <p className="text-muted-foreground">
-              RIF:{" "}
-              <span className="font-mono text-foreground tabular-nums">
-                {sinRif ? "todavía no" : formatearDocumento(e.tax_id)}
-              </span>
-            </p>
-            <p className="text-muted-foreground">
-              Razón social: <span className="text-foreground">{e.legal_name}</span>
-            </p>
-            <p className="text-muted-foreground sm:col-span-2">
-              Dirección fiscal: <span className="text-foreground">{e.fiscal_address ?? "—"}</span>
-            </p>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {sinRif ? (
-              <Button variant="primary" size="sm" onClick={() => setRifAbierto("poner")}>
-                Poner mi RIF
-              </Button>
-            ) : (
-              <>
-                <Button variant="secondary" size="sm" onClick={() => setRifAbierto("poner")}>
-                  Cambiar el RIF
+        ) : (
+          /* Los datos fiscales, visualmente APARTE: son otra liga. */
+          <div className="rounded-lg border border-border p-4">
+            <div className="flex items-center gap-2 text-[0.85rem] font-medium text-muted-foreground">
+              <Building2 className="size-4" /> Datos fiscales
+            </div>
+            <div className="mt-2 grid gap-1 text-[0.92rem] sm:grid-cols-2">
+              <p className="text-muted-foreground">
+                RIF:{" "}
+                <span className="font-mono text-foreground tabular-nums">
+                  {sinRif ? "todavía no" : formatearDocumento(e.tax_id)}
+                </span>
+              </p>
+              <p className="text-muted-foreground">
+                Razón social: <span className="text-foreground">{e.legal_name}</span>
+              </p>
+              <p className="text-muted-foreground sm:col-span-2">
+                Dirección fiscal: <span className="text-foreground">{e.fiscal_address ?? "—"}</span>
+              </p>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {sinRif ? (
+                <Button variant="primary" size="sm" onClick={() => setRifAbierto("poner")}>
+                  Poner mi RIF
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => setRifAbierto("corregir")}>
-                  Corregir RIF (error de tipeo)
-                </Button>
-              </>
-            )}
+              ) : (
+                <>
+                  <Button variant="secondary" size="sm" onClick={() => setRifAbierto("poner")}>
+                    Cambiar el RIF
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setRifAbierto("corregir")}>
+                    Corregir RIF (error de tipeo)
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </CardContent>
 
       {editando && (
@@ -254,11 +277,14 @@ export function MiEmpresa(): React.JSX.Element {
           <DialogContent className="max-w-md">
             <DialogTitle>El logo del negocio</DialogTitle>
             <DialogDescription>
-              Cuadrado se ve mejor. Sale en la app y arriba de tus facturas y recibos.
+              {sinRif
+                ? "Cuadrado se ve mejor. Sale en la app y arriba de tus recibos."
+                : "Cuadrado se ve mejor. Sale en la app y arriba de tus facturas y recibos."}
             </DialogDescription>
             <div className="pt-2">
               <Recortador
                 logoUrl={null}
+                documento={sinRif ? "recibo" : "factura"}
                 onLogo={(blob) => {
                   subirLogo.mutate(blob);
                 }}
@@ -296,6 +322,8 @@ function EditarEmpresa({
   onCerrar: (hecho: boolean) => void;
 }): React.JSX.Element {
   const { llamar } = useSesion();
+  // Sin RIF no hay razón social ni domicilio FISCAL: el negocio tiene su nombre y su dirección.
+  const conRifEdicion = tieneRif(e);
   const toast = useToast();
   const [form, setForm] = useState({
     trade_name: e.trade_name ?? "",
@@ -420,19 +448,21 @@ function EditarEmpresa({
               />
             )}
           </FormField>
-          <FormField
-            label="Razón social"
-            hint="El nombre legal. Cambiarla con facturas emitidas queda en acta."
-          >
-            {(p) => (
-              <Input
-                {...p}
-                value={form.legal_name}
-                onChange={(ev) => setForm({ ...form, legal_name: ev.target.value })}
-              />
-            )}
-          </FormField>
-          <FormField label="Dirección fiscal">
+          {conRifEdicion && (
+            <FormField
+              label="Razón social"
+              hint="El nombre legal. Cambiarla con facturas emitidas queda en acta."
+            >
+              {(p) => (
+                <Input
+                  {...p}
+                  value={form.legal_name}
+                  onChange={(ev) => setForm({ ...form, legal_name: ev.target.value })}
+                />
+              )}
+            </FormField>
+          )}
+          <FormField label={conRifEdicion ? "Dirección fiscal" : "Dirección"}>
             {(p) => (
               <Input
                 {...p}
@@ -444,15 +474,21 @@ function EditarEmpresa({
         </div>
         {pideMotivo && (
           <div className="mt-3 space-y-2 rounded-md border border-warning-soft-foreground/30 bg-warning-soft p-3">
-            <p className="text-[0.88rem] text-warning-soft-foreground">
-              Ya emitiste documentos con estos datos. Las facturas ya emitidas conservan los datos
-              con los que salieron. Si facturas por formas libres, el papel preimpreso con los datos
-              viejos queda inválido: necesitarás talonarios nuevos y{" "}
-              <Link to="/admin/facturacion-fiscal" className="underline">
-                cargar el rango nuevo
-              </Link>
-              .
-            </p>
+            {conRifEdicion ? (
+              <p className="text-[0.88rem] text-warning-soft-foreground">
+                Ya emitiste documentos con estos datos. Las facturas ya emitidas conservan los datos
+                con los que salieron. Si facturas por formas libres, el papel preimpreso con los
+                datos viejos queda inválido: necesitarás talonarios nuevos y{" "}
+                <Link to="/admin/facturacion-fiscal" className="underline">
+                  cargar el rango nuevo
+                </Link>
+                .
+              </p>
+            ) : (
+              <p className="text-[0.88rem] text-warning-soft-foreground">
+                Ya diste recibos con estos datos. Los que ya salieron se quedan como estaban.
+              </p>
+            )}
             <FormField label="¿Por qué cambia?" required hint="Queda en la auditoría.">
               {(p) => (
                 <Textarea

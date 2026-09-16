@@ -13,6 +13,7 @@ import { Button } from "../../ui/button.js";
 import { mostrarImporte } from "../../money.js";
 import { errorDePersona } from "../../lib.js";
 import { hoyLocal } from "../../fechas.js";
+import { useConFacturas } from "../../app/modo-venta.js";
 
 /**
  * Reportes — el índice de las respuestas que el sistema ya sabe dar, y el
@@ -54,6 +55,7 @@ export function Reportes(): React.JSX.Element {
     negativo: p.amount.startsWith("-"),
   }));
 
+  const conFacturas = useConFacturas();
   const OTROS = [
     {
       to: "/admin/contabilidad",
@@ -62,12 +64,18 @@ export function Reportes(): React.JSX.Element {
       detalle:
         "Balance de comprobación, estado de resultados y balance general — pestañas de Contabilidad.",
     },
-    {
-      to: "/admin/libros",
-      icono: <BookOpenCheck className="size-4" />,
-      titulo: "Libros fiscales",
-      detalle: "Ventas, compras y retenciones con exportación auditable (hash por generación).",
-    },
+    // Los libros fiscales existen solo para quien tiene RIF.
+    ...(conFacturas
+      ? [
+          {
+            to: "/admin/libros",
+            icono: <BookOpenCheck className="size-4" />,
+            titulo: "Libros fiscales",
+            detalle:
+              "Ventas, compras y retenciones con exportación auditable (hash por generación).",
+          },
+        ]
+      : []),
     {
       to: "/admin/cuentas",
       icono: <Scale className="size-4" />,

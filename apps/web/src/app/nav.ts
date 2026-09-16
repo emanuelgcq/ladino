@@ -52,12 +52,12 @@ export interface NavItem {
 }
 
 /**
- * ¿Existe la capa fiscal para esta empresa? No, si vende con recibos. Mientras
- * el modo no ha llegado (null) tampoco se enseña: mejor que aparezca un instante
- * tarde a quien factura que enseñarle Libros un instante a quien no.
+ * ¿Existe la capa fiscal para esta empresa? Solo si tiene RIF (la regla del dueño: con RIF
+ * se factura, sin RIF se dan recibos). Se pasa el resultado de `tieneRif` para que el menú,
+ * la guardia de rutas y la paleta pregunten exactamente lo mismo.
  */
-export function capaFiscalVisible(modo: "facturas" | "recibos" | "ninguno" | null): boolean {
-  return modo === "facturas" || modo === "ninguno";
+export function capaFiscalVisible(conRif: boolean): boolean {
+  return conRif;
 }
 
 export interface NavGroup {

@@ -661,13 +661,18 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
         {paso === "logo" && (
           <Pregunta
             titulo="Ponle la cara a tu negocio"
-            ayuda="Tu logo saldrá en la app y en tus facturas. Puedes ponerlo después."
+            ayuda={
+              d.tieneRif === true
+                ? "Tu logo saldrá en la app y en tus facturas. Puedes ponerlo después."
+                : "Tu logo saldrá en la app y en tus recibos. Puedes ponerlo después."
+            }
             aviso={aviso}
             onSeguir={avanzar}
             sinSeguir
           >
             <Recortador
               logoUrl={d.logoUrl}
+              documento={d.tieneRif === true ? "factura" : "recibo"}
               onLogo={(blob, url) => {
                 pon("logo", blob);
                 pon("logoUrl", url);
@@ -966,9 +971,12 @@ function CampoGrande({
 export function Recortador({
   logoUrl,
   onLogo,
+  documento = "factura",
 }: {
   logoUrl: string | null;
   onLogo: (blob: Blob, url: string) => void;
+  /** Dónde sale impreso: la factura con RIF, el recibo sin RIF (regla del dueño). */
+  documento?: "factura" | "recibo";
 }): React.JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null);
   const [origen, setOrigen] = useState<HTMLImageElement | null>(null);
@@ -1056,7 +1064,7 @@ export function Recortador({
                 className="size-28 rounded-xl border border-border object-cover shadow-soft"
               />
               <figcaption className="mt-2 text-[0.78rem] text-faint-foreground">
-                En tu factura
+                {documento === "factura" ? "En tu factura" : "En tu recibo"}
               </figcaption>
             </figure>
             <figure className="text-center">

@@ -28,6 +28,7 @@ import {
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import { AVISO_PRECIO_COMPRA } from "../../components/capa-fiscal/textos.js";
 import { fechaRelativa } from "./comunes.js";
+import { useConFacturas } from "../../app/modo-venta.js";
 
 /**
  * COMPRAS Y GASTOS (Fase C, PARTE 10): lo que el negocio paga. Dos mundos en
@@ -698,6 +699,7 @@ function RegistrarCompra({
   onListo: () => void;
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
+  const conFacturas = useConFacturas();
   const toast = useToast();
   const [proveedor, setProveedor] = useState<string | null>(null);
   const [creandoProveedor, setCreandoProveedor] = useState(false);
@@ -1042,7 +1044,10 @@ function RegistrarCompra({
               >
                 <Plus /> Otro producto
               </Button>
-              <p className="text-[0.8rem] text-faint-foreground">{AVISO_PRECIO_COMPRA}</p>
+              <p className="text-[0.8rem] text-faint-foreground">
+                {/* Quien da recibos no ve impuestos: el precio es lo que pagó (app/rif.ts). */}
+                {conFacturas ? AVISO_PRECIO_COMPRA : "El precio es lo que pagaste por cada unidad."}
+              </p>
             </div>
 
             <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">

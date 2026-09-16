@@ -9,6 +9,7 @@ import { Switch } from "../ui/switch.js";
 import { Label } from "../ui/input.js";
 import { useToast } from "../ui/toast.js";
 import { useSesion } from "../app/session.js";
+import { tieneRif } from "../app/rif.js";
 import { errorDePersona } from "../lib.js";
 import { setTema, temaActual, type ThemeChoice } from "../theme.js";
 import { mostrarTodosLosModulos, setMostrarTodos } from "../app/shell.js";
@@ -24,6 +25,8 @@ import { Depositos } from "./configuracion/Depositos.js";
 export function Configuracion(): React.JSX.Element {
   const [tema, setTemaLocal] = useState<ThemeChoice>(temaActual);
   const { empresa, llamar, puede } = useSesion();
+  // Sin RIF no existe la puesta a punto fiscal: se dan recibos (regla del dueño, 2026-09-16).
+  const conRif = tieneRif(empresa);
   const [todos, setTodos] = useState(() => mostrarTodosLosModulos(empresa.id));
   const toast = useToast();
   const qc = useQueryClient();
@@ -55,23 +58,25 @@ export function Configuracion(): React.JSX.Element {
 
       <MiEmpresa />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Puesta a punto fiscal</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <CardDescription className="mb-3">
-            Lo que una empresa nueva necesita cargar antes de emitir su primera factura: alícuota
-            con fuente legal, tasa BCV, régimen fiscal y rango de numeración.
-          </CardDescription>
-          <Link
-            to="/admin/facturacion-fiscal"
-            className="inline-flex items-center gap-2 rounded-sm bg-accent px-3 py-1.5 text-[0.9rem] font-medium text-accent-foreground hover:bg-accent-hover"
-          >
-            <ClipboardCheck className="size-4" /> Abrir la lista de puesta a punto
-          </Link>
-        </CardContent>
-      </Card>
+      {conRif && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Puesta a punto fiscal</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <CardDescription className="mb-3">
+              Lo que una empresa nueva necesita cargar antes de emitir su primera factura: alícuota
+              con fuente legal, tasa BCV, régimen fiscal y rango de numeración.
+            </CardDescription>
+            <Link
+              to="/admin/facturacion-fiscal"
+              className="inline-flex items-center gap-2 rounded-sm bg-accent px-3 py-1.5 text-[0.9rem] font-medium text-accent-foreground hover:bg-accent-hover"
+            >
+              <ClipboardCheck className="size-4" /> Abrir la lista de puesta a punto
+            </Link>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ADR-0049: quién entra y con qué oficio — solo para quien gobierna
           personas (membership.manage, el dueño). */}
@@ -162,9 +167,11 @@ export function Configuracion(): React.JSX.Element {
             <div>
               <Label htmlFor="cfg-todos">Mostrar todos los módulos</Label>
               <CardDescription>
-                Compras, Contabilidad y Libros fiscales aparecen solos cuando la empresa tiene datos
-                en ellos. Actívalo para verlos siempre — la bodega ve un sistema simple; la cadena,
-                el completo. Misma app.
+                {conRif
+                  ? "Compras, Contabilidad y Libros fiscales aparecen solos cuando la empresa tiene datos en ellos."
+                  : "Compras y Contabilidad aparecen solas cuando la empresa tiene datos en ellas."}{" "}
+                Actívalo para verlos siempre — la bodega ve un sistema simple; la cadena, el
+                completo. Misma app.
               </CardDescription>
             </div>
             <Switch

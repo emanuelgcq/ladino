@@ -410,7 +410,7 @@ function PreciosDeLista({
           {tasa === null && (
             <p className="text-[0.82rem] text-warning-soft-foreground">
               Sin tasa del día: la columna de equivalencia no puede calcularse.{" "}
-              <Link to="/admin/facturacion-fiscal" className="underline">
+              <Link to="/dinero" className="underline">
                 Cargar la tasa
               </Link>
             </p>

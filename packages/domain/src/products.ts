@@ -100,11 +100,20 @@ export async function createProduct(
   if (scope.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
   }
+  // Sin clasificación en la petición, la de la empresa (la misma regla que el alta simple y
+  // la importación): un negocio sin RIF no la elige porque no cobra IVA.
+  let clasificacionPedida = input.tax_category_code;
+  if (clasificacionPedida === undefined) {
+    const [ajustes] = await sql<{ default_tax_category_code: string }[]>`
+      select default_tax_category_code from public.company_settings
+       where company_id = ${input.company_id}`;
+    clasificacionPedida = ajustes?.default_tax_category_code ?? "gravado_general";
+  }
   // La categoría tributaria se valida ACTIVA aquí (no solo existente): el FK
   // no sabe de estados.
   const [cat] = await sql<{ code: string }[]>`
     select code from public.product_tax_categories
-     where code = ${input.tax_category_code} and status = 'active'`;
+     where code = ${clasificacionPedida} and status = 'active'`;
   if (!cat) {
     return err({
       code: "VALIDATION_FAILED",
@@ -124,7 +133,7 @@ export async function createProduct(
           (tenant_id, company_id, sku, name, kind, unit_code, tax_category_code, category_id,
            barcode, status)
         values (${scope.value.tenantId}, ${input.company_id}, ${input.sku}, ${input.name},
-                ${input.kind}, ${input.unit_code}, ${input.tax_category_code},
+                ${input.kind}, ${input.unit_code}, ${cat.code},
                 ${input.category_id ?? null}, ${input.barcode ?? null},
                 ${input.status ?? "active"})
         returning ${sp.unsafe(PRODUCT_COLUMNS)},

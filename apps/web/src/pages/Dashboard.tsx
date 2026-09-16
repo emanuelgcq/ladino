@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../ui/card.js";
 import { mostrarImporte } from "../money.js";
 import { errorDePersona } from "../lib.js";
 import { fechaLocal, mesLocal, mesLocalAnterior } from "../fechas.js";
+import { tieneRif } from "../app/rif.js";
 
 /**
  * El valor de una tarjeta cuando su consulta FALLÓ: el mensaje en voz de
@@ -112,17 +113,23 @@ export function Dashboard(): React.JSX.Element {
       ]),
   });
 
+  // Con RIF se cuentan facturas; sin RIF, recibos (regla del dueño, 2026-09-16). Antes un
+  // negocio sin RIF veía «0 facturas» aunque vendiera todos los días.
+  const conRif = tieneRif(empresa);
+  const tipoVenta = conRif ? "invoice" : "receipt";
+  const palabraVenta = conRif ? "facturas" : "recibos";
   const facturasMes = useQuery({
-    queryKey: ["dash-facturas", empresa.id, mes.from],
+    queryKey: ["dash-facturas", empresa.id, mes.from, tipoVenta],
     queryFn: () =>
       llamar<{ total: number }>(
-        `/v1/documents?kind=invoice&from=${mes.from}&to=${mes.to}&per_page=1`,
+        `/v1/documents?kind=${tipoVenta}&from=${mes.from}&to=${mes.to}&per_page=1`,
       ),
   });
 
   const porCobrar = useQuery({
-    queryKey: ["dash-cobrar", empresa.id],
-    queryFn: () => llamar<{ total: number }>(`/v1/documents?kind=invoice&status=issued&per_page=1`),
+    queryKey: ["dash-cobrar", empresa.id, tipoVenta],
+    queryFn: () =>
+      llamar<{ total: number }>(`/v1/documents?kind=${tipoVenta}&status=issued&per_page=1`),
   });
 
   const diferencial = useQuery({
@@ -246,9 +253,15 @@ export function Dashboard(): React.JSX.Element {
         title={`Hola — ${empresa.trade_name ?? empresa.legal_name}`}
         description="Las cinco respuestas del dueño, con cada cifra calculada por el servidor."
         actions={
-          <Button variant="primary" onClick={() => void navigate("/admin/ventas/nueva")}>
-            <Receipt /> Nueva factura
-          </Button>
+          conRif ? (
+            <Button variant="primary" onClick={() => void navigate("/admin/ventas/nueva")}>
+              <Receipt /> Nueva factura
+            </Button>
+          ) : (
+            <Button variant="primary" onClick={() => void navigate("/vender")}>
+              <Receipt /> Vender
+            </Button>
+          )
         }
       />
 
@@ -276,7 +289,7 @@ export function Dashboard(): React.JSX.Element {
               <span className="font-mono text-[1.55rem] font-semibold">
                 {facturasMes.data?.total ?? 0}
                 <span className="ml-1 text-[0.85rem] font-normal text-muted-foreground">
-                  facturas
+                  {palabraVenta}
                 </span>
               </span>
             )
@@ -308,7 +321,7 @@ export function Dashboard(): React.JSX.Element {
         {/* Es un CONTEO de facturas en estado `issued`, no un importe por
             cobrar: el rótulo dice exactamente eso. */}
         <KpiCard
-          title="Facturas emitidas sin cerrar"
+          title={conRif ? "Facturas emitidas sin cerrar" : "Ventas fiadas sin cobrar"}
           icon={Banknote}
           loading={porCobrar.isPending}
           value={
@@ -318,19 +331,19 @@ export function Dashboard(): React.JSX.Element {
               <span className="font-mono text-[1.55rem] font-semibold">
                 {porCobrar.data?.total ?? 0}
                 <span className="ml-1 text-[0.85rem] font-normal text-muted-foreground">
-                  facturas
+                  {palabraVenta}
                 </span>
               </span>
             )
           }
           footer={
             <Link to="/admin/cuentas" className="text-accent-soft-foreground hover:underline">
-              Ver aging por cliente →
+              {conRif ? "Ver aging por cliente →" : "Ver quién me debe →"}
             </Link>
           }
         />
         <KpiCard
-          title="Diferencial cambiario"
+          title={conRif ? "Diferencial cambiario" : "Lo que movió la tasa"}
           icon={ArrowLeftRight}
           loading={diferencial.isPending}
           value={
@@ -397,20 +410,22 @@ export function Dashboard(): React.JSX.Element {
             <DataTable
               columns={columnas}
               data={ultimos.data === undefined ? undefined : filas}
-              error={ultimos.error instanceof Error ? ultimos.error.message : null}
+              error={ultimos.error == null ? null : errorDePersona(ultimos.error)}
               onRetry={() => void ultimos.refetch()}
               density="compact"
               onRowClick={(d) => void navigate(`/admin/ventas/${d.id}`)}
               empty={{
                 title: "Todavía no hay documentos",
-                description: "La primera factura aparecerá aquí en cuanto se emita.",
+                description: conRif
+                  ? "La primera factura aparecerá aquí en cuanto se emita."
+                  : "Tu primera venta aparecerá aquí.",
                 action: (
                   <Button
                     variant="primary"
                     size="sm"
-                    onClick={() => void navigate("/admin/ventas/nueva")}
+                    onClick={() => void navigate(conRif ? "/admin/ventas/nueva" : "/vender")}
                   >
-                    Emitir la primera
+                    {conRif ? "Emitir la primera" : "Hacer la primera venta"}
                   </Button>
                 ),
               }}

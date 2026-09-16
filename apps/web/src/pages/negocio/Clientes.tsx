@@ -18,6 +18,7 @@ import { Input } from "../../ui/input.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField } from "../../components/forms.js";
 import { formatearDocumento } from "./comunes.js";
+import { useConFacturas } from "../../app/modo-venta.js";
 
 /**
  * CLIENTES (Fase C, PARTE 9): a quién le vendo. SOLO la información del
@@ -53,6 +54,7 @@ function useDebounced<T>(valor: T, ms: number): T {
 
 export function ClientesNegocio(): React.JSX.Element {
   const { empresa, llamar, puede } = useSesion();
+  const conFacturasLista = useConFacturas();
   const [busqueda, setBusqueda] = useState("");
   const [alta, setAlta] = useState(false);
   const [ficha, setFicha] = useState<ClienteFila | null>(null);
@@ -145,7 +147,9 @@ export function ClientesNegocio(): React.JSX.Element {
           </p>
           <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
             {q === ""
-              ? "Para vender de mostrador no hace falta ninguno. Registra a los que compran fiado o piden factura con sus datos."
+              ? conFacturasLista
+                ? "Para vender de mostrador no hace falta ninguno. Registra a los que compran fiado o piden factura con sus datos."
+                : "Para vender de mostrador no hace falta ninguno. Registra a los que te compran fiado."
               : "Revisa cómo lo escribiste, o agrégalo si es nuevo."}
           </p>
           {q === "" && puedeGestionar && (
@@ -218,6 +222,7 @@ function AltaCliente({
   onCreado: () => void;
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
+  const conFacturas = useConFacturas();
   const toast = useToast();
   const [nombre, setNombre] = useState("");
   const [rif, setRif] = useState("");
@@ -261,7 +266,8 @@ function AltaCliente({
   // real la toma el servidor.
   const esEmpresa = /^[JG]/.test(documento);
   const listo =
-    nombre.trim().length > 0 && (!esEmpresa || (documento.length >= 3 && direccion.trim() !== ""));
+    nombre.trim().length > 0 &&
+    (!esEmpresa || (documento.length >= 3 && (!conFacturas || direccion.trim() !== "")));
 
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
@@ -312,7 +318,7 @@ function AltaCliente({
           </FormField>
           <FormField
             label="Dirección"
-            {...(esEmpresa
+            {...(esEmpresa && conFacturas
               ? { required: true, hint: "Una factura a una empresa lleva su domicilio fiscal." }
               : {})}
           >

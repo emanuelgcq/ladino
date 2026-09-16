@@ -51,6 +51,7 @@ import type {
   Warehouse,
 } from "../../lib.js";
 import { hoyLocal, fechaLocal, fuenteDeTasa } from "../../fechas.js";
+import { useConFacturas } from "../../app/modo-venta.js";
 
 /**
  * Compras — Fase B. Cuatro superficies: órdenes (con recepción y landed cost),
@@ -68,6 +69,8 @@ export function Compras(): React.JSX.Element {
   // esconde lo que igual fallaría.
   const { puede } = useSesion();
   const puedeOrdenar = puede("purchase.order.manage");
+  // Retenciones: solo con RIF (regla del dueño, 2026-09-16: sin RIF, nada fiscal).
+  const conFacturas = useConFacturas();
   return (
     <div>
       <PageHeader
@@ -79,7 +82,7 @@ export function Compras(): React.JSX.Element {
           <TabsTab value="ordenes">Órdenes</TabsTab>
           {puedeOrdenar && <TabsTab value="nueva">Nueva orden</TabsTab>}
           <TabsTab value="cxp">Cuentas por pagar</TabsTab>
-          <TabsTab value="retenciones">Reglas de retención</TabsTab>
+          {conFacturas && <TabsTab value="retenciones">Reglas de retención</TabsTab>}
         </TabsList>
         <TabsPanel value="ordenes">
           <Ordenes />
@@ -92,9 +95,11 @@ export function Compras(): React.JSX.Element {
         <TabsPanel value="cxp">
           <CuentasPorPagar />
         </TabsPanel>
-        <TabsPanel value="retenciones">
-          <Retenciones />
-        </TabsPanel>
+        {conFacturas && (
+          <TabsPanel value="retenciones">
+            <Retenciones />
+          </TabsPanel>
+        )}
       </Tabs>
     </div>
   );

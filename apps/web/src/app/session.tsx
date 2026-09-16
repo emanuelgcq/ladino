@@ -14,6 +14,7 @@ import { Button } from "../ui/button.js";
 import { Input, Label } from "../ui/input.js";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../ui/card.js";
 import { LogoLadino } from "../components/LogoLadino.js";
+import { rifParaMostrar } from "./rif.js";
 import { Registro } from "../pages/registro/Registro.js";
 
 /**
@@ -798,7 +799,9 @@ function SelectorEmpresa({
                   <Building2 className="size-4 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{c.legal_name}</span>
-                    <span className="block text-[0.8rem] text-muted-foreground">{c.tax_id}</span>
+                    <span className="block text-[0.8rem] text-muted-foreground">
+                      {rifParaMostrar(c)}
+                    </span>
                   </span>
                 </button>
               ))
