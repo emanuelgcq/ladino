@@ -120,11 +120,24 @@ describe("inventario de extremo a extremo", () => {
       warehouse_id: W1,
       product_id: PROD,
       quantity: "5",
-      amount: "650",
+      // POR UNIDAD (QA 2026-09-15, h. 44): 5 × 130 = 650, el total lo calcula el servidor.
+      unit_amount: "130",
       currency: "VES",
     });
     expect(e2.status).toBe(201);
     expect(((await e2.json()) as { unit_cost: string }).unit_cost).toBe("110.00000000");
+
+    // Total Y por unidad a la vez es ambiguo: se rechaza.
+    const ambas = await pedir("POST", "/v1/inventory/receipts", JEFE, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      product_id: PROD,
+      quantity: "1",
+      amount: "100",
+      unit_amount: "100",
+      currency: "VES",
+    });
+    expect(ambas.status).toBe(422);
 
     const stock = await pedir("GET", `/v1/inventory/stock?product_id=${PROD}`, JEFE);
     expect(stock.status).toBe(200);
@@ -133,10 +146,12 @@ describe("inventario de extremo a extremo", () => {
       total: number;
     };
     expect(pagina.total).toBe(1);
+    // Valor y costo se sirven a los céntimos de su moneda (ADR-0063 §5, h. 43); el kardex
+    // conserva los 8 decimales.
     expect(pagina.items[0]).toMatchObject({
       quantity: "15.00000000",
-      value: "1650.00000000",
-      last_unit_cost: "110.00000000",
+      value: "1650.00",
+      last_unit_cost: "110.00",
       currency: "VES",
     });
 

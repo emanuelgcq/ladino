@@ -211,7 +211,7 @@ export const PLANTILLA_CLIENTES: { nombreArchivo: string; filas: string[][] } = 
 export const NOTA_FORMATO_PRODUCTOS =
   "Obligatorias: «Nombre» y «Precio». Números con coma decimal («9,50») o punto — las dos " +
   "valen. Separador «;» o «,» (se detecta solo). «Es servicio»: sí/no. Con «Existencia» hace " +
-  "falta «Costo». Máximo 500 filas.";
+  "falta «Costo», por unidad y en dólares (o en Bs si «Moneda costo» lo dice). Máximo 500 filas.";
 
 export const NOTA_FORMATO_CLIENTES =
   "Obligatoria: «Nombre o razón social». El tipo se deduce del documento: V/E o vacío = " +

@@ -1,3 +1,116 @@
+# Handoff — 2026-09-16 (24ª entrega) — QA de pantalla: los 87 hallazgos, y solo la tasa del BCV
+
+## Estado
+
+- **QA de pantalla del 2026-09-15 (87 hallazgos), cerrado en código** en siete tandas, todas en
+  main y con `pnpm run verify` en verde. Lo que queda abierto está abajo y dicho por su número.
+- **Producción en la migración 66.** Las **56–66 están aplicadas en Supabase** (Claude, con
+  permiso del dueño; ensayo en seco con ROLLBACK antes de cada tanda; invariantes en cero). **La
+  API, el worker y la web de producción siguen VIEJOS**: hace falta
+  `git pull && docker compose up -d --build api worker web` en el VPS **ya** (R-39).
+- **Reglas del dueño que gobiernan esta entrega:**
+  - **Con RIF, facturas y todo lo fiscal, en lenguaje técnico. Sin RIF, recibos, en lenguaje
+    sencillo:** nada de alícuota, IVA ni lo fiscal.
+  - **El USD es solo el precio de referencia.** Todo se maneja en bolívares salvo el efectivo en
+    dólares, Zelle y USDT. Contabilidad, libros, retenciones y declaraciones van siempre en Bs.
+    Los fiados quedan anclados en USD y se cobran a la tasa del día del pago.
+  - **Solo existe la tasa del BCV y nadie la escribe a mano.** En pantalla se lee
+    «Tasa BCV: 842,2067» (ADR-0064).
+- **PÁRATE — sin cambio:**
+  - la regularización del histórico de la Ola 2 (`scripts/ola2/regularizacion-inventario-y-caja.sql`)
+    sigue sin correr: espera el visto bueno del dueño sobre el ensayo en seco;
+  - la nota de débito o crédito por fiado cobrado a otra tasa (ADR-0064 §3) espera al asesor (P-20).
+
+## Commits
+
+| Commit | Tanda | Qué |
+|---|---|---|
+| `236e86d` | 1 | Segundo depósito, cliente bloqueado, doble facturación y 30 hallazgos más · migración 60 |
+| `da07443` | 2 | El dinero del negocio: la cuenta donde cae un cobro, mover dinero entre cuentas, sobregiros · migración 61 · ADR-0062 |
+| `fca6e86` | 3 | El céntimo de la caja: un solo total, cobros en céntimos, sin diferencial fantasma · migración 62 · ADR-0063 |
+| `bb559d6` | 4 | Con RIF facturas, sin RIF recibos: lenguaje sencillo y nada fiscal · migración 63 |
+| `a9db864` | 4b | «detal» y «mayor» anclados en USD para toda empresa · migración 64 |
+| `4b43b86` | 5 | Lo fiscal en bolívares: declaración de IVA, libros, retenciones, deuda con proveedores, tipo de contribuyente · migración 65 |
+| `8e165eb` | 6 | «Lo que gané» es el resultado del mayor: devoluciones, servicios y gastos cuentan |
+| `887b71e` | 5b | Solo la tasa del BCV; nadie la escribe a mano; PDF en las dos monedas · migración 66 · ADR-0064 |
+| _(este)_ | 7 | Precio y costo se piden igual; costo por unidad en la entrada; la cuenta cobrada no resucita; avisos de precio en cero, costo en cero, venta bajo costo y nombre repetido |
+
+## Migraciones 60–66: reversibilidad con datos vivos
+
+| Migración | Qué escribe | Cómo se deshace | Hasta dónde |
+|---|---|---|---|
+| **60** · depósito principal y alcance del dueño | 2 funciones; vínculos del dueño a cada depósito (idempotente) | quitar las asignaciones creadas; restaurar funciones | **Total**: no borra ni cambia nada existente |
+| **61** · transferencias entre cuentas | `treasury_transfers` (append-only salvo el enlace al asiento), papel `treasury_account_from`, el hecho del preset y su plantilla, cobertura contable | migración nueva, **solo sin transferencias** | Con filas **no se revierte**: son hechos de dinero; se corrigen con otra transferencia |
+| **62** · el céntimo | `document_debt_today`: la deuda servida en céntimos y calculada desde el ancla | restaurar la función de su migración anterior | **Total** en funciones. Los cobros guardados en céntimos quedan como están, y son correctos |
+| **63** · sin RIF, recibos | régimen de recibos para toda empresa sin RIF (`assign_receipts_to_companies_without_rif`), filas con su evento | quitar las filas por su evento | **Parcial**: los recibos emitidos quedan emitidos |
+| **64** · detal y mayor en USD | `currency_code = USD` en las listas semilla sin historia | migración nueva por lista | **Total** mientras no se carguen precios nuevos en USD |
+| **65** · lo fiscal en Bs | funciones de libros, planilla y deuda; `purchases_book` con 2 columnas nuevas | restaurar funciones de las 27, 46 y 52 (`drop` + `create` del libro) | **Total** en funciones. Libros y declaraciones ya guardados conservan lo que dijeron |
+| **66** · solo la tasa del BCV | `rate_for` solo lee la oficial; la política de inserción solo admite la oficial del sistema | restaurar `rate_for` y la política de la 52 | **Total.** No borra nada: la única tasa tecleada de producción queda como historia |
+
+## Producción: lo que el dueño tiene que decidir
+
+- **Libros y declaraciones con cifras mezcladas, anteriores a la migración 65.** Quedan como
+  hechos guardados:
+  - «Inversiones Ferretería QA»: **3 libros exportados** y **2 retenciones** calculadas sobre
+    importes en USD;
+  - «Ladino» (demo): **1 declaración**.
+  Regenerar el período produce la cifra correcta con otra huella. Sustituirlos es decisión del
+  dueño o de su contador.
+- **Listas en Bs con historia.** La lista «detal» de «Ladino» (600 precios) y la de «Corazon de
+  Jesus» (1 precio) siguen en bolívares **con precios cargados**. La migración 64 no las tocó a propósito; el dueño decide si
+  se re-anclan en USD.
+- **Una tasa tecleada**, la única que había en producción («sin cambio, confirmada»), queda inerte
+  (migración 66). El ensayo en seco mostró que **ninguna empresa cambia de tasa del día** y que
+  **ningún documento en divisa** se emitió con una tasa que no fuera del BCV (P-24 no tiene casos).
+
+## Hallazgos del QA: lo que NO se cerró
+
+| # | Hallazgo | Por qué | Qué falta |
+|---|---|---|---|
+| 9 | Aviso de React «flushSync…» al cerrar diálogos | viene de `@base-ui-components/react` 1.0.0-rc.0 (`ToastRoot`) | actualizar la librería (arreglo upstream); solo se ve en desarrollo |
+| 1 y 44 (en parte) | «Lista de costo» y columnas de costo y margen en Listas de precios | el costo real es el promedio del kardex, por depósito, en Bs; una «lista de costo» en USD sería un segundo costo que puede contradecirlo | decisión de diseño del dueño: se unificó la **forma** de pedir el costo (por unidad, en USD, con su equivalente) en el alta, la entrada y la importación |
+| P-20 | nota por fiado cobrado a otra tasa | fuente no oficial del art. 51 | asesor |
+
+Todos los demás están cerrados en código, con prueba donde toca dinero, stock o documentos
+fiscales. Cada commit nombra sus hallazgos.
+
+## Aserciones existentes cambiadas
+
+- **Por decisión del dueño («solo la tasa del BCV»):**
+  - pgTAP 052: a igual día manda la oficial, y la tecleada ya no se escribe;
+  - fixtures 022, 062 y 065 pasan a tasa oficial;
+  - `e2e-treasury`: «sigue igual» se rechaza;
+  - `e2e-bcv`: el mensaje de fuente caída ya no ofrece la carga a mano;
+  - `e2e-sales`, `e2e-purchases` y `e2e-igtf` siembran la tasa oficial con `_tasa-oficial.ts` y
+    la borran al terminar.
+- **Por ADR-0063 §5 (valores servidos en céntimos):** `e2e-inventory` espera
+  `value: "1650.00"` y `last_unit_cost: "110.00"` en el listado de existencias. El kardex conserva
+  los 8 decimales.
+- **Por el costo en USD por defecto:** en `e2e-products`, la fila de la importación en Excel dice
+  «Moneda costo: Bs».
+
+## Abierto
+
+- **Deploy YA** (R-39): `docker compose up -d --build api worker web`.
+- **Regularización del histórico** (sin cambio).
+- **Asesor:**
+  - P-19: tasa de la factura de proveedor en divisa;
+  - P-20: art. 51;
+  - P-21: fecha de la tasa en la factura;
+  - P-22: antigüedad de la tasa;
+  - P-23: fuentes primarias;
+  - P-24: documentos con tasa tecleada; producción no tiene casos.
+- **Release fiscal:** las migraciones 65 y 66 tienen `HOMOLOGATION_IMPACT = YES`. El manifiesto de
+  releases sigue en 0.1.0, así que hay que cortar la release con `fiscal_behavior_changed: true`
+  antes de liberar emisión fiscal productiva (`RELEASE_AND_VERSION_HOMOLOGATION.md`).
+- **QA de pantalla de repaso:** repetir los guiones de `scratchpad/mqa` sobre la web nueva
+  después del deploy.
+
+HOMOLOGATION_IMPACT = YES (migraciones 65 y 66: qué tasa convierte un documento fiscal, qué cifras
+llevan los libros y la planilla, y qué imprime el PDF).
+
+---
+
 # Handoff — 2026-09-15 (23ª entrega) — Bug de producción y Ola 2: contabilidad verdadera
 
 ## Estado

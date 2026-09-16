@@ -175,6 +175,7 @@ export interface Warehouse {
 export interface StockBalance {
   warehouse_id: string;
   warehouse_code: string;
+  warehouse_name: string;
   product_id: string;
   product_sku: string;
   product_name: string;

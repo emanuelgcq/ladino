@@ -391,6 +391,26 @@ async function resolverLote(
   }
 }
 
+/**
+ * El costo TOTAL de una entrada dada POR UNIDAD: cantidad × costo unitario, a los 8 decimales
+ * de `numeric(24,8)` (HALF_UP), igual que el inventario inicial del alta simple. Es la única
+ * aritmética que la pantalla ya no hace (QA de pantalla 2026-09-15, h. 44).
+ */
+export function totalDeEntrada(
+  unitAmount: string,
+  quantity: string,
+): Result<string, { code: "VALIDATION_FAILED"; message: string }> {
+  const unitario = parseDecimal(unitAmount);
+  const q = parseDecimal(quantity);
+  if (!unitario.ok || !q.ok) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Cantidad o costo por unidad no interpretables.",
+    });
+  }
+  return ok(unitario.value.times(q.value).toDecimalPlaces(8, 4).toFixed(8));
+}
+
 export async function receiveStock(
   uow: UnitOfWork,
   input: ReceiveStockInput,

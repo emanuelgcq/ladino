@@ -41,6 +41,7 @@ export {
   QuantityString,
   FxInput,
   ReceiveStockRequest,
+  ReceiveStockApiRequest,
   IssueStockRequest,
   AdjustStockRequest,
   TransferStockRequest,

@@ -2245,6 +2245,9 @@
                 "warehouse_code": {
                   "type": "string"
                 },
+                "warehouse_name": {
+                  "type": "string"
+                },
                 "product_id": {
                   "type": "string",
                   "format": "uuid"
@@ -2280,6 +2283,7 @@
               "required": [
                 "warehouse_id",
                 "warehouse_code",
+                "warehouse_name",
                 "product_id",
                 "product_sku",
                 "product_name",
@@ -2304,7 +2308,7 @@
         ],
         "additionalProperties": false
       },
-      "ReceiveStockRequest": {
+      "ReceiveStockApiRequest": {
         "type": "object",
         "properties": {
           "company_id": {
@@ -2325,10 +2329,6 @@
             "format": "uuid"
           },
           "quantity": {
-            "type": "string",
-            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
-          },
-          "amount": {
             "type": "string",
             "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
           },
@@ -2382,6 +2382,14 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 500
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "unit_amount": {
+            "type": "string",
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
           }
         },
         "required": [
@@ -2389,7 +2397,6 @@
           "warehouse_id",
           "product_id",
           "quantity",
-          "amount",
           "currency"
         ],
         "additionalProperties": false
@@ -17258,7 +17265,7 @@
     "/v1/inventory/receipts": {
       "post": {
         "summary": "Entrada de existencias (permiso inventory.move sobre el almacén)",
-        "description": "El importe es el costo TOTAL de la recepción. En moneda distinta a la funcional exige la tasa con su fuente: sin fuente no se persiste (ADR-0020). El promedio se recalcula.",
+        "description": "El costo va TOTAL (amount) o POR UNIDAD (unit_amount), uno de los dos; el total lo calcula el servidor. En moneda distinta a la funcional se valora con la tasa del BCV del día; `fx` desde fuera responde 409 RATE_ONLY_FROM_BCV (ADR-0064). El promedio se recalcula.",
         "security": [
           {
             "bearerAuth": []
@@ -17288,7 +17295,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReceiveStockRequest"
+                "$ref": "#/components/schemas/ReceiveStockApiRequest"
               }
             }
           }

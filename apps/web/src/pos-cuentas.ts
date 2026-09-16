@@ -107,6 +107,11 @@ const ESPERA_NUBE = 4000;
 export interface SincronizadorNube {
   guardar: (cuenta: CuentaNube) => void;
   borrar: (id: string) => void;
+  /**
+   * Suelta lo pendiente de una cuenta SIN tocar la nube: la que se cobró ya la borró el
+   * servidor en la transacción de la venta, y subirla después la resucitaba.
+   */
+  olvidar: (id: string) => void;
   /** Sube YA lo pendiente: al cambiar de cuenta, al cobrar, al salir. */
   vaciar: () => void;
 }
@@ -180,6 +185,12 @@ export function crearSincronizador(
       porBorrar.add(id);
       sucias.delete(id);
       void volar(id);
+    },
+    olvidar(id: string): void {
+      const previo = temporizadores.get(id);
+      if (previo !== undefined) clearTimeout(previo);
+      temporizadores.delete(id);
+      sucias.delete(id);
     },
     vaciar(): void {
       for (const [id, t] of temporizadores) {

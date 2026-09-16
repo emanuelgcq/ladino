@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { Link } from "react-router";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Camera, PackagePlus, Pencil, Upload } from "lucide-react";
@@ -555,7 +556,20 @@ function DetalleProducto({
                             {v.data.vigente !== null ? (
                               mostrarImporte(v.data.vigente)
                             ) : (
-                              <span className="text-warning-soft-foreground">sin precio</span>
+                              <span className="text-warning-soft-foreground">
+                                sin precio
+                                {puede("price_list.manage") && (
+                                  <>
+                                    {" · "}
+                                    <Link
+                                      className="underline"
+                                      to={`/admin/precios?lista=${lista.id}&producto=${producto.id}&nombre=${encodeURIComponent(producto.name)}`}
+                                    >
+                                      Poner precio
+                                    </Link>
+                                  </>
+                                )}
+                              </span>
                             )}
                             <span className="ml-2 text-[0.78rem] text-faint-foreground">
                               {sinRif

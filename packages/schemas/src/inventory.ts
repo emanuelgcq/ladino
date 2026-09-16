@@ -63,6 +63,23 @@ export const ReceiveStockRequest = z
   .strict();
 export type ReceiveStockRequest = z.infer<typeof ReceiveStockRequest>;
 
+/**
+ * La entrada tal como llega a la API (QA de pantalla 2026-09-15, h. 44): el costo se da TOTAL
+ * (`amount`) o POR UNIDAD (`unit_amount`), uno de los dos. El alta de producto y las compras
+ * piden el costo por unidad; esta pantalla ahora también. El dominio recibe siempre el total.
+ */
+export const ReceiveStockApiRequest = ReceiveStockRequest.omit({ amount: true })
+  .extend({
+    amount: amount.optional(),
+    /** Costo POR UNIDAD en `currency`; el total lo calcula el servidor. */
+    unit_amount: amount.optional(),
+  })
+  .strict()
+  .refine((r) => (r.amount === undefined) !== (r.unit_amount === undefined), {
+    message: "Da el costo total (amount) o el costo por unidad (unit_amount): uno de los dos.",
+  });
+export type ReceiveStockApiRequest = z.infer<typeof ReceiveStockApiRequest>;
+
 export const IssueStockRequest = z
   .object({
     ...posicion,
@@ -147,6 +164,8 @@ export const StockBalanceResponse = z
   .object({
     warehouse_id: uuid,
     warehouse_code: z.string(),
+    /** El nombre del depósito: la pantalla dice «Principal», no «W1». */
+    warehouse_name: z.string(),
     product_id: uuid,
     product_sku: z.string(),
     product_name: z.string(),

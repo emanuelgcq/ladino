@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Plus, Tags } from "lucide-react";
@@ -32,6 +32,7 @@ import { errorDePersona } from "../../lib.js";
 import type { PriceList, PriceItem, Product } from "../../lib.js";
 import { fechaHoraLocal } from "../../fechas.js";
 import { tasaLimpia } from "../../tasa.js";
+import { esCero } from "../../components/decimal-compare.js";
 
 /**
  * Listas de precios — Fase B. La regla que esta pantalla ENSEÑA en vez de
@@ -54,6 +55,13 @@ export function Precios(): React.JSX.Element {
     queryFn: () => llamar<{ sells_wholesale: boolean }>("/v1/company-settings"),
   });
   const alMayor = ajustes.data?.sells_wholesale === true;
+  const [params] = useSearchParams();
+  const listaPedida = params.get("lista");
+  useEffect(() => {
+    if (seleccionada !== null || listaPedida === null) return;
+    const pedida = listas.data?.find((l) => l.id === listaPedida);
+    if (pedida !== undefined) setSeleccionada(pedida);
+  }, [listas.data, listaPedida, seleccionada]);
 
   return (
     <div>
@@ -124,6 +132,7 @@ export function Precios(): React.JSX.Element {
             </Card>
           ) : (
             <PreciosDeLista
+              key={seleccionada.id}
               lista={seleccionada}
               esPredeterminada={
                 listas.data?.find((l) => l.id === seleccionada.id)?.is_caja_default === true
@@ -156,15 +165,15 @@ export function Precios(): React.JSX.Element {
  */
 async function todosLosProductos(
   llamar: <T>(path: string) => Promise<T>,
-): Promise<Pick<Product, "id" | "sku" | "name">[]> {
+): Promise<Pick<Product, "id" | "sku" | "name" | "status">[]> {
   const POR_PAGINA = 100;
-  const todos: Pick<Product, "id" | "sku" | "name">[] = [];
+  const todos: Pick<Product, "id" | "sku" | "name" | "status">[] = [];
   let pagina = 1;
   for (;;) {
     const r = await llamar<{ items: Product[]; total: number }>(
       `/v1/products?per_page=${POR_PAGINA}&page=${pagina}`,
     );
-    todos.push(...r.items.map((p) => ({ id: p.id, sku: p.sku, name: p.name })));
+    todos.push(...r.items.map((p) => ({ id: p.id, sku: p.sku, name: p.name, status: p.status })));
     if (r.items.length === 0 || todos.length >= r.total) return todos;
     pagina += 1;
   }
@@ -248,7 +257,13 @@ function PreciosDeLista({
   const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
-  const [producto, setProducto] = useState<EntityOption | null>(null);
+  // El producto pedido por enlace llega elegido: «Poner precio» desde su ficha (h. 13).
+  const [params] = useSearchParams();
+  const [producto, setProducto] = useState<EntityOption | null>(() => {
+    const id = params.get("producto");
+    const nombre = params.get("nombre");
+    return id !== null && nombre !== null ? { id, label: nombre } : null;
+  });
   const [importe, setImporte] = useState("");
   const [desde, setDesde] = useState("");
   const [confirmando, setConfirmando] = useState(false);
@@ -265,10 +280,17 @@ function PreciosDeLista({
         }>(`/v1/price-lists/${lista.id}/prices`),
         todosLosProductos(llamar),
       ]);
-      const skuDe = new Map(prods.map((p) => [p.id, `${p.sku} · ${p.name}`]));
+      const deProducto = new Map(prods.map((p) => [p.id, p]));
       return {
         rate: r.rate,
-        filas: r.items.map((i) => ({ ...i, producto: skuDe.get(i.product_id) ?? i.product_id })),
+        filas: r.items.map((i) => {
+          const p = deProducto.get(i.product_id);
+          return {
+            ...i,
+            producto: p === undefined ? i.product_id : `${p.sku} · ${p.name}`,
+            estadoProducto: p?.status ?? "active",
+          };
+        }),
       };
     },
   });
@@ -291,10 +313,26 @@ function PreciosDeLista({
     }
   }
 
-  type Fila = PriceItem & { producto: string };
+  type Fila = PriceItem & { producto: string; estadoProducto: Product["status"] };
   const columnas = useMemo<ColumnDef<Fila, unknown>[]>(
     () => [
-      { id: "producto", header: "Producto", accessorKey: "producto" },
+      {
+        id: "producto",
+        header: "Producto",
+        accessorKey: "producto",
+        cell: (c) => (
+          <span className="flex flex-wrap items-center gap-1.5">
+            {c.row.original.producto}
+            {c.row.original.estadoProducto !== "active" && (
+              <Badge tone="neutral">
+                {c.row.original.estadoProducto === "inactive"
+                  ? "Producto inactivo: no se vende"
+                  : "Borrador: aún no se vende"}
+              </Badge>
+            )}
+          </span>
+        ),
+      },
       {
         // ADR-0046: las DOS columnas — el precio ancla (USD) y su conversión.
         id: "importe",
@@ -388,8 +426,8 @@ function PreciosDeLista({
       setDesde("");
       await qc.invalidateQueries({ queryKey: ["precios-lista", empresa.id, lista.id] });
     } catch (e) {
+      // Sin aviso aparte: el motivo ya se ve bajo el formulario (QA 2026-09-15, h. 45).
       setError(e);
-      toast.error("No se pudo cargar el precio");
     }
   }
 
@@ -410,9 +448,9 @@ function PreciosDeLista({
           )}
           {tasa === null && (
             <p className="text-[0.82rem] text-warning-soft-foreground">
-              Sin tasa del día: la columna de equivalencia no puede calcularse.{" "}
+              Todavía no llegó la tasa BCV: la columna de equivalencia no puede calcularse.{" "}
               <Link to="/dinero" className="underline">
-                Cargar la tasa
+                Traer la tasa
               </Link>
             </p>
           )}
@@ -436,12 +474,27 @@ function PreciosDeLista({
                     const r = await llamar<{ items: Product[] }>(
                       `/v1/products?search=${encodeURIComponent(q)}&per_page=8`,
                     );
-                    return r.items.map((p) => ({ id: p.id, label: p.name, detalle: p.sku }));
+                    return r.items.map((p) => ({
+                      id: p.id,
+                      label: p.name,
+                      detalle:
+                        p.status === "active"
+                          ? p.sku
+                          : `${p.sku} · ${p.status === "inactive" ? "inactivo" : "borrador"}`,
+                    }));
                   }}
                 />
               )}
             </FormField>
-            <FormField label={`Importe (${lista.currency_code})`} required>
+            <FormField
+              label={`Importe (${lista.currency_code})`}
+              required
+              error={
+                importeValido(importe) && esCero(importe)
+                  ? "Un precio en cero regala el producto: pon el precio de venta."
+                  : undefined
+              }
+            >
               {(a) => (
                 <MoneyInput
                   id={a.id}
@@ -472,7 +525,9 @@ function PreciosDeLista({
           <div className="mt-3">
             <Button
               variant="primary"
-              disabled={!gestiona || producto === null || !importeValido(importe)}
+              disabled={
+                !gestiona || producto === null || !importeValido(importe) || esCero(importe)
+              }
               onClick={() => setConfirmando(true)}
             >
               Cargar precio…

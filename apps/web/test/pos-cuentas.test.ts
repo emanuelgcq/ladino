@@ -25,6 +25,24 @@ describe("crearSincronizador", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
+  it("la cuenta cobrada NO resucita: olvidar suelta lo pendiente sin subirlo ni borrarlo", async () => {
+    // QA de pantalla 2026-09-15, h. 85: el servidor borra el carrito al vender; la subida
+    // diferida que quedaba en cola lo volvía a crear con lo ya vendido.
+    const subir = vi.fn().mockResolvedValue(undefined);
+    const bajar = vi.fn().mockResolvedValue(undefined);
+    const s = crearSincronizador(subir, bajar, 4000);
+
+    s.guardar(cuenta("vendida", 2));
+    await vi.advanceTimersByTimeAsync(1000);
+    s.olvidar("vendida");
+    await vi.advanceTimersByTimeAsync(5000);
+    s.vaciar();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(subir).not.toHaveBeenCalled();
+    expect(bajar).not.toHaveBeenCalled();
+  });
+
   it("NO sube en el toque: espera a que el carrito se quede quieto", async () => {
     const subir = vi.fn().mockResolvedValue(undefined);
     const s = crearSincronizador(subir, vi.fn().mockResolvedValue(undefined), 4000);

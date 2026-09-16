@@ -88,6 +88,7 @@ const ORIGEN_ASIENTO: { value: string; label: string }[] = [
   { value: "stock_opening", label: "Entrada sin compra (aporte)" },
   { value: "goods_receipt", label: "Recepción de compra" },
   { value: "purchase_revaluation", label: "Ajuste de costo de compra" },
+  { value: "treasury_transfer", label: "Movimiento entre cuentas" },
 ];
 const etiquetaOrigen = (k: string): string => ORIGEN_ASIENTO.find((o) => o.value === k)?.label ?? k;
 

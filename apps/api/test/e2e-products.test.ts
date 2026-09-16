@@ -2,6 +2,8 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { diaCaracas } from "./_dia-caracas.js";
+import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 
 /**
  * El módulo de productos de EXTREMO A EXTREMO por el camino de producción:
@@ -121,6 +123,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await borrarTasasOficiales(sql, "BCV e2e-productos");
   await sql.end();
   await sqlApi.end();
 });
@@ -409,8 +412,17 @@ describe("productos de extremo a extremo", () => {
       const { Workbook } = await import("exceljs");
       const libro = new Workbook();
       const hoja = libro.addWorksheet("Productos");
-      hoja.addRow(["Nombre", "Precio", "Moneda", "Categoría", "Existencia", "Costo"]);
-      hoja.addRow([`Arroz import ${RUN}`, "1,80", "USD", "Alimentos", "12", "50,00"]);
+      hoja.addRow([
+        "Nombre",
+        "Precio",
+        "Moneda",
+        "Categoría",
+        "Existencia",
+        "Costo",
+        "Moneda costo",
+      ]);
+      // «Bs» se entiende como bolívares: el costo de esta fila NO va en dólares.
+      hoja.addRow([`Arroz import ${RUN}`, "1,80", "USD", "Alimentos", "12", "50,00", "Bs"]);
       hoja.addRow(["", "2.00"]); // sin nombre → error con fila
       hoja.addRow([`Aceite import ${RUN}`, "tres dólares"]); // precio ilegible
       hoja.addRow([`Jabón import ${RUN}`, "0.90"]); // sin existencia: solo catálogo
@@ -452,6 +464,67 @@ describe("productos de extremo a extremo", () => {
       expect(saldo!.q).toBe("12.00000000");
     },
   );
+
+  it("sin «Moneda costo», el costo va en DÓLARES, como el precio (QA 2026-09-15, h. 2 y 44)", async () => {
+    await sembrarTasaOficial(sql, {
+      rate: "40.00000000",
+      source: "BCV e2e-productos",
+      rate_date: diaCaracas(),
+    });
+    const csv = "Nombre;Precio;Existencia;Costo\r\n" + `Tornillos USD ${RUN};0,50;3;2\r\n`;
+    const token = await tokenDe(GESTOR);
+    const form = new FormData();
+    form.append("file", new File([csv], "productos.csv", { type: "text/csv" }));
+    const r = await app.request("/v1/products/import", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "X-Company-Id": COMPANY },
+      body: form,
+    });
+    expect(r.status).toBe(201);
+    const res = (await r.json()) as { rows: { status: string; product_id?: string }[] };
+    expect(res.rows[0]!.status).toBe("creado");
+    // 3 unidades a 2 USD = 6 USD; a 40 son 240 Bs en el kardex, no 6 Bs.
+    const [saldo] = await sql<{ v: string }[]>`
+      select coalesce(sum(value), 0)::text as v from public.stock_balances
+       where company_id = ${COMPANY} and product_id = ${res.rows[0]!.product_id!}`;
+    expect(saldo!.v).toBe("240.00000000");
+  });
+
+  it("el alta simple no acepta precio ni costo en cero (QA 2026-09-15, h. 4 y 5)", async () => {
+    const token = await tokenDe(GESTOR);
+    const gratis = await pedir("POST", "/v1/products/simple", {
+      token,
+      key: crypto.randomUUID(),
+      body: {
+        company_id: COMPANY,
+        name: `Gratis ${RUN}`,
+        price: { amount: "0", currency: "USD" },
+      },
+    });
+    expect(gratis.status).toBe(422);
+    expect(((await gratis.json()) as { message: string }).message).toContain(
+      "precio tiene que ser mayor que cero",
+    );
+    const sinCosto = await pedir("POST", "/v1/products/simple", {
+      token,
+      key: crypto.randomUUID(),
+      body: {
+        company_id: COMPANY,
+        name: `Sin costo ${RUN}`,
+        price: { amount: "1.00", currency: "USD" },
+        initial_stock: { quantity: "5", unit_cost: { amount: "0", currency: "USD" } },
+      },
+    });
+    expect(sinCosto.status).toBe(422);
+    expect(((await sinCosto.json()) as { message: string }).message).toContain(
+      "costo por unidad tiene que ser mayor que cero",
+    );
+    // Y nada quedó a medias: ninguno de los dos existe.
+    const [n] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.products
+       where company_id = ${COMPANY} and name in (${`Gratis ${RUN}`}, ${`Sin costo ${RUN}`})`;
+    expect(n!.n).toBe("0");
+  });
 
   it("la importación también come CSV: punto y coma, coma decimal y comillas (2026-09-08)", async () => {
     const csv =

@@ -712,9 +712,9 @@ function CargarRango(): React.JSX.Element {
 }
 
 /**
- * La verificación de verdad: una COTIZACIÓN de prueba contra el motor real.
- * No toca stock ni numeración fiscal, pero SÍ queda guardada como cotización —
- * por eso es un acto explícito con el efecto dicho, nunca un ping silencioso.
+ * La verificación de verdad: el MISMO cálculo que hace la caja (`POST /v1/pos/quote`) contra el
+ * motor real — alícuota, tasa y lista —, sin guardar nada. Antes guardaba una cotización de
+ * prueba que quedaba para siempre en Ventas (QA de pantalla 2026-09-15, h. 60).
  */
 function VerificacionReal(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
@@ -728,25 +728,21 @@ function VerificacionReal(): React.JSX.Element {
     setResultado(null);
     try {
       const q = await llamar<{
-        series: string;
-        document_number: number | null;
-        tax_amount: string;
+        functional_tax_amount: string;
         functional_currency: string;
-      }>("/v1/quotes", {
+      }>("/v1/pos/quote", {
         method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
           company_id: empresa.id,
           customer_id: cliente?.id ?? "",
           lines: [{ product_id: producto?.id ?? "", quantity: "1" }],
-          notes: "Cotización de verificación de puesta a punto",
         }),
       });
       setResultado(
         <p className="flex items-center gap-1.5 text-[0.88rem] text-accent-soft-foreground">
-          <CheckCircle2 className="size-4" /> El motor emitió la cotización con IVA{" "}
-          {mostrarImporte({ amount: q.tax_amount, currency: q.functional_currency })}: alícuota y
-          tasa están cargadas. (La cotización quedó guardada en Ventas.)
+          <CheckCircle2 className="size-4" /> El motor calculó la venta con IVA{" "}
+          {mostrarImporte({ amount: q.functional_tax_amount, currency: q.functional_currency })}:
+          alícuota y tasa están cargadas. No se guardó nada.
         </p>,
       );
     } catch (e) {
@@ -772,9 +768,9 @@ function VerificacionReal(): React.JSX.Element {
       </CardHeader>
       <CardContent className="space-y-3">
         <CardDescription>
-          Guarda una <strong>cotización de prueba</strong> (queda en Ventas, no toca stock ni
-          numeración fiscal) y lee la respuesta del motor: si falta la alícuota o la tasa, el 409 te
-          lo dice con nombre y apellido — el mismo que verías al emitir.
+          Calcula una <strong>venta de prueba</strong> con el mismo motor de la caja,{" "}
+          <strong>sin guardar nada</strong>: si falta la alícuota o la tasa, el aviso te lo dice con
+          nombre y apellido — el mismo que verías al emitir.
         </CardDescription>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <EntityPicker
@@ -807,7 +803,7 @@ function VerificacionReal(): React.JSX.Element {
           disabled={cliente === null || producto === null || ocupado}
           onClick={() => void probar()}
         >
-          {ocupado ? "Consultando al motor…" : "Guardar cotización de prueba"}
+          {ocupado ? "Consultando al motor…" : "Probar el cálculo"}
         </Button>
       </CardContent>
     </Card>

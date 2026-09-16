@@ -472,7 +472,10 @@ export function productsRoutes(
           });
           continue;
         }
-        const monedaCosto = (texto(colMonedaCosto) || "VES").toUpperCase();
+        // Como el precio, el costo va en dólares si la fila no dice otra cosa (QA 2026-09-15,
+        // h. 2 y 44: el costo se pedía en Bs y el precio en USD). «Bs» se acepta como VES.
+        const monedaCostoCruda = (texto(colMonedaCosto) || "USD").toUpperCase();
+        const monedaCosto = /^BS\.?$/.test(monedaCostoCruda) ? "VES" : monedaCostoCruda;
         inicial = { quantity: cantidad, unit_cost: { amount: costo, currency: monedaCosto } };
       }
 

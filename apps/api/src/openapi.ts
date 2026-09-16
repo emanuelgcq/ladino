@@ -39,7 +39,7 @@ import {
   SetCustomerBlockedRequest,
   CustomerResponse,
   ListCustomersResponse,
-  ReceiveStockRequest,
+  ReceiveStockApiRequest,
   IssueStockRequest,
   AdjustStockRequest,
   TransferStockRequest,
@@ -1008,7 +1008,7 @@ export function buildOpenApiDocument(): object {
     ListInventoryMovesResponse,
   );
   const listaStock = registry.register("ListStockResponse", ListStockResponse);
-  const recibir = registry.register("ReceiveStockRequest", ReceiveStockRequest);
+  const recibir = registry.register("ReceiveStockApiRequest", ReceiveStockApiRequest);
   const despachar = registry.register("IssueStockRequest", IssueStockRequest);
   const ajustar = registry.register("AdjustStockRequest", AdjustStockRequest);
   const transferir = registry.register("TransferStockRequest", TransferStockRequest);
@@ -1085,8 +1085,10 @@ export function buildOpenApiDocument(): object {
   mueveStock(
     "/v1/inventory/receipts",
     "Entrada de existencias (permiso inventory.move sobre el almacén)",
-    "El importe es el costo TOTAL de la recepción. En moneda distinta a la funcional exige " +
-      "la tasa con su fuente: sin fuente no se persiste (ADR-0020). El promedio se recalcula.",
+    "El costo va TOTAL (amount) o POR UNIDAD (unit_amount), uno de los dos; el total lo " +
+      "calcula el servidor. En moneda distinta a la funcional se valora con la tasa del BCV " +
+      "del día; `fx` desde fuera responde 409 RATE_ONLY_FROM_BCV (ADR-0064). El promedio se " +
+      "recalcula.",
     recibir,
     movimiento,
   );

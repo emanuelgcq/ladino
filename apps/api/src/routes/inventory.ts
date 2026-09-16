@@ -1,7 +1,7 @@
 import type { Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql } from "@ladino/db";
 import {
-  ReceiveStockRequest,
+  ReceiveStockApiRequest,
   IssueStockRequest,
   AdjustStockRequest,
   TransferStockRequest,
@@ -14,6 +14,7 @@ import {
 } from "@ladino/schemas";
 import {
   receiveStock,
+  totalDeEntrada,
   issueStock,
   adjustStock,
   transferStock,
@@ -83,10 +84,16 @@ export function inventoryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
                  or p.name ilike ${`%${search.replace(/[\\%_]/g, (m) => `\\${m}`)}%`} escape '\\')`;
       const conSaldo = conStock ? tx`and b.quantity <> 0` : tx``;
       return tx<Record<string, unknown>[]>`
-        select b.warehouse_id, w.code as warehouse_code, b.product_id, p.sku as product_sku,
+        select b.warehouse_id, w.code as warehouse_code, w.name as warehouse_name,
+               b.product_id, p.sku as product_sku,
                p.name as product_name, b.lot_id, l.code as lot_code,
-               b.quantity::text as quantity, b.value::text as value,
-               b.currency_code as currency, b.last_unit_cost::text as last_unit_cost,
+               b.quantity::text as quantity,
+               -- Valor y costo se SIRVEN a los céntimos de su moneda (ADR-0063 §5): el kardex
+               -- guarda 8 decimales y la pantalla enseñaba «Bs. 33.688,268» (QA 2026-09-15, h. 43).
+               round(b.value, platform.currency_minor_units(b.currency_code))::text as value,
+               b.currency_code as currency,
+               round(b.last_unit_cost, platform.currency_minor_units(b.currency_code))::text
+                 as last_unit_cost,
                count(*) over ()::int as total
           from public.stock_balances b
           join public.products p on p.id = b.product_id
@@ -152,7 +159,7 @@ export function inventoryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
 
   app.post("/v1/inventory/receipts", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);
-    const parsed = ReceiveStockRequest.safeParse(await c.req.json().catch(() => null));
+    const parsed = ReceiveStockApiRequest.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) throw new ValidacionError(parsed.error.issues);
     coherente(companyId, parsed.data.company_id);
     // Solo existe la tasa del BCV (ADR-0064 §1): una entrada ya no se valora a una tasa escrita
@@ -165,8 +172,16 @@ export function inventoryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
           "La entrada se valora con la tasa del BCV del día; ya no se escribe otra tasa a mano.",
       });
     }
+    const { unit_amount: unitario, amount: total, ...resto } = parsed.data;
+    let monto = total;
+    if (monto === undefined) {
+      const calculado = totalDeEntrada(unitario ?? "", resto.quantity);
+      if (!calculado.ok) throw new DominioError(calculado.error);
+      monto = calculado.value;
+    }
+    const entrada = { ...resto, amount: monto };
     const { actor } = c.get("ladino.auth");
-    const r = await withTransaction(sql, actor, (uow) => receiveStock(uow, parsed.data));
+    const r = await withTransaction(sql, actor, (uow) => receiveStock(uow, entrada));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
   });

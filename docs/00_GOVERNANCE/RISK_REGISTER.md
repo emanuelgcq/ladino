@@ -650,3 +650,60 @@ es abrir una vía para bajar ventas fuera del libro (R-27).
 
 **Deja de ser aceptable:** con el primer caso real. Mitigación: permitirlo solo contra recibos
 emitidos bajo `sin_facturacion` (la regla vive en LAD84).
+
+### R-39 · Producción en la migración 66 con la API vieja
+
+- **Severidad:** Alta · **Disparador:** las migraciones 60–66 ya están aplicadas en Supabase
+  (2026-09-16) y el VPS sigue con la API, el worker y la web anteriores
+- **Dónde:** migración 61 (plantilla de transferencias), 65 (forma de `purchases_book`) y 66
+  (política de inserción de tasas)
+
+Con la API vieja:
+- cargar una tasa a mano o «sigue igual» falla por RLS con un error genérico;
+- la conversión ya usa solo la tasa oficial;
+- las pantallas nuevas (mover dinero, recibos sin RIF, costo en USD) no existen;
+- las que dependen de contratos nuevos responden el 422 genérico, como el 2026-09-16 con
+  «Nuevo producto».
+
+Nada escribe un asiento equivocado, pero el negocio ve errores.
+
+**Deja de ser aceptable:** ya. Mitigación: `git pull && docker compose up -d --build api worker
+web` en el VPS.
+
+### R-40 · Solo la tasa del BCV: con la fuente caída se vende con la última publicada
+
+- **Severidad:** Media · **Disparador:** DolarAPI no responde durante días, o publica un valor
+  que la cota de plausibilidad rechaza
+- **Dónde:** `platform.rate_for` (migración 66), `apps/api/src/tasa-oficial.ts`
+
+Sin carga a mano (ADR-0064 §1), rige la última tasa publicada, sin tope de días. Mi dinero e
+Inicio dicen su fecha. «Traer del BCV» no pasa por la cota, así que una devaluación real se
+guarda desde ahí.
+
+**Deja de ser aceptable:** si la fuente cae más de un día hábil. Mitigación: el operador de la
+plataforma carga la oficial del día como fila de sistema; el tope legal queda como P-22.
+
+### R-41 · Libros, declaración y retenciones de producción con cifras anteriores a la migración 65
+
+- **Severidad:** Media · **Disparador:** presentar o usar los documentos guardados antes del
+  2026-09-16
+- **Dónde:** «Inversiones Ferretería QA» (3 libros exportados, 2 retenciones en USD) y «Ladino»
+  (1 declaración)
+
+Son hechos con huella y no se reescriben. Regenerar el período da la cifra corregida con otra
+huella.
+
+**Deja de ser aceptable:** si alguno se presentó al SENIAT. Mitigación: el contador decide si se
+sustituyen.
+
+### R-42 · El fiado cobrado a otra tasa se asienta sin nota de débito o crédito
+
+- **Severidad:** Media · **Disparador:** una empresa que factura cobra una deuda en divisa a una
+  tasa distinta de la de emisión
+- **Dónde:** `registerPayment` (diferencial cambiario, ADR-0047); ADR-0064 §3 sin implementar
+
+El Reglamento de la LIVA, art. 51, leído en una fuente no oficial, pediría documentar esa
+diferencia con nota de débito o de crédito. Hoy solo se asienta el diferencial.
+
+**Deja de ser aceptable:** cuando el asesor confirme el art. 51 (P-20). Mitigación: el diseño
+está en ADR-0064 §3.

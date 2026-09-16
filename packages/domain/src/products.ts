@@ -402,6 +402,27 @@ export async function createProductSimple(
     }
   }
 
+  // Un precio en cero regala el producto (QA de pantalla 2026-09-15, h. 4). La lista admite
+  // cero —un precio gratis puede ser legítimo—, pero el alta simple no lo pone por descuido.
+  for (const [etiqueta, p] of [
+    ["precio", input.price],
+    ["precio al mayor", input.wholesale_price],
+  ] as const) {
+    if (p !== undefined && !/[1-9]/.test(p.amount)) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `El ${etiqueta} tiene que ser mayor que cero.`,
+      });
+    }
+  }
+  // Con existencia, un costo en cero infla la ganancia de cada venta (h. 5).
+  if (input.initial_stock !== undefined && !/[1-9]/.test(input.initial_stock.unit_cost.amount)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Con existencia, el costo por unidad tiene que ser mayor que cero.",
+    });
+  }
+
   const esServicio = input.is_service === true;
   if (esServicio && input.initial_stock !== undefined) {
     return err({
@@ -542,7 +563,7 @@ export async function createProductSimple(
       if (!t?.rate) {
         return err({
           code: "VALIDATION_FAILED",
-          message: `No hay tasa de ${monedaCosto} a ${funcional}: carga la tasa del día antes de costear en divisa.`,
+          message: `No hay tasa BCV de ${monedaCosto} a ${funcional}: tráela en Mi dinero antes de costear en divisa.`,
         });
       }
       fx = { rate: t.rate, source: t.source ?? "manual", at: new Date().toISOString() };

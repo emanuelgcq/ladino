@@ -13,7 +13,7 @@ import {
 import { useSesion } from "../../app/session.js";
 import { errorDePersona } from "../../lib.js";
 import { mostrarImporte, mostrarCantidad } from "../../money.js";
-import { esCero } from "../../components/decimal-compare.js";
+import { compararImportes, esCero } from "../../components/decimal-compare.js";
 import { Button } from "../../ui/button.js";
 import { Card } from "../../ui/card.js";
 import {
@@ -429,12 +429,43 @@ export function AltaSimple({
   const conMayor = ajustes.data?.sells_wholesale === true && mayorLimpio !== "";
   // Un precio al mayor mal escrito NO se descarta en silencio: se avisa y
   // no se envía hasta corregirlo (auditoría 2026-09-11).
-  const mayorInvalido = conMayor && !importeValido(mayorLimpio);
+  const mayorInvalido = conMayor && (!importeValido(mayorLimpio) || esCero(mayorLimpio));
+  // Un precio en cero regala el producto, y un costo en cero con existencia infla la ganancia de
+  // cada venta: los dos se piden mayores que cero (QA de pantalla 2026-09-15, h. 4 y 5).
+  const precioCero = importeValido(precioLimpio) && esCero(precioLimpio);
+  const costoCero = conStock && importeValido(costoLimpio) && esCero(costoLimpio);
+  // Vender por debajo de lo que costó no se prohíbe (una oferta, un saldo), pero se dice (h. 6).
+  // Precio y costo van en la misma moneda: comparar no es calcular.
+  const bajoCosto =
+    conStock &&
+    importeValido(precioLimpio) &&
+    importeValido(costoLimpio) &&
+    !costoCero &&
+    compararImportes(precioLimpio, costoLimpio) < 0;
   const listo =
     nombre.trim().length > 0 &&
     importeValido(precioLimpio) &&
+    !precioCero &&
     !mayorInvalido &&
-    (!conStock || (importeValido(existenciaLimpia) && importeValido(costoLimpio)));
+    (!conStock || (importeValido(existenciaLimpia) && importeValido(costoLimpio) && !costoCero));
+
+  // ¿Ya hay uno con ese nombre? No se prohíbe —dos presentaciones pueden llamarse igual—, se
+  // avisa antes de agregarlo (h. 3). La búsqueda la hace el servidor.
+  const nombreBuscado = useDebounced(nombre.trim(), 400);
+  const homonimos = useQuery({
+    queryKey: ["productos-homonimos", empresa.id, nombreBuscado],
+    enabled: nombreBuscado.length >= 3,
+    staleTime: 30_000,
+    queryFn: () =>
+      llamar<{ items: { id: string; name: string }[] }>(
+        `/v1/products?search=${encodeURIComponent(nombreBuscado)}&per_page=10`,
+      ),
+  });
+  const yaExiste =
+    nombreBuscado.length >= 3 &&
+    (homonimos.data?.items ?? []).some(
+      (p) => p.name.trim().toLowerCase() === nombreBuscado.toLowerCase(),
+    );
 
   const crear = useMutation({
     mutationFn: async (): Promise<{ id: string; fotoFallo: boolean }> => {
@@ -450,7 +481,7 @@ export function AltaSimple({
             ? {
                 initial_stock: {
                   quantity: existenciaLimpia,
-                  unit_cost: { amount: costoLimpio, currency: "VES" },
+                  unit_cost: { amount: costoLimpio, currency: moneda },
                 },
               }
             : {}),
@@ -534,15 +565,25 @@ export function AltaSimple({
                   />
                 )}
               </FormField>
-              {/* El precio NO es un campo del producto: se guarda como un
-                  renglón de la lista «detal». Decirlo aquí evita la duda de
-                  «¿y este precio compite con el de mis listas?» (2026-09-10). */}
-              <FormField label="Precio de venta al detal (USD)" required>
+              {yaExiste && (
+                <p className="text-[0.8rem] text-warning-soft-foreground">
+                  Ya tienes un producto llamado «{nombre.trim()}». Si es otro, ponle un nombre que
+                  los distinga.
+                </p>
+              )}
+              {/* El precio NO es un campo del producto: es el primer renglón de la lista
+                  «detal». Aquí se pone UNA vez; después vive solo en Listas de precios, y
+                  decirlo evita la duda de «¿y si pongo otro allá?» (QA 2026-09-15, h. 1). */}
+              <FormField
+                label="Precio de venta (USD)"
+                required
+                error={precioCero ? "El precio tiene que ser mayor que cero." : undefined}
+              >
                 {(p) => <MoneyInput {...p} value={precio} onChange={setPrecio} currency="USD" />}
               </FormField>
               <p className="text-[0.8rem] text-faint-foreground">
-                Se guarda en tu lista «detal». Si manejas otras listas, sus precios se ponen desde
-                Listas de precios.
+                Es el precio de tu lista «detal», el que usa la caja. Después se cambia en Listas de
+                precios, no aquí: cada producto tiene su precio en un solo lugar.
               </p>
               <EquivalenteBs amount={precio} currency={moneda} />
             </div>
@@ -578,17 +619,33 @@ export function AltaSimple({
                   />
                 )}
               </FormField>
-              <FormField label="Costo por unidad" hint="Lo que te costó a ti, en Bs.">
+              <FormField
+                label="¿Cuánto te costó cada uno? (USD)"
+                hint="En dólares, como el precio."
+                error={
+                  costoCero ? "Con existencia, el costo tiene que ser mayor que cero." : undefined
+                }
+              >
                 {(p) => (
                   <MoneyInput
                     {...p}
                     value={costo}
                     onChange={setCosto}
-                    currency="VES"
+                    currency="USD"
                     disabled={existenciaLimpia === ""}
                   />
                 )}
               </FormField>
+              {conStock && (
+                <div className="col-span-2 space-y-1">
+                  <EquivalenteBs amount={costo} currency="USD" />
+                  {bajoCosto && (
+                    <p className="text-[0.8rem] text-warning-soft-foreground">
+                      Lo vendes por debajo de lo que te costó: cada venta pierde dinero.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

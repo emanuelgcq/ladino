@@ -229,7 +229,11 @@ function VenderDeEmpresa(): React.JSX.Element {
     const siguientes = restantes.length > 0 ? restantes : [cuentaNueva([])];
     setCuentas(siguientes);
     escribirCuentasLocales(empresa.id, siguientes);
+    // La cuenta cobrada ya no existe en el servidor (la venta la borró): solo se suelta lo que
+    // quedaba por subir. Antes, la subida diferida la volvía a crear con lo ya vendido y la caja
+    // la restauraba al volver — cuentas fantasma y «Cuenta 11» con una sola abierta (h. 85).
     if (avisarNube) sincronizador.borrar(id);
+    else sincronizador.olvidar(id);
     if (activa.id === id) setActivaId(siguientes[0]!.id);
   }
 

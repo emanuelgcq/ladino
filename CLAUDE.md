@@ -341,7 +341,7 @@ pendientes), libros y declaraciones de IVA, percepción de IGTF y la puesta a pu
 `SPRINT_0_BOOTSTRAP.md` es historia.
 
 Antes de tocar algo: `docs/00_GOVERNANCE/HANDOFF.md` (la entrega más reciente arriba),
-`docs/00_GOVERNANCE/ADR_INDEX.md` (61 ADR) y `docs/02_COMPLIANCE/REGULATORY_STATUS.md`. La
+`docs/00_GOVERNANCE/ADR_INDEX.md` (64 ADR) y `docs/02_COMPLIANCE/REGULATORY_STATUS.md`. La
 homologación de software (PA SNAT/2024/000121) fue **derogada** por la PA SNAT/2026/00084
 sin sustituta: lo que gobierna la emisión es la PA 00071 (forma libre + imprenta autorizada)
 y la PA 102 (imprenta digital). Los `VALIDAR-SENIAT` / `VALIDAR-TRIBUTARIO` abiertos están en

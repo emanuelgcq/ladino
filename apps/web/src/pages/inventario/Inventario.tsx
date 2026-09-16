@@ -70,7 +70,7 @@ const OPERACION: Record<
     // COMPRADO va por Compras, que baja la caja o crea la deuda con el proveedor (QA de
     // pantalla 2026-09-15, h. 39).
     consecuencia:
-      "Úsala para inventario inicial o mercancía que aporta el dueño: en contabilidad entra como aporte, no como compra. Si la compraste, regístrala en Compras y gastos. El costo promedio del producto en ese almacén se recalculará; el movimiento no se edita ni se borra después.",
+      "Úsala para inventario inicial o mercancía que aporta el dueño: en contabilidad entra como aporte, no como compra. Si la compraste, regístrala en Compras y gastos. El costo promedio del producto en ese depósito se recalcula, y el movimiento no se edita ni se borra después.",
   },
   salida: {
     etiqueta: "Salida",
@@ -137,7 +137,7 @@ export function Inventario(): React.JSX.Element {
 
   const columnas = useMemo<ColumnDef<StockBalance, unknown>[]>(
     () => [
-      { id: "almacen", header: "Almacén", accessorKey: "warehouse_code" },
+      { id: "almacen", header: "Depósito", accessorKey: "warehouse_name" },
       {
         id: "sku",
         header: "SKU",
@@ -516,6 +516,8 @@ function Movimiento({
 
   async function enviar(): Promise<void> {
     setError(null);
+    // El costo se pide POR UNIDAD, como en el alta de producto y en compras (h. 44): el total
+    // lo calcula el servidor.
     const comun = {
       company_id: empresa.id,
       product_id: producto?.id ?? "",
@@ -530,7 +532,7 @@ function Movimiento({
             ...comun,
             warehouse_id: form.warehouse_id,
             quantity: form.quantity,
-            amount: montoLimpio,
+            unit_amount: montoLimpio,
             currency: form.currency,
             // Sin fx: el SERVIDOR valora con la tasa del BCV del día (ADR-0064 §1).
           }),
@@ -586,7 +588,8 @@ function Movimiento({
   // Solo los activos para mover mercancía: un depósito apagado no recibe ni despacha (migración 60).
   const opcionesAlmacen = almacenes
     .filter((w) => w.status !== "inactive")
-    .map((w) => ({ value: w.id, label: `${w.code} · ${w.name}` }));
+    .map((w) => ({ value: w.id, label: w.name }));
+  const nombreDeposito = (id: string): string => almacenes.find((w) => w.id === id)?.name ?? "";
 
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
@@ -613,7 +616,7 @@ function Movimiento({
             )}
           </FormField>
           <FormField
-            label={operacion === "transferencia" ? "Almacén de origen" : "Almacén"}
+            label={operacion === "transferencia" ? "Depósito de origen" : "Depósito"}
             required
           >
             {(a) => (
@@ -627,7 +630,7 @@ function Movimiento({
             )}
           </FormField>
           {operacion === "transferencia" && (
-            <FormField label="Almacén de destino" required>
+            <FormField label="Depósito de destino" required>
               {(a) => (
                 <SimpleSelect
                   id={a.id}
@@ -656,7 +659,11 @@ function Movimiento({
           </FormField>
           {operacion === "entrada" && (
             <>
-              <FormField label="Costo TOTAL de la recepción" required hint="Total, no unitario.">
+              <FormField
+                label="¿Cuánto costó cada uno?"
+                required
+                hint="Por unidad, como en el alta de producto y en compras."
+              >
                 {(a) => (
                   <MoneyInput
                     id={a.id}
@@ -673,8 +680,8 @@ function Movimiento({
                     value={form.currency}
                     onValueChange={(v) => setForm({ ...form, currency: v })}
                     options={[
-                      { value: "VES", label: "VES" },
-                      { value: "USD", label: "USD" },
+                      { value: "USD", label: "Dólares (USD)" },
+                      { value: "VES", label: "Bolívares (Bs.)" },
                     ]}
                   />
                 )}
@@ -741,8 +748,11 @@ function Movimiento({
         >
           {mostrarCantidad(form.quantity || "0")} × {producto?.label ?? "—"}
           {operacion === "transferencia"
-            ? ` · ${almacenes.find((w) => w.id === form.warehouse_id)?.code ?? ""} → ${almacenes.find((w) => w.id === form.to_warehouse_id)?.code ?? ""}`
-            : ` · ${almacenes.find((w) => w.id === form.warehouse_id)?.code ?? ""}`}
+            ? ` · de ${nombreDeposito(form.warehouse_id)} a ${nombreDeposito(form.to_warehouse_id)}`
+            : ` · ${nombreDeposito(form.warehouse_id)}`}
+          {operacion === "entrada" && importeValido(montoLimpio)
+            ? `, a ${mostrarImporte({ amount: montoLimpio, currency: form.currency })} cada uno`
+            : ""}
           . {def.consecuencia}
         </ConfirmDialog>
       </DialogContent>
