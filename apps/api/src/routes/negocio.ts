@@ -78,29 +78,35 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
           select d.id, d.kind, (d.issued_at at time zone 'America/Caracas')::date as dia
             from public.documents d
            where d.company_id = ${companyId}
-             and d.kind in ('invoice', 'receipt', 'debit_note', 'credit_note')
+             -- El recibo de devolución (ADR-0061) resta como la nota de crédito: antes
+             -- «Vendido hoy» no bajaba al devolver (QA de pantalla 2026-09-15, h. 34).
+             and d.kind in ('invoice', 'receipt', 'debit_note', 'credit_note', 'receipt_return')
              and d.status in ('issued', 'paid')
              and d.issued_at >= (select mes from ventana)::timestamptz - interval '1 day'
         ),
         lineas as (
           select d.dia,
-                 case when d.kind = 'credit_note' then -l.line_total_functional
+                 case when d.kind in ('credit_note', 'receipt_return') then -l.line_total_functional
                       else l.line_total_functional end as total,
                  case
                    when d.kind = 'debit_note' then l.line_subtotal_functional
-                   when d.kind = 'credit_note' then -l.line_subtotal_functional
+                   when d.kind in ('credit_note', 'receipt_return') then -l.line_subtotal_functional
+                   -- Un SERVICIO no tiene costo de mercancía: todo lo cobrado es margen, y no
+                   -- es una «venta sin costo cargado» (QA 2026-09-15, h. 20).
+                   when l.cost_snapshot is null and p.kind = 'service' then l.line_subtotal_functional
                    when l.cost_snapshot is null then null
                    else l.line_subtotal_functional - l.cost_snapshot * l.quantity
                  end as margen
             from docs d
             join public.document_lines l on l.document_id = d.id
+            left join public.products p on p.id = l.product_id
           union all
           select d.dia, 0 as total, sum(rl.quantity * coalesce(ol.cost_snapshot, 0)) as margen
             from docs d
             join public.returns r on r.credit_note_id = d.id and r.status = 'confirmed'
             join public.return_lines rl on rl.return_id = r.id
             join public.document_lines ol on ol.id = rl.source_line_id
-           where d.kind = 'credit_note'
+           where d.kind in ('credit_note', 'receipt_return')
            group by d.id, d.dia
         )
         select
@@ -111,6 +117,64 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
           count(*) filter (where margen is null and dia >= (select mes from ventana))::int
             as lineas_sin_costo_mes
         from lineas`;
+
+      /**
+       * LO QUE GANÉ, UN SOLO NEGOCIO (QA de pantalla 2026-09-15, h. 51 y 68). Inicio decía
+       * «gané Bs 13.931» y el estado de resultados «Bs 1.924»: Inicio no restaba gastos,
+       * mermas, faltantes de caja ni devoluciones. Ahora, si la empresa lleva contabilidad
+       * (tiene plantillas), «lo que gané» ES el resultado del mayor en la ventana —la misma
+       * suma que /v1/accounting/reports/income-statement—, y la pantalla avisa si hay hechos
+       * del período todavía en cola. Sin contabilidad: el margen de lo vendido menos los
+       * gastos registrados.
+       */
+      const [contable] = await tx<
+        {
+          lleva: boolean;
+          res_hoy: string;
+          res_mes: string;
+          gastos_hoy: string;
+          gastos_mes: string;
+          pendientes: number;
+        }[]
+      >`
+        with ventana as (
+          select (now() at time zone 'America/Caracas')::date as hoy,
+                 date_trunc('month', (now() at time zone 'America/Caracas')::date)::date as mes
+        ),
+        movs as (
+          select e.posting_date as dia,
+                 -- Ingresos suman por su haber y gastos restan por su debe: haber − debe
+                 -- sobre las dos clases ES el resultado.
+                 coalesce(jl.functional_credit, 0) - coalesce(jl.functional_debit, 0) as resultado
+            from public.journal_entries e
+            join public.journal_lines jl on jl.entry_id = e.id
+            join public.accounts a on a.id = jl.account_id
+           where e.company_id = ${companyId}
+             and e.status in ('posted', 'reversed')
+             and a.kind in ('ingreso', 'gasto')
+             and e.posting_date >= (select mes from ventana)
+        ),
+        gastos as (
+          select ((x.paid_at at time zone 'America/Caracas')::date) as dia, x.functional_amount
+            from public.expenses x
+           where x.company_id = ${companyId}
+             and x.paid_at >= (select mes from ventana)::timestamptz - interval '1 day'
+        )
+        select exists (select 1 from public.journal_templates t where t.company_id = ${companyId})
+                 as lleva,
+               coalesce((select sum(resultado) from movs where dia = (select hoy from ventana)), 0)::text
+                 as res_hoy,
+               coalesce((select sum(resultado) from movs), 0)::text as res_mes,
+               coalesce((select sum(functional_amount) from gastos
+                          where dia = (select hoy from ventana)), 0)::text as gastos_hoy,
+               coalesce((select sum(functional_amount) from gastos
+                          where dia >= (select mes from ventana)), 0)::text as gastos_mes,
+               (select count(*)::int from public.journal_generation_queue q
+                 where q.company_id = ${companyId} and q.status = 'pending') as pendientes`;
+      const llevaContabilidad = contable?.lleva === true;
+      const [sinContabilidad] = await tx<{ hoy: string; mes: string }[]>`
+        select (${ventas!.ganado_hoy}::numeric - ${contable!.gastos_hoy}::numeric)::text as hoy,
+               (${ventas!.ganado_mes}::numeric - ${contable!.gastos_mes}::numeric)::text as mes`;
 
       // Lo que me deben / lo que debo: saldos que calcula el ESQUEMA, sumados
       // en SQL. Solo los positivos: un sobrepago no «resta deuda de otros».
@@ -170,10 +234,12 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
         select d.id,
                to_char(d.issued_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as issued_at,
                case when cu.is_system then 'Consumidor final' else cu.legal_name end as customer_name,
-               d.functional_amount::text as total_functional, d.status
+               d.functional_amount::text as total_functional, d.status, d.kind
           from public.documents d
           join public.customers cu on cu.id = d.customer_id
-         where d.company_id = ${companyId} and d.kind in ('invoice', 'receipt')
+         where d.company_id = ${companyId}
+           -- Las devoluciones también se ven (h. 34): «Últimas ventas» sin ellas mentía.
+           and d.kind in ('invoice', 'receipt', 'credit_note', 'receipt_return')
            and d.status in ('issued', 'paid', 'annulled')
          order by d.issued_at desc nulls last
          limit 8`;
@@ -182,8 +248,10 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
         functional_currency: funcional,
         vendido_hoy: ventas!.vendido_hoy,
         vendido_mes: ventas!.vendido_mes,
-        ganado_hoy: ventas!.ganado_hoy,
-        ganado_mes: ventas!.ganado_mes,
+        ganado_hoy: llevaContabilidad ? contable.res_hoy : sinContabilidad!.hoy,
+        ganado_mes: llevaContabilidad ? contable.res_mes : sinContabilidad!.mes,
+        ganado_desde_contabilidad: llevaContabilidad,
+        pendientes_de_contabilizar: llevaContabilidad ? contable.pendientes : 0,
         lineas_sin_costo_mes: ventas!.lineas_sin_costo_mes,
         lo_que_me_deben: deben!.total,
         lo_que_debo: debo!.total,

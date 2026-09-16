@@ -29,6 +29,8 @@ interface Resumen {
   vendido_mes: string;
   ganado_hoy: string;
   ganado_mes: string;
+  ganado_desde_contabilidad: boolean;
+  pendientes_de_contabilizar: number;
   lineas_sin_costo_mes: number;
   lo_que_me_deben: string;
   lo_que_debo: string;
@@ -48,6 +50,7 @@ interface Resumen {
     customer_name: string;
     total_functional: string;
     status: string;
+    kind: string;
   }[];
 }
 
@@ -224,10 +227,24 @@ export function Inicio(): React.JSX.Element {
                   })
                 : "…"}
             </p>
+            {r !== null && (
+              <p className="mt-0.5 text-[0.78rem] text-muted-foreground">
+                {r.ganado_desde_contabilidad
+                  ? "Ventas menos lo que costó la mercancía, gastos, mermas y faltantes: lo mismo que tu contabilidad."
+                  : "Ventas menos lo que costó la mercancía y tus gastos."}
+              </p>
+            )}
+            {r !== null && r.pendientes_de_contabilizar > 0 && (
+              <p className="mt-0.5 text-[0.78rem] text-warning-soft-foreground">
+                {r.pendientes_de_contabilizar} movimiento
+                {r.pendientes_de_contabilizar === 1 ? "" : "s"} todavía sin contabilizar: la cifra
+                puede cambiar.
+              </p>
+            )}
             {r !== null && r.lineas_sin_costo_mes > 0 && (
               <p className="mt-0.5 text-[0.78rem] text-warning-soft-foreground">
-                {r.lineas_sin_costo_mes} venta{r.lineas_sin_costo_mes === 1 ? "" : "s"} sin costo
-                cargado: la ganancia real puede ser menor.
+                {r.lineas_sin_costo_mes} venta{r.lineas_sin_costo_mes === 1 ? "" : "s"} de productos
+                sin costo cargado: la ganancia real puede ser menor.
               </p>
             )}
           </CardContent>
@@ -241,9 +258,14 @@ export function Inicio(): React.JSX.Element {
             <p className="mt-1 text-xl font-semibold tabular-nums">
               {r !== null ? mostrarImporte({ amount: r.lo_que_me_deben, currency: moneda }) : "…"}
             </p>
+            {/* Lo fiado se debe en dólares y se cobra a la tasa del día del pago (regla
+                del dueño): por eso esta cifra sube o baja con la tasa (h. 71). */}
+            <p className="text-[0.75rem] text-faint-foreground">
+              En dólares de referencia, a la tasa de hoy: cambia cuando cambia la tasa.
+            </p>
             {puedeVerDeuda ? (
               <Link
-                to="/admin/clientes"
+                to="/clientes"
                 className="text-[0.8rem] text-accent-soft-foreground hover:underline"
               >
                 Ver quién
@@ -339,7 +361,13 @@ export function Inicio(): React.JSX.Element {
                     Anulada
                   </span>
                 )}
+                {(v.kind === "credit_note" || v.kind === "receipt_return") && (
+                  <span className="rounded-full bg-warning-soft px-2 py-0.5 text-[0.72rem] text-warning-soft-foreground">
+                    Devolución
+                  </span>
+                )}
                 <span className="shrink-0 font-medium tabular-nums">
+                  {v.kind === "credit_note" || v.kind === "receipt_return" ? "−" : ""}
                   {mostrarImporte({ amount: v.total_functional, currency: moneda })}
                 </span>
               </div>

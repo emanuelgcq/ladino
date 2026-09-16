@@ -5290,6 +5290,12 @@
           "ganado_mes": {
             "type": "string"
           },
+          "ganado_desde_contabilidad": {
+            "type": "boolean"
+          },
+          "pendientes_de_contabilizar": {
+            "type": "integer"
+          },
           "lineas_sin_costo_mes": {
             "type": "integer"
           },
@@ -5371,6 +5377,9 @@
                 },
                 "status": {
                   "type": "string"
+                },
+                "kind": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -5378,7 +5387,8 @@
                 "issued_at",
                 "customer_name",
                 "total_functional",
-                "status"
+                "status",
+                "kind"
               ],
               "additionalProperties": false
             }
@@ -5390,6 +5400,8 @@
           "vendido_mes",
           "ganado_hoy",
           "ganado_mes",
+          "ganado_desde_contabilidad",
+          "pendientes_de_contabilizar",
           "lineas_sin_costo_mes",
           "lo_que_me_deben",
           "lo_que_debo",

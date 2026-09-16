@@ -17,9 +17,17 @@ export const NegocioResumenResponse = z
      */
     vendido_hoy: cifra,
     vendido_mes: cifra,
-    /** Margen: base vendida menos costo congelado de las líneas que lo tienen. */
+    /**
+     * Lo que gané. Con contabilidad: el RESULTADO del mayor en la ventana (ingresos − gastos,
+     * lo mismo que el estado de resultados). Sin ella: el margen de lo vendido menos los
+     * gastos registrados.
+     */
     ganado_hoy: cifra,
     ganado_mes: cifra,
+    /** true = «lo que gané» sale del mayor (y cuadra con el estado de resultados). */
+    ganado_desde_contabilidad: z.boolean(),
+    /** Hechos de la empresa todavía en la cola contable: el resultado puede estar incompleto. */
+    pendientes_de_contabilizar: z.number().int(),
     /** Líneas vendidas EN EL MES sin costo congelado: el aviso de «sin costo». */
     lineas_sin_costo_mes: z.number().int(),
     /** Suma de saldos pendientes de facturas emitidas (solo positivos). */
@@ -57,6 +65,8 @@ export const NegocioResumenResponse = z
           customer_name: z.string(),
           total_functional: cifra,
           status: z.string(),
+          /** invoice | receipt | credit_note | receipt_return: las devoluciones también. */
+          kind: z.string(),
         })
         .strict(),
     ),

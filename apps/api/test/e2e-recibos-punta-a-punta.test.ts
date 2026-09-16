@@ -223,6 +223,97 @@ describe("negocio sin RIF, de punta a punta", () => {
     expect(resumen.tasa_del_dia!.dias_de_antiguedad).toBe(0);
   });
 
+  /** El resultado del mayor HOY, con la misma suma que el estado de resultados. */
+  async function resultadoDelMayorHoy(): Promise<string> {
+    const [r] = await sql<{ r: string }[]>`
+      select coalesce(sum(coalesce(jl.functional_credit, 0) - coalesce(jl.functional_debit, 0)), 0)::text as r
+        from public.journal_entries e
+        join public.journal_lines jl on jl.entry_id = e.id
+        join public.accounts a on a.id = jl.account_id
+       where e.company_id = ${COMPANY} and e.status in ('posted', 'reversed')
+         and a.kind in ('ingreso', 'gasto') and e.posting_date = ${HOY}::date`;
+    return r!.r;
+  }
+
+  async function resumen(): Promise<{
+    vendido_hoy: string;
+    ganado_hoy: string;
+    ganado_desde_contabilidad: boolean;
+    ultimas_ventas: { id: string; kind: string }[];
+  }> {
+    const r = await pedir("GET", "/v1/negocio/resumen");
+    expect(r.status).toBe(200);
+    return (await r.json()) as {
+      vendido_hoy: string;
+      ganado_hoy: string;
+      ganado_desde_contabilidad: boolean;
+      ultimas_ventas: { id: string; kind: string }[];
+    };
+  }
+
+  it("TANDA 6 · «lo que gané» es el resultado del mayor, no un segundo negocio (h. 68)", async () => {
+    const r = await resumen();
+    expect(r.ganado_desde_contabilidad).toBe(true);
+    const [igual] = await sql<{ ok: boolean }[]>`
+      select ${r.ganado_hoy}::numeric = ${await resultadoDelMayorHoy()}::numeric as ok`;
+    expect(igual!.ok).toBe(true);
+  });
+
+  it("TANDA 6 · un gasto baja «lo que gané» en lo que costó (h. 51)", async () => {
+    const antes = await resumen();
+    const cuentas = await pedir("GET", "/v1/treasury/accounts");
+    const lista = (await cuentas.json()) as {
+      accounts: { id: string; currency: string; is_system: boolean }[];
+    };
+    const caja = lista.accounts.find((c) => c.currency === "VES")!;
+    const g = await pedir("POST", "/v1/expenses", {
+      company_id: COMPANY,
+      category: "Bolsas",
+      account_id: caja.id,
+      amount: "10.00",
+      allow_negative_balance: true,
+    });
+    expect(g.status).toBe(201);
+    const despues = await resumen();
+    const [baja] = await sql<{ d: string }[]>`
+      select (${antes.ganado_hoy}::numeric - ${despues.ganado_hoy}::numeric)::text as d`;
+    expect(Number(baja!.d)).toBe(10);
+  });
+
+  it("TANDA 6 · una devolución resta de lo vendido y se ve en las últimas ventas (h. 34)", async () => {
+    const antes = await resumen();
+    const [linea] = await sql<{ id: string }[]>`
+      select id from public.document_lines where document_id = ${RECIBO}`;
+    const creada = await pedir("POST", "/v1/returns", {
+      company_id: COMPANY,
+      source_document_id: RECIBO,
+      warehouse_id: DEPOSITO,
+      reason: "El cliente devolvió media harina",
+      lines: [{ source_line_id: linea!.id, quantity: "0.5" }],
+    });
+    expect(creada.status).toBe(201);
+    const devolucion = ((await creada.json()) as { id: string }).id;
+    const confirmada = await pedir("POST", `/v1/returns/${devolucion}/confirm`);
+    expect(confirmada.status).toBe(200);
+    const nota = ((await confirmada.json()) as { credit_note_id: string }).credit_note_id;
+    const [doc] = await sql<{ total: string; kind: string }[]>`
+      select total_amount::text as total, kind from public.documents where id = ${nota}`;
+    expect(doc!.kind).toBe("receipt_return");
+
+    const despues = await resumen();
+    const [resta] = await sql<{ ok: boolean }[]>`
+      select ${antes.vendido_hoy}::numeric - ${despues.vendido_hoy}::numeric
+             = ${doc!.total}::numeric as ok`;
+    expect(resta!.ok).toBe(true);
+    expect(despues.ultimas_ventas.some((u) => u.id === nota && u.kind === "receipt_return")).toBe(
+      true,
+    );
+    // Y «lo que gané» sigue siendo el resultado del mayor, con la devolución dentro.
+    const [igual] = await sql<{ ok: boolean }[]>`
+      select ${despues.ganado_hoy}::numeric = ${await resultadoDelMayorHoy()}::numeric as ok`;
+    expect(igual!.ok).toBe(true);
+  });
+
   it("el recorrido completo no dio ni un 409", () => {
     expect(respuestas409).toEqual([]);
   });
