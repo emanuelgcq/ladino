@@ -142,15 +142,14 @@ async function tasaA(
     if (!uno.ok) return err({ code: "VALIDATION_FAILED", message: uno.error.message });
     return ok({ rate: uno.value, source: "identidad" });
   }
-  // La tasa vigente PARA LA EMPRESA: la propia gana a la oficial del mismo
-  // día, y la de otra empresa no existe (ADR-0057).
+  // La tasa vigente: solo existe la del BCV (ADR-0064 §1, migración 66).
   const [t] = await sql<{ rate: string | null; source: string | null }[]>`
     select f.rate::text as rate, f.source
       from platform.rate_for(${companyId}, ${desde}, ${hasta}, ${diaNegocio(fecha)}::date) f`;
   if (!t?.rate) {
     return err({
       code: "EXCHANGE_RATE_MISSING",
-      message: `No hay tasa de ${desde} a ${hasta} vigente para esa fecha. Cárgala con su fuente antes de continuar.`,
+      message: `No hay tasa BCV de ${desde} a ${hasta} vigente para esa fecha. Tráela en Mi dinero.`,
     });
   }
   const d = parseDecimal(t.rate);

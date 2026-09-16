@@ -341,6 +341,117 @@ meses pasados que nunca se asentó.
 
 ---
 
+## P-19 · La tasa de una factura de proveedor en divisa (VALIDAR-TRIBUTARIO)
+
+**Hoy:**
+- La factura del proveedor en divisa se lleva a bolívares con la tasa del BCV de la **fecha de
+  la factura** (migración 65, `purchases_book`, `recompute_iva_period`).
+- Esa misma tasa se usa en el asiento y en el crédito fiscal.
+- Desde la migración 66 no hay forma de usar otra tasa (ADR-0064 §1).
+
+**Falta:** ¿el crédito fiscal se toma con los bolívares que imprimió el proveedor, o con la tasa
+BCV de la fecha de la factura? Si el proveedor usó la tasa de otro día (o la «fecha valor» del
+BCV), las dos cifras difieren.
+
+**Si la respuesta es «los bolívares impresos»:** Ladino tiene que capturar esos bolívares por
+factura. Sería un dato del documento, no una tasa de la empresa, así que no choca con ADR-0064.
+Migración nueva y campo en la compra.
+
+**Dónde se toca:** `packages/domain/src/purchases.ts` (`registerSupplierInvoice`), migración 65.
+
+---
+
+## P-20 · El fiado cobrado a otra tasa: ¿nota de débito o crédito? (VALIDAR-TRIBUTARIO)
+
+**Hoy:**
+- Una deuda anclada en divisa que se cobra a otra tasa asienta un **diferencial cambiario**,
+  sin documento (ADR-0047).
+
+**Falta:**
+- **La norma.** El art. 51 del Reglamento de la LIVA (Decreto 206) diría que esa diferencia
+  «constituye una corrección del precio» y se documenta con nota de débito o de crédito. Se leyó
+  en una **reproducción no oficial**: confirmar su vigencia y su alcance.
+- **El período.** ¿En qué período entra la nota (P-6)?
+- **La retención.** ¿El agente de retención retiene sobre la nota de débito?
+
+**Si se confirma:** el cobro emite la nota en la misma transacción y deja de asentar el
+diferencial (ADR-0064 §3, diseñado y sin implementar). Exige rango de notas en la puesta a
+punto.
+
+**Dónde se toca:** `packages/domain/src/sales.ts` (`registerPayment`), ADR-0064 §3.
+
+---
+
+## P-21 · La fecha de la tasa en la factura (VALIDAR-SENIAT)
+
+**Hoy:**
+- El PDF imprime **«Tasa BCV: 842,2067»**, sin la fecha de publicación ni el servicio por el
+  que llegó (decisión del dueño, 2026-09-16).
+- El documento guarda la fuente completa, con la marca de tiempo de la publicación, pero no una
+  columna con la fecha de la tasa.
+
+**Falta:** ¿el «tipo de cambio aplicable» de la PA 00071 art. 13.14 exige la fecha de la
+publicación del BCV? Un fin de semana, o con la fuente caída, la tasa puede ser de otro día que
+la factura.
+
+**Si la respuesta es sí:** migración con `rate_date` en `documents` y la línea
+«Tasa BCV del 15/09/2026: 842,2067».
+
+**Dónde se toca:** `apps/api/src/routes/documents-pdf.ts`, `documents`.
+
+---
+
+## P-22 · Vender con la última tasa publicada (VALIDAR-TRIBUTARIO)
+
+**Hoy:**
+- Si el BCV no publica (fin de semana) o la fuente no responde, rige la **última tasa
+  publicada**, sin límite de días.
+- Mi dinero e Inicio avisan de qué fecha es. Ya no hay carga a mano (ADR-0064 §1).
+
+**Falta:**
+- **La antigüedad.** ¿Hasta cuántos días puede facturarse con la última tasa?
+- **El fin de semana.** ¿Qué tasa rige una operación de sábado o domingo: la del viernes o la
+  de «fecha valor» del lunes?
+
+**Si hay un tope:** la emisión se bloquea pasado el tope, con su mensaje, y el operador de la
+plataforma carga la oficial del día.
+
+**Dónde se toca:** `platform.rate_for` (migración 66), `apps/api/src/tasa-oficial.ts`.
+
+---
+
+## P-23 · Las fuentes primarias de la tasa y de la factura en divisa (VALIDAR-TRIBUTARIO)
+
+**Hoy:**
+- **Fuentes.** ADR-0064 se apoya en tres textos: el Convenio Cambiario N° 1, art. 9 (G.O. Ext.
+  6.405), y la LIVA, arts. 25 y 69 (G.O. Ext. 6.507).
+- **Qué ordenan.** Solo la tasa del BCV, y en la factura base, impuesto y total también en la
+  moneda extranjera.
+- **Estado de la verificación.** Se verificaron en la investigación del 2026-09-16.
+
+**Falta:** archivar el texto primario de la Gaceta en `EXPEDIENTE_TECNICO.md` y confirmar que el
+art. 69 exige base, impuesto y total en divisa, no solo el total.
+
+**Dónde se toca:** `docs/02_COMPLIANCE/REGULATORY_STATUS.md` §2.
+
+---
+
+## P-24 · Documentos emitidos con una tasa tecleada (VALIDAR-TRIBUTARIO)
+
+**Hoy:**
+- **El caso.** Antes de la migración 66, una empresa podía emitir con una tasa tecleada
+  distinta de la del BCV (h. 70: 900 contra 842,2067).
+- **Qué queda en el documento.** Esos documentos conservan su tasa congelada.
+- **Cómo se imprimen.** El PDF los rotula «Tipo de cambio», no «Tasa BCV».
+
+**Falta:** ¿hay que emitir nota de crédito o de débito por la diferencia, o basta con que
+conserven su tasa? En producción, el alcance se mide con los documentos cuyo `rate_source` no
+es del BCV.
+
+**Dónde se toca:** consulta de producción; notas de crédito y de débito existentes.
+
+---
+
 ## Resumen para la conversación con el asesor
 
 Si el tiempo con el asesor es corto, este es el orden por **coste de resolverlo
@@ -351,4 +462,6 @@ tarde**:
 3. **P-7** (layout del TXT) — bloquea la primera carga real al portal.
 4. **P-1** (casillas) — bloquea que la planilla deje de ser «demostrativa».
 5. **P-8** y **P-9** (IGTF: exenciones y reintegro) — solo si la empresa es SPE.
-6. El resto puede esperar sin acumular deuda.
+6. **P-19** y **P-22** (tasa de la compra en divisa y antigüedad de la tasa): cambian cifras
+   de libros y de cada venta mientras sigan abiertos.
+7. El resto puede esperar sin acumular deuda.

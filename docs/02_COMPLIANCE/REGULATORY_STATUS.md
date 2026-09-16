@@ -66,7 +66,10 @@ que gobiernan la emisión fiscal hoy.
 | **PA SNAT/2025/000054** (vigente 01/08/2025; deroga PA SNAT/2015/0049) | Agentes de retención de IVA: designación, porcentajes 75 % / 100 %, oportunidad y comprobante | `RETENTIONS_SPEC.md` — las reglas se cargan por empresa con esta fuente (ADR-0057) |
 | **PA SNAT/2025/000048** (G.O. 43.140, 02/06/2025) | Unidad Tributaria = Bs. 43 | `IVA_SPEC.md` (umbral de máquina fiscal del art. 8 de la 00071, R-25) |
 | **PA SNAT/2025/000091** (G.O. 43.273 / 43.283) | Calendario de sujetos pasivos especiales 2026 | `PENDIENTES_ASESOR.md` — el calendario de declaraciones NO viene de fábrica (ADR-0052) |
-| **Decreto 4.972** (G.O. Ext. 6.821, 15/07/2024) | IGTF 3 % en divisas · 0 % en bolívares para sujetos pasivos especiales | `IGTF_SPEC.md` · ADR-0052/0053 |
+| **Decreto 4.972** (G.O. Ext. 6.821, publicada el 12/07/2024, vigente desde el 15/07/2024) | IGTF 3 % en divisas · 0 % en bolívares para sujetos pasivos especiales | `IGTF_SPEC.md` · ADR-0052/0053 |
+| **Convenio Cambiario N° 1** (G.O. Ext. 6.405, 07/09/2018), art. 9, Parágrafo Primero | El tipo de cambio que publica el BCV es «el de referencia de mercado a todos los efectos» | ADR-0064 §1: solo existe la tasa del BCV (migración 66) |
+| **Ley del IVA** (G.O. Ext. 6.507, 29/01/2020), arts. 25 y 69 | Art. 25: operaciones en divisa al tipo de cambio corriente del día del hecho imponible. Art. 69: la factura en divisa lleva base imponible, impuesto y total también en bolívares | ADR-0064 §1-§2 · `documents-pdf.ts` · P-21, P-23 |
+| **Reglamento de la LIVA** (Decreto 206), art. 51 — **leído en reproducción no oficial** | La diferencia de tasa al pagar un precio en divisa es corrección de precio y se documenta con nota de débito o crédito | ADR-0064 §3, **sin implementar**: P-20 |
 
 Verificadas el 2026-09-12 con fuentes secundarias (Forvis Mazars, Baker McKenzie, IUSDATA,
 Efecto Cocuyo); el texto primario en Gaceta queda por archivar en `EXPEDIENTE_TECNICO.md`

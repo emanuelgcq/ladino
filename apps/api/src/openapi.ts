@@ -2128,16 +2128,19 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "post",
     path: "/v1/exchange-rates",
-    summary: "Cargar tasa manualmente (permiso fx.rate.manage)",
+    summary: "RETIRADA: cargar una tasa a mano (siempre 409 RATE_ONLY_FROM_BCV)",
     description:
-      "El FALLBACK del adaptador BCV (ADR-0028): sin internet, la tasa se teclea. Sin fuente " +
-      "citada no se persiste, y la fuente viaja en cada documento.",
+      "Solo existe la tasa del BCV (ADR-0064 §1): ya no se teclea. La ruta responde el motivo " +
+      "a un cliente viejo; el cuerpo se ignora.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: idemHeader,
       body: { content: { "application/json": { schema: crearTasa } } },
     },
-    responses: { 201: okJson(crearTasa, "Tasa cargada."), ...erroresComunes },
+    responses: {
+      ...erroresComunes,
+      409: errorRef("RATE_ONLY_FROM_BCV: solo existe la tasa del BCV; se trae, no se escribe."),
+    },
   });
   registry.registerPath({
     method: "post",
@@ -2148,7 +2151,7 @@ export function buildOpenApiDocument(): object {
       "DolarAPI, extrae `promedio` del cuerpo CRUDO (la tasa nunca pasa por un float) y la " +
       "persiste como USD→VES con el día PUBLICADO por la fuente y la fuente citada " +
       "(«BCV oficial vía DolarAPI (<fechaActualizacion>)»). Si la fuente no responde: 502 " +
-      "UPSTREAM_UNAVAILABLE, y el fallback es la carga manual de siempre.",
+      "UPSTREAM_UNAVAILABLE, y mientras tanto rige la última tasa publicada (ADR-0064 §1).",
     security: [{ bearerAuth: [] }],
     request: { headers: idemHeader },
     responses: {
@@ -3362,7 +3365,7 @@ export function buildOpenApiDocument(): object {
   const cierreCaja = registry.register("CashClosingResponse", CashClosingResponse);
   const cierresCaja = registry.register("ListCashClosingsResponse", ListCashClosingsResponse);
   const confirmarTasa = registry.register("KeepDailyRateRequest", KeepDailyRateRequest);
-  const tasaDiaria = registry.register("DailyRateResponse", DailyRateResponse);
+  registry.register("DailyRateResponse", DailyRateResponse);
 
   registry.registerPath({
     method: "get",
@@ -3510,17 +3513,19 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "post",
     path: "/v1/exchange-rates/keep",
-    summary: "«La tasa sigue igual»: confirmarla para hoy (permiso fx.rate.manage)",
+    summary: "RETIRADA: «la tasa sigue igual» (siempre 409 RATE_ONLY_FROM_BCV)",
     description:
-      "SIEMPRE crea una fila nueva con la fecha de hoy y una fuente que dice que fue una " +
-      "confirmación humana. Reutilizar la fila vieja dejaría indistinguible «nadie miró la " +
-      "tasa» de «se miró y no cambió».",
+      "Solo existe la tasa del BCV (ADR-0064 §1): un día sin publicación rige la última tasa " +
+      "publicada, sin copiarla. La ruta responde el motivo a un cliente viejo.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: idemHeader,
       body: { content: { "application/json": { schema: confirmarTasa } } },
     },
-    responses: { 201: okJson(tasaDiaria, "La tasa confirmada."), ...erroresComunes },
+    responses: {
+      ...erroresComunes,
+      409: errorRef("RATE_ONLY_FROM_BCV: la tasa ya no se confirma a mano."),
+    },
   });
 
   const generator = new OpenApiGeneratorV3(registry.definitions);

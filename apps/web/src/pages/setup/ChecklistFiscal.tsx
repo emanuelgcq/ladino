@@ -5,14 +5,7 @@ import { CheckCircle2, CircleDashed, FlaskConical, ShieldAlert } from "lucide-re
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
-import {
-  FormField,
-  MoneyInput,
-  DatePicker,
-  EntityPicker,
-  importeValido,
-  type EntityOption,
-} from "../../components/forms.js";
+import { FormField, EntityPicker, type EntityOption } from "../../components/forms.js";
 import { Button } from "../../ui/button.js";
 import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
@@ -20,11 +13,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Badge } from "../../ui/badge.js";
 import { useToast } from "../../ui/toast.js";
 import { LlamadaApiError } from "../../lib.js";
-import { mostrarCantidad, mostrarImporte } from "../../money.js";
+import { mostrarImporte } from "../../money.js";
 import { mostrarPorcentaje } from "../../porcentaje.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { porcentajeAFraccion } from "../negocio/comunes.js";
-import { fechaLocal, fuenteDeTasa, hoyLocal } from "../../fechas.js";
+import { fechaLocal } from "../../fechas.js";
+import { mostrarTasa, tasaLimpia } from "../../tasa.js";
 
 /**
  * PUESTA A PUNTO FISCAL — R-16 resuelto como diseño.
@@ -220,8 +214,8 @@ export function ChecklistFiscal(): React.JSX.Element {
             tasas.isError
               ? "No se pudieron consultar las tasas."
               : ultimaTasa !== undefined
-                ? `Última: ${mostrarCantidad(ultimaTasa.rate)} Bs/USD · ${fuenteDeTasa(ultimaTasa.source)} · ${fechaLocal(ultimaTasa.rate_date)}`
-                : "Sin tasa cargada: cualquier operación en divisa fallará."
+                ? `Última: ${tasaLimpia(ultimaTasa.rate)} · ${fechaLocal(ultimaTasa.rate_date)}`
+                : "Todavía no llegó la tasa BCV: cualquier operación en divisa fallará."
           }
           extra={
             tasas.isError ? (
@@ -230,9 +224,7 @@ export function ChecklistFiscal(): React.JSX.Element {
               <TraerDelBcv />
             ) : undefined
           }
-        >
-          <CargarTasa />
-        </Paso>
+        />
 
         <Paso
           numero={3}
@@ -563,8 +555,8 @@ function AsignarRegimen({ regimenes }: { regimenes: RegimenFiscal[] }): React.JS
 /**
  * La tasa OFICIAL, traída del adaptador BCV del servidor (`POST
  * /v1/exchange-rates/bcv`): el mismo día publicado dos veces es UNA fila.
- * Exige `fx.rate.manage` en servidor; la carga manual de abajo sigue siendo
- * el fallback sin internet.
+ * Exige `fx.rate.manage` en servidor. Es la única manera de ponerla además del
+ * refresco automático: ya no se escribe a mano (ADR-0064 §1).
  */
 function TraerDelBcv(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
@@ -582,8 +574,8 @@ function TraerDelBcv(): React.JSX.Element {
         headers: { "Idempotency-Key": crypto.randomUUID() },
       });
       toast.success(
-        "Tasa del BCV traída",
-        `${mostrarCantidad(r.rate)} Bs/USD del ${fechaLocal(r.rate_date)}`,
+        "Tasa BCV traída",
+        `Tasa BCV: ${mostrarTasa(r.rate)} · ${fechaLocal(r.rate_date)}`,
       );
       await qc.invalidateQueries({ queryKey: ["tasas", empresa.id] });
     } catch (e) {
@@ -599,70 +591,6 @@ function TraerDelBcv(): React.JSX.Element {
         {ocupado ? "Consultando al BCV…" : "Traer del BCV"}
       </Button>
       {error !== null && <MensajeError error={error} />}
-    </div>
-  );
-}
-
-function CargarTasa(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
-  const qc = useQueryClient();
-  const toast = useToast();
-  const hoy = hoyLocal();
-  const [rate, setRate] = useState("");
-  const [source, setSource] = useState("BCV");
-  const [fecha, setFecha] = useState(hoy);
-  const [error, setError] = useState<unknown>(null);
-  const [ocupado, setOcupado] = useState(false);
-
-  async function cargar(): Promise<void> {
-    setError(null);
-    setOcupado(true);
-    try {
-      await llamar("/v1/exchange-rates", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          from_currency: "USD",
-          to_currency: "VES",
-          rate: rate.trim(),
-          source,
-          rate_date: fecha,
-        }),
-      });
-      toast.success("Tasa cargada");
-      // La clave real es ["tasas", empresa.id, "USD-VES"]: con ["tasas",
-      // "USD-VES"] el prefijo no coincidía y el Paso 2 seguía en «Pendiente»
-      // después de cargar (auditoría 2026-09-11).
-      await qc.invalidateQueries({ queryKey: ["tasas", empresa.id] });
-    } catch (e) {
-      setError(e);
-    } finally {
-      setOcupado(false);
-    }
-  }
-
-  return (
-    <div className="space-y-3 rounded-md border border-border bg-surface-muted/40 p-3">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <FormField label="Tasa USD→VES" required>
-          {(a) => <MoneyInput id={a.id} value={rate} onChange={setRate} currency="Bs/USD" />}
-        </FormField>
-        <FormField label="Fuente" required hint="De dónde salió: BCV, con fecha.">
-          {(a) => <Input id={a.id} value={source} onChange={(e) => setSource(e.target.value)} />}
-        </FormField>
-        <FormField label="Fecha de la tasa" required>
-          {(a) => <DatePicker id={a.id} value={fecha} onChange={setFecha} max={hoy} />}
-        </FormField>
-      </div>
-      {error !== null && <MensajeError error={error} />}
-      <Button
-        variant="primary"
-        size="sm"
-        disabled={!importeValido(rate) || ocupado}
-        onClick={() => void cargar()}
-      >
-        Cargar tasa
-      </Button>
     </div>
   );
 }

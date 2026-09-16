@@ -231,7 +231,7 @@ export function Dashboard(): React.JSX.Element {
                   ? null
                   : {
                       rate: d.fx_rate,
-                      source: `${d.rate_source} · doc. en ${d.transaction_currency}`,
+                      source: d.rate_source,
                     }
               }
             />

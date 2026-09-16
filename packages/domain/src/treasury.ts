@@ -13,8 +13,6 @@ import type {
   ExpenseResponse,
   CloseCashRegisterRequest,
   CashClosingResponse,
-  KeepDailyRateRequest,
-  DailyRateResponse,
   CreateTreasuryTransferRequest,
   TreasuryTransferResponse,
 } from "@ladino/schemas";
@@ -219,7 +217,7 @@ async function tasaHoy(
   if (!t?.rate) {
     return err({
       code: "EXCHANGE_RATE_MISSING",
-      message: `No hay tasa de ${desde} a ${hasta}. Carga la tasa del día primero.`,
+      message: `No hay tasa BCV de ${desde} a ${hasta}. Tráela en Mi dinero.`,
     });
   }
   return ok({ rate: t.rate, source: t.source ?? "manual" });
@@ -810,45 +808,6 @@ export async function closeCashRegister(
     journal_entry_id: entryId,
     accounting,
   } as CashClosingResponse);
-}
-
-// ── Tasa del día: «sigue igual» ─────────────────────────────────────────────
-
-export async function keepDailyRate(
-  uow: UnitOfWork,
-  companyId: string,
-  input: KeepDailyRateRequest,
-): Promise<Result<DailyRateResponse, TreasuryError>> {
-  const { sql, actor } = uow;
-  if (actor.kind !== "user") {
-    return err({ code: "PERMISSION_REQUIRED", message: "Confirmar la tasa exige un usuario." });
-  }
-  const ctx = await companyScope(sql, actor.userId, companyId, "fx.rate.manage");
-  if (!ctx.ok) return ctx;
-
-  const [ultima] = await sql<{ rate: string; source: string; rate_date: string }[]>`
-    select f.rate::text as rate, f.source, f.rate_date::text as rate_date
-      from platform.rate_for(${companyId}, ${input.from_currency}, ${input.to_currency},
-                             (now() at time zone 'America/Caracas')::date) f`;
-  if (!ultima) {
-    return err({
-      code: "EXCHANGE_RATE_MISSING",
-      message: `Nunca se ha cargado una tasa de ${input.from_currency} a ${input.to_currency}: no hay nada que confirmar.`,
-    });
-  }
-
-  // SIEMPRE una fila nueva, aunque el número sea el mismo: reutilizar la vieja
-  // dejaría indistinguible «nadie miró la tasa» de «se miró y no cambió». Y la
-  // fuente dice la verdad: esto es una confirmación humana, no una carga BCV.
-  const fuente = `sin cambio, confirmada (antes: ${ultima.source})`.slice(0, 120);
-  const [fila] = await sql<DailyRateResponse[]>`
-    insert into public.exchange_rates
-      (tenant_id, company_id, from_currency, to_currency, rate, source, rate_date, rate_timestamp)
-    values (${ctx.value.tenantId}, ${companyId}, ${input.from_currency}, ${input.to_currency},
-            ${ultima.rate}, ${fuente}, (now() at time zone 'America/Caracas')::date, now())
-    returning from_currency, to_currency, rate::text as rate, rate_date::text as rate_date,
-              source`;
-  return ok(fila!);
 }
 
 /**

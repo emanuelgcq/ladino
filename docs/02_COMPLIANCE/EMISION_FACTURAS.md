@@ -74,7 +74,7 @@ califica la actividad — eso es del contador (VALIDAR-TRIBUTARIO).
 | 13.7-13.8 | Identificación del adquirente | Snapshot del cliente (migración 33, `customer_*_snapshot`); jurídica/gobierno exigen domicilio al crearse |
 | 13.9 | Marcador **«(E)»** en operaciones exentas/exoneradas/no sujetas | El PDF lo imprime junto a la descripción, leído del `tax_treatment` **congelado** (migración 27); una línea pre-27 sin tratamiento no se marca — no se adivina |
 | 13.13 | **«SIN DERECHO A CRÉDITO FISCAL»** en toda copia | `GET /v1/documents/:id/pdf?copia=1` — el generador distingue original de copia |
-| 13.14 | Ambas monedas y **tipo de cambio** si la operación se expresó en moneda extranjera | ADR-0047: la operación se expresa en la moneda de la lista (ancla USD) y la deuda queda anclada ahí. El PDF **habla en Bs** — líneas y totales del lado funcional congelado al emitir — y añade el total en la divisa y la tasa con su fuente: ambas monedas presentes, el Bs se lee grande |
+| 13.14 | Ambas monedas y **tipo de cambio** si la operación se expresó en moneda extranjera | ADR-0047: la operación se expresa en la moneda de la lista (ancla USD) y la deuda queda anclada ahí. El PDF **habla en Bs** — líneas y totales del lado funcional congelado al emitir — y añade base imponible, IVA y total en la divisa (LIVA art. 69) y la tasa, limpia: «Tasa BCV: 842,2067» (ADR-0064; «Tipo de cambio» si el documento viejo se emitió con una tasa tecleada). Ambas monedas presentes, el Bs se lee grande. La fecha de la tasa no se imprime: P-21 |
 
 El **layout sigue siendo provisional** (VALIDAR-SENIAT, abajo): estos elementos son de la
 00071 y van ya; lo pendiente es contrastar el conjunto contra un ejemplar real aprobado.

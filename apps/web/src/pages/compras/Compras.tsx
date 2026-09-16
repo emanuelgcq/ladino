@@ -50,8 +50,9 @@ import type {
   SupplierStatement,
   Warehouse,
 } from "../../lib.js";
-import { hoyLocal, fechaLocal, fuenteDeTasa } from "../../fechas.js";
+import { hoyLocal, fechaLocal } from "../../fechas.js";
 import { useConFacturas } from "../../app/modo-venta.js";
+import { tasaLimpia } from "../../tasa.js";
 
 /**
  * Compras — Fase B. Cuatro superficies: órdenes (con recepción y landed cost),
@@ -283,9 +284,8 @@ function DetalleOrden({ id, onCerrar }: { id: string; onCerrar: () => void }): R
               <FiscalStatusBadge estado={d.derived_status} className="ml-2 align-middle" />
             </DialogTitle>
             <DialogDescription>
-              Moneda {d.order.transaction_currency} · tasa{" "}
-              <span className="font-mono">{mostrarCantidad(d.order.fx_rate)}</span> (
-              {fuenteDeTasa(d.order.rate_source)})
+              Moneda {d.order.transaction_currency} ·{" "}
+              {tasaLimpia(d.order.fx_rate, d.order.rate_source)}
             </DialogDescription>
 
             <div className="mt-3 space-y-4">

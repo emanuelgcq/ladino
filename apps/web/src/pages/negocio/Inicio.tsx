@@ -4,14 +4,15 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowDownToLine, RefreshCw, Store, TrendingUp, TriangleAlert, Wallet } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { errorDePersona } from "../../lib.js";
-import { mostrarImporte, mostrarCantidad } from "../../money.js";
+import { mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
 import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
 import { fechaRelativa } from "./comunes.js";
 import { ETIQUETA_OBLIGACION } from "../../components/capa-fiscal/vencimientos.js";
 import { useModoDeVenta } from "../../app/modo-venta.js";
-import { hoyLocal, diaLocalMas, fuenteDeTasa } from "../../fechas.js";
+import { hoyLocal, diaLocalMas } from "../../fechas.js";
+import { tasaLimpia } from "../../tasa.js";
 
 /**
  * INICIO (Fase C, PARTE 12): cómo va el negocio, de un vistazo. El número
@@ -105,7 +106,7 @@ export function Inicio(): React.JSX.Element {
   if (r !== null) {
     if (r.tasa_del_dia === null) {
       recordatorios.push({
-        texto: "Todavía no hay tasa del día. Sin ella no se vende en dólares.",
+        texto: "Todavía no hay tasa BCV. Sin ella no se vende en dólares.",
         a: "/dinero",
       });
     } else if (!r.tasa_del_dia.es_de_hoy) {
@@ -113,7 +114,7 @@ export function Inicio(): React.JSX.Element {
       // el sistema está cobrando con ella.
       const d = r.tasa_del_dia.dias_de_antiguedad;
       recordatorios.push({
-        texto: `Estás vendiendo con la tasa de hace ${d} día${d === 1 ? "" : "s"}. Confírmala o actualízala.`,
+        texto: `Estás vendiendo con la tasa BCV de hace ${d} día${d === 1 ? "" : "s"}. Si el BCV ya publicó otra, tráela.`,
         a: "/dinero",
       });
     }
@@ -378,8 +379,7 @@ export function Inicio(): React.JSX.Element {
 
       {r?.tasa_del_dia !== null && r?.tasa_del_dia !== undefined && (
         <p className="text-center text-[0.82rem] text-faint-foreground tabular-nums">
-          Tasa del día: Bs. {mostrarCantidad(r.tasa_del_dia.rate)} por dólar ·{" "}
-          {fuenteDeTasa(r.tasa_del_dia.source)}
+          {tasaLimpia(r.tasa_del_dia.rate)}
         </p>
       )}
     </div>

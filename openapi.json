@@ -22905,8 +22905,8 @@
         }
       },
       "post": {
-        "summary": "Cargar tasa manualmente (permiso fx.rate.manage)",
-        "description": "El FALLBACK del adaptador BCV (ADR-0028): sin internet, la tasa se teclea. Sin fuente citada no se persiste, y la fuente viaja en cada documento.",
+        "summary": "RETIRADA: cargar una tasa a mano (siempre 409 RATE_ONLY_FROM_BCV)",
+        "description": "Solo existe la tasa del BCV (ADR-0064 §1): ya no se teclea. La ruta responde el motivo a un cliente viejo; el cuerpo se ignora.",
         "security": [
           {
             "bearerAuth": []
@@ -22942,16 +22942,6 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Tasa cargada.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreateExchangeRateRequest"
-                }
-              }
-            }
-          },
           "401": {
             "description": "Sin token válido.",
             "content": {
@@ -22982,6 +22972,16 @@
               }
             }
           },
+          "409": {
+            "description": "RATE_ONLY_FROM_BCV: solo existe la tasa del BCV; se trae, no se escribe.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
             "content": {
@@ -22998,7 +22998,7 @@
     "/v1/exchange-rates/bcv": {
       "post": {
         "summary": "Traer la tasa OFICIAL del BCV desde DolarAPI (permiso fx.rate.manage)",
-        "description": "El adaptador BCV de ADR-0028, ya no null: consulta `GET /v1/dolares/oficial` de DolarAPI, extrae `promedio` del cuerpo CRUDO (la tasa nunca pasa por un float) y la persiste como USD→VES con el día PUBLICADO por la fuente y la fuente citada («BCV oficial vía DolarAPI (<fechaActualizacion>)»). Si la fuente no responde: 502 UPSTREAM_UNAVAILABLE, y el fallback es la carga manual de siempre.",
+        "description": "El adaptador BCV de ADR-0028, ya no null: consulta `GET /v1/dolares/oficial` de DolarAPI, extrae `promedio` del cuerpo CRUDO (la tasa nunca pasa por un float) y la persiste como USD→VES con el día PUBLICADO por la fuente y la fuente citada («BCV oficial vía DolarAPI (<fechaActualizacion>)»). Si la fuente no responde: 502 UPSTREAM_UNAVAILABLE, y mientras tanto rige la última tasa publicada (ADR-0064 §1).",
         "security": [
           {
             "bearerAuth": []
@@ -30347,8 +30347,8 @@
     },
     "/v1/exchange-rates/keep": {
       "post": {
-        "summary": "«La tasa sigue igual»: confirmarla para hoy (permiso fx.rate.manage)",
-        "description": "SIEMPRE crea una fila nueva con la fecha de hoy y una fuente que dice que fue una confirmación humana. Reutilizar la fila vieja dejaría indistinguible «nadie miró la tasa» de «se miró y no cambió».",
+        "summary": "RETIRADA: «la tasa sigue igual» (siempre 409 RATE_ONLY_FROM_BCV)",
+        "description": "Solo existe la tasa del BCV (ADR-0064 §1): un día sin publicación rige la última tasa publicada, sin copiarla. La ruta responde el motivo a un cliente viejo.",
         "security": [
           {
             "bearerAuth": []
@@ -30384,16 +30384,6 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "La tasa confirmada.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DailyRateResponse"
-                }
-              }
-            }
-          },
           "401": {
             "description": "Sin token válido.",
             "content": {
@@ -30416,6 +30406,16 @@
           },
           "404": {
             "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "RATE_ONLY_FROM_BCV: la tasa ya no se confirma a mano.",
             "content": {
               "application/json": {
                 "schema": {

@@ -155,6 +155,16 @@ export function inventoryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const parsed = ReceiveStockRequest.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) throw new ValidacionError(parsed.error.issues);
     coherente(companyId, parsed.data.company_id);
+    // Solo existe la tasa del BCV (ADR-0064 §1): una entrada ya no se valora a una tasa escrita
+    // a mano. El dominio conserva `fx` para sus llamantes internos, que pasan la tasa congelada
+    // de un documento; desde fuera, se rechaza con su motivo.
+    if (parsed.data.fx !== undefined) {
+      throw new DominioError({
+        code: "RATE_ONLY_FROM_BCV",
+        message:
+          "La entrada se valora con la tasa del BCV del día; ya no se escribe otra tasa a mano.",
+      });
+    }
     const { actor } = c.get("ladino.auth");
     const r = await withTransaction(sql, actor, (uow) => receiveStock(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);

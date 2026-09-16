@@ -36,6 +36,7 @@ import type {
 } from "../../lib.js";
 import { fechaLocal, fechaHoraLocal } from "../../fechas.js";
 import { sufijoDeArchivo } from "../../app/rif.js";
+import { tasaLimpia } from "../../tasa.js";
 
 /**
  * Inventario — Fase B. Cuatro superficies en pestañas: existencias (con el
@@ -479,14 +480,9 @@ function Movimiento({
     quantity: "",
     amount: "",
     currency: "USD",
-    fx_rate: "",
-    fx_source: "",
     reason: "",
     reference: "",
   });
-  // La tasa del día es el camino feliz (la resuelve el servidor, con su
-  // fuente); «usar otra tasa» abre el override para el caso raro.
-  const [otraTasa, setOtraTasa] = useState(false);
   const [confirmando, setConfirmando] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -511,11 +507,7 @@ function Movimiento({
     producto !== null &&
     form.warehouse_id !== "" &&
     cantidadValida &&
-    (operacion !== "entrada" ||
-      (importeValido(montoLimpio) &&
-        (form.currency === "VES" ||
-          !otraTasa ||
-          (form.fx_rate !== "" && form.fx_source.trim() !== "")))) &&
+    (operacion !== "entrada" || importeValido(montoLimpio)) &&
     // La SALIDA también exige motivo: sin él no se sabe si fue merma, consumo o regalo, y en el
     // mayor cae igual en «Ajuste de inventario» (QA de pantalla 2026-09-15, h. 42).
     ((operacion !== "ajuste" && operacion !== "salida") || form.reason.trim().length >= 3) &&
@@ -540,17 +532,7 @@ function Movimiento({
             quantity: form.quantity,
             amount: montoLimpio,
             currency: form.currency,
-            // Sin fx, el SERVIDOR resuelve la tasa del día (con su fuente) —
-            // el override solo viaja cuando la persona eligió otra tasa.
-            ...(form.currency !== "VES" && otraTasa
-              ? {
-                  fx: {
-                    rate: form.fx_rate,
-                    source: form.fx_source,
-                    at: new Date().toISOString(),
-                  },
-                }
-              : {}),
+            // Sin fx: el SERVIDOR valora con la tasa del BCV del día (ADR-0064 §1).
           }),
         });
       } else if (operacion === "salida") {
@@ -700,54 +682,12 @@ function Movimiento({
               {/* La equivalencia del día, calculada por el servidor: se ve lo
                   que vale en la otra moneda ANTES de registrar, y queda claro
                   con qué tasa y de qué fuente se valorará. */}
-              {importeValido(montoLimpio) && vista.data && !otraTasa && (
+              {importeValido(montoLimpio) && vista.data && (
                 <p className="text-[0.85rem] text-muted-foreground tabular-nums sm:col-span-2">
                   {form.currency === "USD"
-                    ? `≈ Bs. ${vista.data.in_functional} a la tasa del día (${vista.data.rate} · ${vista.data.source.split(" ")[0]})`
-                    : `≈ USD ${vista.data.in_anchor} a la tasa del día (${vista.data.rate})`}
-                  {" · "}
-                  <button
-                    type="button"
-                    className="text-accent-soft-foreground hover:underline"
-                    onClick={() => setOtraTasa(true)}
-                  >
-                    usar otra tasa
-                  </button>
+                    ? `≈ ${mostrarImporte({ amount: vista.data.in_functional, currency: "VES" })} · ${tasaLimpia(vista.data.rate)}`
+                    : `≈ ${mostrarImporte({ amount: vista.data.in_anchor, currency: "USD" })} · ${tasaLimpia(vista.data.rate)}`}
                 </p>
-              )}
-              {form.currency !== "VES" && otraTasa && (
-                <>
-                  <FormField label="Tasa a VES" required>
-                    {(a) => (
-                      <Input
-                        id={a.id}
-                        inputMode="decimal"
-                        className="text-right font-mono"
-                        value={form.fx_rate}
-                        onChange={(e) => setForm({ ...form, fx_rate: e.target.value })}
-                      />
-                    )}
-                  </FormField>
-                  <FormField label="Fuente de la tasa" required hint="Sin fuente no se guarda.">
-                    {(a) => (
-                      <Input
-                        id={a.id}
-                        placeholder="Pactada con el proveedor…"
-                        value={form.fx_source}
-                        onChange={(e) => setForm({ ...form, fx_source: e.target.value })}
-                      />
-                    )}
-                  </FormField>
-                  <p className="text-[0.8rem] text-muted-foreground sm:col-span-2">
-                    <button
-                      type="button"
-                      className="text-accent-soft-foreground hover:underline"
-                      onClick={() => setOtraTasa(false)}
-                    >
-                      volver a la tasa del día
-                    </button>
-                  </p>
-                </>
               )}
             </>
           )}

@@ -23,7 +23,8 @@ import type { StorageConfig } from "../config.js";
  * líneas exentas/exoneradas/no sujetas leído del tratamiento congelado
  * (13.9), «SIN DERECHO A CRÉDITO FISCAL» en toda copia (13.13, `?copia=1`) y
  * ambas monedas con su tipo de cambio cuando la operación se expresó en
- * moneda extranjera (13.14).
+ * moneda extranjera (13.14): base, IVA y total en la moneda del documento (LIVA
+ * art. 69) y la tasa, limpia (ADR-0064).
  *
  * Generación en la API (pdfkit) y no en el worker — desviación declarada de
  * la spec de fase: es render puro de datos ya persistidos, tarda milisegundos
@@ -57,6 +58,23 @@ function vestirCantidad(exacto: string): string {
   const [entero = "0", decimalCrudo = ""] = exacto.split(".");
   const decimal = decimalCrudo.replace(/0+$/, "");
   return decimal === "" ? entero : `${entero},${decimal}`;
+}
+
+/**
+ * La tasa impresa, limpia: «Tasa BCV: 842,2067». La fuente completa —servicio y marca de
+ * tiempo— queda en la fila, no en el papel (dueño, 2026-09-16). Un documento emitido antes de la
+ * migración 66 con una tasa tecleada no se rotula «BCV»: dice «Tipo de cambio» (ADR-0064 §1).
+ */
+function nombreDeTasa(fuente: string): string {
+  return /\bbcv\b/i.test(fuente) ? "Tasa BCV" : "Tipo de cambio";
+}
+
+/** La tasa exacta, con miles y coma decimal, sin ceros de cola. */
+function vestirTasa(exacto: string): string {
+  const [entero = "0", decimalCrudo = ""] = exacto.split(".");
+  const miles = entero.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const decimal = decimalCrudo.replace(/0+$/, "");
+  return decimal === "" ? miles : `${miles},${decimal}`;
 }
 
 function fechaLegible(iso: string | null): string {
@@ -108,6 +126,12 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
                d.tax_amount::text as tax_amount, d.total_amount::text as total_amount,
                d.functional_amount::text as functional_amount,
                d.amount_transaction_currency::text as amount_transaction,
+               (select coalesce(sum(l.line_subtotal_transaction), 0)
+                  from public.document_lines l where l.document_id = d.id)::text
+                 as subtotal_transaction,
+               (select coalesce(sum(l.tax_amount), 0)
+                  from public.document_lines l where l.document_id = d.id)::text
+                 as tax_transaction,
                d.annul_reason,
                e.logo_path as company_logo_path,
                coalesce(d.issuer_name_snapshot, e.legal_name) as company_name,
@@ -312,29 +336,50 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
     totalFila("TOTAL:", String(doc["total_amount"]), true);
     // PA 00071 art. 13.14: operación expresada en moneda extranjera → el
     // documento lleva AMBAS monedas y el tipo de cambio aplicable. El cuerpo
-    // va en Bs (arriba); aquí, el total en la moneda del documento y la tasa
-    // de emisión con su fuente — los tres congelados en la fila. Es además la
+    // va en Bs (arriba); aquí, base, IVA y total en la moneda del documento y la
+    // tasa de emisión — congelados en la fila. Es además la
     // deuda ANCLADA (ADR-0047): lo que se fía se debe en esta moneda.
     if (moneda !== funcional) {
       pdf.moveDown(0.2);
       // La cita de PA 00071 art. 13.14 es de la FACTURA (A6): el recibo no
-      // fiscal muestra la tasa con su fuente, sin invocar una norma que no le aplica.
+      // fiscal muestra la tasa, sin invocar una norma que no le aplica.
       const cita = esRecibo ? "" : " (art. 13.14, PA 00071)";
+      const nombreMoneda = moneda === "USD" ? "dólares" : moneda;
+      pdf.font("Helvetica").fontSize(9);
+      // LIVA art. 69 (G.O. Ext. 6.507): la factura en divisa lleva base imponible, impuesto y
+      // total en la moneda de la operación Y en bolívares (ADR-0064 §2). El recibo no fiscal
+      // no separa impuesto: solo su total.
+      if (!esRecibo) {
+        pdf
+          .text(
+            `Base imponible en ${nombreMoneda}: ${moneda} ${vestirImporte(String(doc["subtotal_transaction"]))}`,
+            280,
+            pdf.y,
+            { width: 284, align: "right" },
+          )
+          .text(
+            `IVA en ${nombreMoneda}: ${moneda} ${vestirImporte(String(doc["tax_transaction"]))}`,
+            280,
+            pdf.y,
+            { width: 284, align: "right" },
+          );
+      }
       pdf
-        .font("Helvetica")
-        .fontSize(9)
         .text(
-          `Total en ${moneda === "USD" ? "dólares" : moneda}: ` +
+          `Total en ${nombreMoneda}: ` +
             `${moneda} ${vestirImporte(String(doc["amount_transaction"]))}`,
           280,
           pdf.y,
           { width: 284, align: "right" },
         )
         .text(
-          `Tipo de cambio: ${vestirCantidad(String(doc["fx_rate"]))} ${funcional}/${moneda} — ${String(doc["rate_source"])}${cita}`,
+          `${nombreDeTasa(String(doc["rate_source"]))}: ${vestirTasa(String(doc["fx_rate"]))}${cita}`,
           280,
           pdf.y,
-          { width: 284, align: "right" },
+          {
+            width: 284,
+            align: "right",
+          },
         );
     }
 

@@ -15,7 +15,6 @@ import {
   CreateDebitNoteRequest,
   CreateReturnRequest,
   CreateFiscalRangeRequest,
-  CreateExchangeRateRequest,
   PosTenderRequest,
   RefundCustomerCreditRequest,
 } from "@ladino/schemas";
@@ -418,7 +417,7 @@ export function salesRoutes(
         if (!t?.rate) {
           throw new DominioError({
             code: "EXCHANGE_RATE_MISSING",
-            message: `No hay tasa de ${tenderedCurrency} a ${currency}: carga la tasa del día.`,
+            message: `No hay tasa BCV de ${tenderedCurrency} a ${currency}: tráela en Mi dinero.`,
           });
         }
         rate = t.rate;
@@ -437,7 +436,7 @@ export function salesRoutes(
           if (!t2?.rate) {
             throw new DominioError({
               code: "EXCHANGE_RATE_MISSING",
-              message: `No hay tasa de ${alreadyPaidCurrency} a ${currency}: carga la tasa del día.`,
+              message: `No hay tasa BCV de ${alreadyPaidCurrency} a ${currency}: tráela en Mi dinero.`,
             });
           }
           const [conv] = await tx<{ v: string }[]>`
@@ -832,7 +831,7 @@ export function salesRoutes(
   });
 
   app.get("/v1/exchange-rates", async (c) => {
-    const { companyId } = requireCompany(c);
+    requireCompany(c);
     const { actor } = c.get("ladino.auth");
     const from = c.req.query("from") ?? "USD";
     const to = c.req.query("to") ?? "VES";
@@ -846,13 +845,14 @@ export function salesRoutes(
                case when company_id is null then 'plataforma' else 'propia' end as scope
           from public.exchange_rates
          where from_currency = ${from} and to_currency = ${to}
-           -- Lo que esta empresa VE: la plataforma y lo suyo (ADR-0057).
-           and (company_id is null or company_id = ${companyId})
+           -- Solo existe la tasa del BCV (ADR-0064 §1): las tecleadas antes de la migración 66
+           -- son historia y no se listan como si rigieran.
+           and company_id is null
          -- El MISMO orden con el que rate_for elige «la tasa del día»: con dos
          -- tasas para la misma fecha (BCV + propia) la primera fila es la que va
          -- a usar la venta. Sin el desempate, cada pantalla enseñaba una
          -- distinta (auditoría 2026-09-11, M-04).
-         order by rate_date desc, (company_id is not null) desc, created_at desc limit 60`,
+         order by rate_date desc, created_at desc limit 60`,
     );
     return c.json(filas, 200);
   });
@@ -860,8 +860,8 @@ export function salesRoutes(
   /**
    * La tasa OFICIAL del BCV, traída del adaptador (DolarAPI) y persistida con
    * su fuente y su día PUBLICADO — el `NullBCVAdapter` de ADR-0028 por fin
-   * dejó de ser null. La carga manual de abajo sigue siendo el fallback: sin
-   * internet, la tasa se teclea.
+   * dejó de ser null. Es la única manera de poner la tasa además del refresco automático
+   * (ADR-0064 §1): ya no se teclea.
    */
   app.post("/v1/exchange-rates/bcv", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);
@@ -932,47 +932,18 @@ export function salesRoutes(
   });
 
   /**
-   * Carga MANUAL de tasa (ADR-0028): el fallback del adaptador BCV de arriba
-   * — sin internet, la tasa se teclea. Sin fuente no se persiste, y la fuente
-   * queda visible en cada documento que la use.
+   * Cargar una tasa A MANO ya no existe (ADR-0064 §1, dueño 2026-09-16: «ya no permitas
+   * escribir ninguna tasa a mano. solo la del BCV»). La ruta se conserva para que un cliente
+   * viejo reciba un motivo y no un 404 mudo; la base, además, ya no deja escribir una tasa de
+   * empresa (migración 66).
    */
-  app.post("/v1/exchange-rates", idempotencia, async (c) => {
-    const parsed = CreateExchangeRateRequest.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
-    const d = parsed.data;
-    const { companyId } = requireCompany(c);
-    const { actor } = c.get("ladino.auth");
-    if (actor.kind !== "user") {
-      throw new DominioError({
-        code: "PERMISSION_REQUIRED",
-        message: "Cargar una tasa exige un usuario real.",
-      });
-    }
-    const fila = await withTransaction(sql, actor, async ({ sql: tx }) => {
-      const [permiso] = await tx<{ ok: boolean }[]>`
-        select platform.ladino_user_has_permission(${actor.userId}, 'fx.rate.manage',
-                                                   ${companyId}) as ok`;
-      if (!permiso?.ok) {
-        throw new DominioError({
-          code: "PERMISSION_REQUIRED",
-          message: "Cargar una tasa exige el permiso fx.rate.manage.",
-        });
-      }
-      // `rate_timestamp` es el instante en que se REGISTRA la tasa, distinto de
-      // `rate_date`, que es el día para el que rige. Los dos, porque una tasa
-      // cargada tarde sigue rigiendo su día y el desfase tiene que verse.
-      // Una tasa tecleada es DE ESTA EMPRESA: las demás no la ven (ADR-0057).
-      const [r] = await tx<Record<string, unknown>[]>`
-        insert into public.exchange_rates
-          (tenant_id, company_id, from_currency, to_currency, rate, source, rate_date, rate_timestamp)
-        values ((select tenant_id from public.companies where id = ${companyId}), ${companyId},
-                ${d.from_currency}, ${d.to_currency}, ${d.rate}, ${d.source}, ${d.rate_date}::date,
-                now())
-        returning id, from_currency, to_currency, rate::text as rate, source,
-                  rate_date::text as rate_date`;
-      return r!;
+  app.post("/v1/exchange-rates", idempotencia, (c) => {
+    requireCompany(c);
+    throw new DominioError({
+      code: "RATE_ONLY_FROM_BCV",
+      message:
+        "Solo se usa la tasa del BCV y ya no se escribe a mano. Tráela con «Traer del BCV» en Mi dinero.",
     });
-    return c.json(fila, 201);
   });
 
   /** KPI del panel: diferencial cambiario acumulado del período. */

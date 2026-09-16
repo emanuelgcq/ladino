@@ -166,7 +166,7 @@ describe("el adaptador BCV", () => {
     expect(conteo!.n).toBe("1");
   });
 
-  it("con la fuente caída: 502 UPSTREAM_UNAVAILABLE, y el fallback manual queda dicho", async () => {
+  it("con la fuente caída: 502 UPSTREAM_UNAVAILABLE, y se dice que rige la última tasa", async () => {
     const caido = buildApp({
       sql: sqlApi,
       auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER },
@@ -177,7 +177,9 @@ describe("el adaptador BCV", () => {
     expect(r.status).toBe(502);
     const cuerpo = (await r.json()) as { code: string; person_message: string };
     expect(cuerpo.code).toBe("UPSTREAM_UNAVAILABLE");
-    expect(cuerpo.person_message).toContain("a mano");
+    // Ya no hay carga a mano (ADR-0064 §1): mientras el BCV no responde, rige su última tasa.
+    expect(cuerpo.person_message).toContain("rige la última tasa");
+    expect(cuerpo.person_message).not.toContain("a mano");
   });
 
   it("sin adaptador configurado también es 502, no un 500 mudo", async () => {

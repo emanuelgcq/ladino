@@ -436,8 +436,8 @@ async function ingresar(
   // vigente a la fecha del movimiento (día Caracas), con su fuente citada:
   // la MISMA semántica y la misma consulta que usan las ventas. La tasa
   // oficial llega sola cada día (refresco BCV), así que el camino feliz ya
-  // no pide tasa a nadie; el override explícito sigue mandando (mercancía
-  // pactada a otra tasa, fechas viejas). El movimiento congela tasa, fuente
+  // no pide tasa a nadie. `fx` explícito solo llega de llamantes internos que
+  // pasan la tasa congelada de su documento (la API lo rechaza: ADR-0064 §1). El movimiento congela tasa, fuente
   // y monto original: el histórico del diferencial queda entero.
   let fx = input.fx;
   if (fx === undefined && input.currency !== ctx.value.functionalCurrency) {
@@ -450,7 +450,7 @@ async function ingresar(
     if (!t) {
       return err({
         code: "EXCHANGE_RATE_MISSING",
-        message: `No hay tasa de ${input.currency} a ${ctx.value.functionalCurrency} para esa fecha. Confírmala en Mi dinero, o escribe la tuya con su fuente.`,
+        message: `No hay tasa BCV de ${input.currency} a ${ctx.value.functionalCurrency} para esa fecha. Tráela en Mi dinero.`,
       });
     }
     fx = { rate: t.rate, source: t.source ?? "manual", at: t.at };

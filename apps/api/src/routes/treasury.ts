@@ -8,7 +8,6 @@ import {
   RegisterExpenseRequest,
   CreateTreasuryTransferRequest,
   CloseCashRegisterRequest,
-  KeepDailyRateRequest,
 } from "@ladino/schemas";
 import {
   listCompanyAccounts,
@@ -20,7 +19,6 @@ import {
   registerExpense,
   transferBetweenAccounts,
   closeCashRegister,
-  keepDailyRate,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -268,16 +266,15 @@ export function treasuryRoutes(
   });
 
   // ── «La tasa sigue igual» ─────────────────────────────────────────────────
-  app.post("/v1/exchange-rates/keep", idempotencia, async (c) => {
-    const { companyId } = requireCompany(c);
-    const parsed = KeepDailyRateRequest.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
-    const { actor } = c.get("ladino.auth");
-    const r = await withTransaction(sql, actor, (uow) =>
-      keepDailyRate(uow, companyId, parsed.data),
-    );
-    if (!r.ok) throw new DominioError(r.error);
-    return c.json(r.value, 201);
+  // Ya no se confirma a mano (ADR-0064 §1): un día sin publicación rige la última tasa del
+  // BCV, sin copiarla. La ruta se conserva para responder un motivo a un cliente viejo.
+  app.post("/v1/exchange-rates/keep", idempotencia, (c) => {
+    requireCompany(c);
+    throw new DominioError({
+      code: "RATE_ONLY_FROM_BCV",
+      message:
+        "La tasa ya no se confirma a mano: si el BCV no publicó hoy, rige su última tasa. Para actualizarla usa «Traer del BCV».",
+    });
   });
 
   /**

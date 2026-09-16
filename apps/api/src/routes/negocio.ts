@@ -302,7 +302,7 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
       if (!t?.rate) {
         throw new DominioError({
           code: "EXCHANGE_RATE_MISSING",
-          message: `No hay tasa de ${from} a ${to}. Carga la tasa del día primero.`,
+          message: `No hay tasa BCV de ${from} a ${to}. Tráela en Mi dinero.`,
         });
       }
       // La equivalencia es PRESENTACIÓN: se sirve a las unidades mínimas de su moneda

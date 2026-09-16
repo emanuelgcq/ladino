@@ -39,8 +39,7 @@ values ('aaaa0065-0000-4000-8000-00000000e101', 'aaaa0065-0000-4000-8000-0000000
         'aaaa0065-0000-4000-8000-0000000000a2', 'formatos_libres', '2026-01-01');
 insert into public.exchange_rates
   (from_currency, to_currency, rate, source, rate_date, rate_timestamp, tenant_id, company_id)
-values ('USD', 'VES', 45, 'prueba-065', platform.caracas_day(now()), now(),
-        'aaaa0065-0000-4000-8000-00000000000a', 'aaaa0065-0000-4000-8000-0000000000a2');
+values ('USD', 'VES', 45, 'prueba-065', platform.caracas_day(now()), now(), null, null);
 
 -- La venta: USD 100 + 16, congelada en bolívares a 40.
 insert into public.documents

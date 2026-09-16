@@ -33,6 +33,7 @@ import {
   NOTA_FORMATO_PRODUCTOS,
 } from "../../components/importar.js";
 import { BotonEscanear } from "../../components/EscanerCodigo.js";
+import { tasaLimpia } from "../../tasa.js";
 
 /**
  * PRODUCTOS (Fase C, PARTE 7): lo que vendo, con foto. Cuadrícula visual por
@@ -371,8 +372,7 @@ function EquivalenteBs({
   if (!valido || !q.data) return null;
   return (
     <p className="text-[0.82rem] text-muted-foreground">
-      ≈ {mostrarImporte({ amount: q.data.converted, currency: "VES" })} a la tasa de hoy (
-      {mostrarCantidad(q.data.rate)})
+      ≈ {mostrarImporte({ amount: q.data.converted, currency: "VES" })} · {tasaLimpia(q.data.rate)}
     </p>
   );
 }

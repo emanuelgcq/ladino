@@ -6,13 +6,13 @@ import { useSesion } from "../../app/session.js";
 import { tieneRif as tieneRifEmpresa } from "../../app/rif.js";
 import { LogoLadino } from "../../components/LogoLadino.js";
 import { errorDePersona } from "../../lib.js";
-import { mostrarCantidad } from "../../money.js";
-import { fuenteDeTasa } from "../../fechas.js";
+import { tasaLimpia } from "../../tasa.js";
+import { fechaLocal } from "../../fechas.js";
 import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
 import { Input } from "../../ui/input.js";
 import { useToast } from "../../ui/toast.js";
-import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
+import { FormField } from "../../components/forms.js";
 import { AltaSimple, ImportarExcel } from "./Productos.js";
 import { CrearCuenta } from "./Dinero.js";
 import { IvaQueCobras } from "../../components/capa-fiscal/IvaQueCobras.js";
@@ -46,7 +46,7 @@ interface SetupFiscal {
   iva_general: { rate: string; legal_source: string } | null;
 }
 interface Resumen {
-  tasa_del_dia: { rate: string; source: string; es_de_hoy: boolean } | null;
+  tasa_del_dia: { rate: string; rate_date: string; es_de_hoy: boolean } | null;
 }
 
 export function Empezar(): React.JSX.Element {
@@ -101,7 +101,8 @@ export function Empezar(): React.JSX.Element {
 
   const hayProductos = (productos.data?.total ?? 0) > 0;
   const hayCuentas = (cuentas.data?.accounts.length ?? 0) > 0;
-  const hayTasa = resumen.data?.tasa_del_dia?.es_de_hoy === true;
+  // Solo existe la tasa del BCV (ADR-0064 §1): la última publicada vale, sea de hoy o no.
+  const hayTasa = (resumen.data?.tasa_del_dia ?? null) !== null;
   const facturacion = fiscal.data ?? null;
   const necesitaTalonario = facturacion?.current_regime === "formatos_libres";
   const hayTalonario = (rangos.data ?? []).some(
@@ -118,7 +119,7 @@ export function Empezar(): React.JSX.Element {
   const pasos: { titulo: string; listo: boolean; saltable: boolean }[] = [
     { titulo: "Tus productos", listo: hayProductos, saltable: true },
     { titulo: "Tu dinero", listo: hayCuentas, saltable: false },
-    { titulo: "La tasa del día", listo: hayTasa, saltable: false },
+    { titulo: "La tasa BCV", listo: hayTasa, saltable: false },
     // Sin RIF no hay facturas: el paso es «Tus recibos» (regla del dueño, 2026-09-16).
     { titulo: conRif ? "Tus facturas" : "Tus recibos", listo: fiscalListo, saltable: false },
   ];
@@ -361,50 +362,15 @@ function PasoTasa({
   onCambio,
   onSeguir,
 }: {
-  tasa: { rate: string; source: string; es_de_hoy: boolean } | null;
+  tasa: { rate: string; rate_date: string; es_de_hoy: boolean } | null;
   onCambio: () => void;
   onSeguir: () => void;
 }): React.JSX.Element {
   const { llamar } = useSesion();
   const toast = useToast();
-  const [nueva, setNueva] = useState("");
 
-  const confirmar = useMutation({
-    mutationFn: () =>
-      llamar("/v1/exchange-rates/keep", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ from_currency: "USD", to_currency: "VES" }),
-      }),
-    onSuccess: () => {
-      toast.success("Tasa confirmada para hoy");
-      onCambio();
-    },
-    onError: (e) => toast.error("No se pudo confirmar la tasa", errorDePersona(e)),
-  });
-  const cargar = useMutation({
-    mutationFn: () =>
-      llamar("/v1/exchange-rates", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          from_currency: "USD",
-          to_currency: "VES",
-          rate: nueva.trim().replace(",", "."),
-          source: "Carga manual del negocio",
-          // El día LOCAL de la persona, no el de UTC (CLAUDE.md §3).
-          rate_date: new Date().toLocaleDateString("en-CA"),
-        }),
-      }),
-    onSuccess: () => {
-      toast.success("Tasa del día guardada");
-      setNueva("");
-      onCambio();
-    },
-    onError: (e) => toast.error("No se pudo guardar la tasa", errorDePersona(e)),
-  });
-  // El camino de UN clic: la oficial del BCV, vía DolarAPI, con fuente y día
-  // publicados. El manual queda como fallback para cuando no haya internet.
+  // Solo existe la tasa del BCV (ADR-0064 §1): se actualiza sola y este botón la pide ya. No se
+  // escribe a mano: un día sin publicación rige la última tasa del BCV.
   const traerBcv = useMutation({
     mutationFn: () =>
       llamar<{ rate: string }>("/v1/exchange-rates/bcv", {
@@ -412,7 +378,7 @@ function PasoTasa({
         headers: { "Idempotency-Key": crypto.randomUUID() },
       }),
     onSuccess: (r) => {
-      toast.success("Tasa del BCV traída", `Bs. ${mostrarCantidad(r.rate)} por dólar`);
+      toast.success("Tasa BCV traída", tasaLimpia(r.rate));
       onCambio();
     },
     onError: (e) => toast.error("No se pudo traer la tasa", errorDePersona(e)),
@@ -422,66 +388,35 @@ function PasoTasa({
     <Card>
       <CardContent className="space-y-4 py-5">
         <div>
-          <h2 className="text-[1.05rem] font-semibold">La tasa del día</h2>
+          <h2 className="text-[1.05rem] font-semibold">La tasa BCV</h2>
           <p className="mt-1 text-[0.9rem] text-muted-foreground">
-            Con ella Ladino convierte tus precios en dólares a bolívares. Se confirma cada día desde
-            «Mi dinero» — hoy la dejamos puesta.
+            Con ella Ladino convierte tus precios en dólares a bolívares. Se actualiza sola cada
+            día; la ves en «Mi dinero».
           </p>
         </div>
-        {tasa !== null && tasa.es_de_hoy ? (
+        {tasa !== null ? (
           <p className="flex items-center gap-2 text-[0.95rem]">
             <Check className="size-4 text-success-soft-foreground" />
-            Hoy: Bs. {mostrarCantidad(tasa.rate)} por dólar · {fuenteDeTasa(tasa.source)}
+            {tasaLimpia(tasa.rate)}
+            {!tasa.es_de_hoy && (
+              <span className="text-muted-foreground">
+                · la última publicada, del {fechaLocal(tasa.rate_date)}
+              </span>
+            )}
           </p>
         ) : (
-          <div className="space-y-3">
-            <Button
-              variant="primary"
-              disabled={traerBcv.isPending}
-              onClick={() => traerBcv.mutate()}
-            >
-              {traerBcv.isPending ? "Consultando…" : "Traer la oficial del BCV"}
-            </Button>
-            {tasa !== null && (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[0.9rem]">
-                  La última fue Bs. {mostrarCantidad(tasa.rate)} por dólar.
-                </span>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={confirmar.isPending}
-                  onClick={() => confirmar.mutate()}
-                >
-                  Sigue igual
-                </Button>
-              </div>
-            )}
-            <div className="flex flex-wrap items-end gap-2">
-              <FormField label="O escríbela tú (Bs. por dólar)">
-                {(p) => (
-                  <MoneyInput
-                    id={p.id}
-                    ariaInvalid={p["aria-invalid"]}
-                    ariaDescribedby={p["aria-describedby"]}
-                    value={nueva}
-                    onChange={setNueva}
-                    currency="Bs."
-                    className="w-40"
-                  />
-                )}
-              </FormField>
-              <Button
-                variant="primary"
-                disabled={!importeValido(nueva.trim().replace(",", ".")) || cargar.isPending}
-                onClick={() => cargar.mutate()}
-              >
-                Guardar tasa
-              </Button>
-            </div>
-          </div>
+          <p className="text-[0.9rem] text-muted-foreground">Todavía no llegó la tasa del BCV.</p>
         )}
-        <Button variant="ghost" disabled={tasa === null || !tasa.es_de_hoy} onClick={onSeguir}>
+        {(tasa === null || !tasa.es_de_hoy) && (
+          <Button
+            variant={tasa === null ? "primary" : "secondary"}
+            disabled={traerBcv.isPending}
+            onClick={() => traerBcv.mutate()}
+          >
+            {traerBcv.isPending ? "Consultando…" : "Traer del BCV"}
+          </Button>
+        )}
+        <Button variant="ghost" disabled={tasa === null} onClick={onSeguir}>
           Seguir <ChevronRight />
         </Button>
       </CardContent>

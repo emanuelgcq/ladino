@@ -186,9 +186,11 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   // ADR-0062 §4: el egreso deja la cuenta en negativo y nadie lo confirmó. 409: el cuerpo está
   // bien; lo que no alcanza es el saldo, y el mensaje dice cuánto hay.
   INSUFFICIENT_FUNDS: 409,
-  // El adaptador BCV (DolarAPI) no respondió o respondió irreconocible. 502:
-  // el cuerpo del cliente está bien; lo que falló está aguas arriba, y el
-  // fallback es la carga manual de siempre.
+  // ADR-0064 §1: solo existe la tasa del BCV; teclearla o confirmarla a mano ya no se puede.
+  // 409: el cuerpo está bien; lo que lo impide es la regla, y el mensaje dice el camino.
+  RATE_ONLY_FROM_BCV: 409,
+  // El adaptador BCV no respondió o respondió irreconocible. 502: el cuerpo del cliente está
+  // bien; lo que falló está aguas arriba. Mientras tanto rige la última tasa publicada.
   UPSTREAM_UNAVAILABLE: 502,
 };
 
@@ -368,7 +370,9 @@ export function mensajePersona(code: string): string {
     case "DUPLICATE":
       return "Ya hay uno igual registrado. Busca el que existe en vez de crear otro.";
     case "EXCHANGE_RATE_MISSING":
-      return "Falta la tasa del día. Cárgala en Mi dinero y vuelve a intentar.";
+      return "Falta la tasa BCV. Tráela en Mi dinero y vuelve a intentar.";
+    case "RATE_ONLY_FROM_BCV":
+      return "Solo se usa la tasa del BCV. Tráela con «Traer del BCV» en Mi dinero.";
     case "TAX_RULE_MISSING":
       return "Falta configurar el impuesto de venta. Se completa en Empezar antes de poder vender.";
     case "FISCAL_NUMBERING_INVALID":
@@ -394,7 +398,7 @@ export function mensajePersona(code: string): string {
     case "GATEWAY_TIMEOUT":
       return "Esto está tardando más de la cuenta. Revisa en un momento si quedó registrado antes de repetirlo.";
     case "UPSTREAM_UNAVAILABLE":
-      return "No se pudo consultar la fuente en este momento. Intenta de nuevo, o carga el dato a mano.";
+      return "No se pudo consultar el BCV en este momento. Intenta de nuevo en un rato; mientras tanto rige la última tasa.";
     case "UNAUTHENTICATED":
     case "TOKEN_EXPIRED":
       return "Tu sesión terminó. Vuelve a entrar.";

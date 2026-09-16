@@ -145,15 +145,13 @@ describe("costeo promedio ponderado móvil, de punta a punta", () => {
     expect(!sin.ok && sin.error.code).toBe("EXCHANGE_RATE_MISSING");
     expect(!sin.ok && sin.error.message).toContain("tasa");
 
-    await como(JEFE, async ({ sql }) => {
-      await sql`
-        insert into public.exchange_rates
-          (tenant_id, company_id, from_currency, to_currency, rate, source, rate_date,
-           rate_timestamp)
-        values (${TENANT}, ${COMPANY}, 'USD', 'VES', 50, 'BCV unit-inventario', '2019-06-02',
-                '2019-06-02T12:00:00Z')
-        on conflict on constraint exchange_rates_day_key do nothing`;
-    });
+    // La tasa OFICIAL (solo existe la del BCV: ADR-0064 §1); la escribe el sistema, no el
+    // usuario. Se borra al final del caso: la tabla es global.
+    await sql`
+      insert into public.exchange_rates
+        (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+      values ('USD', 'VES', 50, 'BCV unit-inventario', '2019-06-02', '2019-06-02T12:00:00Z')
+      on conflict on constraint exchange_rates_day_key do nothing`;
     const con = await como(JEFE, (uow) =>
       receiveStock(uow, {
         ...posicion(),
@@ -168,6 +166,8 @@ describe("costeo promedio ponderado móvil, de punta a punta", () => {
     expect(con.value.fx_rate).toBe("50.00000000");
     expect(con.value.rate_source).toBe("BCV unit-inventario");
     expect(con.value.functional_amount).toBe("100.00000000");
+    await sql`delete from public.exchange_rates
+               where company_id is null and source = 'BCV unit-inventario'`;
   });
 });
 

@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 
 /**
  * Ventas de extremo a extremo con JWT real, como `ladino_api`.
@@ -45,7 +46,8 @@ const ASIG_VENDEDOR = crypto.randomUUID();
 const ASIG_CAJERO = crypto.randomUUID();
 const ASIG_MIRON = crypto.randomUUID();
 const RUN = Date.now().toString(36);
-const FUENTE_TASA = "Carga manual E2E (NullBCVAdapter)";
+/** Tasas OFICIALES sembradas por este fichero (solo existe la del BCV: ADR-0064 §1). */
+const FUENTE_TASA = "BCV e2e-ventas";
 const FUENTE_REGLA = "Carga de prueba E2E — VALIDAR-SENIAT antes de producción.";
 const HOY = diaCaracas();
 const AYER = diaCaracas(-1);
@@ -234,6 +236,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // La tabla es global: las tasas de este fichero no rigen en el siguiente.
+  await borrarTasasOficiales(sql, FUENTE_TASA);
   await sql.end();
   await sqlApi.end();
 });
@@ -263,14 +267,7 @@ describe("ventas de extremo a extremo", () => {
   });
 
   it("con tasa pero sin regla tributaria NO se cotiza: LAD50, nunca un IVA de cero", async () => {
-    const tasa = await pedir("POST", "/v1/exchange-rates", VENDEDOR, {
-      from_currency: "USD",
-      to_currency: "VES",
-      rate: "40.00000000",
-      source: FUENTE_TASA,
-      rate_date: AYER,
-    });
-    expect(tasa.status).toBe(201);
+    await sembrarTasaOficial(sql, { rate: "40.00000000", source: FUENTE_TASA, rate_date: AYER });
     // El producto de categoría `gravado_adicional`, que nunca tiene regla.
     const r = await pedir("POST", "/v1/quotes", VENDEDOR, {
       company_id: COMPANY,
@@ -479,13 +476,7 @@ describe("ventas de extremo a extremo", () => {
     expect(doc["total_amount"]).toBe("4640.00000000"); // 116 USD × 40
 
     // La tasa sube a 45 el día del cobro.
-    await pedir("POST", "/v1/exchange-rates", VENDEDOR, {
-      from_currency: "USD",
-      to_currency: "VES",
-      rate: "45.00000000",
-      source: FUENTE_TASA,
-      rate_date: HOY,
-    });
+    await sembrarTasaOficial(sql, { rate: "45.00000000", source: FUENTE_TASA, rate_date: HOY });
 
     const cobro = await pedir("POST", "/v1/payments", CAJERO, {
       company_id: COMPANY,
@@ -1021,6 +1012,14 @@ describe("ventas de extremo a extremo", () => {
     expect(legible).toContain("V-12.345.678");
     expect(legible).toContain("Juan P");
     expect(legible).toContain("Calle 5, casa 12, Maracay");
+    // La factura en dólares (LIVA art. 69, ADR-0064 §2): base, IVA y total TAMBIÉN en la moneda
+    // del documento, y la tasa limpia — «Tasa BCV: 45», sin el servicio por el que llegó.
+    expect(legible).toContain("Base imponible en d");
+    expect(legible).toContain("USD 100,00");
+    expect(legible).toContain("USD 16,00");
+    expect(legible).toContain("USD 116,00");
+    expect(legible).toContain("Tasa BCV: 45");
+    expect(legible).not.toContain("DolarAPI");
   });
 
   it("con las ventas sin identificar APAGADAS, el mostrador exige la cédula", async () => {
@@ -1480,14 +1479,11 @@ describe("ventas de extremo a extremo", () => {
 
   it("la deuda se sirve a 2 decimales y pagar lo mostrado cierra la factura", async () => {
     // Tasa fea de HOY: 116 USD → 4190.320896 Bs. La pantalla dirá 4190.32.
-    const tasa = await pedir("POST", "/v1/exchange-rates", VENDEDOR, {
-      from_currency: "USD",
-      to_currency: "VES",
+    await sembrarTasaOficial(sql, {
       rate: "36.12345600",
-      source: "Prueba redondeo e2e",
+      source: `${FUENTE_TASA} redondeo`,
       rate_date: HOY,
     });
-    expect(tasa.status).toBe(201);
 
     // Cliente FRESCO: su deuda es exactamente esta factura, nada heredado.
     const alta = await pedir("POST", "/v1/customers", VENDEDOR, {

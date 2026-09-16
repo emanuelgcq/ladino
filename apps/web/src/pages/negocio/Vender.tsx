@@ -53,6 +53,7 @@ import { FormField, MoneyInput, importeValido } from "../../components/forms.js"
 import { ETIQUETA_FORMA, FORMAS_BASE, MONEDA_FORMA } from "../../components/formas-de-pago.js";
 import { formatearDocumento } from "./comunes.js";
 import { BotonEscanear, type Lectura } from "../../components/EscanerCodigo.js";
+import { tasaLimpia } from "../../tasa.js";
 
 /**
  * VENDER: el punto de venta. La venta EMPIEZA POR LA CÉDULA — es el flujo
@@ -859,8 +860,7 @@ function VenderDeEmpresa(): React.JSX.Element {
                       amount: cotizacion.data.anchor_total,
                       currency: cotizacion.data.anchor_currency,
                     })}{" "}
-                    a la tasa de hoy (
-                    {mostrarCantidad(cotizacion.data.anchor_rate ?? cotizacion.data.tasa)})
+                    · {tasaLimpia(cotizacion.data.anchor_rate ?? cotizacion.data.tasa)}
                   </p>
                 ) : cotizacion.data.anchor_total === null ? (
                   <p className="text-right text-[0.82rem] text-muted-foreground">

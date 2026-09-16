@@ -7,8 +7,9 @@
  * a DolarAPI y la persiste. Miles de usuarios, cero llamadas extra: la fuente
  * se toca a lo sumo una vez por tick de un solo proceso.
  *
- * El botón manual (POST /v1/exchange-rates/bcv) y la carga manual (ADR-0028)
- * siguen intactos: son el fallback con la fuente caída o sin internet.
+ * El botón «Traer del BCV» (POST /v1/exchange-rates/bcv) sigue: pide lo mismo a
+ * demanda. Ya no hay carga a mano (ADR-0064 §1): con la fuente caída rige la
+ * última tasa publicada.
  */
 import { withTransaction, type createClient } from "@ladino/db";
 import { tasaOficialBcv, BcvNoDisponible, type BcvConfig } from "./bcv.js";
@@ -24,7 +25,7 @@ export type ResultadoRefresco =
   /** Se llamó a la fuente y su publicación ya estaba (fin de semana: DolarAPI
    *  repite el último día hábil, y esa fila ya existe). */
   | "publicacion_repetida"
-  /** La fuente no respondió o respondió basura. El fallback manual sigue. */
+  /** La fuente no respondió o respondió basura. Rige la última tasa guardada. */
   | "sin_fuente"
   /** La fuente respondió un número que no se parece a la última tasa
    *  conocida (otra unidad, otra moneda, un cero perdido): NO se persiste,
@@ -55,10 +56,10 @@ export async function asegurarTasaOficial(sql: Sql, bcv: BcvConfig): Promise<Res
     throw e;
   }
 
-  // Cota de plausibilidad: frente a la ÚLTIMA tasa OFICIAL conocida (las
-  // propias de cada empresa no cuentan: ADR-0057), una desviación mayor del 50 % en un día no es una devaluación:
-  // es un cambio de formato o de unidad en la fuente. Sin tasa previa, la
-  // primera vale (la carga manual la corrige si hace falta).
+  // Cota de plausibilidad: frente a la ÚLTIMA tasa oficial conocida, una desviación mayor del
+  // 50 % en un día no es una devaluación: es un cambio de formato o de unidad en la fuente. Sin
+  // tasa previa, la primera vale. El botón «Traer del BCV» NO pasa por esta cota: una devaluación
+  // real se guarda pidiéndola desde ahí (ADR-0064 §1; ya no hay carga a mano).
   const [previa] = await sql<{ rate: string }[]>`
     select rate::text as rate from public.exchange_rates
      where from_currency = 'USD' and to_currency = 'VES' and company_id is null
@@ -111,7 +112,7 @@ export function iniciarRefrescoBcv(
       else if (resultado === "implausible") log("error", "api.bcv_refresh_implausible");
     } catch (e) {
       // Un fallo del refresco no puede tumbar el servidor: se registra y el
-      // siguiente tick lo reintenta. El botón manual sigue existiendo.
+      // siguiente tick lo reintenta. El botón «Traer del BCV» sigue existiendo.
       log("error", "api.bcv_refresh_failed", { error: String(e) });
     } finally {
       enVuelo = false;

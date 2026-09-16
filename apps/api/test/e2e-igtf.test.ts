@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 import { diaCaracas } from "./_dia-caracas.js";
 
 /**
@@ -517,15 +518,13 @@ describe("LA CAJA (ADR-0059): IGTF dentro de lo recibido, vuelto y formas mezcla
     return r!.b;
   };
 
+  // La tasa de 40 que estos importes suponen, OFICIAL (solo existe la del BCV: ADR-0064 §1),
+  // guardada después de cualquier otra del día para que mande en este bloque.
   beforeAll(async () => {
-    await sql.begin(async (tx) => {
-      await tx`select set_config('ladino.actor_id', ${DUENO}, true)`;
-      await tx`insert into public.exchange_rates
-                 (tenant_id, company_id, from_currency, to_currency, rate, rate_date,
-                  rate_timestamp, source)
-               values (${TENANT}, ${COMPANY}, 'USD', 'VES', 40, ${HOY}::date, now(), 'e2e-caja')
-               on conflict on constraint exchange_rates_day_key do nothing`;
-    });
+    await sembrarTasaOficial(sql, { rate: "40", source: "BCV e2e-igtf-caja", rate_date: HOY });
+  });
+  afterAll(async () => {
+    await borrarTasasOficiales(sql, "BCV e2e-igtf-caja");
   });
 
   it("la vista previa dice cuánto pedir en cada forma: en divisa, IGTF incluido", async () => {

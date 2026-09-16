@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 import { diaCaracas } from "./_dia-caracas.js";
 
 /**
@@ -170,6 +171,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await borrarTasasOficiales(sql, "Carga E2E compras");
   await sql.end();
   await sqlApi.end();
 });
@@ -207,14 +209,8 @@ describe("compras de extremo a extremo", () => {
   });
 
   it("con tasa, la orden se crea con su correlativo interno y su moneda", async () => {
-    const t = await pedir("POST", "/v1/exchange-rates", COMPRADOR, {
-      from_currency: "USD",
-      to_currency: "VES",
-      rate: "40.00000000",
-      source: FUENTE_TASA,
-      rate_date: AYER,
-    });
-    expect(t.status).toBe(201);
+    // La tasa es la OFICIAL (ADR-0064 §1): se siembra como la guardaría el refresco.
+    await sembrarTasaOficial(sql, { rate: "40.00000000", source: FUENTE_TASA, rate_date: AYER });
 
     const r = await pedir("POST", "/v1/purchase-orders", COMPRADOR, {
       company_id: COMPANY,

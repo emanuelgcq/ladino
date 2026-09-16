@@ -463,7 +463,7 @@ en una función de dominio y en `sales_mode`.
 - **Normativa documentada en el repositorio**: todo lo demás está marcado VALIDAR.
   - PA SNAT/2011/00071, arts. 6, 8, 13 (13.5, 13.9, 13.13, 13.14) y 49: `docs/02_COMPLIANCE/EMISION_FACTURAS.md` §1–§3.
   - PA SNAT/2024/000121, derogada por PA SNAT/2026/00084 (G.O. 43.435, 12/08/2026): `docs/02_COMPLIANCE/REGULATORY_STATUS.md` §1–§2.
-  - IGTF y Decreto 4.972 (G.O. Ext. 6.821, 15/07/2024): `docs/02_COMPLIANCE/IGTF_SPEC.md`.
+  - IGTF y Decreto 4.972 (G.O. Ext. 6.821, publicada el 12/07/2024, vigente desde el 15/07/2024): `docs/02_COMPLIANCE/IGTF_SPEC.md`.
   - RIF permanente (PA SNAT/2026/00080 y 00084): ADR-0050.
 - **No documentado con artículo** (VALIDAR):
   - quién es contribuyente ordinario;

@@ -18,9 +18,10 @@ import { FormField, MoneyInput, importeValido } from "./forms.js";
 import { ExchangeDiffIndicator } from "./ExchangeDiffIndicator.js";
 import { FiscalStatusBadge } from "./FiscalStatusBadge.js";
 import { MensajeError } from "../pages/ventas/comunes.js";
-import { mostrarCantidad, mostrarImporte } from "../money.js";
-import { fechaLocal } from "../fechas.js";
+import { mostrarImporte } from "../money.js";
+import { fechaLocal, hoyLocal } from "../fechas.js";
 import { opcionesDeCobro, type FormaDePago, type OpcionDeCobro } from "./formas-de-pago.js";
+import { mostrarTasa, tasaLimpia } from "../tasa.js";
 
 /**
  * EL diálogo de cobro de un documento (M-05): antes había dos —uno en el
@@ -327,14 +328,15 @@ export function CobrarDocumento({
               {cruzaMoneda && tasa.data !== undefined && (
                 <div className="rounded-md border border-info/30 bg-info-soft px-3 py-2 text-[0.85rem]">
                   <p className="font-medium text-info-soft-foreground">
-                    Tasa de hoy: {mostrarCantidad(tasa.data.rate)} ({tasa.data.source},{" "}
-                    {fechaLocal(tasa.data.rate_date)})
+                    {tasaLimpia(tasa.data.rate)}
+                    {tasa.data.rate_date !== hoyLocal() &&
+                      ` · del ${fechaLocal(tasa.data.rate_date)}`}
                   </p>
                   {tasaEmision !== null && tasaEmision.rate !== tasa.data.rate && (
                     <p className="mt-1 flex items-center gap-1.5 font-mono text-[0.8rem] text-muted-foreground tabular-nums">
-                      emisión {mostrarCantidad(tasaEmision.rate)} ({tasaEmision.source})
+                      al emitir {mostrarTasa(tasaEmision.rate)}
                       <ArrowRight className="size-3" />
-                      hoy {mostrarCantidad(tasa.data.rate)}
+                      hoy {mostrarTasa(tasa.data.rate)}
                     </p>
                   )}
                   <p className="mt-1 text-muted-foreground">

@@ -223,4 +223,15 @@ select 'deade001-0000-4000-8000-000000000001', 'deade001-0000-4000-8000-00000000
  where not exists (select 1 from public.inventory_moves m
                     where m.reference = 'seed-demo-' || t.sku);
 
+-- Tasas OFICIALES de ayer y hoy (día de Caracas). Solo existe la tasa del BCV (ADR-0064 §1):
+-- nadie las teclea por la API, así que la demo las siembra como las guardaría el refresco.
+insert into public.exchange_rates
+  (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+select 'USD', 'VES', t.rate, 'BCV oficial (semilla demo)', t.dia, now()
+  from (values (platform.caracas_day(now()) - 1, 119.35::numeric),
+               (platform.caracas_day(now()), 125.50::numeric)) as t(dia, rate)
+ where not exists (select 1 from public.exchange_rates x
+                    where x.company_id is null and x.from_currency = 'USD'
+                      and x.to_currency = 'VES' and x.rate_date = t.dia);
+
 select 'SEED SQL OK';

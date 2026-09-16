@@ -605,7 +605,7 @@ export function DetalleFactura(): React.JSX.Element {
                     dual
                       ? {
                           rate: doc.fx_rate,
-                          source: `${doc.rate_source} · doc. en ${doc.transaction_currency}`,
+                          source: doc.rate_source,
                         }
                       : null
                   }

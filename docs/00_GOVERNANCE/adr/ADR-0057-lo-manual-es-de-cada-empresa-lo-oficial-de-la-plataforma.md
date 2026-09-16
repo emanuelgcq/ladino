@@ -1,6 +1,6 @@
 # ADR-0057 — Lo manual es de cada empresa; lo oficial es de la plataforma
 
-- **Estado**: aceptada (orden del dueño de resolver todos los hallazgos, 2026-09-12)
+- **Estado**: aceptada (orden del dueño de resolver todos los hallazgos, 2026-09-12). **Enmendada por ADR-0064 §1** (2026-09-16): en TASAS solo existe la del BCV; nadie teclea la suya y lo tecleado antes de la migración 66 no se lee.
 - **Fecha**: 2026-09-12
 - **Módulos**: ventas (tasas de cambio, reglas tributarias) · compras (reglas de
   retención) · puesta a punto fiscal · RLS

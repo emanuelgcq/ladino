@@ -367,7 +367,7 @@ export function NuevaFactura(): React.JSX.Element {
                           ? null
                           : {
                               rate: cotizacion.fx_rate,
-                              source: `${cotizacion.rate_source} · doc. en ${cotizacion.transaction_currency}`,
+                              source: cotizacion.rate_source,
                             }
                       }
                     />

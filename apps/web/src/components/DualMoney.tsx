@@ -1,14 +1,15 @@
 import { cn } from "../ui/cn.js";
 import { Tooltip } from "../ui/tooltip.js";
-import { mostrarCantidad, mostrarImporte } from "../money.js";
+import { mostrarImporte } from "../money.js";
 import { fechaLocal } from "../fechas.js";
+import { tasaLimpia } from "../tasa.js";
 
 /**
  * DualMoney — LA firma visual de Ladino: el manejo dual Bs/USD como identidad.
  *
  * Importe principal grande con tabular-nums; el otro lado de la operación,
- * discreto al lado; la tasa como tooltip con FUENTE y fecha, porque una tasa
- * sin fuente es un número que nadie puede defender.
+ * discreto al lado; la tasa como tooltip con su NOMBRE (BCV o del negocio) y su
+ * fecha, porque una tasa sin origen es un número que nadie puede defender.
  *
  * REGLA INNEGOCIABLE: este componente FORMATEA (packages/money/format) y jamás
  * convierte. El secundario solo existe si el SERVIDOR lo mandó — un documento
@@ -44,11 +45,12 @@ function TooltipTasa({
     <Tooltip
       content={
         <span className="block">
-          <span className="block font-mono text-[0.82rem]">Tasa {mostrarCantidad(rate.rate)}</span>
-          <span className="block text-muted-foreground">
-            Fuente: {rate.source}
-            {rate.timestamp != null && ` · ${fechaLocal(rate.timestamp)}`}
+          <span className="block font-mono text-[0.82rem]">
+            {tasaLimpia(rate.rate, rate.source)}
           </span>
+          {rate.timestamp != null && (
+            <span className="block text-muted-foreground">{fechaLocal(rate.timestamp)}</span>
+          )}
         </span>
       }
     >

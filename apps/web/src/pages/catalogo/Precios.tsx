@@ -26,11 +26,12 @@ import {
   DialogTitle,
 } from "../../ui/dialog.js";
 import { useToast } from "../../ui/toast.js";
-import { mostrarCantidad, mostrarImporte } from "../../money.js";
+import { mostrarImporte } from "../../money.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { errorDePersona } from "../../lib.js";
 import type { PriceList, PriceItem, Product } from "../../lib.js";
 import { fechaHoraLocal } from "../../fechas.js";
+import { tasaLimpia } from "../../tasa.js";
 
 /**
  * Listas de precios — Fase B. La regla que esta pantalla ENSEÑA en vez de
@@ -317,9 +318,9 @@ function PreciosDeLista({
             {tasa !== null ? (
               <span
                 className="block text-[0.72rem] font-normal text-muted-foreground"
-                title={`Tasa ${tasa.rate} · ${tasa.source} · ${tasa.rate_date}. Referencia de HOY, también para vigencias históricas.`}
+                title="Conversión de hoy, también para los precios anteriores."
               >
-                al BCV de hoy ({mostrarCantidad(tasa.rate)})
+                {tasaLimpia(tasa.rate)}
               </span>
             ) : (
               <span className="block text-[0.72rem] font-normal text-warning-soft-foreground">

@@ -2,9 +2,9 @@
 -- Ladino — pgTAP 52 · LO MANUAL ES DE CADA EMPRESA; LO OFICIAL, DE LA PLATAFORMA
 --                     (migración 52, ADR-0057)
 --
--- Dos empresas de tenants distintos. La tasa propia gana a la oficial del
--- mismo día y no existe para la otra; la oficial más reciente gana a la
--- propia más antigua. Una regla propia OCULTA las de la plataforma para su
+-- Dos empresas de tenants distintos. Desde la migración 66 (ADR-0064 §1) solo
+-- existe la tasa del BCV: una tasa tecleada antes es historia que ninguna
+-- conversión lee, y ninguna empresa escribe una nueva. Una regla propia OCULTA las de la plataforma para su
 -- empresa, no para otra. Las firmas sin empresa ya no existen. Y la RLS: el
 -- actor de usuario no escribe filas de plataforma; el de sistema, sí.
 -- =============================================================================
@@ -47,24 +47,26 @@ select throws_ok($$
   values ('aaaa0052-0000-4000-8000-0000000000a2', 'USD', 'VES', 1, 'x', '2026-09-01', now())
 $$, '23514', null, 'company_id sin tenant_id se rechaza: la pertenencia va entera o no va');
 
--- ── 2. Tasas: la propia gana a la oficial del mismo día, y no existe para otro ─
+-- ── 2. Tasas: la tecleada (historia) no cuenta para nadie ────────────────────
 insert into public.exchange_rates
   (tenant_id, company_id, from_currency, to_currency, rate, source, rate_date, rate_timestamp)
 values
   (null, null, 'USD', 'VES', 40, 'BCV oficial vía DolarAPI (test 052)', '2026-09-01', now()),
   ('aaaa0052-0000-4000-8000-00000000000a', 'aaaa0052-0000-4000-8000-0000000000a2',
    'USD', 'VES', 38, 'tecleada por A', '2026-09-01', now()),
-  (null, null, 'USD', 'VES', 45, 'BCV oficial vía DolarAPI (test 052)', '2026-09-02', now());
+  (null, null, 'USD', 'VES', 45, 'BCV oficial vía DolarAPI (test 052)', '2026-09-02', now()),
+  ('aaaa0052-0000-4000-8000-00000000000a', 'aaaa0052-0000-4000-8000-0000000000a2',
+   'USD', 'VES', 46, 'tecleada por A, dia 3', '2026-09-03', now());
 
 select is(platform.rate_at('aaaa0052-0000-4000-8000-0000000000a2', 'USD', 'VES', '2026-09-01'),
-  38::numeric, 'para A, el 1/09 rige SU tasa (38), no la oficial del mismo día (40)');
-select is(platform.rate_at('aaaa0052-0000-4000-8000-0000000000b2', 'USD', 'VES', '2026-09-01'),
-  40::numeric, 'para B, el 1/09 rige la oficial (40): la tasa de A no existe para B');
+  40::numeric, 'para A, el 1/09 rige la oficial (40), no la que A tecleó (38)');
+select is(platform.rate_at('aaaa0052-0000-4000-8000-0000000000a2', 'USD', 'VES', '2026-09-03'),
+  45::numeric, 'para A, el 3/09 rige la última oficial (45), no la que A tecleó ese día (46)');
 select is(platform.rate_at('aaaa0052-0000-4000-8000-0000000000a2', 'USD', 'VES', '2026-09-02'),
   45::numeric, 'para A, el 2/09 rige la oficial del 2 (45): el día más reciente gana a lo propio viejo');
 select is((select source from platform.rate_for('aaaa0052-0000-4000-8000-0000000000a2',
-                                                 'USD', 'VES', '2026-09-01')),
-  'tecleada por A', 'rate_for devuelve la fila entera, con su fuente');
+                                                 'USD', 'VES', '2026-09-03')),
+  'BCV oficial vía DolarAPI (test 052)', 'rate_for devuelve la fila entera, con su fuente');
 
 -- Dos empresas pueden teclear su tasa del mismo día con la misma fuente; la
 -- misma empresa, no.
@@ -161,12 +163,12 @@ select throws_ok($$
   values ('aaaa0052-0000-4000-8000-00000000000b', 'aaaa0052-0000-4000-8000-0000000000b2',
           'USD', 'VES', 1, 'colada en B', '2026-09-03', now())
 $$, '42501', null, 'ni una tasa de OTRO tenant: 42501');
-select lives_ok($$
+select throws_ok($$
   insert into public.exchange_rates
     (tenant_id, company_id, from_currency, to_currency, rate, source, rate_date, rate_timestamp)
   values ('aaaa0052-0000-4000-8000-00000000000a', 'aaaa0052-0000-4000-8000-0000000000a2',
           'USD', 'VES', 41, 'tecleada por A', '2026-09-03', now())
-$$, 'pero sí la suya');
+$$, '42501', null, 'ni la suya: solo existe la tasa del BCV (migración 66; antes sí podía)');
 reset role;
 
 -- El actor de SISTEMA sí escribe la oficial.

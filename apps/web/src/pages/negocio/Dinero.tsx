@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { errorDePersona } from "../../lib.js";
-import { mostrarImporte, mostrarCantidad } from "../../money.js";
+import { mostrarImporte } from "../../money.js";
 import { compararImportes } from "../../components/decimal-compare.js";
 import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
@@ -33,7 +33,8 @@ import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
-import { fechaLocal, fuenteDeTasa } from "../../fechas.js";
+import { fechaLocal } from "../../fechas.js";
+import { mostrarTasa, tasaLimpia } from "../../tasa.js";
 
 /**
  * MI DINERO (Fase C, PARTE 11): «¿dónde está mi plata?» en una pantalla.
@@ -380,25 +381,9 @@ function TarjetaTasa({
 }): React.JSX.Element {
   const { llamar } = useSesion();
   const toast = useToast();
-  const [editando, setEditando] = useState(false);
-  const [nueva, setNueva] = useState("");
 
-  const confirmar = useMutation({
-    mutationFn: () =>
-      llamar("/v1/exchange-rates/keep", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ from_currency: "USD", to_currency: "VES" }),
-      }),
-    onSuccess: () => {
-      toast.success("Tasa confirmada para hoy");
-      onCambio();
-    },
-    onError: (e) => toast.error("No se pudo confirmar la tasa", errorDePersona(e)),
-  });
-
-  // La tasa OFICIAL, traída del BCV (vía DolarAPI) y guardada con su fuente.
-  // Si no hay internet, el camino manual de abajo sigue ahí.
+  // Solo existe la tasa del BCV (ADR-0064 §1): se actualiza sola y este botón la pide ya. No se
+  // escribe a mano ni se «confirma»: un día sin publicación rige la última tasa del BCV.
   const traerBcv = useMutation({
     mutationFn: () =>
       llamar<{ rate: string }>("/v1/exchange-rates/bcv", {
@@ -406,34 +391,10 @@ function TarjetaTasa({
         headers: { "Idempotency-Key": crypto.randomUUID() },
       }),
     onSuccess: (r) => {
-      toast.success("Tasa del BCV traída", `Bs. ${mostrarCantidad(r.rate)} por dólar`);
+      toast.success("Tasa BCV actualizada", tasaLimpia(r.rate));
       onCambio();
     },
     onError: (e) => toast.error("No se pudo traer la tasa", errorDePersona(e)),
-  });
-
-  const cambiar = useMutation({
-    mutationFn: () =>
-      llamar("/v1/exchange-rates", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          from_currency: "USD",
-          to_currency: "VES",
-          rate: nueva.trim().replace(",", "."),
-          source: "Carga manual del negocio",
-          // El día LOCAL de la persona, no el de UTC: a las 9 pm de Caracas,
-          // toISOString ya va por mañana (la familia de bugs de CLAUDE.md §3).
-          rate_date: new Date().toLocaleDateString("en-CA"),
-        }),
-      }),
-    onSuccess: () => {
-      toast.success("Tasa del día guardada");
-      setEditando(false);
-      setNueva("");
-      onCambio();
-    },
-    onError: (e) => toast.error("No se pudo guardar la tasa", errorDePersona(e)),
   });
 
   const tasa = resumen?.tasa_del_dia ?? null;
@@ -443,78 +404,33 @@ function TarjetaTasa({
         <div className="min-w-[12rem] flex-1">
           <div className="flex items-center gap-2 text-muted-foreground">
             <RefreshCw className="size-4" />
-            <span className="text-[0.9rem]">Tasa del día</span>
+            <span className="text-[0.9rem]">Tasa BCV</span>
           </div>
           {tasa === null ? (
             <p className="mt-1 text-[0.95rem]">
-              Todavía no hay tasa cargada. Ponla para poder vender en dólares.
+              Todavía no hay tasa BCV. Tráela para poder vender en dólares.
             </p>
           ) : (
             <>
               <p className="mt-1 text-2xl font-semibold tabular-nums">
-                Bs. {mostrarCantidad(tasa.rate)}{" "}
+                Bs. {mostrarTasa(tasa.rate)}{" "}
                 <span className="text-base font-normal text-muted-foreground">por dólar</span>
               </p>
               <p className="text-[0.8rem] text-faint-foreground">
-                {tasa.es_de_hoy ? "Confirmada hoy" : `Del ${fechaLocal(tasa.rate_date)}`} ·{" "}
-                {fuenteDeTasa(tasa.source)}
+                {tasa.es_de_hoy
+                  ? "De hoy"
+                  : `La última publicada, del ${fechaLocal(tasa.rate_date)}`}
               </p>
             </>
           )}
         </div>
-        {!editando ? (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant={tasa === null || !tasa.es_de_hoy ? "primary" : "secondary"}
-              disabled={traerBcv.isPending}
-              onClick={() => traerBcv.mutate()}
-            >
-              {traerBcv.isPending ? "Consultando…" : "Traer del BCV"}
-            </Button>
-            {tasa !== null && !tasa.es_de_hoy && (
-              <Button
-                variant="secondary"
-                disabled={confirmar.isPending}
-                onClick={() => confirmar.mutate()}
-              >
-                Sigue igual
-              </Button>
-            )}
-            <Button variant="secondary" onClick={() => setEditando(true)}>
-              {tasa === null ? "Cargarla a mano" : "Cambió"}
-            </Button>
-          </div>
-        ) : (
-          <form
-            className="flex items-end gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (importeValido(nueva.trim().replace(",", "."))) cambiar.mutate();
-            }}
-          >
-            <FormField label="Bs. por dólar" required>
-              {(p) => (
-                <MoneyInput
-                  {...p}
-                  value={nueva}
-                  onChange={setNueva}
-                  currency="Bs."
-                  className="w-36"
-                />
-              )}
-            </FormField>
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={cambiar.isPending || !importeValido(nueva.trim().replace(",", "."))}
-            >
-              Guardar
-            </Button>
-            <Button variant="ghost" onClick={() => setEditando(false)}>
-              Cancelar
-            </Button>
-          </form>
-        )}
+        <Button
+          variant={tasa === null || !tasa.es_de_hoy ? "primary" : "secondary"}
+          disabled={traerBcv.isPending}
+          onClick={() => traerBcv.mutate()}
+        >
+          {traerBcv.isPending ? "Consultando…" : "Traer del BCV"}
+        </Button>
       </CardContent>
     </Card>
   );

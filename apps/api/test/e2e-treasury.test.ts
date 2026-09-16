@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 import { diaCaracas } from "./_dia-caracas.js";
 
 /**
@@ -130,6 +131,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (sql !== undefined) await borrarTasasOficiales(sql, FUENTE_TASA);
   await sql?.end();
   await sqlApi?.end();
 });
@@ -253,12 +255,16 @@ describe("tesorería de extremo a extremo", () => {
     expect(((await r.json()) as { code: string }).code).toBe("EXCHANGE_RATE_MISSING");
   });
 
-  it("«la tasa sigue igual» crea una fila NUEVA con fuente de confirmación", async () => {
-    const sinNada = await pedir("POST", "/v1/exchange-rates/keep", GESTOR, {
+  it("la tasa ni se escribe ni se «confirma» a mano: solo existe la del BCV (ADR-0064 §1)", async () => {
+    const keep = await pedir("POST", "/v1/exchange-rates/keep", GESTOR, {
       from_currency: "USD",
       to_currency: "VES",
     });
-    expect(sinNada.status).toBe(409);
+    expect(keep.status).toBe(409);
+    const k = (await keep.json()) as { code: string; message: string };
+    expect(k.code).toBe("RATE_ONLY_FROM_BCV");
+    // El mensaje, no solo el código: EXCHANGE_RATE_MISSING también es 409.
+    expect(k.message).toContain("ya no se confirma a mano");
 
     const carga = await pedir("POST", "/v1/exchange-rates", GESTOR, {
       from_currency: "USD",
@@ -267,16 +273,16 @@ describe("tesorería de extremo a extremo", () => {
       source: FUENTE_TASA,
       rate_date: HOY,
     });
-    expect(carga.status).toBe(201);
+    expect(carga.status).toBe(409);
+    const m = (await carga.json()) as { code: string; message: string };
+    expect(m.code).toBe("RATE_ONLY_FROM_BCV");
+    expect(m.message).toContain("ya no se escribe a mano");
+    const [filas] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.exchange_rates where source = ${FUENTE_TASA}`;
+    expect(filas!.n).toBe("0");
 
-    const keep = await pedir("POST", "/v1/exchange-rates/keep", GESTOR, {
-      from_currency: "USD",
-      to_currency: "VES",
-    });
-    expect(keep.status).toBe(201);
-    const t = (await keep.json()) as { rate: string; source: string };
-    expect(t.rate).toBe("40.00000000");
-    expect(t.source.startsWith("sin cambio, confirmada")).toBe(true);
+    // La tasa oficial del día, como la guardaría el refresco.
+    await sembrarTasaOficial(sql, { rate: "40.00000000", source: FUENTE_TASA, rate_date: HOY });
 
     // Y con tasa, el gasto en divisa sale — convertido a la tasa del día.
     const gasto = await pedir("POST", "/v1/expenses", GESTOR, {

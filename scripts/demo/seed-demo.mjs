@@ -138,19 +138,8 @@ for (const proveedor of [
   await api("POST", "/v1/suppliers", { company_id: COMPANY, ...proveedor });
 }
 
-paso("tasas BCV (ayer y hoy)");
-for (const [d, rate] of [
-  [ayer, "119.35000000"],
-  [hoy, "125.50000000"],
-]) {
-  await api("POST", "/v1/exchange-rates", {
-    from_currency: "USD",
-    to_currency: "VES",
-    rate,
-    source: "BCV",
-    rate_date: iso(d),
-  });
-}
+// Las tasas BCV de ayer y hoy las siembra seed-demo.sql: por la API nadie teclea una tasa
+// (ADR-0064 §1).
 
 paso("plan contable + mapeo");
 await api("POST", "/v1/accounts/import-template", {

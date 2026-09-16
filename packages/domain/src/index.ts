@@ -130,7 +130,6 @@ export {
   transferBetweenAccounts,
   exigeSaldo,
   closeCashRegister,
-  keepDailyRate,
   resolverCuentaEfectivo,
   type TreasuryError,
 } from "./treasury.js";
