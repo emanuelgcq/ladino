@@ -8,7 +8,12 @@
  * Estado: S0.2 en fase roja. Las firmas están completas; la implementación no existe todavía.
  */
 export type { CurrencyCode, CurrencyDefinition, Scale } from "./currency.js";
-export { currencyDefinition, parseCurrency, registeredCurrencies } from "./currency.js";
+export {
+  currencyDefinition,
+  minorUnitsOf,
+  parseCurrency,
+  registeredCurrencies,
+} from "./currency.js";
 
 export type { Decimal } from "./decimal.js";
 export { isPersistableAsNumeric, NUMERIC_SCALE, parseDecimal } from "./decimal.js";

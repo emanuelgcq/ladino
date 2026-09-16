@@ -95,9 +95,20 @@ export function pricingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
         tasa === undefined
           ? { expr: tx`null`, moneda: null }
           : lista.currency_code === "VES"
-            ? { expr: tx`round(amount / ${tasa.rate}::numeric, 8)::text`, moneda: "USD" }
+            ? {
+                // La equivalencia es PRESENTACIÓN: a las unidades mínimas de SU moneda
+                // (ADR-0063 §5). /productos ya lo hacía y aquí salía «Bs. 1.263,31005»:
+                // la misma cifra con dos caras (QA 2026-09-15, h. 13).
+                expr: tx`round(amount / ${tasa.rate}::numeric,
+                               platform.currency_minor_units('USD'))::text`,
+                moneda: "USD",
+              }
             : lista.currency_code === "USD"
-              ? { expr: tx`round(amount * ${tasa.rate}::numeric, 8)::text`, moneda: "VES" }
+              ? {
+                  expr: tx`round(amount * ${tasa.rate}::numeric,
+                                 platform.currency_minor_units('VES'))::text`,
+                  moneda: "VES",
+                }
               : { expr: tx`null`, moneda: null };
 
       const filtro = productId === undefined ? tx`` : tx`and product_id = ${productId}`;

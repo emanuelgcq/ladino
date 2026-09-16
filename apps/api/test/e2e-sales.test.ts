@@ -413,7 +413,8 @@ describe("ventas de extremo a extremo", () => {
     expect(d.lines[0]!["tax_rule_id"]).not.toBeNull();
     // El costo del momento, congelado con la línea.
     expect(d.lines[0]!["cost_snapshot"]).toBe("3000.00000000");
-    expect(d.balance).toBe("9280.00000000");
+    // El saldo se SIRVE en céntimos de la moneda de la empresa (ADR-0063 §4).
+    expect(d.balance).toBe("9280.00");
   });
 
   it("anular conserva el correlativo: el número anulado no se reutiliza", async () => {
@@ -553,7 +554,8 @@ describe("ventas de extremo a extremo", () => {
     // viernes — 116 USD × 45, no los 4 640 Bs congelados de ayer.
     const detalle = await pedir("GET", `/v1/documents/${doc["id"]}`, VENDEDOR);
     const d = (await detalle.json()) as { balance: string };
-    expect(d.balance).toBe("5220.00000000");
+    // La deuda se sirve en céntimos de la moneda de la empresa (ADR-0063 §4).
+    expect(d.balance).toBe("5220.00");
 
     // Se cobra EN BOLÍVARES lo que la deuda vale hoy. El servidor valora los
     // 5 220 Bs a la tasa del día (116 USD), salda la deuda anclada, y los
@@ -584,7 +586,7 @@ describe("ventas de extremo a extremo", () => {
 
     // Y la deuda de hoy dice cero.
     const despues = await pedir("GET", `/v1/documents/${doc["id"]}`, VENDEDOR);
-    expect(((await despues.json()) as { balance: string }).balance).toBe("0.00000000");
+    expect(((await despues.json()) as { balance: string }).balance).toBe("0.00");
   });
 
   it("un cobro en la misma moneda del documento y a la misma tasa no escribe diferencial de cero", async () => {
@@ -782,7 +784,8 @@ describe("ventas de extremo a extremo", () => {
     expect(usd.rate).not.toBeNull();
     expect(usd.rate!.rate).toBe("45.00000000");
     expect(usd.items[0]!.amount).toBe("100.00000000");
-    expect(usd.items[0]!.equivalent_amount).toBe("4500.00000000");
+    // La equivalencia es presentación: en céntimos de su moneda (ADR-0063 §5).
+    expect(usd.items[0]!.equivalent_amount).toBe("4500.00");
     expect(usd.items[0]!.equivalent_currency).toBe("VES");
 
     const ves = (await (
@@ -795,8 +798,8 @@ describe("ventas de extremo a extremo", () => {
       }[];
     };
     expect(ves.items[0]!.amount).toBe("4000.00000000");
-    // 4000 / 45 en numeric(…,8): división del SERVIDOR, jamás del cliente.
-    expect(ves.items[0]!.equivalent_amount).toBe("88.88888889");
+    // 4000 / 45, dividido por el SERVIDOR (jamás el cliente) y servido en céntimos.
+    expect(ves.items[0]!.equivalent_amount).toBe("88.89");
     expect(ves.items[0]!.equivalent_currency).toBe("USD");
   });
 

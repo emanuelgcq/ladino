@@ -193,7 +193,7 @@ export function salesRoutes(
                difference::text as difference, fx_rate_issue::text as fx_rate_issue,
                fx_rate_payment::text as fx_rate_payment, occurred_on::text as occurred_on
           from public.exchange_gain_loss where document_id = ${id} order by occurred_on, id`;
-      // El saldo lo dice el esquema, no esta capa.
+      // El saldo lo dice el esquema, no esta capa — y viene ya en céntimos (ADR-0063 §4).
       const [saldo] = await tx<{ balance: string }[]>`
         select platform.document_debt_today(${companyId}, ${id})::text as balance`;
       return {

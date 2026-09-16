@@ -158,7 +158,10 @@ export {
 } from "./igtf.js";
 export { onboardBusiness, type OnboardingError } from "./onboarding.js";
 export { listPosCarts, upsertPosCart, deletePosCart, type PosCartError } from "./pos-carts.js";
-export { createDirectCreditNote, createDebitNote, minorUnitsOf } from "./sales.js";
+export { createDirectCreditNote, createDebitNote } from "./sales.js";
+// Las unidades mínimas de una moneda viven en @ladino/money (ADR-0063): se reexporta para que
+// la API no tenga que importar dos paquetes por una función de tres líneas.
+export { minorUnitsOf } from "@ladino/money";
 export {
   updateCompanyProfile,
   setCompanyTaxId,

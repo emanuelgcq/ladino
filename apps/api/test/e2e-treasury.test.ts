@@ -77,6 +77,7 @@ async function pedir(metodo: string, path: string, sub: string, body?: unknown):
   return r;
 }
 
+/** El saldo TAL COMO LO SIRVE la API: en céntimos de su moneda (ADR-0063 §4). */
 async function saldoDe(cuenta: string): Promise<string> {
   const r = await pedir("GET", "/v1/treasury/accounts", GESTOR);
   const { accounts } = (await r.json()) as { accounts: { id: string; balance: string }[] };
@@ -153,8 +154,8 @@ describe("tesorería de extremo a extremo", () => {
     expect(zelle.status).toBe(201);
     ZELLE = ((await zelle.json()) as { id: string }).id;
 
-    expect(await saldoDe(CAJA)).toBe("0");
-    expect(await saldoDe(ZELLE)).toBe("0");
+    expect(await saldoDe(CAJA)).toBe("0.00");
+    expect(await saldoDe(ZELLE)).toBe("0.00");
   });
 
   it("con SOLO cash.close se ve LA CAJA y nada más: el banco y el Zelle no son suyos de ver (ADR-0048)", async () => {
@@ -231,7 +232,7 @@ describe("tesorería de extremo a extremo", () => {
     expect(g["journal_entry_id"]).toBeNull();
     expect(g["amount"]).toBe("250.00000000");
     expect(g["currency"]).toBe("VES");
-    expect(await saldoDe(CAJA)).toBe("-250.00000000");
+    expect(await saldoDe(CAJA)).toBe("-250.00");
 
     // El invariante de ADR-0042: gasto ⇒ asiento O cola. Encolado cuenta.
     const gaps = await sql<{ n: number }[]>`
@@ -289,7 +290,7 @@ describe("tesorería de extremo a extremo", () => {
     const g = (await gasto.json()) as Record<string, string>;
     expect(g["functional_amount"]).toBe("400.00000000");
     expect(g["functional_currency"]).toBe("VES");
-    expect(await saldoDe(ZELLE)).toBe("-10.00000000");
+    expect(await saldoDe(ZELLE)).toBe("-10.00");
   });
 
   it("cerrar con diferencia y sin motivo no pasa; con motivo, el saldo queda en lo contado", async () => {
@@ -308,11 +309,11 @@ describe("tesorería de extremo a extremo", () => {
     });
     expect(r.status).toBe(201);
     const c = (await r.json()) as Record<string, unknown>;
-    expect(c["expected_amount"]).toBe("-250.00000000");
-    expect(c["counted_amount"]).toBe("0.00000000");
-    expect(c["difference"]).toBe("250.00000000");
+    expect(c["expected_amount"]).toBe("-250.00");
+    expect(c["counted_amount"]).toBe("0.00");
+    expect(c["difference"]).toBe("250.00");
     expect(c["accounting"]).toBe("queued");
-    expect(await saldoDe(CAJA)).toBe("0.00000000");
+    expect(await saldoDe(CAJA)).toBe("0.00");
   });
 
   it("un cierre exacto ni exige motivo ni asienta: cuadrar no es un movimiento", async () => {
@@ -323,10 +324,10 @@ describe("tesorería de extremo a extremo", () => {
     });
     expect(r.status).toBe(201);
     const c = (await r.json()) as Record<string, unknown>;
-    expect(c["difference"]).toBe("0.00000000");
+    expect(c["difference"]).toBe("0.00");
     expect(c["accounting"]).toBe("none");
     expect(c["journal_entry_id"]).toBeNull();
-    expect(await saldoDe(CAJA)).toBe("0.00000000");
+    expect(await saldoDe(CAJA)).toBe("0.00");
   });
 
   it("con el plan y el preset importados, el gasto se asienta SOLO", async () => {
@@ -352,7 +353,7 @@ describe("tesorería de extremo a extremo", () => {
     const g = (await r.json()) as Record<string, unknown>;
     expect(g["accounting"]).toBe("posted");
     expect(g["journal_entry_id"]).not.toBeNull();
-    expect(await saldoDe(CAJA)).toBe("-100.00000000");
+    expect(await saldoDe(CAJA)).toBe("-100.00");
   });
 
   it("y el cierre con diferencia también: sobrante contra faltantes y sobrantes de caja", async () => {
@@ -364,7 +365,7 @@ describe("tesorería de extremo a extremo", () => {
     });
     expect(r.status).toBe(201);
     const c = (await r.json()) as Record<string, unknown>;
-    expect(c["difference"]).toBe("100.00000000");
+    expect(c["difference"]).toBe("100.00");
     expect(c["accounting"]).toBe("posted");
     expect(c["journal_entry_id"]).not.toBeNull();
   });
@@ -383,8 +384,8 @@ describe("tesorería de extremo a extremo", () => {
     expect(res.functional_currency).toBe("VES");
     // Caja quedó en 0 tras el último cierre; Zelle en −10 por el gasto en USD.
     const porMoneda = new Map(res.mi_dinero.map((m) => [m.currency, m.balance]));
-    expect(porMoneda.get("VES")).toBe("0.00000000");
-    expect(porMoneda.get("USD")).toBe("-10.00000000");
+    expect(porMoneda.get("VES")).toBe("0.00");
+    expect(porMoneda.get("USD")).toBe("-10.00");
     // Sin ventas ni compras en esta empresa: deudas en cero, no en null — y a
     // DOS decimales desde 2026-09-08: la deuda mostrada es presentación.
     expect(res.lo_que_me_deben).toBe("0.00");

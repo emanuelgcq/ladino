@@ -246,9 +246,15 @@ export function treasuryRoutes(
       const filas = await tx<Record<string, unknown>[]>`
         select cc.id, cc.account_id, cc.closing_date::text as closing_date,
                to_char(cc.closed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as closed_at,
-               cc.expected_amount::text as expected_amount,
-               cc.counted_amount::text as counted_amount,
-               cc.amount_transaction_currency::text as difference, cc.reason,
+               round(cc.expected_amount,
+                     platform.currency_minor_units(cc.transaction_currency))::text
+                 as expected_amount,
+               round(cc.counted_amount,
+                     platform.currency_minor_units(cc.transaction_currency))::text
+                 as counted_amount,
+               round(cc.amount_transaction_currency,
+                     platform.currency_minor_units(cc.transaction_currency))::text as difference,
+               cc.reason,
                cc.transaction_currency as currency, cc.journal_entry_id
           from public.cash_closings cc
          where cc.company_id = ${companyId}

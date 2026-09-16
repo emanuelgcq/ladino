@@ -76,3 +76,17 @@ export function currencyDefinition(code: CurrencyCode): CurrencyDefinition {
   }
   return definition;
 }
+
+/**
+ * Las UNIDADES MÍNIMAS de una moneda: a cuántos decimales se puede pagar de verdad. 8 si el
+ * código no está en el registro — quien la use para construir un `Money` recibirá el rechazo
+ * de `Money.of`, que es donde ese error tiene que verse.
+ *
+ * Vive aquí, y no en un módulo de ventas, porque es una propiedad de la MONEDA: la usan la
+ * caja, el arqueo y la valoración de un cobro por igual (ADR-0063), y tenerla en uno de esos
+ * módulos obligaba a los otros a importarlo — el ciclo que cazó `dependency-cruiser`.
+ */
+export function minorUnitsOf(currency: string): Scale {
+  const code = parseCurrency(currency);
+  return code.ok ? currencyDefinition(code.value).minorUnits : 8;
+}

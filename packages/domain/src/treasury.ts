@@ -1,7 +1,7 @@
 import { err, ok, type Result } from "@ladino/core";
 import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
-import { Money, parseDecimal } from "@ladino/money";
+import { Money, minorUnitsOf, parseDecimal } from "@ladino/money";
 import type {
   CreateCompanyAccountRequest,
   UpdateCompanyAccountRequest,
@@ -271,7 +271,11 @@ export async function listCompanyAccounts(
   }
   const filas = await sql<CompanyAccountResponse[]>`
     select ca.id, ca.name, ca.currency, ca.kind, ca.is_active, ca.is_system,
-           ca.ledger_account_id, coalesce(b.balance, 0)::text as balance
+           ca.ledger_account_id,
+           -- El saldo se SIRVE a las unidades mínimas de su moneda (ADR-0063 §4): en la
+           -- gaveta no hay «USD 7,02529438». La base conserva su escala.
+           round(coalesce(b.balance, 0), platform.currency_minor_units(ca.currency))::text
+             as balance
       from public.company_accounts ca
       left join public.company_account_balances b on b.account_id = ca.id
      where ca.company_id = ${companyId}
@@ -685,17 +689,26 @@ export async function closeCashRegister(
   const [saldo] = await sql<{ balance: string }[]>`
     select coalesce((select balance from public.company_account_balances
                       where account_id = ${input.account_id}), 0)::text as balance`;
-  const esperado = parseDecimal(saldo!.balance);
-  const contado = parseDecimal(input.counted_amount);
-  if (!esperado.ok || !contado.ok) {
+  const esperadoCrudo = parseDecimal(saldo!.balance);
+  const contadoCrudo = parseDecimal(input.counted_amount);
+  if (!esperadoCrudo.ok || !contadoCrudo.ok) {
     return err({ code: "VALIDATION_FAILED", message: "Importes no interpretables." });
   }
+  /**
+   * EL ARQUEO CUENTA DINERO (ADR-0063 §6). Lo esperado, lo contado y la diferencia viven en
+   * las unidades mínimas de la moneda: nadie puede contar «USD 4,49999982» ni encontrar un
+   * faltante de ocho decimales en la gaveta (QA de pantalla 2026-09-15, h. 28). El saldo de
+   * la cuenta conserva su escala; lo que se arquea es lo que se puede tocar.
+   */
+  const escalaCaja = minorUnitsOf(cuenta.currency);
+  const esperado = { ok: true as const, value: esperadoCrudo.value.toDecimalPlaces(escalaCaja, 4) };
+  const contado = { ok: true as const, value: contadoCrudo.value.toDecimalPlaces(escalaCaja, 4) };
   const diferencia = contado.value.minus(esperado.value);
 
   if (!diferencia.isZero() && input.reason === undefined) {
     return err({
       code: "VALIDATION_FAILED",
-      message: `Contaste ${contado.value.toFixed()} y el sistema esperaba ${esperado.value.toFixed()}. Explica en una línea de dónde sale la diferencia.`,
+      message: `Contaste ${contado.value.toFixed(escalaCaja)} y el sistema esperaba ${esperado.value.toFixed(escalaCaja)}. Explica en una línea de dónde sale la diferencia.`,
     });
   }
 
@@ -706,7 +719,10 @@ export async function closeCashRegister(
   if (!tasa.ok) return tasa;
   const tasaDec = parseDecimal(tasa.value.rate);
   if (!tasaDec.ok) return err({ code: "VALIDATION_FAILED", message: tasaDec.error.message });
-  const difFuncional = diferencia.times(tasaDec.value).toDecimalPlaces(8, 4);
+  // El asiento del faltante o del sobrante, también en céntimos de la moneda de la empresa.
+  const difFuncional = diferencia
+    .times(tasaDec.value)
+    .toDecimalPlaces(minorUnitsOf(funcionalCode), 4);
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
@@ -730,9 +746,14 @@ export async function closeCashRegister(
                 ${CLOSING_POLICY_ID})
         returning id, account_id, closing_date::text as closing_date,
                   to_char(closed_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as closed_at,
-                  expected_amount::text as expected_amount,
-                  counted_amount::text as counted_amount,
-                  amount_transaction_currency::text as difference, reason,
+                  -- Un arqueo se sirve en céntimos: es lo que alguien contó (ADR-0063 §6).
+                  round(expected_amount, platform.currency_minor_units(transaction_currency))::text
+                    as expected_amount,
+                  round(counted_amount, platform.currency_minor_units(transaction_currency))::text
+                    as counted_amount,
+                  round(amount_transaction_currency,
+                        platform.currency_minor_units(transaction_currency))::text as difference,
+                  reason,
                   transaction_currency as currency`;
       return c!;
     });

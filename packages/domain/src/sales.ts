@@ -3,6 +3,7 @@ import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
 import {
   currencyDefinition,
+  minorUnitsOf,
   Money,
   parseCurrency,
   parseDecimal,
@@ -83,17 +84,14 @@ export type SalesError =
   | { code: "INSUFFICIENT_FUNDS"; message: string };
 
 /**
- * Redondeo de la VALORACIÓN (cobros y diferencial cambiario): la escala de
- * `numeric(24,8)`. No es lo que ve el cliente en el documento — para eso está
- * `politicaDelDocumento` — sino lo que la contabilidad compara al céntimo de
- * ocho decimales entre caja, deuda saldada y diferencial (ADR-0058 §Lo que no
- * cambia).
+ * Redondeo de la VALORACIÓN de un cobro y de su diferencial: las UNIDADES MÍNIMAS de la moneda
+ * de la empresa (ADR-0063 §3), no la escala de `numeric(24,8)`. La escala se arma en el sitio
+ * porque depende de la moneda funcional de cada empresa; el id la lleva dentro para que quede
+ * en el asiento cuál se aplicó.
  */
-const VALORACION_POLICY: RoundingPolicy = {
-  id: "sales:valuation:8:HALF_UP",
-  scale: 8,
-  mode: "HALF_UP",
-};
+function politicaDeValoracion(escala: Scale): RoundingPolicy {
+  return { id: `sales:fx_diff:${escala}:HALF_UP`, scale: escala, mode: "HALF_UP" };
+}
 
 /**
  * El precio unitario NO se redondea a la moneda: un precio de lista puede
@@ -113,12 +111,6 @@ const PRECIO_POLICY: RoundingPolicy = { id: "sales:price:8:HALF_UP", scale: 8, m
  * duda: son las minor units ISO-4217 de la moneda del documento.
  */
 const MODO_DOCUMENTO: RoundingMode = "HALF_UP";
-
-/** Minor units ISO-4217 de una moneda del registro; 8 si no está (Money.of la rechazará). */
-export function minorUnitsOf(currency: string): Scale {
-  const code = parseCurrency(currency);
-  return code.ok ? currencyDefinition(code.value).minorUnits : 8;
-}
 
 /**
  * La política del documento EN su moneda: base y impuesto de cada línea, y por
@@ -268,6 +260,8 @@ export function pasoDeCobro(p: {
   pendienteFuncional: Decimal;
   entregado: Decimal;
   moneda: string;
+  /** La moneda de la empresa: decide a cuántos céntimos se valora un abono parcial. */
+  monedaFuncional: string;
   instrumento: string;
   cond: CondicionDePago;
 }): Result<PasoDeCobro, SalesError> {
@@ -280,7 +274,14 @@ export function pasoDeCobro(p: {
   }
   const u = unidadMinima(p.moneda);
   const escala = minorUnitsOf(p.moneda);
-  const pendMon = p.pendienteFuncional.dividedBy(p.cond.tasa).toDecimalPlaces(8, 4);
+  /**
+   * EL CÉNTIMO DE LA CAJA (ADR-0063 §2). Lo que hace falta para cerrar se expresa en las
+   * unidades mínimas de la moneda del pago: no existe el medio céntimo, ni el billete de
+   * 0,00000147 dólares. Antes se guardaba el pendiente ÷ tasa con ocho decimales y la caja en
+   * dólares quedaba con «USD 7,02529438» y el arqueo pedía contar eso (QA 2026-09-15, h. 17,
+   * 28); y el vuelto de 5 sobre 2,80 salía «2,19», un céntimo de menos (h. 16).
+   */
+  const pendMon = p.pendienteFuncional.dividedBy(p.cond.tasa).toDecimalPlaces(escala, 4);
   const igtfTotal = igtfSobre(pendMon, p.cond, p.moneda);
   const necesario = pendMon.plus(igtfTotal);
   const dif = p.entregado.minus(necesario);
@@ -334,7 +335,12 @@ export function pasoDeCobro(p: {
   }
   return ok({
     aplicado,
-    aplicadoFuncional: aplicado.times(p.cond.tasa).toDecimalPlaces(8, 4),
+    // El abono parcial se guarda tal como se entregó, y su valor funcional a las unidades
+    // mínimas de la moneda de la empresa (ADR-0063 §2): un saldo con seis decimales no lo
+    // paga nadie (h. 32, 37, 56).
+    aplicadoFuncional: aplicado
+      .times(p.cond.tasa)
+      .toDecimalPlaces(minorUnitsOf(p.monedaFuncional), 4),
     igtf,
     vuelto: cero,
     cubre: false,
@@ -350,7 +356,9 @@ function montoParaCerrar(
   cond: CondicionDePago,
 ): { monto: Decimal; igtf: Decimal } {
   const escala = minorUnitsOf(moneda);
-  const pendMon = pendienteFuncional.dividedBy(cond.tasa).toDecimalPlaces(8, 4);
+  // La MISMA base que pasoDeCobro (ADR-0063 §2): lo que el botón sugiere es exactamente lo
+  // que se guarda al cobrarlo. Antes el botón decía «USD 4,23» y se guardaba 4,22529291.
+  const pendMon = pendienteFuncional.dividedBy(cond.tasa).toDecimalPlaces(escala, 4);
   const igtf = igtfSobre(pendMon, cond, moneda);
   return { monto: pendMon.plus(igtf).toDecimalPlaces(escala, 4), igtf };
 }
@@ -495,6 +503,7 @@ export async function previsualizarCobro(
       pendienteFuncional: pendiente,
       entregado: entregado.value,
       moneda: p.currency,
+      monedaFuncional: ctx.value.functionalCurrency,
       instrumento: p.instrument,
       cond: c.value,
     });
@@ -2044,8 +2053,9 @@ export async function registerPayment(
     return err({ code: "VALIDATION_FAILED", message: "Importe o tasa no interpretables." });
   }
   const funcionalCobro = importe.value.multiply(tasaCobroDec.value);
-  const funcionalRedondeado = Money.of(
-    funcionalCobro.amount.toDecimalPlaces(8, 4).toFixed(8),
+  const escalaFuncional = minorUnitsOf(ctx.value.functionalCurrency);
+  let funcionalRedondeado = Money.of(
+    funcionalCobro.amount.toDecimalPlaces(escalaFuncional, 4).toFixed(8),
     ctx.value.functionalCurrency,
   );
   if (!funcionalRedondeado.ok) {
@@ -2055,6 +2065,32 @@ export async function registerPayment(
   // El saldo se CALCULA, nunca se lee de una columna.
   const [saldoAntes] = await sql<{ saldo: string }[]>`
     select platform.document_balance(${input.company_id}, ${input.document_id})::text as saldo`;
+
+  /**
+   * EL COBRO QUE CIERRA (ADR-0063 §2). El dinero real solo viene en unidades mínimas: quien
+   * paga en dólares una cuenta de Bs 2.358,1788 entrega 2,80 y con eso la cuenta queda
+   * saldada. El importe guardado es esos 2,80 —lo que de verdad entró en la caja— y su valor
+   * funcional es EXACTAMENTE lo pendiente, para que el documento quede en cero y no en
+   * «Saldo Bs. 0,0000758» (QA de pantalla 2026-09-15, h. 32, 37, 56).
+   *
+   * La tolerancia es media unidad mínima de la MONEDA DEL COBRO valorada en funcional: es lo
+   * que el redondeo de caja puede desviar como máximo. La diferencia queda absorbida en la
+   * conversión de este cobro y no se asienta aparte (VALIDAR-CONTABLE, ADR-0058 §6.4).
+   */
+  const toleranciaCaja = unidadMinima(input.currency).dividedBy(2).times(tasaCobroDec.value);
+  const pendienteFuncional = parseDecimal(saldoAntes?.saldo ?? "0");
+  if (
+    pendienteFuncional.ok &&
+    pendienteFuncional.value.greaterThan(0) &&
+    pendienteFuncional.value
+      .minus(funcionalRedondeado.value.amount)
+      .abs()
+      .lessThanOrEqualTo(toleranciaCaja)
+  ) {
+    const exacto = Money.of(pendienteFuncional.value.toFixed(8), ctx.value.functionalCurrency);
+    if (!exacto.ok) return err({ code: "VALIDATION_FAILED", message: exacto.error.message });
+    funcionalRedondeado = exacto;
+  }
 
   // TOPE: un cobro no supera lo pendiente (A-26). Se compara en la moneda que
   // DECIDE el saldo (ADR-0047): la del documento si el cobro va en ella, la
@@ -2094,7 +2130,19 @@ export async function registerPayment(
     }
     const pend = pendiente === undefined ? null : parseDecimal(pendiente);
     const cob = cobrado === undefined ? null : parseDecimal(cobrado);
-    if (pend?.ok && cob?.ok && cob.value.minus(pend.value).greaterThan("0.005")) {
+    /**
+     * La tolerancia del tope es la del redondeo de caja: media unidad mínima de la moneda del
+     * cobro, expresada en la moneda que decide. Con medio céntimo fijo, pagar en dólares lo
+     * que el botón sugiere se leía como «cobro de más» por unos bolívares (ADR-0063 §2).
+     */
+    const media = unidadMinima(input.currency).dividedBy(2);
+    const enLaQueDecide =
+      moneda === ctx.value.functionalCurrency && input.currency !== moneda
+        ? media.times(tasaCobroDec.value)
+        : media;
+    const minimo = decimalDe("0.005");
+    const holgura = enLaQueDecide.greaterThan(minimo) ? enLaQueDecide : minimo;
+    if (pend?.ok && cob?.ok && cob.value.minus(pend.value).greaterThan(holgura)) {
       return err({
         code: "VALIDATION_FAILED",
         message: `El cobro supera lo pendiente: quedan ${pend.value.toDecimalPlaces(2, 4).toFixed(2)} ${moneda} por cobrar. Ajusta el importe; si el cliente pagó de más, regístralo como saldo a favor con una nota de crédito.`,
@@ -2292,7 +2340,9 @@ export async function registerPayment(
         functionalCurrency: ctx.value.functionalCurrency,
         rateAtIssue: tasaEmision.value,
         rateAtPayment: tasaCobroDec.value,
-        policy: VALORACION_POLICY,
+        // El diferencial se reconoce a las unidades mínimas de la moneda de la empresa
+        // (ADR-0063 §3): un resultado financiero de 0,00000302 no existe.
+        policy: politicaDeValoracion(escalaFuncional),
       });
       if (!dif.ok) return err({ code: "VALIDATION_FAILED", message: dif.error.message });
       if (!dif.value.difference.isZero()) {
@@ -2303,8 +2353,8 @@ export async function registerPayment(
              fx_rate_issue, fx_rate_payment, occurred_on)
           values (${ctx.value.tenantId}, ${input.company_id}, ${input.document_id},
                   ${pago["id"] as string}, ${importe.value.toAmountString()}, ${input.currency},
-                  ${dif.value.functionalAtIssue.toAmountString()},
-                  ${dif.value.functionalAtPayment.toAmountString()},
+                  ${funcionalRedondeado.value.amount.minus(dif.value.difference.amount).toFixed(8)},
+                  ${funcionalRedondeado.value.toAmountString()},
                   ${dif.value.difference.toAmountString()},
                   ${tasaEmision.value.toFixed()}, ${tasaCobroDec.value.toFixed()}, ${diaNegocio(fecha)}::date)
           returning id, document_id, payment_id, amount_transaction::text as amount_transaction,
@@ -2334,12 +2384,21 @@ export async function registerPayment(
       if (!tasaDoc.ok) {
         return err({ code: "VALIDATION_FAILED", message: "Tasa no interpretable." });
       }
+      /**
+       * EL DIFERENCIAL SIN POLVO (ADR-0063 §3). Antes se hacía el viaje de ida y vuelta
+       * —funcional ÷ tasa × tasa, a ocho decimales— y con LA MISMA tasa salía «Ganancia
+       * cambiaria 0,00000302» en cada venta (QA de pantalla 2026-09-15, h. 18 y 29). Ahora la
+       * diferencia se calcula por PROPORCIÓN: lo que entró, por lo que la tasa se movió. Con
+       * tasas iguales el factor es cero exacto, sin resta de dos redondeos.
+       */
       const saldadoTx = funcionalRedondeado.value.amount
         .dividedBy(tasaDoc.value)
         .toDecimalPlaces(8, 4);
-      const alEmitir = saldadoTx.times(tasaEmision.value).toDecimalPlaces(8, 4);
       const alPago = funcionalRedondeado.value.amount;
-      const diferencia = alPago.minus(alEmitir);
+      const factor = decimalDe("1").minus(tasaEmision.value.dividedBy(tasaDoc.value));
+      const diferencia = alPago.times(factor).toDecimalPlaces(escalaFuncional, 4);
+      const alEmitir = alPago.minus(diferencia);
+      // Menos de una unidad mínima no es un hecho contable: es el redondeo de la caja.
       if (!diferencia.isZero()) {
         const [eg] = await sql<Record<string, unknown>[]>`
           insert into public.exchange_gain_loss
@@ -2421,8 +2480,11 @@ export async function registerPayment(
    * coinciden y la tercera línea no se genera por su condición de signo.
    */
   const entrado = funcionalRedondeado.value.toAmountString();
-  const cancelado = diferencial === null ? entrado : (diferencial["functional_at_issue"] as string);
   const diferencia = diferencial === null ? "0" : (diferencial["difference"] as string);
+  // Lo que deja de deberse = lo que entró − el diferencial. Se DERIVA en vez de leerse de la
+  // fila: así el asiento cuadra por construcción aunque el cobro se haya ajustado al céntimo
+  // (ADR-0063 §§2-3).
+  const cancelado = diferencial === null ? entrado : (diferencial["functional_at_issue"] as string);
   const contable = await generateJournalFromDocument(sql, {
     tenantId: ctx.value.tenantId,
     companyId: input.company_id,
@@ -3435,12 +3497,6 @@ export async function quotePos(
   if (!calculadas.ok) return calculadas;
   const totales = calculateTotals(calculadas.value.lineas.map((l) => l.calc));
   if (!totales.ok) return err({ code: "VALIDATION_FAILED", message: totales.error.message });
-  const totalFuncional = aFuncional(
-    totales.value.total,
-    calculadas.value.fxRate,
-    ctx.value.functionalCurrency,
-  );
-  if (!totalFuncional.ok) return totalFuncional;
 
   // ADR-0047: el carrito enseña LOS DOS LADOS y los dos los calcula el
   // servidor — el funcional por línea con la misma conversión que congelará
@@ -3456,13 +3512,39 @@ export async function quotePos(
     if (!roto.unitFunc.ok) return roto.unitFunc;
     if (!roto.totFunc.ok) return roto.totFunc;
   }
-  const subtotalFuncional = aFuncional(
-    totales.value.subtotal,
-    calculadas.value.fxRate,
-    ctx.value.functionalCurrency,
+
+  /**
+   * UN SOLO TOTAL (ADR-0063 §1). El funcional del carrito se SUMA por renglón, con la misma
+   * conversión que congelará `insertarDocumento` (PER_LINE, ADR-0058). Antes se convertía el
+   * total una sola vez y la caja anunciaba Bs 5.558,56 mientras el recibo decía 5.558,57: dos
+   * reglas de redondeo para el mismo importe (QA de pantalla 2026-09-15, h. 19 y 57).
+   */
+  const subLineas = calculadas.value.lineas.map((l) =>
+    aFuncional(l.calc.subtotal, calculadas.value.fxRate, ctx.value.functionalCurrency),
   );
-  if (!subtotalFuncional.ok) return subtotalFuncional;
-  const impuestoFuncional = totalFuncional.value.amount.minus(subtotalFuncional.value.amount);
+  const rotoSub = subLineas.find((r) => !r.ok);
+  if (rotoSub !== undefined && !rotoSub.ok) return rotoSub;
+  const ceroFunc = parseDecimal("0");
+  if (!ceroFunc.ok) return err({ code: "VALIDATION_FAILED", message: "imposible" });
+  let sumaSub = ceroFunc.value;
+  let sumaTot = ceroFunc.value;
+  for (const r of subLineas) {
+    if (!r.ok) return r;
+    sumaSub = sumaSub.plus(r.value.amount);
+  }
+  for (const f of porLinea) {
+    if (!f.totFunc.ok) return f.totFunc;
+    sumaTot = sumaTot.plus(f.totFunc.value.amount);
+  }
+  const totalFuncional = Money.of(sumaTot.toFixed(), ctx.value.functionalCurrency);
+  const subtotalFuncional = Money.of(sumaSub.toFixed(), ctx.value.functionalCurrency);
+  if (!totalFuncional.ok) {
+    return err({ code: "VALIDATION_FAILED", message: totalFuncional.error.message });
+  }
+  if (!subtotalFuncional.ok) {
+    return err({ code: "VALIDATION_FAILED", message: subtotalFuncional.error.message });
+  }
+  const impuestoFuncional = sumaTot.minus(sumaSub);
 
   // ADR-0047: el carrito enseña también el ANCLA (USD) aunque la lista esté en
   // Bs; la factura, en cambio, habla en bolívares. Lo calcula el servidor con
@@ -3635,6 +3717,7 @@ export async function quickSale(
       pendienteFuncional: pendiente.value,
       entregado: entregado.value,
       moneda: p.currency,
+      monedaFuncional: documento.functional_currency,
       instrumento: p.instrument,
       cond: condicion.value,
     });

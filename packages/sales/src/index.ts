@@ -170,8 +170,14 @@ export interface ExchangeDifference {
  * cobrado ni en el impuesto (ADR-0020, y MONEY_AND_ROUNDING §6.4 dice lo mismo
  * del redondeo de caja: la diferencia genera asiento propio).
  *
- * Con la misma tasa, la diferencia es CERO exacta, no «casi cero»: las dos
- * valoraciones salen del mismo producto.
+ * Con la misma tasa, la diferencia es CERO exacta, no «casi cero»: el factor
+ * `1 − tasaEmisión ÷ tasaCobro` vale cero y no hay resta de dos redondeos que
+ * deje polvo (ADR-0063 §3; el QA del 2026-09-15 veía «Ganancia 0,00000302» en
+ * cada venta cobrada a la misma tasa del día).
+ *
+ * Y las tres cifras CUADRAN por construcción: lo valorado al cobro menos la
+ * diferencia es lo valorado a la emisión. El asiento del cobro usa las tres
+ * (caja = deuda saldada + diferencial) y no puede desbalancearse por redondeo.
  */
 export function exchangeDifference(input: {
   readonly amountTransaction: Money;
@@ -214,20 +220,30 @@ export function exchangeDifference(input: {
     return ok(r.value.value);
   };
 
-  const enEmision = valorar(input.rateAtIssue);
-  if (!enEmision.ok) return enEmision;
   const enCobro = valorar(input.rateAtPayment);
   if (!enCobro.ok) return enCobro;
 
-  const diferencia = enCobro.value.subtract(enEmision.value);
-  if (!diferencia.ok) return err(money(diferencia.error));
+  // La diferencia, por PROPORCIÓN sobre lo que entró: lo que la tasa se movió.
+  // La diferencia EXACTA es el importe por lo que la tasa se movió: importe × (cobro −
+  // emisión). Se redondea UNA vez. Calcularla desde lo ya valorado (y por tanto ya
+  // redondeado) rompía la simetría al invertir las tasas, que es la propiedad P4.
+  const exactaDif = ExactMoney.from({
+    amount: input.amountTransaction.amount.times(input.rateAtPayment.minus(input.rateAtIssue)),
+    currency: funcional.value,
+  });
+  const redondeada = roundForCost(exactaDif, input.policy);
+  if (!redondeada.ok) return err(money(redondeada.error));
+  const diferencia = redondeada.value.value;
+
+  const enEmision = enCobro.value.subtract(diferencia);
+  if (!enEmision.ok) return err(money(enEmision.error));
 
   return ok({
     amountTransaction: input.amountTransaction,
     functionalAtIssue: enEmision.value,
     functionalAtPayment: enCobro.value,
-    difference: diferencia.value,
-    isGain: !diferencia.value.isNegative() && !diferencia.value.isZero(),
+    difference: diferencia,
+    isGain: !diferencia.isNegative() && !diferencia.isZero(),
   });
 }
 

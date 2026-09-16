@@ -135,7 +135,10 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
                  where i.company_id = ${companyId} and i.status = 'posted') s`;
 
       const dinero = await tx<{ currency: string; balance: string }[]>`
-        select ca.currency, coalesce(sum(b.balance), 0)::text as balance
+        select ca.currency,
+               -- En céntimos de cada moneda: es dinero contable a mano (ADR-0063 §4).
+               round(coalesce(sum(b.balance), 0),
+                     platform.currency_minor_units(ca.currency))::text as balance
           from public.company_accounts ca
           left join public.company_account_balances b on b.account_id = ca.id
          where ca.company_id = ${companyId} and ca.is_active
@@ -231,8 +234,11 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
           message: `No hay tasa de ${from} a ${to}. Carga la tasa del día primero.`,
         });
       }
+      // La equivalencia es PRESENTACIÓN: se sirve a las unidades mínimas de su moneda
+      // (ADR-0063 §5). Antes salía «≈ Bs. 2.737,171775» (QA 2026-09-15, h. 12).
       const [calc] = await tx<{ converted: string }[]>`
-        select round(${amount}::numeric * ${t.rate}::numeric, 8)::text as converted`;
+        select round(${amount}::numeric * ${t.rate}::numeric,
+                     platform.currency_minor_units(${to}))::text as converted`;
       return {
         amount,
         from_currency: from,
