@@ -121,6 +121,10 @@
             "type": "string",
             "nullable": true
           },
+          "taxpayer_type_code": {
+            "type": "string",
+            "nullable": true
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -147,6 +151,7 @@
           "city",
           "state",
           "logo_url",
+          "taxpayer_type_code",
           "status",
           "created_at"
         ],
@@ -8824,6 +8829,9 @@
                 "status": {
                   "type": "string"
                 },
+                "transaction_currency": {
+                  "type": "string"
+                },
                 "total_amount": {
                   "type": "string"
                 },
@@ -8832,6 +8840,10 @@
                 },
                 "balance": {
                   "type": "string"
+                },
+                "balance_today": {
+                  "type": "string",
+                  "nullable": true
                 },
                 "days_outstanding": {
                   "type": "integer"
@@ -8843,9 +8855,11 @@
                 "invoice_date",
                 "due_date",
                 "status",
+                "transaction_currency",
                 "total_amount",
                 "paid_amount",
                 "balance",
+                "balance_today",
                 "days_outstanding"
               ],
               "additionalProperties": false
@@ -10864,6 +10878,12 @@
                     "status": {
                       "type": "string"
                     },
+                    "transaction_currency": {
+                      "type": "string"
+                    },
+                    "fx_rate": {
+                      "type": "string"
+                    },
                     "base_gravada": {
                       "type": "string"
                     },
@@ -10913,6 +10933,8 @@
                     "supplier_control_number",
                     "supplier_document_ref",
                     "status",
+                    "transaction_currency",
+                    "fx_rate",
                     "base_gravada",
                     "base_exenta",
                     "base_exonerada",
@@ -11491,6 +11513,12 @@
                         "status": {
                           "type": "string"
                         },
+                        "transaction_currency": {
+                          "type": "string"
+                        },
+                        "fx_rate": {
+                          "type": "string"
+                        },
                         "base_gravada": {
                           "type": "string"
                         },
@@ -11540,6 +11568,8 @@
                         "supplier_control_number",
                         "supplier_document_ref",
                         "status",
+                        "transaction_currency",
+                        "fx_rate",
                         "base_gravada",
                         "base_exenta",
                         "base_exonerada",

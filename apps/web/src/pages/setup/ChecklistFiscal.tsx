@@ -145,7 +145,13 @@ export function ChecklistFiscal(): React.JSX.Element {
   });
 
   const tasaOk = (tasas.data?.length ?? 0) > 0;
-  const rangoOk = (rangos.data ?? []).some((r) => r.kind === "invoice" && r.status === "active");
+  // Cada clase de documento numera su control desde SU rango (ADR-0037): con solo el de
+  // facturas, la primera nota de crédito o devolución respondía «no hay rango» mientras esta
+  // lista decía «Completo» (QA de pantalla 2026-09-15, h. 54).
+  const clasesSinRango = CLASES_CON_RANGO.filter(
+    (c) => !(rangos.data ?? []).some((r) => r.kind === c.value && r.status === "active"),
+  );
+  const rangoOk = rangos.data !== undefined && clasesSinRango.length === 0;
   const contingencias = useQuery({
     queryKey: ["contingencias", empresa.id],
     queryFn: () => llamar<{ items: RangoContingencia[] }>("/v1/fiscal/contingency-ranges"),
@@ -155,7 +161,7 @@ export function ChecklistFiscal(): React.JSX.Element {
     <div className="max-w-3xl">
       <PageHeader
         title="Puesta a punto fiscal"
-        description={`Lo que ${empresa.legal_name} necesita antes de su primera factura. Cada paso pendiente responde un 409 al emitir — no es una avería, es esta lista.`}
+        description={`Lo que ${empresa.legal_name} necesita antes de su primera factura. Mientras un paso esté pendiente, emitir se detiene y te trae aquí: no es una avería, es esta lista.`}
       />
       <AlertaRangos />
 
@@ -245,7 +251,7 @@ export function ChecklistFiscal(): React.JSX.Element {
             setup.isError
               ? "No se pudo consultar la puesta a punto fiscal."
               : regimenVigente !== null
-                ? `Régimen vigente: ${regimenVigente.name}${regimenVigente.legal_source === "" ? "" : ` · ${regimenVigente.legal_source}`}. El régimen decide cómo se numera (company_fiscal_regimes, ADR-0029).`
+                ? `Régimen vigente: ${regimenVigente.name}${regimenVigente.legal_source === "" ? "" : ` · ${regimenVigente.legal_source}`}. El régimen decide cómo se numeran tus documentos.`
                 : "Sin régimen vigente: el régimen (formatos libres, máquina fiscal…) decide cómo se numera. Se asigna en /empezar, o aquí mismo si tienes el permiso."
           }
           sello="VALIDAR-SENIAT: qué régimen corresponde a la empresa lo confirma su contador."
@@ -271,9 +277,14 @@ export function ChecklistFiscal(): React.JSX.Element {
             rangoOk
               ? `Rangos activos: ${(rangos.data ?? [])
                   .filter((r) => r.status === "active")
-                  .map((r) => `${r.kind} ${r.series} (quedan ${r.remaining})`)
+                  .map(
+                    (r) =>
+                      `${NOMBRE_CLASE[r.kind] ?? r.kind} serie ${r.series} (quedan ${r.remaining})`,
+                  )
                   .join(" · ")}`
-              : "Sin rango de la imprenta autorizada no se asigna número de control."
+              : clasesSinRango.length < CLASES_CON_RANGO.length
+                ? `Falta el rango de: ${clasesSinRango.map((c) => c.label.toLowerCase()).join(", ")}. Sin él, ese documento no recibe número de control.`
+                : "Sin rango de la imprenta autorizada no se asigna número de control."
           }
         >
           <CargarRango />
@@ -656,11 +667,25 @@ function CargarTasa(): React.JSX.Element {
   );
 }
 
+/** Las clases de documento fiscal que numeran su control desde un rango (ADR-0037). */
+const CLASES_CON_RANGO: readonly { value: string; label: string }[] = [
+  { value: "invoice", label: "Facturas" },
+  { value: "credit_note", label: "Notas de crédito" },
+  { value: "debit_note", label: "Notas de débito" },
+];
+const NOMBRE_CLASE: Record<string, string> = {
+  invoice: "Facturas",
+  credit_note: "Notas de crédito",
+  debit_note: "Notas de débito",
+  receipt: "Recibos",
+};
+
 function CargarRango(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const qc = useQueryClient();
   const toast = useToast();
   const [forma, setForma] = useState({
+    kind: "invoice",
     series: "A",
     range_from: "1",
     range_to: "",
@@ -676,9 +701,9 @@ function CargarRango(): React.JSX.Element {
       await llamar("/v1/fiscal-number-ranges", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ company_id: empresa.id, kind: "invoice", ...forma }),
+        body: JSON.stringify({ company_id: empresa.id, ...forma }),
       });
-      toast.success("Rango cargado");
+      toast.success("Rango cargado", NOMBRE_CLASE[forma.kind] ?? forma.kind);
       await qc.invalidateQueries({ queryKey: ["rangos", empresa.id] });
     } catch (e) {
       setError(e);
@@ -689,6 +714,20 @@ function CargarRango(): React.JSX.Element {
 
   return (
     <div className="space-y-3 rounded-md border border-border bg-surface-muted/40 p-3">
+      <FormField
+        label="Para qué documento"
+        required
+        hint="La imprenta autoriza un rango por cada clase: facturas, notas de crédito y notas de débito."
+      >
+        {(a) => (
+          <SimpleSelect
+            id={a.id}
+            value={forma.kind}
+            onValueChange={(v) => setForma({ ...forma, kind: v })}
+            options={CLASES_CON_RANGO.map((c) => ({ value: c.value, label: c.label }))}
+          />
+        )}
+      </FormField>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <FormField label="Serie" required>
           {(a) => (

@@ -75,6 +75,7 @@ const PROYECCION: Record<BookKind, { fn: string; cols: string }> = {
     cols: `invoice_id, invoice_date::text as invoice_date, supplier_tax_id, supplier_name,
            supplier_kind, supplier_document_number, supplier_control_number,
            supplier_document_ref, status,
+           transaction_currency, fx_rate::text as fx_rate,
            base_gravada::text as base_gravada, iva_credito::text as iva_credito,
            iva_al_costo::text as iva_al_costo, tax_is_recoverable,
            base_exenta::text as base_exenta, base_exonerada::text as base_exonerada,

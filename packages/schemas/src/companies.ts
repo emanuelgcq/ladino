@@ -53,6 +53,12 @@ export const CompanyResponse = z
     state: z.string().nullable(),
     /** URL FIRMADA del logo (vigencia corta) o null. La ruta vive en el servidor. */
     logo_url: z.string().nullable(),
+    /**
+     * Tipo de contribuyente de la EMPRESA (ordinario, especial, formal…). NULL hasta que el
+     * dueño lo declara: sin él no se sabe si el IVA de una compra es crédito fiscal, y las
+     * compras se rechazan (QA de pantalla 2026-09-15, h. 62).
+     */
+    taxpayer_type_code: z.string().nullable(),
     status: z.enum(["onboarding", "active", "suspended"]),
     created_at: z.string().datetime({ offset: true }),
   })

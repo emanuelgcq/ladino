@@ -22,6 +22,8 @@ export interface ApiError {
   /** La misma verdad en voz de persona (Fase C): qué pasó y qué hacer. */
   readonly person_message?: string;
   readonly request_id?: string | null;
+  /** En un 422 del esquema: qué campos rechazó, con su ruta (issues de Zod). */
+  readonly details?: unknown;
 }
 
 export class LlamadaApiError extends Error {
@@ -44,14 +46,52 @@ export function errorDePersona(e: unknown): string {
     // Un cuerpo sin texto (o con un texto vacío) no puede acabar pintando
     // «undefined» en pantalla: la frase fija es el suelo.
     const texto = e.body.person_message ?? e.body.message;
-    return typeof texto === "string" && texto.trim() !== ""
-      ? texto
-      : "El servidor rechazó la operación sin explicar por qué. Vuelve a intentar; si sigue, avísanos.";
+    const base =
+      typeof texto === "string" && texto.trim() !== ""
+        ? texto
+        : "El servidor rechazó la operación sin explicar por qué. Vuelve a intentar; si sigue, avísanos.";
+    // «Revisa los campos marcados» sin ningún campo marcado no ayuda a nadie: cuando el
+    // servidor dice cuáles rechazó, se nombran (2026-09-16, «Nuevo producto» con la API vieja).
+    const campos = camposRechazados(e.body.details);
+    return e.body.code === "VALIDATION_FAILED" && campos.length > 0
+      ? `${base} Revisa: ${campos.join(", ")}.`
+      : base;
   }
   if (e instanceof TypeError) {
     return "No hay conexión con el servidor. Revisa tu internet y vuelve a intentar.";
   }
   return "Algo salió mal de nuestro lado. Vuelve a intentar; si sigue, avísanos.";
+}
+
+/** Nombres de persona para los campos que más aparecen en un 422 del esquema. */
+const NOMBRE_CAMPO: Record<string, string> = {
+  tax_category_code: "clasificación del IVA",
+  tax_id: "cédula o RIF",
+  legal_name: "nombre",
+  unit_code: "unidad",
+  sku: "código",
+  barcode: "código de barras",
+  amount: "monto",
+  currency: "moneda",
+  account_id: "cuenta",
+  quantity: "cantidad",
+  unit_price: "precio",
+  fiscal_address: "dirección",
+  reason: "motivo",
+};
+
+function camposRechazados(details: unknown): string[] {
+  if (!Array.isArray(details)) return [];
+  const nombres = new Set<string>();
+  for (const d of details) {
+    const ruta = (d as { path?: unknown }).path;
+    if (!Array.isArray(ruta)) continue;
+    const partes: unknown[] = ruta;
+    const clave = [...partes].reverse().find((p): p is string => typeof p === "string");
+    if (clave === undefined) continue;
+    nombres.add(NOMBRE_CAMPO[clave] ?? clave.replace(/_/g, " "));
+  }
+  return [...nombres].slice(0, 3);
 }
 
 export interface Company {
@@ -70,6 +110,8 @@ export interface Company {
   state: string | null;
   /** URL firmada del logo (vigencia corta) o null. */
   logo_url: string | null;
+  /** Tipo de contribuyente de la empresa; NULL hasta que el dueño lo declara. */
+  taxpayer_type_code: string | null;
   status: string;
   created_at: string;
 }

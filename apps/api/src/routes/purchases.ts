@@ -621,10 +621,13 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
       if (!empresa) return null;
       const invoices = await tx<Record<string, unknown>[]>`
         select i.id, i.supplier_document_number, i.invoice_date::text as invoice_date,
-               i.due_date::text as due_date, i.status, i.total_amount::text as total_amount,
+               i.due_date::text as due_date, i.status, i.transaction_currency,
+               i.total_amount::text as total_amount,
                coalesce((select sum(p.gross_amount) from public.supplier_payments p
                           where p.supplier_invoice_id = i.id), 0)::text as paid_amount,
                coalesce(platform.supplier_invoice_balance(${companyId}, i.id), 0)::text as balance,
+               -- La deuda de hoy en bolívares; NULL en una anulada (no hay deuda).
+               platform.supplier_debt_today(${companyId}, i.id)::text as balance_today,
                greatest(0, (current_date - coalesce(i.due_date, i.invoice_date)))::int
                  as days_outstanding
           from public.supplier_invoices i
@@ -632,7 +635,9 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
            and i.status in ('posted', 'paid', 'annulled')
          order by i.invoice_date, i.id`;
       const [totales] = await tx<{ pendiente: string; retenido: string }[]>`
-        select coalesce((select sum(platform.supplier_invoice_balance(${companyId}, i.id))
+        -- En moneda funcional, como balance_today y la antigüedad (migración 65); las filas
+        -- conservan además su saldo en la moneda de la factura.
+        select coalesce((select sum(platform.supplier_debt_today(${companyId}, i.id))
                            from public.supplier_invoices i
                           where i.company_id = ${companyId} and i.supplier_id = ${id}
                             and i.status in ('posted', 'paid')), 0)::text as pendiente,

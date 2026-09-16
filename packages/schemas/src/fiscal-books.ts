@@ -72,6 +72,12 @@ export const PurchasesBookRow = z
     supplier_control_number: z.string().nullable(),
     supplier_document_ref: z.string().nullable(),
     status: z.string(),
+    /**
+     * La moneda en que el proveedor FACTURÓ y la tasa con la que se llevó a bolívares. Todos
+     * los importes de la fila están en moneda funcional (migración 65).
+     */
+    transaction_currency: z.string(),
+    fx_rate: z.string(),
     ...Bases,
     /** Crédito fiscal solo si es recuperable; si no, el mismo importe es costo. */
     iva_credito: z.string(),

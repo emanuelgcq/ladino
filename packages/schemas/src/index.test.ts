@@ -51,6 +51,7 @@ describe("@ladino/schemas — contratos de companies", () => {
       city: null,
       state: null,
       logo_url: null,
+      taxpayer_type_code: null,
       status: "onboarding" as const,
     };
     expect(

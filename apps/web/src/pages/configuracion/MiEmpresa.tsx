@@ -20,6 +20,7 @@ import { Link } from "react-router";
 import { formatearDocumento } from "../negocio/comunes.js";
 import { Recortador } from "../registro/Registro.js";
 import { tieneRif } from "../../app/rif.js";
+import { TipoDeContribuyente } from "../../components/capa-fiscal/TipoDeContribuyente.js";
 
 /**
  * MI EMPRESA (Configuración → la tarjeta del negocio): todos los campos del
@@ -50,6 +51,7 @@ interface EmpresaFila {
   city: string | null;
   state: string | null;
   logo_url: string | null;
+  taxpayer_type_code: string | null;
 }
 
 const RUBROS: { value: string; label: string }[] = [
@@ -258,6 +260,9 @@ export function MiEmpresa(): React.JSX.Element {
                   </Button>
                 </>
               )}
+            </div>
+            <div className="mt-4 border-t border-border pt-3">
+              <TipoDeContribuyente actual={e.taxpayer_type_code} onCambio={recargar} />
             </div>
           </div>
         )}
@@ -544,6 +549,10 @@ function DialogoRif({
   const toast = useToast();
   const [rif, setRif] = useState("");
   const [motivo, setMotivo] = useState("");
+  // Quien pone su PRIMER RIF y no tiene dirección fiscal la escribe aquí mismo: antes se le
+  // mandaba a «Editar» a buscar un campo que, sin RIF, ni siquiera se llama «fiscal».
+  const [direccion, setDireccion] = useState("");
+  const pideDireccion = sinRif && modo === "poner" && !hayDireccion;
   const [error, setError] = useState<string | null>(null);
 
   const normalizado = rif
@@ -560,11 +569,20 @@ function DialogoRif({
             headers: { "Idempotency-Key": crypto.randomUUID() },
             body: JSON.stringify({ tax_id: normalizado, reason: motivo.trim() }),
           })
-        : llamar(`/v1/companies/tax-id`, {
-            method: "PUT",
-            headers: { "Idempotency-Key": crypto.randomUUID() },
-            body: JSON.stringify({ tax_id: normalizado }),
-          }),
+        : (async () => {
+            if (pideDireccion) {
+              await llamar(`/v1/companies/fiscal-address`, {
+                method: "PUT",
+                headers: { "Idempotency-Key": crypto.randomUUID() },
+                body: JSON.stringify({ fiscal_address: direccion.trim() }),
+              });
+            }
+            return llamar(`/v1/companies/tax-id`, {
+              method: "PUT",
+              headers: { "Idempotency-Key": crypto.randomUUID() },
+              body: JSON.stringify({ tax_id: normalizado }),
+            });
+          })(),
     onSuccess: () => {
       toast.success(
         esCorreccion ? "RIF corregido" : sinRif ? "RIF registrado" : "RIF cambiado",
@@ -591,7 +609,7 @@ function DialogoRif({
               : "Sin documentos emitidos, el cambio es directo y queda auditado."}
         </DialogDescription>
         <div className="space-y-3 pt-2">
-          {!hayDireccion && (
+          {!hayDireccion && !pideDireccion && (
             <p className="rounded-md bg-warning-soft p-3 text-[0.88rem] text-warning-soft-foreground">
               Primero carga la dirección fiscal (en «Editar»): es la que sale en tus facturas.
             </p>
@@ -612,6 +630,22 @@ function DialogoRif({
               />
             )}
           </FormField>
+          {pideDireccion && (
+            <FormField
+              label="Dirección fiscal"
+              required
+              hint="La que aparece en tu RIF. Sale impresa en tus facturas."
+            >
+              {(p) => (
+                <Input
+                  {...p}
+                  placeholder="Av. Bolívar, local 3, Valencia"
+                  value={direccion}
+                  onChange={(ev) => setDireccion(ev.target.value)}
+                />
+              )}
+            </FormField>
+          )}
           {esCorreccion && (
             <FormField label="¿Qué pasó?" required hint="Queda en la auditoría.">
               {(p) => (
@@ -645,7 +679,8 @@ function DialogoRif({
               (esCorreccion && motivo.trim().length < 3) ||
               // Sin dirección fiscal el servidor responde 422: el botón ya no invita a fallar
               // (QA de pantalla 2026-09-15, h. 80).
-              (sinRif && !esCorreccion && !hayDireccion)
+              (sinRif && !esCorreccion && !hayDireccion && !pideDireccion) ||
+              (pideDireccion && direccion.trim().length < 5)
             }
             onClick={() => enviar.mutate()}
           >

@@ -2270,8 +2270,10 @@ function NuevoProveedor({
     trade_name: "",
     supplier_kind: "nacional",
     tax_id: "",
-    person_type_code: "juridica",
-    taxpayer_type_code: "ordinario",
+    // Vacíos = «según el RIF»: el servidor los deduce de la letra del documento (V, E, J, G).
+    // Preseleccionar «Jurídica» dejaba jurídico a un proveedor V (QA 2026-09-15, h. 52).
+    person_type_code: "",
+    taxpayer_type_code: "",
     fiscal_address: "",
     email: "",
     phone: "",
@@ -2306,8 +2308,8 @@ function NuevoProveedor({
           trade_name: opcional(form.trade_name),
           supplier_kind: form.supplier_kind,
           tax_id: nacional ? form.tax_id.trim().toUpperCase() : opcional(form.tax_id),
-          person_type_code: nacional ? form.person_type_code : null,
-          taxpayer_type_code: nacional ? form.taxpayer_type_code : null,
+          person_type_code: nacional ? opcional(form.person_type_code) : null,
+          taxpayer_type_code: nacional ? opcional(form.taxpayer_type_code) : null,
           fiscal_address: opcional(form.fiscal_address),
           email: opcional(form.email),
           phone: opcional(form.phone),
@@ -2382,13 +2384,14 @@ function NuevoProveedor({
           </FormField>
           {nacional && (
             <>
-              <FormField label="Persona" required>
+              <FormField label="Persona">
                 {(a) => (
                   <SimpleSelect
                     id={a.id}
-                    value={form.person_type_code}
-                    onValueChange={campo("person_type_code")}
+                    value={form.person_type_code === "" ? "auto" : form.person_type_code}
+                    onValueChange={(v) => campo("person_type_code")(v === "auto" ? "" : v)}
                     options={[
+                      { value: "auto", label: "Según el RIF" },
                       { value: "juridica", label: "Jurídica" },
                       { value: "natural", label: "Natural" },
                       { value: "gobierno", label: "Ente público" },
@@ -2396,13 +2399,14 @@ function NuevoProveedor({
                   />
                 )}
               </FormField>
-              <FormField label="Contribuyente" required>
+              <FormField label="Contribuyente">
                 {(a) => (
                   <SimpleSelect
                     id={a.id}
-                    value={form.taxpayer_type_code}
-                    onValueChange={campo("taxpayer_type_code")}
+                    value={form.taxpayer_type_code === "" ? "auto" : form.taxpayer_type_code}
+                    onValueChange={(v) => campo("taxpayer_type_code")(v === "auto" ? "" : v)}
                     options={[
+                      { value: "auto", label: "Según el RIF" },
                       { value: "ordinario", label: "Ordinario" },
                       { value: "especial", label: "Especial" },
                       { value: "formal", label: "Formal" },

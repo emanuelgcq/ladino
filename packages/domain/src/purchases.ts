@@ -756,7 +756,7 @@ export async function registerSupplierInvoice(
     return err({
       code: "VALIDATION_FAILED",
       message:
-        "La empresa no tiene clasificación tributaria propia y sin ella no se sabe si el IVA de la compra es crédito fiscal o costo. Asígnala antes de registrar facturas.",
+        "Falta el tipo de contribuyente de la empresa: sin él no se sabe si el IVA de la compra es crédito fiscal o costo. Decláralo en Configuración → Mi empresa → Tipo de contribuyente, y vuelve a registrar la compra.",
     });
   }
   // El contribuyente ESPECIAL es un contribuyente ordinario de IVA designado agente de
@@ -993,7 +993,6 @@ export async function registerSupplierInvoice(
             taxpayerType: prov.taxpayer_type_code,
             personType: prov.person_type_code,
             fecha: input.invoice_date,
-            baseIva: imp.toFixed(8),
           });
           if (!r.ok) {
             // Se guarda ANTES de lanzar: lo que sale del savepoint es el error
@@ -1248,7 +1247,6 @@ async function practicarRetencion(
     taxpayerType: string | null;
     personType: string | null;
     fecha: string;
-    baseIva: string;
   },
 ): Promise<Result<null, PurchaseError>> {
   const [concepto] = await sql<{ retention_code: string }[]>`
@@ -1264,9 +1262,16 @@ async function practicarRetencion(
   // La BASE depende del tributo: el IVA se retiene sobre el impuesto de la
   // factura; el ISLR, sobre el subtotal. No es un detalle — retener ISLR sobre
   // el total con IVA infla la retención y se la quita al proveedor.
-  const [f] = await sql<{ subtotal: string }[]>`
-    select subtotal_amount::text as subtotal from public.supplier_invoices where id = ${d.invoiceId}`;
-  const baseRaw = concepto.retention_code === "iva" ? d.baseIva : (f?.subtotal ?? "0");
+  //
+  // Y la base va en BOLÍVARES (regla del dueño, 2026-09-16: retenciones y libros siempre en
+  // moneda funcional). La factura guarda sus cifras en SU moneda: una de USD 23,20 retenía
+  // sobre «3,20» como si fueran bolívares y guardaba la fila rotulada VES. Se convierten con
+  // la tasa de la factura, la misma con la que se asentó (VALIDAR-TRIBUTARIO P-19).
+  const [f] = await sql<{ subtotal: string; iva: string }[]>`
+    select round(subtotal_amount * fx_rate, 8)::text as subtotal,
+           round(tax_amount * fx_rate, 8)::text as iva
+      from public.supplier_invoices where id = ${d.invoiceId}`;
+  const baseRaw = concepto.retention_code === "iva" ? (f?.iva ?? "0") : (f?.subtotal ?? "0");
   const base = Money.of(baseRaw, ctx.functionalCurrency);
   if (!base.ok) return err({ code: "VALIDATION_FAILED", message: base.error.message });
 
@@ -1810,6 +1815,16 @@ export async function registerSupplierPayment(
     return err({
       code: "VALIDATION_FAILED",
       message: `Solo se paga una factura asentada; esta está en ${factura.status}.`,
+    });
+  }
+  // El saldo de la factura vive en SU moneda (`supplier_invoice_balance` resta los pagos sin
+  // convertir): un pago en otra moneda lo dejaba mal — 100 Bs «pagaban» una factura de
+  // USD 100 (revisión fiscal de la migración 65). Mientras no exista el pago cruzado con su
+  // conversión, se paga en la moneda en que se facturó.
+  if (input.currency !== factura.transaction_currency) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `La factura está en ${factura.transaction_currency} y el pago en ${input.currency}: por ahora el pago se registra en la moneda de la factura.`,
     });
   }
 

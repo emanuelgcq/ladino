@@ -67,6 +67,7 @@ export function companiesRoutes(
       ({ sql: tx }) => tx<({ logo_path: string | null } & Record<string, unknown>)[]>`
         select id, tenant_id, legal_name, trade_name, tax_id, fiscal_address,
                business_type, phone, whatsapp, city, state, logo_path, status,
+               taxpayer_type_code,
                to_char(created_at at time zone 'utc',
                        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at
           from public.companies

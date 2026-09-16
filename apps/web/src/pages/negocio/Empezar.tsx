@@ -16,6 +16,7 @@ import { FormField, MoneyInput, importeValido } from "../../components/forms.js"
 import { AltaSimple, ImportarExcel } from "./Productos.js";
 import { CrearCuenta } from "./Dinero.js";
 import { IvaQueCobras } from "../../components/capa-fiscal/IvaQueCobras.js";
+import { TipoDeContribuyente } from "../../components/capa-fiscal/TipoDeContribuyente.js";
 import { porcentajeAFraccion, fraccionAPorcentaje } from "./comunes.js";
 
 /**
@@ -51,6 +52,17 @@ interface Resumen {
 export function Empezar(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const conRif = tieneRifEmpresa(empresa);
+  // El tipo de contribuyente (h. 62): con RIF, sin él no se registra ninguna compra.
+  const miEmpresa = useQuery({
+    queryKey: ["mi-empresa", empresa.id],
+    enabled: conRif,
+    queryFn: async () => {
+      const lista =
+        await llamar<{ id: string; taxpayer_type_code: string | null }[]>("/v1/companies");
+      return lista.find((e) => e.id === empresa.id) ?? null;
+    },
+  });
+  const tipoContribuyente = miEmpresa.data?.taxpayer_type_code ?? null;
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [paso, setPaso] = useState(0);
@@ -98,6 +110,7 @@ export function Empezar(): React.JSX.Element {
   const fiscalListo =
     facturacion !== null &&
     facturacion.current_regime !== null &&
+    (!conRif || facturacion.sales_mode !== "facturas" || tipoContribuyente !== null) &&
     (facturacion.current_regime === "sin_emision" ||
       facturacion.sales_mode === "recibos" ||
       (facturacion.iva_general !== null && (!necesitaTalonario || hayTalonario)));
@@ -202,7 +215,15 @@ export function Empezar(): React.JSX.Element {
             </Card>
           )}
           {paso === 3 && facturacion !== null && (
-            <PasoFacturas setup={facturacion} hayTalonario={hayTalonario} onCambio={recargar} />
+            <PasoFacturas
+              setup={facturacion}
+              hayTalonario={hayTalonario}
+              tipoContribuyente={conRif ? tipoContribuyente : "no_aplica"}
+              onCambio={() => {
+                recargar();
+                void miEmpresa.refetch();
+              }}
+            />
           )}
         </div>
 
@@ -471,10 +492,13 @@ function PasoTasa({
 function PasoFacturas({
   setup,
   hayTalonario,
+  tipoContribuyente,
   onCambio,
 }: {
   setup: SetupFiscal;
   hayTalonario: boolean;
+  /** El de la empresa con RIF (null si falta); «no_aplica» sin RIF. */
+  tipoContribuyente: string | null;
   onCambio: () => void;
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
@@ -854,6 +878,11 @@ function PasoFacturas({
               </div>
             )}
           </div>
+        )}
+
+        {/* Con RIF y facturando: el tipo de contribuyente, que las compras necesitan (h. 62). */}
+        {setup.sales_mode === "facturas" && tipoContribuyente !== "no_aplica" && (
+          <TipoDeContribuyente actual={tipoContribuyente} onCambio={onCambio} />
         )}
 
         {setup.current_regime !== null &&

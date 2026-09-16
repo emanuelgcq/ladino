@@ -665,6 +665,13 @@ select is((select tax_is_recoverable from public.supplier_invoices
   '…y para ella el IVA de compra NO es recuperable: es parte del costo');
 
 -- ── 14. Aging de CxP y aislamiento ──────────────────────────────────────────
+-- Desde la migración 65 la antigüedad suma lo que se debe HOY en bolívares: una factura en
+-- divisa se valora a la tasa del día, y sin tasa responde LAD51 (como la deuda del cliente).
+-- El escenario carga la tasa que una empresa real tiene cargada.
+insert into public.exchange_rates
+  (from_currency, to_currency, rate, source, rate_date, rate_timestamp, tenant_id, company_id)
+values ('USD', 'VES', 40, 'prueba-022', current_date, now(),
+        'aaaa0022-0000-4000-8000-00000000000a', 'aaaa0022-0000-4000-8000-0000000000a2');
 select cmp_ok((select count(*) from platform.ap_aging(
                  'aaaa0022-0000-4000-8000-0000000000a2', null, current_date)), '>=', 0::bigint,
   'ap_aging responde para la empresa (simétrico a ar_aging, los mismos cuatro tramos)');

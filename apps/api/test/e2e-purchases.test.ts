@@ -578,6 +578,54 @@ describe("compras de extremo a extremo", () => {
     expect(String(f.retentions[0]!["legal_source_snapshot"]).length).toBeGreaterThan(3);
   });
 
+  it("una factura en DÓLARES retiene y declara en bolívares (migración 65)", async () => {
+    // El proveedor factura USD 100 + 16 de IVA; la tasa del día es 40. Retención de IVA:
+    // 75 % de 16 × 40 = 480 Bs. Antes se retenía sobre «16» como si fueran bolívares (12).
+    const r = await pedir("POST", "/v1/supplier-invoices", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      supplier_document_number: `FAC-${RUN}-USD`,
+      supplier_control_number: "00-1234599",
+      invoice_date: HOY,
+      currency: "USD",
+      lines: [{ product_id: PROD_A, quantity: "1", unit_price: "100" }],
+      retention_concepts: ["iva_compras"],
+    });
+    expect(r.status).toBe(201);
+    const f = (await r.json()) as {
+      id: string;
+      tax_amount: string;
+      retentions: Record<string, string>[];
+    };
+    expect(f.tax_amount).toBe("16.00000000");
+    expect(f.retentions[0]!["base_amount"]).toBe("640.00000000");
+    expect(f.retentions[0]!["retained_amount"]).toBe("480.00000000");
+
+    // El libro de compras la lleva en bolívares y dice que venía en dólares.
+    const [fila] = await sql<
+      {
+        transaction_currency: string;
+        base_gravada: string;
+        iva_credito: string;
+        retenido_iva: string;
+      }[]
+    >`
+      select transaction_currency, base_gravada::text, iva_credito::text, retenido_iva::text
+        from platform.purchases_book(${COMPANY}, ${HOY}::date, ${HOY}::date)
+       where invoice_id = ${f.id}`;
+    expect(fila).toEqual({
+      transaction_currency: "USD",
+      base_gravada: "4000.00000000",
+      iva_credito: "640.00000000",
+      retenido_iva: "480.00000000",
+    });
+
+    // Y lo que se le debe hoy a ese proveedor, en bolívares.
+    const [deuda] = await sql<{ d: string }[]>`
+      select platform.supplier_debt_today(${COMPANY}, ${f.id})::text as d`;
+    expect(deuda!.d).toBe("4640.00");
+  });
+
   it("al proveedor EXTRANJERO no se le retiene, y su factura registra el documento origen", async () => {
     const r = await pedir("POST", "/v1/supplier-invoices", COMPRADOR, {
       company_id: COMPANY,

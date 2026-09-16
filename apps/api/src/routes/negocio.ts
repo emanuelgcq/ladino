@@ -130,7 +130,10 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
                    and d.status = 'issued') s`;
       const [debo] = await tx<{ total: string }[]>`
         select round(coalesce(sum(saldo), 0), 2)::text as total
-          from (select greatest(platform.supplier_invoice_balance(${companyId}, i.id), 0) as saldo
+          -- En bolívares: una factura de proveedor en USD se valora a la tasa del día (la
+          -- misma regla que lo que me deben). Antes se sumaban saldos de monedas distintas
+          -- y USD 50,112 aparecía como «Bs 50,11» (QA 2026-09-15, h. 76).
+          from (select greatest(platform.supplier_debt_today(${companyId}, i.id), 0) as saldo
                   from public.supplier_invoices i
                  where i.company_id = ${companyId} and i.status = 'posted') s`;
 

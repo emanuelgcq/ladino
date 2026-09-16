@@ -509,9 +509,13 @@ export const SupplierStatementResponse = z
           invoice_date: z.string(),
           due_date: z.string().nullable(),
           status: z.string(),
+          /** La moneda de la factura: total, pagado y saldo van en ELLA. */
+          transaction_currency: z.string(),
           total_amount: z.string(),
           paid_amount: z.string(),
           balance: z.string(),
+          /** Lo que se debe HOY por esta factura, en moneda funcional (la de `currency`). */
+          balance_today: z.string().nullable(),
           days_outstanding: z.number().int(),
         })
         .strict(),
