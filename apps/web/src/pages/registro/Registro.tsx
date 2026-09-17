@@ -1021,7 +1021,6 @@ export function Recortador({
         ref={inputRef}
         type="file"
         accept="image/jpeg,image/png,image/webp"
-        capture="environment"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];

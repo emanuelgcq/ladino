@@ -4,6 +4,7 @@ import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
 import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
+import { claveSecretaLocal } from "./_clave-storage-local.js";
 
 /**
  * El módulo de productos de EXTREMO A EXTREMO por el camino de producción:
@@ -598,4 +599,48 @@ describe("productos de extremo a extremo", () => {
     expect(String(item["image_url"])).toContain("thumb-400.webp");
     expect(String(item["image_url"])).toContain("token=");
   });
+
+  it(
+    "la foto con una clave NUEVA de Storage (sb_secret): se guarda y se firma (producción, 2026-09-17)",
+    { timeout: 60_000 },
+    async () => {
+      // La clave secreta del stack local (formato nuevo, como la de producción), leída al correr.
+      // Mandarla como Bearer hacía que Storage respondiera 400: ni una foto se guardó del 13 al 17
+      // de septiembre.
+      const conClaveNueva = buildApp({
+        sql: sqlApi,
+        auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER },
+        storage: {
+          url: "http://127.0.0.1:54321/storage/v1",
+          serviceKey: claveSecretaLocal(),
+        },
+      });
+      const token = await tokenDe(GESTOR);
+      const alta = await pedir("POST", "/v1/products/simple", {
+        token,
+        key: crypto.randomUUID(),
+        body: {
+          company_id: COMPANY,
+          name: `Foto clave nueva ${RUN}`,
+          price: { amount: "1.00000000", currency: "USD" },
+        },
+      });
+      expect(alta.status).toBe(201);
+      const producto = ((await alta.json()) as { product: { id: string } }).product;
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        "base64",
+      );
+      const form = new FormData();
+      form.append("file", new File([new Uint8Array(png)], "foto.png", { type: "image/png" }));
+      const subida = await conClaveNueva.request(`/v1/products/${producto.id}/image`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "X-Company-Id": COMPANY },
+        body: form,
+      });
+      expect(subida.status, await subida.clone().text()).toBe(201);
+      const s = (await subida.json()) as { image_path: string; image_url: string | null };
+      expect(s.image_url).toContain("token=");
+    },
+  );
 });

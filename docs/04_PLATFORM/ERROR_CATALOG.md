@@ -73,13 +73,15 @@ el código y se corrige el espejo.
 | `PERMISSION_REQUIRED` | Tu usuario no puede hacer esto. Pídele acceso a quien administra el negocio. |
 | `NOT_FOUND` | Eso no existe o no está disponible para ti. |
 | `DUPLICATE` | Ya hay uno igual registrado. Busca el que existe en vez de crear otro. |
-| `EXCHANGE_RATE_MISSING` | Falta la tasa del día. Cárgala en Mi dinero y vuelve a intentar. |
+| `EXCHANGE_RATE_MISSING` | Falta la tasa BCV. Tráela en Mi dinero y vuelve a intentar. |
+| `RATE_ONLY_FROM_BCV` | Solo se usa la tasa del BCV. Tráela con «Traer del BCV» en Mi dinero. |
 | `TAX_RULE_MISSING` | Falta configurar el impuesto de venta. Se completa en Empezar antes de poder vender. |
 | `FISCAL_NUMBERING_INVALID` | No hay números de factura disponibles. Carga un rango nuevo en Facturación fiscal. |
 | `NEGATIVE_STOCK` | No hay suficiente mercancía para esa cantidad. Revisa la existencia o registra la entrada primero. |
 | `APPEND_ONLY_VIOLATION` | Esto ya quedó registrado y no se puede cambiar. Lo que corresponde es registrar la corrección. |
 | `DOCUMENT_SNAPSHOT_FROZEN` | Los datos del cliente quedaron impresos en esa factura y no se cambian. Si están mal, se corrige con una nota de crédito. |
-| `UPSTREAM_UNAVAILABLE` | No se pudo consultar la fuente en este momento. Intenta de nuevo, o carga el dato a mano. |
+| `UPSTREAM_UNAVAILABLE` | No se pudo consultar el BCV en este momento. Intenta de nuevo en un rato; mientras tanto rige la última tasa. |
+| `STORAGE_UNAVAILABLE` | No se pudo guardar el archivo. Intenta de nuevo en un rato; si sigue, avísanos. |
 | `PERIOD_CLOSED` | Ese mes ya está cerrado en contabilidad. Habla con quien lleva los números. |
 | `COMPANY_SUSPENDED` | El negocio está suspendido en el sistema. Contacta a soporte. |
 | `COSTING_MISMATCH` | La existencia cambió mientras guardabas. Vuelve a intentar: casi siempre pasa a la primera. |

@@ -192,6 +192,9 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   // El adaptador BCV no respondió o respondió irreconocible. 502: el cuerpo del cliente está
   // bien; lo que falló está aguas arriba. Mientras tanto rige la última tasa publicada.
   UPSTREAM_UNAVAILABLE: 502,
+  // El Storage rechazó guardar un archivo (foto, logo, comprobante). 502 por lo mismo: el
+  // archivo está bien; el detalle queda en el log, no en la pantalla.
+  STORAGE_UNAVAILABLE: 502,
 };
 
 export class DominioError extends Error {
@@ -371,6 +374,8 @@ export function mensajePersona(code: string): string {
       return "Ya hay uno igual registrado. Busca el que existe en vez de crear otro.";
     case "EXCHANGE_RATE_MISSING":
       return "Falta la tasa BCV. Tráela en Mi dinero y vuelve a intentar.";
+    case "STORAGE_UNAVAILABLE":
+      return "No se pudo guardar el archivo. Intenta de nuevo en un rato; si sigue, avísanos.";
     case "RATE_ONLY_FROM_BCV":
       return "Solo se usa la tasa del BCV. Tráela con «Traer del BCV» en Mi dinero.";
     case "TAX_RULE_MISSING":

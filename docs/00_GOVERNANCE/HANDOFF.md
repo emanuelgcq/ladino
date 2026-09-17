@@ -1,3 +1,51 @@
+# Handoff — 2026-09-17 (25ª entrega) — La foto del producto no se guardaba
+
+## Qué pasaba
+
+Desde la mudanza al proyecto de Virginia (2026-09-13), **ninguna foto de producto ni ningún logo
+se guardó en producción**: `storage.objects` vacío, 0 de 319 productos con foto, 0 empresas con
+logo. El log de Storage muestra la subida de la API respondida con **HTTP 400**.
+
+La causa: el proyecto nuevo usa una clave secreta del formato nuevo (`sb_secret_…`), y el cliente
+de Storage de la API la mandaba en `Authorization: Bearer`. Esas claves no son JWT y deben ir en
+`apikey` (documentación de Supabase, «API keys»). La persona veía «Algo salió mal de nuestro
+lado».
+
+## Qué se cambió
+
+- **`apps/api/src/storage.ts`:**
+  - `cabecerasServicio` manda la clave en `apikey`, y también en `Authorization` solo si es una
+    `service_role` JWT heredada;
+  - un rechazo de Storage llega a la persona como `502 STORAGE_UNAVAILABLE`, con motivo, y
+    queda en el log (`api.storage_upload_failed`, con el estado de Storage).
+- **Web:**
+  - la foto se reduce en el navegador (2000 px, JPEG) antes de subirla, porque la API corta en
+    6 MB y una foto de teléfono pesa 3–8 MB;
+  - se acepta cualquier imagen y se quitó `capture`: en Android solo abría la cámara, sin la
+    galería;
+  - el recuadro del alta dice «Agregar foto»;
+  - la ficha del producto en la vista del negocio tiene «Agregar foto» / «Cambiar la foto»
+    (con `product.manage`);
+  - si la foto falla al crear el producto, el aviso dice el motivo.
+- **Logo del registro:** sin `capture`.
+- **Documentación:** `api.env.example` documenta `SUPABASE_STORAGE_URL` y
+  `SUPABASE_STORAGE_KEY`; en `ERROR_CATALOG` entran `STORAGE_UNAVAILABLE` y
+  `RATE_ONLY_FROM_BCV`.
+
+## Pruebas
+
+- `storage.test.ts` (4): las cabeceras por tipo de clave, y el rechazo convertido en motivo.
+- **`e2e-products`: subida contra el Storage local con la clave `sb_secret` pública de la CLI.**
+  Con el cliente viejo da 500 «Error interno» —lo mismo que producción— y con el arreglo, 201.
+
+## Para el dueño
+
+- **Deploy:** `git pull && docker compose up -d --build api worker web`. Sin migración.
+- **Después del deploy:** subir una foto desde el teléfono. Las fotos que se intentaron antes
+  no quedaron guardadas en ningún lado: hay que volver a subirlas.
+
+---
+
 # Handoff — 2026-09-16 (24ª entrega) — QA de pantalla: los 87 hallazgos, y solo la tasa del BCV
 
 ## Estado

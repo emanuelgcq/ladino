@@ -34,6 +34,7 @@ import {
 } from "../../components/importar.js";
 import { BotonEscanear } from "../../components/EscanerCodigo.js";
 import { tasaLimpia } from "../../tasa.js";
+import { ACEPTA_FOTOS, subirFotoProducto } from "../../components/foto.js";
 
 /**
  * PRODUCTOS (Fase C, PARTE 7): lo que vendo, con foto. Cuadrícula visual por
@@ -468,7 +469,7 @@ export function AltaSimple({
     );
 
   const crear = useMutation({
-    mutationFn: async (): Promise<{ id: string; fotoFallo: boolean }> => {
+    mutationFn: async (): Promise<{ id: string; fotoFallo: string | null }> => {
       const creado = await llamar<{ product: { id: string } }>("/v1/products/simple", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
@@ -492,24 +493,22 @@ export function AltaSimple({
         }),
       });
       // El producto YA existe: si la foto falla, no se reintenta el POST
-      // entero (crearía otro producto). Se cierra y se dice dónde subirla.
-      let fotoFallo = false;
+      // entero (crearía otro producto). Se cierra y se dice el motivo y dónde subirla.
+      let fotoFallo: string | null = null;
       if (foto !== null) {
         try {
-          const form = new FormData();
-          form.append("file", foto);
-          await llamar(`/v1/products/${creado.product.id}/image`, { method: "POST", body: form });
-        } catch {
-          fotoFallo = true;
+          await subirFotoProducto(llamar, creado.product.id, foto);
+        } catch (e) {
+          fotoFallo = errorDePersona(e);
         }
       }
       return { id: creado.product.id, fotoFallo };
     },
     onSuccess: (r) => {
-      if (r.fotoFallo) {
+      if (r.fotoFallo !== null) {
         toast.warning(
-          "Producto agregado",
-          "La foto no se pudo subir; inténtalo desde Administración → Productos.",
+          "Producto agregado, sin foto",
+          `${r.fotoFallo} Ábrelo en Productos y usa «Agregar foto».`,
         );
       } else {
         toast.success("Producto agregado", `${nombre.trim()} ya está listo para vender.`);
@@ -532,20 +531,26 @@ export function AltaSimple({
             <button
               type="button"
               onClick={() => fotoRef.current?.click()}
-              className="flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-dashed border-border bg-surface-muted text-faint-foreground hover:border-accent"
-              aria-label="Agregar foto"
+              className="flex size-24 shrink-0 flex-col items-center justify-center gap-1 overflow-hidden rounded-lg border border-dashed border-border bg-surface-muted text-faint-foreground hover:border-accent"
+              aria-label={vistaPrevia !== null ? "Cambiar la foto" : "Agregar foto"}
             >
               {vistaPrevia !== null ? (
                 <img src={vistaPrevia} alt="" className="size-full object-cover" />
               ) : (
-                <Camera className="size-6" />
+                <>
+                  <Camera className="size-6" />
+                  {/* Dicho con palabras: un recuadro con un icono no se leía como «aquí va la
+                      foto» (dueño, 2026-09-17). */}
+                  <span className="text-[0.72rem] font-medium">Agregar foto</span>
+                </>
               )}
             </button>
+            {/* Sin `capture`: el teléfono ofrece la cámara Y la galería (con `capture` solo abría
+                la cámara y no dejaba elegir una foto ya tomada). */}
             <input
               ref={fotoRef}
               type="file"
-              accept="image/jpeg,image/png,image/webp"
-              capture="environment"
+              accept={ACEPTA_FOTOS}
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0] ?? null;
@@ -769,12 +774,65 @@ function DetalleProducto({
   onCerrar: () => void;
 }): React.JSX.Element {
   const navigate = useNavigate();
+  const { empresa, llamar, puede } = useSesion();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const fotoRef = useRef<HTMLInputElement>(null);
+  const [urlNueva, setUrlNueva] = useState<string | null>(null);
+
+  // La foto se agrega o cambia AQUÍ también (dueño, 2026-09-17: «ni cuando está creado me
+  // muestra para subirla»). Es catálogo, no administración: la ve quien puede editar productos.
+  const cambiarFoto = useMutation({
+    mutationFn: (f: File) => subirFotoProducto(llamar, producto.id, f),
+    onSuccess: (r) => {
+      setUrlNueva(r.image_url);
+      toast.success("Foto guardada");
+      void qc.invalidateQueries({ queryKey: ["productos", empresa.id] });
+    },
+    onError: (e) => toast.error("No se pudo guardar la foto", errorDePersona(e)),
+    onSettled: () => {
+      // El mismo archivo elegido dos veces seguidas tiene que volver a disparar onChange.
+      if (fotoRef.current !== null) fotoRef.current.value = "";
+    },
+  });
+  const conFoto = urlNueva !== null || Boolean(producto.image_url);
+
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
       <DialogContent className="max-w-md">
         <DialogTitle>{producto.name}</DialogTitle>
         <div className="space-y-3 pt-2">
-          <Foto producto={producto} className="aspect-square w-full rounded-lg" />
+          <Foto
+            producto={urlNueva === null ? producto : { ...producto, image_url: urlNueva }}
+            className="aspect-square w-full rounded-lg"
+          />
+          {puede("product.manage") && (
+            <>
+              <input
+                ref={fotoRef}
+                type="file"
+                accept={ACEPTA_FOTOS}
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) cambiarFoto.mutate(f);
+                }}
+              />
+              <Button
+                variant="secondary"
+                className="w-full"
+                disabled={cambiarFoto.isPending}
+                onClick={() => fotoRef.current?.click()}
+              >
+                <Camera />
+                {cambiarFoto.isPending
+                  ? "Subiendo la foto…"
+                  : conFoto
+                    ? "Cambiar la foto"
+                    : "Agregar foto"}
+              </Button>
+            </>
+          )}
           <div className="flex items-center justify-between text-[0.95rem]">
             <span className="text-muted-foreground">Precio</span>
             <span className="font-semibold tabular-nums">

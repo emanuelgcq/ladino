@@ -1,4 +1,5 @@
 import type { StorageConfig } from "./config.js";
+import { DominioError } from "./middleware/errors.js";
 
 /**
  * Cliente MÍNIMO del Storage de Supabase, por REST y con la credencial de
@@ -11,6 +12,22 @@ import type { StorageConfig } from "./config.js";
  * secreto con fecha de muerte, por eso la base guarda rutas y la API firma al
  * servir.
  */
+
+/**
+ * Las cabeceras de la credencial de servicio.
+ *
+ * Las claves NUEVAS de Supabase (`sb_secret_…`) no son JWT: van en `apikey` y el gateway pone el
+ * rol por su cuenta. Mandarlas en `Authorization: Bearer` las hace fallar como JWT inválido, y
+ * Storage respondía 400 a TODA subida: del 2026-09-13 (mudanza al proyecto de Virginia, que usa
+ * `sb_secret`) al 2026-09-17 no se guardó ni una foto ni un logo en producción. Una clave
+ * heredada (la `service_role` JWT, la del stack local) sigue yendo también en `Authorization`.
+ */
+export function cabecerasServicio(clave: string): Record<string, string> {
+  return /^eyJ/.test(clave)
+    ? { apikey: clave, Authorization: `Bearer ${clave}` }
+    : { apikey: clave };
+}
+
 export async function subirObjeto(
   cfg: StorageConfig,
   bucket: string,
@@ -21,7 +38,7 @@ export async function subirObjeto(
   const r = await fetch(`${cfg.url}/object/${bucket}/${path}`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${cfg.serviceKey}`,
+      ...cabecerasServicio(cfg.serviceKey),
       "Content-Type": contentType,
       "x-upsert": "true",
     },
@@ -30,8 +47,23 @@ export async function subirObjeto(
     body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
   });
   if (!r.ok) {
+    // El detalle va al LOG (nunca a la pantalla: puede nombrar la credencial o el bucket); la
+    // persona recibe un motivo que se entiende. Antes era un 500 «Error interno» sin rastro.
     const detalle = await r.text().catch(() => "");
-    throw new Error(`storage: subir ${path} → HTTP ${r.status} ${detalle.slice(0, 300)}`);
+    console.error(
+      JSON.stringify({
+        nivel: "error",
+        evento: "api.storage_upload_failed",
+        bucket,
+        status: r.status,
+        detalle: detalle.slice(0, 300),
+      }),
+    );
+    throw new DominioError({
+      code: "STORAGE_UNAVAILABLE",
+      message:
+        "No se pudo guardar el archivo en el almacenamiento. Intenta de nuevo en un rato; si sigue fallando, avisa a soporte.",
+    });
   }
 }
 
@@ -51,7 +83,7 @@ export async function firmarUrls(
   const r = await fetch(`${cfg.url}/object/sign/${bucket}`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${cfg.serviceKey}`,
+      ...cabecerasServicio(cfg.serviceKey),
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ expiresIn: expiresInSeconds, paths }),
@@ -82,7 +114,7 @@ export async function descargarObjeto(
 ): Promise<Buffer | null> {
   try {
     const r = await fetch(`${cfg.url}/object/${bucket}/${path}`, {
-      headers: { Authorization: `Bearer ${cfg.serviceKey}` },
+      headers: cabecerasServicio(cfg.serviceKey),
       signal: AbortSignal.timeout(5000),
     });
     if (!r.ok) return null;

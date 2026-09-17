@@ -29,6 +29,7 @@ import { useToast } from "../../ui/toast.js";
 import { mostrarImporte } from "../../money.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { useConFacturas } from "../../app/modo-venta.js";
+import { ACEPTA_FOTOS, subirFotoProducto } from "../../components/foto.js";
 import { errorDePersona } from "../../lib.js";
 import { BotonEscanear } from "../../components/EscanerCodigo.js";
 import type { Product, PriceList, PriceItem, Unit, TaxCategory } from "../../lib.js";
@@ -408,14 +409,12 @@ function DetalleProducto({
   async function cambiarFoto(f: File): Promise<void> {
     setSubiendoFoto(true);
     try {
-      const form = new FormData();
-      form.append("file", f);
-      await llamar(`/v1/products/${producto.id}/image`, { method: "POST", body: form });
+      await subirFotoProducto(llamar, producto.id, f);
       toast.success("Foto actualizada");
       void qc.invalidateQueries({ queryKey: ["productos", empresa.id] });
     } catch (e) {
-      setError(e);
-      toast.error("No se pudo cambiar la foto");
+      // Un solo aviso, con el motivo (antes: el error arriba y un aviso sin razón).
+      toast.error("No se pudo cambiar la foto", errorDePersona(e));
     } finally {
       setSubiendoFoto(false);
       // El mismo archivo elegido dos veces seguidas tiene que volver a disparar onChange.
@@ -588,12 +587,12 @@ function DetalleProducto({
               <div className="rounded-md border border-border bg-surface-muted/40 p-3">
                 <p className="text-[0.85rem] font-medium">Foto del producto</p>
                 <p className="text-[0.8rem] text-muted-foreground">
-                  La que se ve en la caja y en el catálogo. JPG, PNG o WebP.
+                  La que se ve en la caja y en el catálogo. Del teléfono o de la galería.
                 </p>
                 <input
                   ref={fotoRef}
                   type="file"
-                  accept="image/jpeg,image/png,image/webp"
+                  accept={ACEPTA_FOTOS}
                   className="hidden"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
