@@ -124,9 +124,47 @@ la puerta, `POST /v1/arrivals`, que es justo lo que ADR-0066 vino a decir.
   asevera nada** al respecto y no percibe IGTF en el pago al proveedor; está en
   `PENDIENTES_ASESOR` como `VALIDAR-TRIBUTARIO`.
 - **La devolución al proveedor** sigue fuera de alcance, como se acordó.
-- **Las migraciones 71 y 72 y los cambios de contrato esperan la ventana de deploy** con el
-  rebuild (R-43). Lo de la entrega (i) —migraciones 69 y 70, `origin` obligatorio— sigue esperando
-  la misma ventana: van juntas.
+- **Falta el VPS.** Las migraciones YA están en producción (abajo); el API y la web que corren
+  siguen siendo las viejas. Hasta que el dueño haga
+  `cd /opt/apps/ladino && git pull && docker compose up -d --build`, no existen `/v1/arrivals`,
+  `?pending=1`, el cierre de pedido ni ninguna de las pantallas nuevas.
+
+## Aplicación en producción — 2026-09-18, a petición del dueño
+
+Las **seis** migraciones pendientes (67 a 72) se aplicaron a `jwaszxsxzudekduwbgzu` por la
+Management API, en **una sola transacción**, después de un ensayo en seco con `rollback` que
+salió limpio. Producción pasa de **66 a 72**; la última es `20260918150000`.
+
+| | antes | después |
+|---|---|---|
+| migraciones | 66 | **72** |
+| empresas · facturas de venta · de compra | 8 · 1.224 · 100 | iguales |
+| asientos · líneas · movimientos de inventario | 1.125 · 2.710 · 3.817 | iguales |
+| asientos descuadrados | 0 | **0** |
+
+Ningún dato se creó ni se perdió: lo que cambia es el esquema. Comprobado en vivo que existen
+`fiscal_support`, las seis columnas de captura y las tres funciones nuevas, y que
+`accounting_coverage_gaps()` da **cero en las ocho empresas**.
+
+**Se aplicaron sin el rebuild a propósito, y ese es el orden correcto:** son compatibles hacia
+atrás (columna con `default`, correlativo del proveedor que pasa a opcional, funciones nuevas que
+nadie llama todavía), así que el API viejo sigue funcionando igual. R-43 avisa del caso contrario
+—código nuevo contra esquema viejo—, que es el que rompe.
+
+Lo único que **sí** cambia de comportamiento con el código viejo es la migración 68: desde ahora
+la retención se causa al registrar la factura, no al pagarla. Es la corrección fiscal que el dueño
+verificó con su asesoría (R-3 del 26º handoff).
+
+**Lo que los controles nuevos encontraron nada más encenderse** (todo PREEXISTENTE, nada causado
+por este despliegue):
+
+- `receipts_pending_invoice`: **ferretería tiene 2 recepciones sin factura**. Es exactamente para
+  lo que se construyó la pestaña «Falta la factura»; aparecerán en ella tras el rebuild.
+- `inventory_coverage_gaps`: **Ladino 3.755**, ferretería 50, «Pollos y víveres paola» 1. Los de
+  Ladino son del **9 y 10 de septiembre** —la carga del histórico— y van de la mano de los 1.527
+  pendientes de la cola contable que nadie ha reprocesado. Estaban ahí antes; la migración 67 solo
+  pudo bajar esa cuenta, nunca subirla.
+- `duplicate_stock_in_gaps` y `backdated_stock_in`: **cero en las ocho empresas**.
 
 HOMOLOGATION_IMPACT = **NO** para estas dos entregas (nada cambia en la emisión ni en los libros;
 71 y 72 son columnas de captura y funciones de lectura). El **YES** de ADR-0066 sigue siendo el de
