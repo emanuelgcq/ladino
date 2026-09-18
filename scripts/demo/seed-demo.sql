@@ -191,17 +191,24 @@ select 'VE', 'iva', 'ordinario', c, r::numeric, current_date - 30,
                     where jurisdiction = 'VE' and tax_code = 'iva' and taxpayer_type = 'ordinario'
                       and product_tax_category = t.c and transaction_type = t.tt);
 
--- Y la regla GENERAL de ventas (taxpayer_type NULL, prioridad menor): es la que
--- aplica al Consumidor final y a cualquier contraparte sin regla específica.
--- resolve_tax elige la específica cuando existe (prioridad 10 > 5).
+-- Y la regla GENERAL (taxpayer_type NULL, prioridad menor): es la que aplica al Consumidor final
+-- y a cualquier contraparte sin regla específica. resolve_tax elige la específica cuando existe
+-- (prioridad 10 > 5).
+--
+-- Va para las DOS puntas. Solo estaba en ventas, y la demo siembra un proveedor «especial»
+-- («Alimentos Polares del Centro»): comprarle con factura moría con LAD50 —«no hay regla
+-- tributaria vigente… contraparte especial»—, que es la respuesta CORRECTA del sistema (regla 8:
+-- no se inventa una alícuota) ante un catálogo de demostración incompleto. Lo encontró el QA de
+-- pantalla de ADR-0066 (ii), 2026-09-18.
 insert into public.tax_rules (jurisdiction, tax_code, taxpayer_type, product_tax_category,
                               rate, effective_from, legal_source, priority, transaction_type)
 select 'VE', 'iva', null, c, r::numeric, current_date - 30,
-       'Carga DEMO — VALIDAR-SENIAT antes de producción.', 5, 'sale'
-  from (values ('gravado_general', '0.16'), ('exento', '0')) as t(c, r)
+       'Carga DEMO — VALIDAR-SENIAT antes de producción.', 5, tt
+  from (values ('gravado_general', '0.16', 'sale'), ('exento', '0', 'sale'),
+               ('gravado_general', '0.16', 'purchase'), ('exento', '0', 'purchase')) as t(c, r, tt)
  where not exists (select 1 from public.tax_rules
                     where jurisdiction = 'VE' and tax_code = 'iva' and taxpayer_type is null
-                      and product_tax_category = t.c and transaction_type = 'sale');
+                      and product_tax_category = t.c and transaction_type = t.tt);
 
 -- Existencias: 500 de cada producto, con su costo.
 insert into public.inventory_moves
