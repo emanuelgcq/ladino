@@ -483,6 +483,10 @@ function Movimiento({
     reason: "",
     reference: "",
   });
+  // El costo se pone COMO LA PERSONA LO SEPA (dueño, 2026-09-17): «1.000 por 10 bolsas» o «100
+  // cada bolsa». Por unidad es lo que piden el alta de producto y las compras, así que es lo
+  // predeterminado; el total sigue disponible y es el servidor quien lo reparte.
+  const [costoPor, setCostoPor] = useState<"unidad" | "total">("unidad");
   const [confirmando, setConfirmando] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -516,8 +520,6 @@ function Movimiento({
 
   async function enviar(): Promise<void> {
     setError(null);
-    // El costo se pide POR UNIDAD, como en el alta de producto y en compras (h. 44): el total
-    // lo calcula el servidor.
     const comun = {
       company_id: empresa.id,
       product_id: producto?.id ?? "",
@@ -532,7 +534,8 @@ function Movimiento({
             ...comun,
             warehouse_id: form.warehouse_id,
             quantity: form.quantity,
-            unit_amount: montoLimpio,
+            // Uno de los dos, nunca los dos: el servidor calcula el que falta (h. 44).
+            ...(costoPor === "unidad" ? { unit_amount: montoLimpio } : { amount: montoLimpio }),
             currency: form.currency,
             // Sin fx: el SERVIDOR valora con la tasa del BCV del día (ADR-0064 §1).
           }),
@@ -659,10 +662,27 @@ function Movimiento({
           </FormField>
           {operacion === "entrada" && (
             <>
+              <FormField label="El costo que vas a poner es" className="sm:col-span-2">
+                {(a) => (
+                  <SimpleSelect
+                    id={a.id}
+                    value={costoPor}
+                    onValueChange={(v) => setCostoPor(v === "total" ? "total" : "unidad")}
+                    options={[
+                      { value: "unidad", label: "De cada uno (100 por bolsa)" },
+                      { value: "total", label: "El total de la llegada (1.000 por 10 bolsas)" },
+                    ]}
+                  />
+                )}
+              </FormField>
               <FormField
-                label="¿Cuánto costó cada uno?"
+                label={costoPor === "unidad" ? "¿Cuánto costó cada uno?" : "¿Cuánto costó todo?"}
                 required
-                hint="Por unidad, como en el alta de producto y en compras."
+                hint={
+                  costoPor === "unidad"
+                    ? "Por unidad, como en el alta de producto y en compras."
+                    : "El total de lo que llegó; el costo de cada uno lo saca el sistema."
+                }
               >
                 {(a) => (
                   <MoneyInput
@@ -751,7 +771,9 @@ function Movimiento({
             ? ` · de ${nombreDeposito(form.warehouse_id)} a ${nombreDeposito(form.to_warehouse_id)}`
             : ` · ${nombreDeposito(form.warehouse_id)}`}
           {operacion === "entrada" && importeValido(montoLimpio)
-            ? `, a ${mostrarImporte({ amount: montoLimpio, currency: form.currency })} cada uno`
+            ? costoPor === "unidad"
+              ? `, a ${mostrarImporte({ amount: montoLimpio, currency: form.currency })} cada uno`
+              : `, ${mostrarImporte({ amount: montoLimpio, currency: form.currency })} en total`
             : ""}
           . {def.consecuencia}
         </ConfirmDialog>
