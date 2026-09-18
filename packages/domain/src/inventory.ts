@@ -1132,13 +1132,6 @@ export async function adjustStock(
   const occurredAt = input.occurred_at ?? null;
   const momentoTasa = ahora(input.occurred_at);
 
-  let unitCost: Money | undefined;
-  if (input.unit_cost !== undefined) {
-    const m = Money.of(input.unit_cost, ctx.value.functionalCurrency);
-    if (!m.ok) return err({ code: "VALIDATION_FAILED", message: m.error.message });
-    unitCost = m.value;
-  }
-
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   const posicion = await bloquear(
     sql,
@@ -1149,9 +1142,9 @@ export async function adjustStock(
   );
   if (!posicion.ok) return posicion;
 
+  // Al PROMEDIO VIGENTE, siempre: el ajuste corrige una cantidad, no pone precio (ADR-0066 §7).
   const costed = costAdjust(posicion.value, delta.value, {
     allowNegative: ctx.value.allowNegative,
-    ...(unitCost ? { unitCost } : {}),
   });
   if (!costed.ok) {
     return err(

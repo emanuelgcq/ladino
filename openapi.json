@@ -2489,10 +2489,6 @@
             "minLength": 3,
             "maxLength": 500
           },
-          "unit_cost": {
-            "type": "string",
-            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
-          },
           "occurred_at": {
             "type": "string",
             "format": "date-time"

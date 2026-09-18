@@ -116,8 +116,12 @@ export const AdjustStockRequest = z
       .refine(noEsCero, "un ajuste exige un delta distinto de cero"),
     /** OBLIGATORIO: un ajuste sin motivo no es un ajuste, es un descuadre. */
     reason: z.string().trim().min(3).max(500),
-    /** Costo unitario de un ajuste POSITIVO; por omisión, el promedio vigente. */
-    unit_cost: amount.optional(),
+    /**
+     * SIN COSTO (ADR-0066 §7). Un ajuste positivo se valora al PROMEDIO VIGENTE y no admite
+     * importe: si lo admitiera, «conteo» sería la misma puerta de entrada que se acaba de
+     * cerrar, con otro nombre. La mercancía que entra de fuera pasa por «Llegó mercancía»,
+     * que además pregunta de quién vino y qué documento trae.
+     */
     occurred_at: z.string().datetime({ offset: true }).optional(),
     reference: z.string().trim().min(1).max(60).optional(),
   })
