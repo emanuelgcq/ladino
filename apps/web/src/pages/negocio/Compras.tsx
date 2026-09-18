@@ -21,6 +21,11 @@ import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
+import {
+  FORMAS_DE_COMPRA,
+  esFormaDeCompra,
+  type FormaDePago,
+} from "../../components/formas-de-pago.js";
 import { HacerPedido } from "../../components/HacerPedido.js";
 import { fechaRelativa } from "./comunes.js";
 import { fechaLocal } from "../../fechas.js";
@@ -64,13 +69,6 @@ interface Cuenta {
   is_active: boolean;
   is_system: boolean;
 }
-interface FormaDePago {
-  id: string;
-  name: string;
-  kind: string;
-  account_id: string;
-  is_active: boolean;
-}
 
 /** Lo recibido que todavía no tiene factura (ADR-0066 §8). */
 interface RecepcionPendiente {
@@ -96,29 +94,6 @@ const CATEGORIAS_GASTO = [
   "Publicidad",
   "Mantenimiento",
 ];
-
-/**
- * Con qué se le PAGA a un proveedor: el `PurchaseInstrument` de
- * packages/schemas. Es un subconjunto de las formas de COBRO configurables:
- * «Cashea» cobra, pero no paga a un proveedor, y una forma configurada con un
- * tipo fuera de esta lista no se ofrece aquí.
- */
-const FORMAS_DE_COMPRA = [
-  { value: "transferencia", label: "Transferencia", moneda: "VES" },
-  { value: "pago_movil", label: "Pago móvil", moneda: "VES" },
-  { value: "efectivo_bs", label: "Efectivo Bs.", moneda: "VES" },
-  { value: "efectivo_usd", label: "Efectivo USD", moneda: "USD" },
-  { value: "zelle", label: "Zelle", moneda: "USD" },
-  { value: "usdt", label: "USDT", moneda: "USD" },
-  { value: "punto_venta", label: "Punto de venta", moneda: "VES" },
-  { value: "tarjeta", label: "Tarjeta", moneda: "VES" },
-  { value: "otro", label: "Otra", moneda: "VES" },
-] as const;
-type FormaDeCompra = (typeof FORMAS_DE_COMPRA)[number]["value"];
-const ES_FORMA_DE_COMPRA = new Set<string>(FORMAS_DE_COMPRA.map((i) => i.value));
-function esFormaDeCompra(kind: string): kind is FormaDeCompra {
-  return ES_FORMA_DE_COMPRA.has(kind);
-}
 
 /** La misma cara para todo listado que no pudo cargar: el motivo y el reintento. */
 function ErrorDeLista({

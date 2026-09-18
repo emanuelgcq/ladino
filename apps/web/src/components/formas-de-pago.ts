@@ -110,3 +110,58 @@ export function nombreDeInstrumento(
   if (candidatas.length === 1) return candidatas[0]!.name;
   return ETIQUETA_FORMA[instrument] ?? instrument.replace(/_/g, " ");
 }
+
+/**
+ * Con qué se le PAGA a un proveedor: el `PurchaseInstrument` de `packages/schemas`. Es un
+ * subconjunto de las formas de COBRO — «Cashea» cobra, pero no se le paga a un proveedor con
+ * ella— y a la vez trae dos que el cobro no ofrece, «Tarjeta» y «Otra».
+ *
+ * Vivía dentro de «Compras y gastos». Se sube aquí porque la puerta de la mercancía necesita
+ * exactamente la misma lista, y la primera versión de esa pantalla, por no tenerla, ofrecía
+ * SOLO las formas configuradas: con `payment_methods` vacía —que es como están las ocho
+ * empresas de producción— el desplegable salía sin una sola opción y no se podía seguir.
+ */
+export const FORMAS_DE_COMPRA = [
+  { value: "transferencia", label: "Transferencia", moneda: "VES" },
+  { value: "pago_movil", label: "Pago móvil", moneda: "VES" },
+  { value: "efectivo_bs", label: "Efectivo Bs.", moneda: "VES" },
+  { value: "efectivo_usd", label: "Efectivo USD", moneda: "USD" },
+  { value: "zelle", label: "Zelle", moneda: "USD" },
+  { value: "usdt", label: "USDT", moneda: "USD" },
+  { value: "punto_venta", label: "Punto de venta", moneda: "VES" },
+  { value: "tarjeta", label: "Tarjeta", moneda: "VES" },
+  { value: "otro", label: "Otra", moneda: "VES" },
+] as const;
+export type FormaDeCompra = (typeof FORMAS_DE_COMPRA)[number]["value"];
+const ES_FORMA_DE_COMPRA = new Set<string>(FORMAS_DE_COMPRA.map((i) => i.value));
+export function esFormaDeCompra(kind: string): kind is FormaDeCompra {
+  return ES_FORMA_DE_COMPRA.has(kind);
+}
+
+/**
+ * Con qué pagarle al proveedor: las formas CONFIGURADAS que sirven para comprar —con su cuenta,
+ * que es lo que evita que el pago caiga en «Sin asignar»— y detrás los instrumentos que ninguna
+ * cubra. Sin ninguna configurada quedan los nueve, y el servidor resuelve la cuenta propia de esa
+ * familia (ADR-0062 §1). La lista NUNCA sale vacía: es la misma regla que el POS.
+ */
+export function opcionesDePagoDeCompra(
+  formas: readonly FormaDePago[] | undefined,
+): OpcionDeCobro[] {
+  const configuradas = (formas ?? []).filter((f) => f.is_active && esFormaDeCompra(f.kind));
+  const cubiertos = new Set(configuradas.map((f) => f.kind));
+  return [
+    ...configuradas.map((f) => ({
+      clave: f.id,
+      etiqueta: f.name,
+      instrument: f.kind,
+      currency: MONEDA_FORMA[f.kind] ?? "VES",
+      account_id: f.account_id,
+    })),
+    ...FORMAS_DE_COMPRA.filter((i) => !cubiertos.has(i.value)).map((i) => ({
+      clave: i.value,
+      etiqueta: i.label,
+      instrument: i.value,
+      currency: i.moneda,
+    })),
+  ];
+}

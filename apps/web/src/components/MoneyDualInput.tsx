@@ -124,7 +124,7 @@ export function MoneyDualInput({
         </p>
       ) : (
         <p className="text-[0.8rem] text-faint-foreground">
-          Escribe en la moneda que tengas: el otro campo lo llena el sistema.
+          Escribe en Bs o en USD — el otro se calcula solo.
         </p>
       )}
     </div>

@@ -17,6 +17,7 @@ import {
   type EntityOption,
 } from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
+import { opcionesDePagoDeCompra, type FormaDePago } from "../../components/formas-de-pago.js";
 import { fechaLocal } from "../../fechas.js";
 import { MoneyDualInput } from "../../components/MoneyDualInput.js";
 import { TARJETAS_FACTURA } from "../../components/capa-fiscal/textos.js";
@@ -53,13 +54,6 @@ interface Deposito {
   is_default: boolean;
   /** El endpoint devuelve el estado, no una bandera: «active» es el que admite mercancía. */
   status: string;
-}
-interface FormaDePago {
-  id: string;
-  name: string;
-  kind: string;
-  account_id: string | null;
-  is_active: boolean;
 }
 interface Linea {
   id: string;
@@ -199,6 +193,19 @@ export function LlegoMercancia(): React.JSX.Element {
     enabled: pagada === true,
     queryFn: () => llamar<{ methods: FormaDePago[] }>("/v1/payment-methods"),
   });
+  /**
+   * Con qué se le pagó al proveedor. Es la MISMA regla que el POS y que el cobro de documentos
+   * (`opcionesDeCobro`, decisión del dueño del 2026-09-05): las formas configuradas del negocio
+   * primero —con su cuenta— y detrás las formas de pago base que ninguna cubra.
+   *
+   * Esta pantalla listaba solo las configuradas, y `payment_methods` está VACÍA en las ocho
+   * empresas de producción: el desplegable salía sin una sola opción y «Seguir» no se encendía
+   * nunca. Un callejón sin salida en el único camino que registra que el dinero salió de la caja.
+   *
+   * Cashea se cae de la lista: financia al consumidor, no se le paga a un proveedor con ella, y
+   * `PurchaseInstrument` no la admite. Tarjeta y «Otra», que el cobro no ofrece, sí entran.
+   */
+  const opcionesDePago = useMemo(() => opcionesDePagoDeCompra(formas.data?.methods), [formas.data]);
 
   const buscarProveedor = useCallback(
     async (q: string): Promise<EntityOption[]> => {
@@ -343,13 +350,13 @@ export function LlegoMercancia(): React.JSX.Element {
 
   const registrar = useMutation({
     mutationFn: (forzar: boolean) => {
-      const configurada = (formas.data?.methods ?? []).find((f) => f.id === forma);
+      const elegida = opcionesDePago.find((o) => o.clave === forma);
       const pago =
-        pagada !== true || forma === null
+        pagada !== true || elegida === undefined
           ? undefined
           : {
-              instrument: configurada?.kind ?? forma,
-              ...(configurada?.account_id == null ? {} : { account_id: configurada.account_id }),
+              instrument: elegida.instrument,
+              ...(elegida.account_id == null ? {} : { account_id: elegida.account_id }),
               ...(forzar ? { allow_negative_balance: true } : {}),
             };
       return llamar<{ kind: string }>("/v1/arrivals", {
@@ -585,7 +592,7 @@ export function LlegoMercancia(): React.JSX.Element {
               <User className="mb-2 size-6 text-accent" />
               <p className="font-medium">Ya era mía</p>
               <p className="text-[0.85rem] text-muted-foreground">
-                La tenías al empezar, o la pusiste tú. No queda deuda con nadie.
+                La tenías antes de usar Ladino, o la pusiste tú. No debes nada.
               </p>
             </Card>
           </div>
@@ -748,7 +755,7 @@ export function LlegoMercancia(): React.JSX.Element {
                   </p>
                 ) : (
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <FormField label="El costo que vas a poner es">
+                    <FormField label="¿Qué precio vas a escribir?">
                       {(p) => (
                         <SimpleSelect
                           id={p.id}
@@ -763,19 +770,21 @@ export function LlegoMercancia(): React.JSX.Element {
                             )
                           }
                           options={[
-                            { value: "unidad", label: "De cada uno (100 por bolsa)" },
-                            {
-                              value: "total",
-                              label: "El total de la llegada (1.000 por 10 bolsas)",
-                            },
+                            { value: "unidad", label: "El de una unidad" },
+                            { value: "total", label: "El total de todas las unidades" },
                           ]}
                         />
                       )}
                     </FormField>
+                    {/* La ayuda de «escribe en la que tengas» la pone el propio campo doble: aquí
+                        no se repite. */}
                     <FormField
-                      label={l.por === "unidad" ? "¿Cuánto costó cada uno?" : "¿Cuánto costó todo?"}
+                      label={
+                        l.por === "unidad"
+                          ? "¿Cuánto te costó cada una?"
+                          : "¿Cuánto te costaron todas?"
+                      }
                       required
-                      hint="Escribe en bolívares o en dólares: el otro lo llena el sistema."
                     >
                       {() => (
                         <MoneyDualInput
@@ -861,8 +870,8 @@ export function LlegoMercancia(): React.JSX.Element {
           <div className="grid gap-2 sm:grid-cols-2">
             {pedido === null && (
               <FormField
-                label="¿En qué moneda viene el documento?"
-                hint="La de la factura del proveedor. El costo lo puedes escribir en cualquiera."
+                label="¿En qué moneda está la factura?"
+                hint="Si no tienes factura, elige en la que pagaste."
               >
                 {(p) => (
                   <SimpleSelect
@@ -877,7 +886,10 @@ export function LlegoMercancia(): React.JSX.Element {
                 )}
               </FormField>
             )}
-            <FormField label="¿Qué día llegó?" hint="Hoy, o hasta dos días atrás.">
+            <FormField
+              label="¿Qué día llegó?"
+              hint="Si fue hace más de dos días, regístralo como ajuste de inventario."
+            >
               {(p) => (
                 <Input
                   {...p}
@@ -1003,10 +1015,8 @@ export function LlegoMercancia(): React.JSX.Element {
                   id={p.id}
                   value={forma}
                   onValueChange={setForma}
-                  options={(formas.data?.methods ?? [])
-                    .filter((f) => f.is_active)
-                    .map((f) => ({ value: f.id, label: f.name }))}
-                  placeholder={formas.isPending ? "Cargando…" : "Elige…"}
+                  options={opcionesDePago.map((o) => ({ value: o.clave, label: o.etiqueta }))}
+                  placeholder={formas.isFetching ? "Cargando…" : "Elige…"}
                 />
               )}
             </FormField>
