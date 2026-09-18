@@ -129,6 +129,38 @@ la puerta, `POST /v1/arrivals`, que es justo lo que ADR-0066 vino a decir.
   `cd /opt/apps/ladino && git pull && docker compose up -d --build`, no existen `/v1/arrivals`,
   `?pending=1`, el cierre de pedido ni ninguna de las pantallas nuevas.
 
+## Los textos de la puerta, y un callejón sin salida que nadie había pisado
+
+El dueño reescribió los textos de «¿Qué llegó?» —las preguntas piden lo que la persona sabe, no
+lo que el sistema guarda— y, probándola, encontró el fallo de verdad: **al decir «Sí, ya la
+pagué», el desplegable de con qué pagó salía VACÍO**, y «Seguir» no se encendía nunca.
+
+La causa no era el desplegable: era de dónde sacaba la lista. La puerta ofrecía **solo las formas
+de pago CONFIGURADAS** del negocio, y `payment_methods` está **vacía en las ocho empresas de
+producción** y en la demo. El resto de la aplicación nunca tuvo el problema porque todas usan la
+misma regla —las configuradas primero, y detrás las formas base que ninguna cubra (decisión del
+dueño, 2026-09-05)—; la puerta era la única que no la usaba. Es el mismo error que ya se cometió
+con `/v1/warehouses` en la entrega (i): **construir una lista a mano en vez de usar la del resto
+de la casa.**
+
+Arreglado subiendo `FORMAS_DE_COMPRA` y `esFormaDeCompra` de «Compras y gastos» a
+`components/formas-de-pago.ts`, con `opcionesDePagoDeCompra()` al lado, y usándolos en las dos
+pantallas. Ahora salen las nueve formas del `PurchaseInstrument` —con Tarjeta y «Otra», que el
+cobro no ofrece, y sin Cashea, que financia al consumidor— y la lista **nunca puede salir vacía**.
+
+Sin forma configurada el dinero sale de «Sin asignar», igual que en el POS (ADR-0062 §1); para que
+salga de una cuenta con nombre hay que configurar la forma en «Mi dinero». No es de esta entrega.
+
+Los textos: «¿Qué precio vas a escribir?» con «El de una unidad / El total de todas las unidades»;
+«¿Cuánto te costó cada una?» / «¿Cuánto te costaron todas?»; «¿En qué moneda está la factura?
+Si no tienes factura, elige en la que pagaste»; la fecha remite al ajuste de inventario cuando
+pasan de dos días; y **se quitó una de las dos frases de ayuda que decían lo mismo** bajo los
+campos de importe.
+
+**QA de pantalla:** 16 comprobaciones más (guion `23-pago`), 0 hallazgos, con la tabla de formas
+vacía a propósito —el caso real de producción— y comprobando contra la base que el pago quedó con
+su forma, con su cuenta, y que el dinero salió: 1.500 → 900.
+
 ## Aplicación en producción — 2026-09-18, a petición del dueño
 
 Las **seis** migraciones pendientes (67 a 72) se aplicaron a `jwaszxsxzudekduwbgzu` por la

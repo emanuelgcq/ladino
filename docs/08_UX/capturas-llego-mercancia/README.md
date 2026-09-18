@@ -10,6 +10,7 @@ y asevera lo que la persona ve; las capturas son el rastro, no la prueba — la 
 | (ii) el dinero se escribe una vez | 15 | 0 |
 | (iii) del pedido a la llegada | 26 | 0 |
 | (iii) el paso 0 de la puerta | 8 | 0 |
+| textos nuevos y «¿Con qué la pagaste?» | 16 | 0 |
 
 Los tres últimos comprueban además la PROPAGACIÓN contra la base, no contra la pantalla: kardex,
 mayor, libro de compras, deuda con el proveedor y los invariantes que cruzan módulos.
@@ -29,4 +30,5 @@ mayor, libro de compras, deuda con el proveedor y los invariantes que cruzan mó
 | `11-por-recibir.png` | La bandeja «Por recibir» en el mostrador, con sus dos verbos |
 | `12-recepcion-a-ciegas.png` | La puerta abierta desde un pedido: se cuenta, no se valora |
 | `13-no-va-a-llegar.png` | Cerrar un pedido exige decir por qué; sin motivo el botón está apagado |
-| `14-costo-en-dolares.png` | El costo escrito en dólares sobre una compra en bolívares, con la tasa que lo convierte |
+| `14-costo-en-dolares.png` | Los dos campos de importe, con la tasa que convierte y una sola frase de ayuda |
+| `15-con-que-la-pagaste.png` | Con qué se le pagó al proveedor: las nueve formas, con la tabla de formas configuradas VACÍA |
