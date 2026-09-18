@@ -746,3 +746,32 @@ no cambia; lo que está mal es la fuente.
 la decisión es del dueño — desactivar las dos reglas de plataforma y que cada empresa cargue la
 suya (ADR-0057), o cargar una nueva con la fuente correcta y desactivar la vieja. Una regla citada
 por una retención tiene FK: **no se borra, se desactiva.**
+
+### R-45 · La entrada suelta exige origen: la web desplegada deja de poder usarla hasta el rebuild
+
+- **Severidad:** Media · **Disparador:** aplicar las migraciones 69/70 y el API nuevo sin
+  reconstruir la web, o al revés
+- **Dónde:** `POST /v1/inventory/receipts` (ADR-0066 §3); `apps/web` «Entrada de existencias»
+
+Desde ADR-0066 esa ruta exige `origin` explícito y responde 422 sin él. La web desplegada sigue
+llamándola sin origen desde «Entrada de existencias» —pantalla que esta entrega elimina—, así que
+entre el despliegue del API y el de la web esa pantalla vieja responde 422 con un mensaje que
+remite a una pantalla que todavía no existe. Ninguna otra superficie la usa.
+
+**Deja de ser aceptable:** si el API y la web se despliegan por separado. Mitigación: van en la
+MISMA ventana, como siempre (R-43), y la pantalla nueva y la vieja no coexisten en ninguna
+versión.
+
+### R-46 · El rol de almacén cambia de aterrizaje
+
+- **Severidad:** Baja · **Disparador:** un usuario con `inventory.move` o `purchase.receive` que
+  entra a la aplicación
+- **Dónde:** `rutaInicial` en `apps/web/src/app/nav.ts`
+
+Antes caía en Administración → Inventario, que era donde estaba la «entrada de existencias»; ahora
+cae en «Llegó mercancía», que es su trabajo. Está aseverado en `nav-llegada.test.ts`, y esa zona
+ya produjo un bucle de redirección con pantalla en blanco (auditoría 2026-09-11), así que el
+cambio se hizo con su prueba delante.
+
+**Deja de ser aceptable:** si alguien añade una entrada nueva ANTES de esta en el grupo Operación
+sin mirar el test: el aterrizaje se movería sin que nadie lo decidiera.

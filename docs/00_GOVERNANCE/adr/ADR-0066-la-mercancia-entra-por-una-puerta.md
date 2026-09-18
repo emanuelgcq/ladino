@@ -143,7 +143,7 @@ suyo**:
 | Camino | Permiso |
 |---|---|
 | Aporte / inventario inicial | `inventory.move` |
-| Recepción | `purchase.receive` |
+| Recepción | `purchase.receive` **y** `inventory.move` — recibir es mover existencia, y el kardex lo exige igual que a cualquier otro movimiento |
 | Registrar la factura | `purchase.invoice.register` |
 | Pagar en el acto | el de tesorería |
 

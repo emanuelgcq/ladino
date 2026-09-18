@@ -400,6 +400,44 @@ describe("llegó mercancía — la única puerta (ADR-0066)", () => {
     expect(saldo!.s).toBe("1200.00000000");
   });
 
+  // ── 5b. Con factura y pagada en el acto ──────────────────────────────────
+  it("pagada en el acto: la factura queda saldada y el dinero sale de la cuenta", async () => {
+    const r = await pedir("POST", "/v1/arrivals", JEFE, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      currency: "VES",
+      supplier_id: PROV,
+      invoice: "present",
+      supplier_document_number: `F-${RUN}-3`,
+      supplier_control_number: `00-${RUN}3`,
+      lines: [{ product_id: PROD, quantity: "2", unit_amount: "250" }],
+      // Sin forma de pago configurada, el servidor resuelve «Sin asignar (Bs.)»; aquí se prueba
+      // el PAGO, no el saldo, así que el sobregiro se confirma explícitamente (ADR-0062 §4).
+      payment: { instrument: "transferencia", allow_negative_balance: true },
+    });
+    expect(r.status, await r.clone().text()).toBe(201);
+    const a = (await r.json()) as {
+      kind: string;
+      invoice: { id: string; total_amount: string };
+      payment: { balance: string; invoice_status: string; payment: { net_amount: string } } | null;
+    };
+    expect(a.kind).toBe("invoiced");
+    expect(a.payment).not.toBeNull();
+    // 2 × 250 = 500 de base, 16 % = 80: se pagan 580 y no queda debiendo nada.
+    expect(a.invoice.total_amount).toBe("580.00000000");
+    expect(a.payment!.payment.net_amount).toBe("580.00000000");
+    expect(a.payment!.balance).toBe("0.00000000");
+    expect(a.payment!.invoice_status).toBe("paid");
+
+    // Y el dinero salió de una cuenta de verdad: la de sistema queda en negativo.
+    const [cuenta] = await sql<{ balance: string }[]>`
+      select b.balance::text as balance
+        from public.company_accounts ca
+        join public.company_account_balances b on b.account_id = ca.id
+       where ca.company_id = ${COMPANY} and ca.is_system and ca.currency = 'VES'`;
+    expect(Number(cuenta!.balance)).toBeLessThanOrEqual(-580);
+  });
+
   // ── 6. La fecha, acotada ──────────────────────────────────────────────────
   it("una llegada de hace tres días se rechaza y remite a Conteo; la de ayer entra", async () => {
     const vieja = await pedir("POST", "/v1/arrivals", JEFE, {

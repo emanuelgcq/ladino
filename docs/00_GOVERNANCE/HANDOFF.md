@@ -1,3 +1,79 @@
+# Handoff — 2026-09-18 (27ª entrega) — La mercancía entra por una puerta (entrega i de ADR-0066)
+
+## Qué pasaba
+
+La mercancía entraba a Ladino por **tres** puertas que hacían lo mismo con tres lenguajes y dos
+monedas por omisión: el alta de producto («stock inicial», USD), «Registrar compra» (Bs., con dos
+números de factura **obligatorios**) y «Entrada de existencias» (USD, sin proveedor ni dinero).
+Ninguna sabía que las otras existían y nadie comparaba una entrada contra una recepción, así que
+la persona elegía la contrapartida contable **eligiendo un ítem de menú** — y el error no se
+sentía como error: los tres caminos asientan bien en sus propios términos y todos los invariantes
+quedaban en cero.
+
+Tres consecuencias medidas: la compra sin factura no cabía en su puerta (o se inventaba un número
+—y a la segunda compra del mismo proveedor el índice único respondía con un 409 sin sentido— o se
+registraba como aporte y el dinero que salió de la caja no salía en ningún sitio); la moneda por
+omisión era distinta según la puerta; y ningún control lo veía.
+
+## Qué se cambió
+
+**ADR-0066** fija los principios, las cuatro salidas contables, la tabla de orígenes con sus
+llamadores, el permiso por camino, la fecha acotada y qué NO entra por la puerta.
+
+**Migración 69 — la compra sin soporte fiscal.** `fiscal_support` (por omisión `true`), el
+correlativo del proveedor pasa a opcional con **índice único parcial**, el `CHECK` de
+identificación se **condiciona** en vez de borrarse, un `CHECK` nuevo impide IVA sin documento, y
+`purchases_book` la filtra. No hizo falta ninguna plantilla de asiento nueva: la rama
+`if_tax_not_recoverable` ya asienta «todo al costo contra cuentas por pagar».
+
+**Migración 70 — la factura que no llegó.** `platform.receipts_pending_invoice()` es a la vez la
+pestaña «Falta la factura» y el control de los 30 días: una sola definición, para que la pantalla
+y el aviso no puedan decir cosas distintas.
+
+**La puerta.** `POST /v1/arrivals` compone, en UNA transacción, las piezas que ya existían
+(recepción, factura, pago, aporte) y decide la salida contable con lo que la persona contó. La
+fecha está acotada en el dominio (hoy, hasta 2 días atrás, nunca antes del período abierto ni del
+último cierre de la cuenta que paga) y `GET /v1/arrivals/impact` devuelve lo vendido entre medias
+para enseñarlo **antes** de confirmar.
+
+**La ruta suelta no se cerró: ahora exige `origin`.** `POST /v1/inventory/receipts` pide
+`origin: "aporte"` y el permiso `inventory.move`; sin él responde 422 remitiendo a la puerta.
+Cerrarla habría obligado a reescribir la siembra de diez ficheros E2E y habría roto la web
+desplegada durante la ventana, sin ganar control.
+
+**Las pantallas.** `/admin/llego-mercancia` (seis pasos, una pregunta por pantalla, clave de
+idempotencia al entrar); «Compras y gastos» conserva todo y gana la pestaña «Falta la factura»
+con «Ya llegó la factura»; «Entrada de existencias» **se eliminó** de Administración → Inventario
+y el formulario de un paso de «Registrar compra» también; el menú, las migas, el Ctrl+K y el
+aterrizaje por rol.
+
+## Pruebas
+
+- **pgTAP 069** (6) y **070** (5), verdes a la primera.
+- **`e2e-llegada`** (11), nuevo: las cuatro salidas con sus cifras en el libro y en la
+  declaración; **el ciclo completo de la cuenta puente** —recibir sin factura la deja con saldo y
+  engancharla la devuelve a cero—, que no tenía test; la fecha acotada; la idempotencia; lote y
+  vencimiento; el compuesto; el permiso por camino; y los invariantes al final.
+- `e2e-purchases` gana la compra sin soporte fiscal y el rechazo de retención sobre ella;
+  `e2e-inventory`, el rechazo de una entrada sin origen.
+- `nav-llegada` (7): dónde vive la entrada, con qué permisos y **dónde aterriza cada rol**.
+
+## Lo que queda abierto
+
+- **Entregas (ii) y (iii)** de ADR-0066: MoneyDualInput y `capture_*`; pedidos, «Por recibir»,
+  recepción a ciegas y los otros dos controles.
+- **P-27, P-28 y P-29** siguen siendo del asesor (compra sin soporte, retención sobre ella, IGTF
+  al pagar en divisa).
+- **Las migraciones 69 y 70 y los cambios de contrato esperan la ventana de deploy** con el
+  rebuild: con la 69 aplicada y la web vieja no pasa nada, pero con `origin` obligatorio en la
+  ruta suelta, la pantalla vieja de «Entrada de existencias» dejaría de funcionar hasta el
+  rebuild (R-43).
+
+HOMOLOGATION_IMPACT = **YES** (un documento de compra que no entra al libro; el correlativo del
+proveedor deja de ser obligatorio).
+
+---
+
 # Handoff — 2026-09-18 (26ª entrega) — QA fiscal: la nota del proveedor y la retención
 
 ## Qué pasaba

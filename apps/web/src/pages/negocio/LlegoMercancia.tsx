@@ -51,7 +51,8 @@ interface Deposito {
   id: string;
   name: string;
   is_default: boolean;
-  is_active: boolean;
+  /** El endpoint devuelve el estado, no una bandera: «active» es el que admite mercancía. */
+  status: string;
 }
 interface FormaDePago {
   id: string;
@@ -129,10 +130,10 @@ export function LlegoMercancia(): React.JSX.Element {
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],
     staleTime: 5 * 60_000,
-    queryFn: () => llamar<{ items: Deposito[] }>("/v1/warehouses"),
+    queryFn: () => llamar<Deposito[]>("/v1/warehouses"),
   });
   const activos = useMemo(
-    () => (depositos.data?.items ?? []).filter((d) => d.is_active),
+    () => (depositos.data ?? []).filter((d) => d.status === "active"),
     [depositos.data],
   );
   const depositoElegido =
