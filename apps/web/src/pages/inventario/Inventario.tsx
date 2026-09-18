@@ -8,6 +8,7 @@ import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
 import { FormField, EntityPicker, type EntityOption } from "../../components/forms.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
+import { PorRecibir } from "../../components/PorRecibir.js";
 import { Button } from "../../ui/button.js";
 import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
@@ -199,6 +200,12 @@ export function Inventario(): React.JSX.Element {
           </div>
         }
       />
+
+      {/* Lo que el negocio espera va ANTES de lo que ya tiene: mientras un pedido siga abierto,
+          la existencia de esta tabla no es toda la historia (ADR-0066, entrega iii). */}
+      <div className="mb-4">
+        <PorRecibir />
+      </div>
 
       <Tabs defaultValue="existencias">
         <TabsList className="mb-3">

@@ -11,6 +11,7 @@ import {
   SimplePurchaseRequest,
   CreateRetentionRuleRequest,
   RegisterArrivalRequest,
+  ClosePurchaseOrderRequest,
 } from "@ladino/schemas";
 import {
   createSupplier,
@@ -23,6 +24,7 @@ import {
   simplePurchase,
   registerArrival,
   ventasIntermedias,
+  closePurchaseOrder,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -160,6 +162,10 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const { actor } = c.get("ladino.auth");
     const status = c.req.query("status") ?? "";
     const supplierId = c.req.query("supplier_id") ?? "";
+    // «Por recibir» (ADR-0066, entrega iii): los pedidos que siguen esperando mercancía. El
+    // estado se DERIVA de las recepciones —una orden cerrada a mano y tres recepciones parciales
+    // son dos verdades—, así que el filtro pregunta a la función, no a la columna.
+    const soloPendientes = c.req.query("pending") === "1";
     const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 20) || 20, 1), 100);
     const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
@@ -168,7 +174,9 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
         "purchase.receive",
       ]);
       return tx<Record<string, unknown>[]>`
-        select o.id, o.company_id, o.supplier_id, o.warehouse_id,
+        select o.id, o.company_id, o.supplier_id, s.legal_name as supplier_name, o.warehouse_id,
+               ((now() at time zone 'America/Caracas')::date
+                - (o.ordered_at at time zone 'America/Caracas')::date)::int as age_days,
                o.order_number::int as order_number, o.status,
                to_char(o.ordered_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ordered_at,
                o.expected_at::text as expected_at, o.transaction_currency, o.functional_currency,
@@ -181,7 +189,19 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
                     else platform.purchase_order_status(o.company_id, o.id) end as derived_status,
                count(*) over ()::int as total
           from public.purchase_orders o
+          join public.suppliers s on s.id = o.supplier_id
          where o.company_id = ${companyId}
+           ${
+             soloPendientes
+               ? // «Por recibir» pregunta por lo que el negocio ESPERA, y eso son dos
+                 // condiciones, no una: que el pedido siga vivo (la columna) y que le falte
+                 // mercancía (las recepciones). El estado derivado ignora a propósito lo
+                 // cerrado a mano, así que filtrar solo por él dejaba en la bandeja los
+                 // pedidos que alguien acababa de cerrar — con su motivo escrito y todo.
+                 tx`and o.status not in ('draft', 'closed', 'cancelled')
+                    and platform.purchase_order_status(o.company_id, o.id) in ('pending', 'partial')`
+               : tx``
+           }
            ${status === "" ? tx`` : tx`and o.status = ${status}`}
            ${supplierId === "" ? tx`` : tx`and o.supplier_id = ${idValido(supplierId)}`}
          order by o.ordered_at desc nulls last, o.order_number desc nulls last, o.id
@@ -269,6 +289,22 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
   });
 
   // ── Recepciones ───────────────────────────────────────────────────────────
+
+  /**
+   * «NO VA A LLEGAR»: el pedido sale de la bandeja con su motivo escrito (ADR-0066, entrega
+   * iii). Lo recibido a medias se queda: cerrar no devuelve mercancía.
+   */
+  app.post("/v1/purchase-orders/:id/close", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = ClosePurchaseOrderRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const id = idValido(c.req.param("id"));
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => closePurchaseOrder(uow, id, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
 
   app.post("/v1/goods-receipts", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);

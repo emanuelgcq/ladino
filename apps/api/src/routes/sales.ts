@@ -823,8 +823,16 @@ export function salesRoutes(
     if (!/^[A-Z]{3}$/.test(currency)) {
       throw new DominioError({ code: "VALIDATION_FAILED", message: "currency inválida." });
     }
+    // La fecha del hecho, si la pantalla la da: la tasa que se enseña es la que se va a usar.
+    const fecha = c.req.query("date");
+    if (fecha !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "«date» debe ser una fecha YYYY-MM-DD.",
+      });
+    }
     const r = await withTransaction(sql, actor, ({ sql: tx }) =>
-      previsualizarConversion(tx, companyId, amount, currency),
+      previsualizarConversion(tx, companyId, amount, currency, fecha),
     );
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 200);

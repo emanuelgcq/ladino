@@ -162,6 +162,7 @@ export {
   RegisterArrivalRequest,
   ArrivalResponse,
   ArrivalImpactResponse,
+  ClosePurchaseOrderRequest,
 } from "./purchases.js";
 export {
   AccountKind,

@@ -26,6 +26,7 @@ import type {
   SupplierPaymentResponse,
   SimplePurchaseRequest,
   SimplePurchaseResponse,
+  ClosePurchaseOrderRequest,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { clasificacionPorPrefijo } from "./customers.js";
@@ -183,6 +184,74 @@ async function auditar(
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
     values (${tenantId}, ${companyId}, ${aggregateType}, ${aggregateId}, ${evento}, 1,
             ${sql.json({ id: aggregateId, ...payload })})`;
+}
+
+/**
+ * CERRAR UN PEDIDO QUE NO VA A LLEGAR. El distribuidor no lo trajo, se canceló, se pidió a
+ * otro: el pedido sale de «Por recibir» y deja escrito POR QUÉ. Lo recibido a medias no se
+ * toca —eso ya entró al kardex y tiene su costo—; lo que se cierra es la expectativa.
+ *
+ * No hay borrado: un pedido que desaparece sin rastro es una decisión que nadie puede revisar
+ * después, y el estado 'closed' con su motivo es exactamente lo que el esquema ya preveía.
+ */
+export async function closePurchaseOrder(
+  uow: UnitOfWork,
+  orderId: string,
+  input: ClosePurchaseOrderRequest,
+): Promise<Result<PurchaseOrderResponse, PurchaseError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Cerrar un pedido exige un usuario real." });
+  }
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "purchase.order.manage");
+  if (!ctx.ok) return ctx;
+
+  const [orden] = await sql<{ status: string }[]>`
+    select status from public.purchase_orders
+     where id = ${orderId} and company_id = ${input.company_id} for update`;
+  if (!orden) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (orden.status === "closed" || orden.status === "cancelled") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Ese pedido ya está cerrado: no se cierra dos veces.",
+    });
+  }
+
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  try {
+    await sql.savepoint(
+      (sp) => sp`
+        update public.purchase_orders
+           set status = 'closed', closed_at = now(), close_reason = ${input.reason}
+         where id = ${orderId} and company_id = ${input.company_id}`,
+    );
+  } catch (e) {
+    const conocido = traducir(e);
+    if (conocido) return err(conocido);
+    throw e;
+  }
+
+  await auditar(
+    sql,
+    ctx.value.tenantId,
+    input.company_id,
+    "purchase_order",
+    orderId,
+    "ap.order_closed",
+    { reason: input.reason, previous_status: orden.status },
+  );
+
+  const [detalle] = await sql<PurchaseOrderResponse[]>`
+    select id, company_id, supplier_id, warehouse_id, order_number::int as order_number, status,
+           to_char(ordered_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as ordered_at,
+           expected_at::text as expected_at, transaction_currency, functional_currency,
+           fx_rate::text as fx_rate, rate_source,
+           amount_transaction_currency::text as amount_transaction_currency,
+           functional_amount::text as functional_amount
+      from public.purchase_orders
+     where id = ${orderId} and company_id = ${input.company_id}`;
+  if (!detalle) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  return ok(detalle);
 }
 
 // ── Proveedores ─────────────────────────────────────────────────────────────
@@ -522,14 +591,16 @@ export async function receiveGoods(
             (tenant_id, company_id, goods_receipt_id, line_number, purchase_order_line_id,
              product_id, quantity, unit_price_transaction, unit_cost_functional, unit_weight,
              amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
-             functional_currency, rate_source, rate_timestamp, rounding_policy_id)
+             functional_currency, rate_source, rate_timestamp, rounding_policy_id,
+             capture_currency, capture_mode)
           values (${ctx.value.tenantId}, ${input.company_id}, ${r!.id}, ${n},
                   ${l.purchase_order_line_id ?? null}, ${l.product_id}, ${l.quantity},
                   ${precio.value.toAmountString()}, ${costoUnitFunc.value.toAmountString()},
                   ${l.unit_weight ?? null}, ${totalLinea.value.toAmountString()},
                   ${input.currency}, ${tasa.value.rate.toFixed()},
                   ${totalFunc.value.toAmountString()}, ${ctx.value.functionalCurrency},
-                  ${tasa.value.source}, now(), ${POLICY.id})`;
+                  ${tasa.value.source}, now(), ${POLICY.id},
+                  ${l.capture_currency ?? null}, ${l.capture_mode ?? null})`;
       }
 
       const totalMoney = Money.of(total.toFixed(8), input.currency);
@@ -590,6 +661,10 @@ export async function receiveGoods(
       currency: ctx.value.functionalCurrency,
       ...(l.lot_code !== undefined ? { lot_code: l.lot_code } : {}),
       ...(l.lot_expires_at !== undefined ? { lot_expires_at: l.lot_expires_at } : {}),
+      // Lo que la persona escribió viaja hasta el kardex (migración 71): el movimiento guarda
+      // en qué moneda lo puso y si dio el de cada uno o el total, no solo lo derivado.
+      ...(l.capture_currency !== undefined ? { capture_currency: l.capture_currency } : {}),
+      ...(l.capture_mode !== undefined ? { capture_mode: l.capture_mode } : {}),
       sourceDocumentId: recepcion.id,
       accounting: "document",
     });
@@ -966,7 +1041,8 @@ export async function registerSupplierInvoice(
              tax_rule_id, tax_rate_snapshot, tax_amount, line_subtotal_transaction,
              line_total_transaction, amount_transaction_currency, transaction_currency, fx_rate,
              functional_amount, functional_currency, rate_source, rate_timestamp,
-             rounding_policy_id, tax_category_snapshot, tax_treatment, operation_type)
+             rounding_policy_id, tax_category_snapshot, tax_treatment, operation_type,
+             capture_currency, capture_mode)
           values (${ctx.value.tenantId}, ${input.company_id}, ${f!.id}, ${n},
                   ${l.goods_receipt_line_id ?? null}, ${l.product_id},
                   ${l.description ?? producto.name}, ${l.quantity},
@@ -984,7 +1060,8 @@ export async function registerSupplierInvoice(
                   -- VALIDAR-SENIAT.
                   ${producto.tax_category_code},
                   platform.tax_treatment_of(${producto.tax_category_code}),
-                  ${prov.supplier_kind === "nacional" ? "interna" : null})`;
+                  ${prov.supplier_kind === "nacional" ? "interna" : null},
+                  ${l.capture_currency ?? null}, ${l.capture_mode ?? null})`;
       }
 
       // Y aquí pasa a `posted`: hasta este UPDATE es un borrador editable, y

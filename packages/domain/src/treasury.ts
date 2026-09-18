@@ -832,6 +832,12 @@ export async function previsualizarConversion(
   companyId: string,
   amount: string,
   currency: string,
+  /**
+   * El DÍA del hecho (ADR-0066 §5). Una llegada fechada ayer se valora con la tasa de AYER, y la
+   * pantalla tiene que enseñar esa, no la de hoy: si enseñara la de hoy, la persona confirmaría
+   * un número y se guardaría otro. Por omisión, el día de Venezuela.
+   */
+  fecha?: string,
 ): Promise<
   Result<VistaConversion, { code: "EXCHANGE_RATE_MISSING" | "VALIDATION_FAILED"; message: string }>
 > {
@@ -847,7 +853,8 @@ export async function previsualizarConversion(
   }
   const [t] = await sql<{ rate: string; source: string; rate_date: string }[]>`
     select f.rate::text as rate, f.source, f.rate_date::text as rate_date
-      from platform.rate_for(${companyId}, ${ancla}, ${funcional}, (now() at time zone 'America/Caracas')::date) f`;
+      from platform.rate_for(${companyId}, ${ancla}, ${funcional},
+             coalesce(${fecha ?? null}::date, (now() at time zone 'America/Caracas')::date)) f`;
   if (!t) {
     return err({
       code: "EXCHANGE_RATE_MISSING",

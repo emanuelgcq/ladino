@@ -122,6 +122,12 @@ export const ReceiveGoodsLineRequest = z
     unit_weight: amount.optional(),
     lot_code: z.string().trim().min(1).max(60).optional(),
     lot_expires_at: z.string().date().optional(),
+    /** Lo que la persona escribió, para poder devolvérselo igual (migración 71). */
+    capture_currency: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .optional(),
+    capture_mode: z.enum(["unit", "total"]).optional(),
   })
   .strict();
 export type ReceiveGoodsLineRequest = z.infer<typeof ReceiveGoodsLineRequest>;
@@ -149,6 +155,12 @@ export const RegisterSupplierInvoiceLineRequest = z
     description: z.string().trim().min(1).max(300).optional(),
     quantity,
     unit_price: amount,
+    /** Lo que la persona escribió, para poder devolvérselo igual (migración 71). */
+    capture_currency: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .optional(),
+    capture_mode: z.enum(["unit", "total"]).optional(),
   })
   .strict();
 
@@ -297,6 +309,19 @@ export const SimplePurchaseRequest = z
   })
   .strict();
 export type SimplePurchaseRequest = z.infer<typeof SimplePurchaseRequest>;
+
+/**
+ * CERRAR UN PEDIDO QUE NO VA A LLEGAR (ADR-0066, entrega iii). No se borra: se cierra con su
+ * motivo, porque un pedido que desaparece sin dejar rastro es una decisión que nadie puede
+ * revisar después. Lo ya recibido se queda como está: cerrar no devuelve mercancía.
+ */
+export const ClosePurchaseOrderRequest = z
+  .object({
+    company_id: uuid,
+    reason: z.string().trim().min(3).max(500),
+  })
+  .strict();
+export type ClosePurchaseOrderRequest = z.infer<typeof ClosePurchaseOrderRequest>;
 
 export const CreateRetentionRuleRequest = z
   .object({
@@ -580,12 +605,34 @@ export const ArrivalLineRequest = z
     /** Lote y vencimiento: obligatorios de hecho para el producto que los lleva (FEFO). */
     lot_code: z.string().trim().min(1).max(60).optional(),
     lot_expires_at: z.string().date().optional(),
+    /**
+     * La moneda en la que la persona ESCRIBIÓ el importe (migración 71). Por omisión, la del
+     * documento. Si es otra, el servidor convierte con la tasa del día del hecho y guarda las
+     * dos cosas: lo escrito y lo derivado. Solo se admite entre el ancla (USD) y la del
+     * documento — lo demás sería inventar un cruce de tasas.
+     */
+    capture_currency: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .optional(),
   })
   .strict()
-  .refine((l) => (l.unit_amount === undefined) !== (l.amount === undefined), {
-    message:
-      "Da el costo por unidad (unit_amount) o el total de la línea (amount): uno de los dos.",
-  });
+  .refine(
+    (l) =>
+      // RECEPCIÓN A CIEGAS (ADR-0066, entrega iii): si la línea viene de un pedido, el costo lo
+      // trae el pedido y quien recibe NO ve importes — cuenta, no valora. Y no es que no haga
+      // falta mandarlos: es que NO SE ADMITEN. Que el precio no pueda viajar desde el navegador
+      // es lo que hace que la ceguera sea de verdad y no una convención de la pantalla; si el
+      // proveedor cobra otra cosa, eso lo dice su factura, que es donde vive el cruce a tres
+      // vías. Ausencia de mecanismo no es prohibición (CLAUDE.md §2).
+      l.purchase_order_line_id !== undefined
+        ? l.unit_amount === undefined && l.amount === undefined
+        : (l.unit_amount === undefined) !== (l.amount === undefined),
+    {
+      message:
+        "Da el costo por unidad (unit_amount) o el total de la línea (amount): uno de los dos. Si la línea viene de un pedido, el costo lo pone el pedido y no se manda.",
+    },
+  );
 export type ArrivalLineRequest = z.infer<typeof ArrivalLineRequest>;
 
 export const RegisterArrivalRequest = z
@@ -622,6 +669,18 @@ export const RegisterArrivalRequest = z
       .strict()
       .optional(),
     lines: z.array(ArrivalLineRequest).min(1).max(200),
+    /**
+     * El TRANSPORTE y lo que se pagó aparte por traerla (ADR-0066, entrega ii). No es un gasto
+     * del mes: es COSTO de esta mercancía, y se reparte entre sus líneas por valor. Solo cuando
+     * hay proveedor, que es cuando hay recepción a la que colgarlo.
+     */
+    freight: z
+      .object({
+        amount,
+        concept: z.string().trim().min(1).max(120).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine((r) => (r.supplier_id === undefined) === (r.invoice === undefined), {
@@ -630,6 +689,9 @@ export const RegisterArrivalRequest = z
   })
   .refine((r) => r.supplier_id !== undefined || r.payment === undefined, {
     message: "La mercancía que ya era tuya no se paga a nadie.",
+  })
+  .refine((r) => r.supplier_id !== undefined || r.freight === undefined, {
+    message: "El transporte se le cuelga a una llegada de un proveedor.",
   })
   .refine(
     (r) =>

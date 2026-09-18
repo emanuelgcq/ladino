@@ -8,6 +8,7 @@ import { mostrarCantidad } from "../../money.js";
 import { compararImportes, esCero } from "../../components/decimal-compare.js";
 import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
+import { PorRecibir } from "../../components/PorRecibir.js";
 import { fechaRelativa } from "./comunes.js";
 
 /**
@@ -144,6 +145,10 @@ export function InventarioNegocio(): React.JSX.Element {
           </button>
         </p>
       )}
+
+      {/* Lo que el negocio está esperando, antes que lo que ya tiene: un pedido que llegó y
+          nadie recibió es mercancía que no está en ningún número de esta pantalla. */}
+      <PorRecibir />
 
       {/* Quien puede registrar movimientos encuentra la puerta aquí: los
           verbos viven en la administración, no en el mostrador. */}

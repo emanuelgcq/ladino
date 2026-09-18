@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 
 /**
  * LA LLEGADA DE MERCANCÍA, DE EXTREMO A EXTREMO (ADR-0066).
@@ -43,6 +44,7 @@ const RUN = Date.now().toString(36);
 const HOY = diaCaracas();
 const AYER = diaCaracas(-1);
 const HACE_TRES = diaCaracas(-3);
+const FUENTE_TASA = `Llegada E2E ${Date.now().toString(36)}`;
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -135,6 +137,7 @@ beforeAll(async () => {
              (${ROL_JEFE}, 'inventory.move'), (${ROL_JEFE}, 'inventory.adjust'),
              (${ROL_JEFE}, 'purchase.receive'), (${ROL_JEFE}, 'purchase.invoice.register'),
              (${ROL_JEFE}, 'purchase.payment.register'), (${ROL_JEFE}, 'purchase.order.manage'),
+             (${ROL_JEFE}, 'purchase.landed_cost.apply'),
              (${ROL_JEFE}, 'supplier.manage'), (${ROL_JEFE}, 'ap.read'),
              (${ROL_JEFE}, 'product.manage'), (${ROL_JEFE}, 'fx.rate.manage'),
              (${ROL_JEFE}, 'accounting.account.manage'), (${ROL_JEFE}, 'accounting.template.manage'),
@@ -188,6 +191,10 @@ beforeAll(async () => {
                             and transaction_type = 'purchase')`;
   });
 
+  // La tasa del día, oficial: sin ella no se puede escribir un costo en dólares sobre una
+  // factura en bolívares (migración 71).
+  await sembrarTasaOficial(sql, { rate: "40", rate_date: HOY, source: FUENTE_TASA });
+
   // La contabilidad, para poder mirar el MAYOR y no solo la cola.
   const plan = await pedir("POST", "/v1/accounts/import-template", JEFE, {
     company_id: COMPANY,
@@ -202,6 +209,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await borrarTasasOficiales(sql, FUENTE_TASA);
   await sql.end();
   await sqlApi.end();
 });
@@ -559,6 +567,246 @@ describe("llegó mercancía — la única puerta (ADR-0066)", () => {
     expect(factura.status).toBe(403);
     // Mover existencia SÍ puede —recibir es mover—, pero registrar la factura del proveedor es
     // otro oficio y otro permiso. Esa es la recepción a ciegas: cuenta, no valora.
+  });
+
+  // ── 12. Lo que la persona escribió (migración 71) ─────────────────────────
+  it("escribe el costo POR TOTAL y en dólares sobre una factura en bolívares: el servidor deriva y guarda las dos cosas", async () => {
+    const r = await pedir("POST", "/v1/arrivals", JEFE, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      currency: "VES",
+      supplier_id: PROV,
+      invoice: "present",
+      supplier_document_number: `F-${RUN}-4`,
+      supplier_control_number: `00-${RUN}4`,
+      lines: [
+        // «Me costaron 100 dólares las 10 bolsas»: ni el unitario ni los bolívares los pone ella.
+        { product_id: PROD, quantity: "10", amount: "100", capture_currency: "USD" },
+      ],
+    });
+    expect(r.status, await r.clone().text()).toBe(201);
+    const a = (await r.json()) as { invoice: { id: string; subtotal_amount: string } };
+    // 100 USD × 40 = 4.000 Bs por las diez → 400 Bs cada una.
+    expect(a.invoice.subtotal_amount).toBe("4000.00000000");
+
+    const [linea] = await sql<{ unit: string; cur: string; mode: string }[]>`
+      select unit_price_transaction::text as unit, capture_currency as cur, capture_mode as mode
+        from public.supplier_invoice_lines where supplier_invoice_id = ${a.invoice.id}`;
+    expect(linea!.unit).toBe("400.00000000");
+    expect(linea!.cur).toBe("USD");
+    expect(linea!.mode).toBe("total");
+
+    // Y el kardex entró con ese costo, no con otro.
+    const [mov] = await sql<{ cur: string | null; mode: string | null; costo: string }[]>`
+      select capture_currency as cur, capture_mode as mode, unit_cost::text as costo
+        from public.inventory_moves
+       where company_id = ${COMPANY} and product_id = ${PROD} and quantity = 10
+       order by created_at desc limit 1`;
+    expect(mov!.cur).toBe("USD");
+    expect(mov!.mode).toBe("total");
+  });
+
+  it("una moneda que no cruza con el ancla se rechaza en vez de inventarse una tasa", async () => {
+    const r = await pedir("POST", "/v1/arrivals", JEFE, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      currency: "VES",
+      supplier_id: PROV,
+      invoice: "none",
+      lines: [{ product_id: PROD, quantity: "1", unit_amount: "10", capture_currency: "EUR" }],
+    });
+    expect(r.status).toBe(422);
+    expect(((await r.json()) as { message: string }).message).toMatch(/No hay tasa de EUR/);
+  });
+
+  // ── 13. El transporte es COSTO de la mercancía, no gasto del mes ──────────
+  it("el transporte se reparte entre las líneas y sube el valor del inventario", async () => {
+    const [antes] = await sql<{ v: string }[]>`
+      select coalesce(sum(value)::text, '0') as v from public.stock_balances
+       where company_id = ${COMPANY} and product_id = ${PROD}`;
+    const r = await pedir("POST", "/v1/arrivals", JEFE, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      currency: "VES",
+      supplier_id: PROV,
+      invoice: "present",
+      supplier_document_number: `F-${RUN}-5`,
+      supplier_control_number: `00-${RUN}5`,
+      lines: [{ product_id: PROD, quantity: "10", unit_amount: "100" }],
+      freight: { amount: "300", concept: "Flete del camión" },
+    });
+    expect(r.status, await r.clone().text()).toBe(201);
+    const a = (await r.json()) as { receipt: { id: string } };
+
+    // El flete quedó colgado de la recepción, no suelto como gasto.
+    const [flete] = await sql<{ n: string; total: string }[]>`
+      select count(*)::text as n, coalesce(sum(functional_amount), 0)::text as total
+        from public.landed_costs where goods_receipt_id = ${a.receipt.id}`;
+    expect(flete!.n).toBe("1");
+    expect(Number(flete!.total)).toBe(300);
+
+    // Y el valor del inventario subió por la mercancía MÁS el flete: 1.000 + 300.
+    const [despues] = await sql<{ v: string }[]>`
+      select coalesce(sum(value)::text, '0') as v from public.stock_balances
+       where company_id = ${COMPANY} and product_id = ${PROD}`;
+    expect(Number(despues!.v) - Number(antes!.v)).toBe(1300);
+  });
+
+  // ── 14. EL CICLO DEL PEDIDO (ADR-0066, entrega iii) ───────────────────────
+  // Pedir · verlo en «Por recibir» · recibirlo A CIEGAS y de a poco · la diferencia queda a la
+  // vista · facturar lo recibido · y cerrar con su motivo lo que no va a llegar.
+  it("del pedido a la llegada: a ciegas, parcial, y el pedido se cierra con su motivo", async () => {
+    const pedido = await pedir("POST", "/v1/purchase-orders", JEFE, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      warehouse_id: W1,
+      currency: "VES",
+      lines: [{ product_id: PROD, quantity: "10", unit_price: "500" }],
+    });
+    expect(pedido.status, await pedido.clone().text()).toBe(201);
+    const p = (await pedido.json()) as { id: string };
+
+    // 1. Aparece en «Por recibir», con el nombre del proveedor y su edad.
+    const bandeja = await pedir("GET", "/v1/purchase-orders?pending=1", JEFE);
+    expect(bandeja.status).toBe(200);
+    const lista = (await bandeja.json()) as {
+      items: { id: string; supplier_name: string; age_days: number }[];
+    };
+    const fila = lista.items.find((o) => o.id === p.id);
+    expect(fila).toBeDefined();
+    expect(fila!.supplier_name).toBe("Distribuidora Andina");
+    expect(fila!.age_days).toBe(0);
+
+    // 2. Llega SOLO UNA PARTE, y quien recibe no manda importes: el costo lo pone el pedido.
+    const detalle = await pedir("GET", `/v1/purchase-orders/${p.id}`, JEFE);
+    const d = (await detalle.json()) as { lines: { id: string }[] };
+    const stockAntes = await existencia(PROD);
+    const puenteAntes = await saldoDePapel("goods_received_not_invoiced");
+    const llegada = await pedir("POST", "/v1/arrivals", JEFE, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      currency: "VES",
+      supplier_id: PROV,
+      invoice: "pending",
+      purchase_order_id: p.id,
+      lines: [{ product_id: PROD, quantity: "8", purchase_order_line_id: d.lines[0]!.id }],
+    });
+    expect(llegada.status, await llegada.clone().text()).toBe(201);
+    const a = (await llegada.json()) as { kind: string; receipt: { id: string } };
+    expect(a.kind).toBe("receipt");
+    // Ocho unidades entraron al costo ACORDADO (500), que la pantalla nunca vio.
+    expect(await existencia(PROD)).toBe(stockAntes + 8);
+    const [linea] = await sql<{ costo: string }[]>`
+      select unit_cost_functional::text as costo from public.goods_receipt_lines
+       where goods_receipt_id = ${a.receipt.id}`;
+    expect(linea!.costo).toBe("500.00000000");
+    // Y la cuenta puente debe exactamente 8 × 500.
+    const puenteRecibido = await saldoDePapel("goods_received_not_invoiced");
+    expect(Number(puenteRecibido.haber) - Number(puenteAntes.haber)).toBe(4000);
+
+    // 3. El pedido SIGUE en la bandeja, y la diferencia está a la vista: se pidieron 10, llegaron 8.
+    const bandeja2 = await pedir("GET", "/v1/purchase-orders?pending=1", JEFE);
+    const lista2 = (await bandeja2.json()) as { items: { id: string }[] };
+    expect(lista2.items.some((o) => o.id === p.id)).toBe(true);
+    const det2 = await pedir("GET", `/v1/purchase-orders/${p.id}`, JEFE);
+    const d2 = (await det2.json()) as {
+      derived_status: string;
+      progress: Record<string, string>[];
+    };
+    expect(d2.derived_status).toBe("partial");
+    expect(d2.progress[0]!["quantity_ordered"]).toBe("10.00000000");
+    expect(d2.progress[0]!["quantity_received"]).toBe("8.00000000");
+    expect(d2.progress[0]!["quantity_pending"]).toBe("2.00000000");
+
+    // 4. Llega la factura de lo recibido y la cuenta puente vuelve a su sitio.
+    const lineasRecibidas = await sql<{ id: string; product_id: string; quantity: string }[]>`
+      select id, product_id, quantity::text as quantity from public.goods_receipt_lines
+       where goods_receipt_id = ${a.receipt.id} order by line_number`;
+    const factura = await pedir("POST", "/v1/supplier-invoices", JEFE, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      supplier_document_number: `F-${RUN}-P`,
+      supplier_control_number: `00-${RUN}P`,
+      invoice_date: HOY,
+      currency: "VES",
+      lines: lineasRecibidas.map((l) => ({
+        goods_receipt_line_id: l.id,
+        product_id: l.product_id,
+        quantity: l.quantity,
+        unit_price: "500",
+      })),
+    });
+    expect(factura.status, await factura.clone().text()).toBe(201);
+    const puenteFinal = await saldoDePapel("goods_received_not_invoiced");
+    expect(Number(puenteFinal.debe) - Number(puenteAntes.debe)).toBe(4000);
+
+    // 5. Lo que no va a llegar se CIERRA con su motivo, y sale de la bandeja.
+    const cierre = await pedir("POST", `/v1/purchase-orders/${p.id}/close`, JEFE, {
+      company_id: COMPANY,
+      reason: "El distribuidor no tenía las otras dos",
+    });
+    expect(cierre.status, await cierre.clone().text()).toBe(200);
+    const bandeja3 = await pedir("GET", "/v1/purchase-orders?pending=1", JEFE);
+    const lista3 = (await bandeja3.json()) as { items: { id: string }[] };
+    expect(lista3.items.some((o) => o.id === p.id)).toBe(false);
+
+    // Cerrar no es borrar: el motivo queda escrito y el pedido sigue ahí.
+    const [cerrado] = await sql<{ status: string; motivo: string }[]>`
+      select status, close_reason as motivo from public.purchase_orders
+       where id = ${p.id}`;
+    expect(cerrado!.status).toBe("closed");
+    expect(cerrado!.motivo).toMatch(/no tenía las otras dos/);
+
+    // Y no se cierra dos veces.
+    const otra = await pedir("POST", `/v1/purchase-orders/${p.id}/close`, JEFE, {
+      company_id: COMPANY,
+      reason: "otra vez",
+    });
+    expect(otra.status).toBe(422);
+  });
+
+  // ── 15. La recepción a ciegas no es una puerta trasera al costo ───────────
+  it("a ciegas: una línea con pedido NO admite importes, y sin pedido los exige", async () => {
+    const pedido = await pedir("POST", "/v1/purchase-orders", JEFE, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      warehouse_id: W1,
+      currency: "VES",
+      lines: [{ product_id: PROD, quantity: "3", unit_price: "700" }],
+    });
+    const p = (await pedido.json()) as { id: string };
+    const detalle = await pedir("GET", `/v1/purchase-orders/${p.id}`, JEFE);
+    const d = (await detalle.json()) as { lines: { id: string }[] };
+
+    // Sin pedido y sin importe: no hay de dónde sacar el costo.
+    const sinNada = await pedir("POST", "/v1/arrivals", JEFE, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      currency: "VES",
+      supplier_id: PROV,
+      invoice: "pending",
+      lines: [{ product_id: PROD, quantity: "3" }],
+    });
+    expect(sinNada.status).toBe(422);
+
+    // Con pedido Y con importe: el costo lo pone el pedido, no el navegador.
+    const conAmbos = await pedir("POST", "/v1/arrivals", JEFE, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      currency: "VES",
+      supplier_id: PROV,
+      invoice: "pending",
+      purchase_order_id: p.id,
+      lines: [
+        {
+          product_id: PROD,
+          quantity: "3",
+          unit_amount: "1",
+          purchase_order_line_id: d.lines[0]!.id,
+        },
+      ],
+    });
+    expect(conAmbos.status, await conAmbos.clone().text()).toBe(422);
   });
 
   // ── 11. EL CRITERIO: los invariantes, en cero por los cuatro caminos ──────

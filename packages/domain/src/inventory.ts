@@ -201,6 +201,9 @@ interface Insercion {
   readonly id: string | null;
   /** Liga los movimientos de UN hecho (las N salidas de una receta). */
   readonly sourceDocumentId: string | null;
+  /** Lo que la persona ESCRIBIÓ, si se sabe (migración 71). */
+  readonly captureCurrency?: string | null;
+  readonly captureMode?: string | null;
 }
 
 /**
@@ -218,7 +221,7 @@ async function insertar(sql: TransactionSql, m: Insercion): Promise<InventoryMov
        functional_amount, functional_currency, rate_source, rate_timestamp,
        rounding_policy_id, unit_cost, quantity_after, value_after,
        occurred_at, reference, reason, note, transfer_id, counterpart_move_id,
-       source_document_id)
+       source_document_id, capture_currency, capture_mode)
     values (coalesce(${m.id}::uuid, platform.uuidv7()), ${m.tenantId}, ${m.companyId},
             ${m.warehouseId}, ${m.productId}, ${m.lotId}, ${m.kind},
             ${m.costed.move.quantity.toFixed()},
@@ -229,7 +232,8 @@ async function insertar(sql: TransactionSql, m: Insercion): Promise<InventoryMov
             ${m.costed.move.quantityAfter.toFixed()},
             ${m.costed.move.valueAfter.toAmountString()},
             coalesce(${m.occurredAt}::timestamptz, now()), ${m.reference}, ${m.reason}, ${m.note},
-            ${m.transferId}, ${m.counterpartId}, ${m.sourceDocumentId})
+            ${m.transferId}, ${m.counterpartId}, ${m.sourceDocumentId},
+            ${m.captureCurrency ?? null}, ${m.captureMode ?? null})
     returning ${sql.unsafe(MOVE_COLUMNS)}`;
   return fila!;
 }
@@ -543,6 +547,10 @@ async function ingresar(
         counterpartId: null,
         id: null,
         sourceDocumentId: input.sourceDocumentId ?? null,
+        // Lo que la persona escribió (migración 71): la moneda y si dio el costo de cada uno o el
+        // total. Lo derivado ya está en el importe; esto dice cuál era el original.
+        captureCurrency: input.capture_currency ?? null,
+        captureMode: input.capture_mode ?? null,
       }),
     );
   } catch (e) {

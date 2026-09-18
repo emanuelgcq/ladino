@@ -88,6 +88,7 @@ export {
   registerSupplierCreditNote,
   registerSupplierPayment,
   simplePurchase,
+  closePurchaseOrder,
   type PurchaseError,
 } from "./purchases.js";
 export {

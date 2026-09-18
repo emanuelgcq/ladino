@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Paperclip, Plus, Receipt, ShoppingCart } from "lucide-react";
+import { ClipboardList, Paperclip, Plus, Receipt, ShoppingCart } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { errorDePersona } from "../../lib.js";
 import { mostrarImporte } from "../../money.js";
@@ -21,6 +21,7 @@ import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
+import { HacerPedido } from "../../components/HacerPedido.js";
 import { fechaRelativa } from "./comunes.js";
 import { fechaLocal } from "../../fechas.js";
 
@@ -159,11 +160,15 @@ export function ComprasNegocio(): React.JSX.Element {
   // de Gastos ni se le enseña.
   const puedeGastos = puede("expense.read");
   const puedeComprar = puede("purchase.invoice.register");
+  // Pedir es un acto de compras; recibir es uno del depósito. Quien puede lo uno no siempre
+  // puede lo otro, y el botón lo respeta (ADR-0066, entrega iii).
+  const puedePedir = puede("purchase.order.manage");
   const [pestana, setPestana] = useState<"gastos" | "compras" | "falta">(
     puedeGastos ? "gastos" : "compras",
   );
   const [enganchando, setEnganchando] = useState<RecepcionPendiente | null>(null);
   const [nuevoGasto, setNuevoGasto] = useState(false);
+  const [nuevoPedido, setNuevoPedido] = useState(false);
   const [pagando, setPagando] = useState<FacturaProveedor | null>(null);
   const puedePagar = puede("purchase.payment.register");
 
@@ -238,6 +243,11 @@ export function ComprasNegocio(): React.JSX.Element {
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-semibold">Compras y gastos</h1>
         <div className="flex-1" />
+        {puedePedir && (
+          <Button variant="secondary" onClick={() => setNuevoPedido(true)}>
+            <ClipboardList /> Hacer un pedido
+          </Button>
+        )}
         {puedeComprar && (
           <Button variant="secondary" onClick={() => void navigate("/admin/llego-mercancia")}>
             <ShoppingCart /> Llegó mercancía
@@ -471,6 +481,7 @@ export function ComprasNegocio(): React.JSX.Element {
       )}
 
       {nuevoGasto && <RegistrarGasto onCerrar={() => setNuevoGasto(false)} onListo={recargar} />}
+      <HacerPedido abierto={nuevoPedido} onCerrar={() => setNuevoPedido(false)} />
       {pagando !== null && (
         <PagarFactura
           factura={pagando}

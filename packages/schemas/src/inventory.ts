@@ -59,6 +59,12 @@ export const ReceiveStockRequest = z
     lot_code: z.string().trim().min(1).max(60).optional(),
     lot_expires_at: z.string().date().optional(),
     note: z.string().trim().min(1).max(500).optional(),
+    /** Lo que la persona escribió, para poder devolvérselo igual (migración 71). */
+    capture_currency: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .optional(),
+    capture_mode: z.enum(["unit", "total"]).optional(),
   })
   .strict();
 export type ReceiveStockRequest = z.infer<typeof ReceiveStockRequest>;

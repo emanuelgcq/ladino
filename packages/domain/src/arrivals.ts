@@ -10,7 +10,12 @@ import type {
   SupplierPaymentResponse,
 } from "@ladino/schemas";
 import { receiveStock, totalDeEntrada, unitarioDeEntrada } from "./inventory.js";
-import { receiveGoods, registerSupplierInvoice, registerSupplierPayment } from "./purchases.js";
+import {
+  applyLandedCost,
+  receiveGoods,
+  registerSupplierInvoice,
+  registerSupplierPayment,
+} from "./purchases.js";
 
 /**
  * LA LLEGADA DE MERCANCÍA (ADR-0066) — la única puerta por la que la mercancía entra al
@@ -128,12 +133,89 @@ export async function ventasIntermedias(
      order by p.name`;
 }
 
-/** El costo unitario de cada línea, venga por unidad o por el total de la línea. */
-function unitarioDeLinea(l: RegisterArrivalRequest["lines"][number]): Result<string, ArrivalError> {
-  if (l.unit_amount !== undefined) return ok(l.unit_amount);
-  const u = unitarioDeEntrada(l.amount ?? "", l.quantity);
-  if (!u.ok) return err(u.error);
-  return ok(u.value);
+/** El ancla del sistema: la única moneda contra la que hay tasa publicada (ADR-0064). */
+const ANCLA = "USD";
+
+interface CostoDeLinea {
+  /** Costo POR UNIDAD, ya en la moneda del documento. */
+  readonly unitario: string;
+  /** Lo que la persona escribió: en qué moneda y si dio el de cada uno o el total. */
+  readonly captureCurrency: string;
+  readonly captureMode: "unit" | "total";
+}
+
+/**
+ * EL COSTO DE UNA LÍNEA, Y LO QUE LA PERSONA ESCRIBIÓ (migración 71).
+ *
+ * Dos derivaciones, las dos en el SERVIDOR: el unitario cuando dieron el total de la línea, y la
+ * conversión cuando escribieron en otra moneda que la del documento —se compra con factura en
+ * bolívares y el dueño piensa en dólares—. La tasa es la del DÍA DEL HECHO, no la de hoy.
+ *
+ * Solo se convierte entre el ancla y la moneda del documento: un cruce entre dos monedas que no
+ * sean el ancla exigiría una tasa que nadie publica, y componerla con dos divisiones es
+ * inventarla.
+ */
+async function costoDeLinea(
+  sql: TransactionSql,
+  companyId: string,
+  fecha: string,
+  monedaDocumento: string,
+  l: RegisterArrivalRequest["lines"][number],
+): Promise<Result<CostoDeLinea, ArrivalError>> {
+  // RECEPCIÓN A CIEGAS: la línea viene de un pedido y no trae importe. El costo es el ACORDADO
+  // en el pedido, y lo lee el servidor: quien recibe cuenta bultos, no valora mercancía, y el
+  // precio no pasa por su pantalla ni por su navegador.
+  if (l.unit_amount === undefined && l.amount === undefined) {
+    const [linea] = await sql<{ precio: string }[]>`
+      select unit_price_transaction::text as precio from public.purchase_order_lines
+       where id = ${l.purchase_order_line_id ?? null} and company_id = ${companyId}`;
+    if (!linea) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "Esa línea del pedido no existe: sin ella no hay costo acordado que usar.",
+      });
+    }
+    return ok({ unitario: linea.precio, captureCurrency: monedaDocumento, captureMode: "unit" });
+  }
+
+  const captureMode = l.unit_amount !== undefined ? "unit" : "total";
+  const captureCurrency = l.capture_currency ?? monedaDocumento;
+  const escrito = l.unit_amount ?? l.amount ?? "";
+  const unitarioEscrito =
+    captureMode === "unit" ? ok(escrito) : unitarioDeEntrada(escrito, l.quantity);
+  if (!unitarioEscrito.ok) return err(unitarioEscrito.error);
+  if (captureCurrency === monedaDocumento) {
+    return ok({ unitario: unitarioEscrito.value, captureCurrency, captureMode });
+  }
+  if (captureCurrency !== ANCLA && monedaDocumento !== ANCLA) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `No hay tasa de ${captureCurrency} a ${monedaDocumento}: el costo se escribe en la moneda del documento o en ${ANCLA}.`,
+    });
+  }
+  const [t] = await sql<{ rate: string }[]>`
+    select f.rate::text as rate
+      from platform.rate_for(${companyId}, ${ANCLA},
+             ${captureCurrency === ANCLA ? monedaDocumento : captureCurrency},
+             ${fecha}::date) f`;
+  if (!t) {
+    return err({
+      code: "EXCHANGE_RATE_MISSING",
+      message: `No hay tasa del BCV de ese día para convertir lo que escribiste. Tráela en Mi dinero.`,
+    });
+  }
+  const escritoDec = parseDecimal(unitarioEscrito.value);
+  const tasa = parseDecimal(t.rate);
+  if (!escritoDec.ok || !tasa.ok || tasa.value.isZero()) {
+    return err({ code: "VALIDATION_FAILED", message: "Importe o tasa no interpretables." });
+  }
+  // Escrito en el ancla → se multiplica; escrito en la del documento cuando el documento va en
+  // el ancla → se divide. No hay tercer caso: el guard de arriba lo cerró.
+  const unitario =
+    captureCurrency === ANCLA
+      ? escritoDec.value.times(tasa.value).toDecimalPlaces(8, 4)
+      : escritoDec.value.dividedBy(tasa.value).toDecimalPlaces(8, 4);
+  return ok({ unitario: unitario.toFixed(8), captureCurrency, captureMode });
 }
 
 export async function registerArrival(
@@ -151,13 +233,15 @@ export async function registerArrival(
   if (!admisible.ok) return admisible;
 
   // Cada línea con su costo unitario resuelto por el SERVIDOR: la pantalla manda lo que la
-  // persona escribió —por unidad o el total de la línea— y nunca el resultado de dividirlo.
-  const unitarios: string[] = [];
+  // persona escribió —por unidad o el total, en la moneda que tenga a mano— y nunca el
+  // resultado de dividirlo ni de convertirlo.
+  const costos: CostoDeLinea[] = [];
   for (const l of input.lines) {
-    const u = unitarioDeLinea(l);
+    const u = await costoDeLinea(sql, input.company_id, fecha, input.currency, l);
     if (!u.ok) return u;
-    unitarios.push(u.value);
+    costos.push(u.value);
   }
+  const unitarios = costos.map((c) => c.unitario);
 
   // ── Camino «ya era mía»: inventario inicial o aporte ──────────────────────
   if (input.supplier_id === undefined) {
@@ -176,6 +260,8 @@ export async function registerArrival(
         accounting: "stock_opening",
         ...(l.lot_code === undefined ? {} : { lot_code: l.lot_code }),
         ...(l.lot_expires_at === undefined ? {} : { lot_expires_at: l.lot_expires_at }),
+        capture_currency: costos[i]!.captureCurrency,
+        capture_mode: costos[i]!.captureMode,
         // La referencia es la del papel con el que llegó, si lo hay. NO se inventa una por
         // omisión: `inventory_moves` tiene llave única por (empresa, tipo, referencia, producto)
         // y una referencia fija haría que la segunda llegada del mismo producto chocara.
@@ -203,6 +289,8 @@ export async function registerArrival(
       : { purchase_order_line_id: l.purchase_order_line_id }),
     ...(l.lot_code === undefined ? {} : { lot_code: l.lot_code }),
     ...(l.lot_expires_at === undefined ? {} : { lot_expires_at: l.lot_expires_at }),
+    capture_currency: costos[i]!.captureCurrency,
+    capture_mode: costos[i]!.captureMode,
   }));
   const recepcion = await receiveGoods(uow, {
     company_id: input.company_id,
@@ -241,6 +329,8 @@ export async function registerArrival(
       product_id: l.product_id,
       quantity: l.quantity,
       unit_price: unitarios[i]!,
+      capture_currency: costos[i]!.captureCurrency,
+      capture_mode: costos[i]!.captureMode,
       ...(rl === undefined ? {} : { goods_receipt_line_id: rl.id }),
     };
   });
@@ -270,6 +360,26 @@ export async function registerArrival(
   if (!factura.ok) return err(factura.error);
 
   // El pago, si ya se pagó. Parcial admitido: lo que no se paga queda debiendo.
+  /**
+   * EL TRANSPORTE, si lo hubo. No es un gasto del mes: es costo de ESTA mercancía, y por eso se
+   * reparte entre las líneas de la recepción y revaloriza el inventario (ADR-0040 §6). Se aplica
+   * después de la factura porque el reparto necesita la recepción ya cerrada, y va por VALOR:
+   * repartir un flete por unidades cobraría lo mismo llevar un saco que un tornillo.
+   */
+  if (input.freight !== undefined) {
+    const flete = await applyLandedCost(uow, {
+      company_id: input.company_id,
+      goods_receipt_id: recepcion.value.id,
+      concept: input.freight.concept ?? "Transporte de la llegada",
+      allocation_method: "by_value",
+      amount: input.freight.amount,
+      currency: input.currency,
+      incurred_on: fecha,
+      supplier_id: input.supplier_id,
+    });
+    if (!flete.ok) return err(flete.error);
+  }
+
   let pago: SupplierPaymentResponse | null = null;
   if (input.payment !== undefined) {
     const [saldo] = await sql<{ s: string }[]>`

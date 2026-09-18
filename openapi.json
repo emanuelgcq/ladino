@@ -2383,6 +2383,17 @@
             "minLength": 1,
             "maxLength": 500
           },
+          "capture_currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "capture_mode": {
+            "type": "string",
+            "enum": [
+              "unit",
+              "total"
+            ]
+          },
           "amount": {
             "type": "string",
             "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
@@ -7779,6 +7790,17 @@
                 "lot_expires_at": {
                   "type": "string",
                   "format": "date"
+                },
+                "capture_currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                "capture_mode": {
+                  "type": "string",
+                  "enum": [
+                    "unit",
+                    "total"
+                  ]
                 }
               },
               "required": [
@@ -7947,6 +7969,17 @@
                 "unit_price": {
                   "type": "string",
                   "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "capture_currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                "capture_mode": {
+                  "type": "string",
+                  "enum": [
+                    "unit",
+                    "total"
+                  ]
                 }
               },
               "required": [
@@ -8963,6 +8996,25 @@
         ],
         "additionalProperties": false
       },
+      "ClosePurchaseOrderRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "company_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
       "RegisterArrivalRequest": {
         "type": "object",
         "properties": {
@@ -9099,6 +9151,10 @@
                 "lot_expires_at": {
                   "type": "string",
                   "format": "date"
+                },
+                "capture_currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
                 }
               },
               "required": [
@@ -9109,6 +9165,24 @@
             },
             "minItems": 1,
             "maxItems": 200
+          },
+          "freight": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "concept": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "amount"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -23385,7 +23459,7 @@
     },
     "/v1/exchange-rates/preview": {
       "get": {
-        "summary": "Vista previa de conversión a la tasa de HOY (aritmética del servidor)",
+        "summary": "Vista previa de conversión a la tasa del día del hecho (aritmética del servidor)",
         "description": "El número que las pantallas enseñan al lado de un monto en la otra moneda: entre el ancla (USD) y la funcional, con la tasa vigente del día Caracas y su fuente. El cliente tiene prohibido calcular dinero, incluso para previsualizar.",
         "security": [
           {
@@ -23407,6 +23481,14 @@
             },
             "required": false,
             "name": "currency",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "date",
             "in": "query"
           },
           {
@@ -24159,6 +24241,14 @@
           },
           {
             "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "pending",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "integer",
               "minimum": 1
             },
@@ -24278,6 +24368,107 @@
         "responses": {
           "201": {
             "description": "Orden creada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurchaseOrderResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/purchase-orders/{id}/close": {
+      "post": {
+        "summary": "«No va a llegar»: cerrar un pedido con su motivo (purchase.order.manage)",
+        "description": "El pedido sale de «Por recibir» y deja escrito POR QUÉ. Lo recibido a medias no se toca: eso ya entró al kardex con su costo. No hay borrado — un pedido que desaparece sin rastro es una decisión que nadie puede revisar después (ADR-0066, entrega iii).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClosePurchaseOrderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "El pedido, ya cerrado.",
             "content": {
               "application/json": {
                 "schema": {

@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, Package, Plus, Trash2, Truck, User } from "lucide-react";
+import { ArrowLeft, Check, ClipboardList, Package, Plus, Trash2, Truck, User } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { errorDePersona } from "../../lib.js";
 import { esCero } from "../../components/decimal-compare.js";
@@ -13,12 +13,12 @@ import { useToast } from "../../ui/toast.js";
 import {
   EntityPicker,
   FormField,
-  MoneyInput,
   importeValido,
   type EntityOption,
 } from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import { fechaLocal } from "../../fechas.js";
+import { MoneyDualInput } from "../../components/MoneyDualInput.js";
 import { TARJETAS_FACTURA } from "../../components/capa-fiscal/textos.js";
 
 /**
@@ -34,7 +34,7 @@ import { TARJETAS_FACTURA } from "../../components/capa-fiscal/textos.js";
  * conexión que va y viene no crean dos llegadas.
  */
 
-type Paso = "origen" | "que" | "factura" | "pago" | "deposito" | "confirmar";
+type Paso = "pedido" | "origen" | "que" | "factura" | "pago" | "deposito" | "confirmar";
 type Origen = "proveedor" | "propia";
 type EstadoFactura = "present" | "pending" | "none";
 
@@ -69,9 +69,36 @@ interface Linea {
   lleva_vencimiento: boolean;
   cantidad: string;
   costo: string;
+  /** La moneda en la que se ESCRIBIÓ el costo; puede no ser la del documento. */
+  monedaCosto: string;
   por: "unidad" | "total";
   paquete: string;
   vence: string;
+  /**
+   * La línea del pedido que esta satisface. Si la trae, el costo lo pone el PEDIDO y esta
+   * pantalla no enseña dinero: quien recibe cuenta bultos, no valora mercancía (ADR-0066 §7).
+   */
+  ordenLineaId: string | null;
+}
+
+/** Un pedido esperando mercancía, tal como lo lista «Por recibir». */
+interface PedidoPendiente {
+  id: string;
+  order_number: number;
+  supplier_id: string;
+  supplier_name: string;
+  transaction_currency: string;
+  expected_at: string | null;
+  age_days: number;
+}
+interface LineaDePedido {
+  id: string;
+  product_id: string;
+  description: string;
+}
+interface AvanceDePedido {
+  order_line_id: string;
+  quantity_pending: string;
 }
 
 const CANT_RE = /^\d{1,16}(\.\d{1,8})?$/;
@@ -83,10 +110,17 @@ const lineaVacia = (): Linea => ({
   lleva_vencimiento: false,
   cantidad: "",
   costo: "",
+  monedaCosto: "VES",
   por: "unidad",
   paquete: "",
   vence: "",
+  ordenLineaId: null,
 });
+
+/** «8.00000000» es como lo guarda la base; «8» es como se cuenta. */
+function sinCerosSobrantes(q: string): string {
+  return q.includes(".") ? q.replace(/\.?0+$/, "") : q;
+}
 
 /** El día de hoy tal como lo escribe el navegador, que es el que la persona ve. */
 function hoyLocal(): string {
@@ -105,8 +139,12 @@ export function LlegoMercancia(): React.JSX.Element {
   const toast = useToast();
   const qc = useQueryClient();
 
+  const [params] = useSearchParams();
+  const pedidoDeLaUrl = params.get("pedido");
+
   const [clave] = useState(() => crypto.randomUUID());
-  const [paso, setPaso] = useState<Paso>("origen");
+  const [paso, setPaso] = useState<Paso>("pedido");
+  const [pedido, setPedido] = useState<PedidoPendiente | null>(null);
   const [origen, setOrigen] = useState<Origen | null>(null);
   const [proveedor, setProveedor] = useState<EntityOption | null>(null);
   const [creandoProveedor, setCreandoProveedor] = useState(false);
@@ -126,6 +164,23 @@ export function LlegoMercancia(): React.JSX.Element {
 
   const puedeFacturar = puede("purchase.invoice.register");
   const puedePagar = puede("purchase.payment.register");
+
+  /**
+   * Los pedidos que esperan mercancía. Si no hay ninguno —o si quien entra no puede verlos— el
+   * paso 0 se salta solo: una pregunta que siempre tiene la misma respuesta no es una pregunta.
+   */
+  const pendientes = useQuery({
+    queryKey: ["pedidos-pendientes", empresa.id],
+    staleTime: 30_000,
+    retry: false,
+    queryFn: () => llamar<{ items: PedidoPendiente[] }>("/v1/purchase-orders?pending=1"),
+  });
+  const hayPedidos = (pendientes.data?.items.length ?? 0) > 0;
+  useEffect(() => {
+    if (paso !== "pedido" || pedidoDeLaUrl !== null) return;
+    if (pendientes.isPending) return;
+    if (!hayPedidos) setPaso("origen");
+  }, [paso, pedidoDeLaUrl, pendientes.isPending, hayPedidos]);
 
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],
@@ -191,6 +246,65 @@ export function LlegoMercancia(): React.JSX.Element {
       ),
   });
 
+  /**
+   * ABRIR UN PEDIDO: trae lo que falta por recibir y arma las líneas ya contadas. El precio
+   * acordado NO viaja hasta aquí a propósito — lo lee el servidor de la línea del pedido, que es
+   * lo que hace que la recepción a ciegas sea de verdad y no una convención de la pantalla.
+   */
+  const abrirPedido = useMutation({
+    mutationFn: async (p: PedidoPendiente) => {
+      const d = await llamar<{ lines: LineaDePedido[]; progress: AvanceDePedido[] }>(
+        `/v1/purchase-orders/${p.id}`,
+      );
+      const falta = new Map(d.progress.map((x) => [x.order_line_id, x.quantity_pending]));
+      const pendientesDeLinea = d.lines.filter((l) => !esCero(falta.get(l.id) ?? "0"));
+      const fichasDeLinea = await Promise.all(
+        pendientesDeLinea.map((l) => llamar<ProductoFila>(`/v1/products/${l.product_id}`)),
+      );
+      return { p, lineas: pendientesDeLinea, falta, fichasDeLinea };
+    },
+    onSuccess: ({ p, lineas: ls, falta, fichasDeLinea }) => {
+      setFichas((prev) => {
+        const sig = { ...prev };
+        for (const f of fichasDeLinea) sig[f.id] = f;
+        return sig;
+      });
+      setPedido(p);
+      setOrigen("proveedor");
+      setProveedor({ id: p.supplier_id, label: p.supplier_name });
+      setMoneda(p.transaction_currency);
+      setLineas(
+        ls.map((l, i) => {
+          const f = fichasDeLinea[i];
+          return {
+            ...lineaVacia(),
+            producto: { id: l.product_id, label: f?.name ?? l.description },
+            compuesto: f?.is_composed ?? false,
+            lleva_paquete: f?.tracks_lots ?? false,
+            lleva_vencimiento: f?.tracks_expiry ?? false,
+            cantidad: sinCerosSobrantes(falta.get(l.id) ?? "0"),
+            ordenLineaId: l.id,
+          };
+        }),
+      );
+      setPaso("que");
+    },
+    onError: (e) => toast.error("No se pudo abrir el pedido", errorDePersona(e)),
+  });
+
+  /**
+   * El pedido llega por la URL cuando se entra desde «Por recibir» → «Ya llegó». Se abre una
+   * sola vez: `abrirPedido` no es idempotente para la pantalla —repone las líneas— y reponerlas
+   * encima de lo que la persona ya contó le borraría el trabajo.
+   */
+  const abrirDesdeUrl = abrirPedido.mutate;
+  const yaSeIntento = abrirPedido.isPending || abrirPedido.isSuccess || abrirPedido.isError;
+  useEffect(() => {
+    if (pedidoDeLaUrl === null || yaSeIntento) return;
+    const p = pendientes.data?.items.find((x) => x.id === pedidoDeLaUrl);
+    if (p !== undefined) abrirDesdeUrl(p);
+  }, [pedidoDeLaUrl, yaSeIntento, pendientes.data, abrirDesdeUrl]);
+
   const crearProveedor = useMutation({
     mutationFn: () =>
       llamar<{ id: string; legal_name: string }>("/v1/suppliers", {
@@ -217,7 +331,8 @@ export function LlegoMercancia(): React.JSX.Element {
       !l.compuesto &&
       CANT_RE.test(l.cantidad.trim().replace(",", ".")) &&
       !esCero(l.cantidad) &&
-      importeValido(l.costo.trim().replace(",", ".")) &&
+      // A ciegas no hay costo que validar: lo pone el pedido.
+      (l.ordenLineaId !== null || importeValido(l.costo.trim().replace(",", "."))) &&
       (!l.lleva_paquete || l.paquete.trim() !== "") &&
       (!l.lleva_vencimiento || l.vence !== ""),
   );
@@ -245,6 +360,7 @@ export function LlegoMercancia(): React.JSX.Element {
           warehouse_id: depositoElegido,
           currency: moneda,
           ...(fecha === hoyLocal() ? {} : { arrived_on: fecha }),
+          ...(pedido === null ? {} : { purchase_order_id: pedido.id }),
           ...(origen === "propia"
             ? {}
             : {
@@ -261,10 +377,19 @@ export function LlegoMercancia(): React.JSX.Element {
           lines: lineasValidas.map((l) => ({
             product_id: l.producto!.id,
             quantity: l.cantidad.trim().replace(",", "."),
-            // Uno de los dos, nunca los dos: el otro lo calcula el servidor.
-            ...(l.por === "unidad"
-              ? { unit_amount: l.costo.trim().replace(",", ".") }
-              : { amount: l.costo.trim().replace(",", ".") }),
+            // A CIEGAS: la línea del pedido va, el costo NO. El servidor lo lee del pedido y el
+            // contrato rechaza que viaje un importe con ella.
+            ...(l.ordenLineaId !== null
+              ? { purchase_order_line_id: l.ordenLineaId }
+              : {
+                  // Uno de los dos, nunca los dos: el otro lo calcula el servidor.
+                  ...(l.por === "unidad"
+                    ? { unit_amount: l.costo.trim().replace(",", ".") }
+                    : { amount: l.costo.trim().replace(",", ".") }),
+                  // En qué moneda lo escribió. Si no es la del documento, el servidor convierte
+                  // con la tasa del día del hecho y guarda las dos cosas (migración 71).
+                  ...(l.monedaCosto === moneda ? {} : { capture_currency: l.monedaCosto }),
+                }),
             ...(l.paquete.trim() === "" ? {} : { lot_code: l.paquete.trim() }),
             ...(l.vence === "" ? {} : { lot_expires_at: l.vence }),
           })),
@@ -288,7 +413,12 @@ export function LlegoMercancia(): React.JSX.Element {
 
   // ── Navegación ────────────────────────────────────────────────────────────
   const pasos: Paso[] = useMemo(() => {
-    const p: Paso[] = ["origen", "que"];
+    const p: Paso[] = [];
+    if (hayPedidos || pedido !== null) p.push("pedido");
+    // Venir de un pedido YA dice de quién vino: preguntarlo otra vez sería pedir dos veces lo
+    // mismo, que es justo lo que ADR-0066 vino a quitar.
+    if (pedido === null) p.push("origen");
+    p.push("que");
     if (origen === "proveedor") {
       p.push("factura");
       if (puedePagar && estadoFactura !== "pending") p.push("pago");
@@ -296,7 +426,7 @@ export function LlegoMercancia(): React.JSX.Element {
     if (activos.length > 1) p.push("deposito");
     p.push("confirmar");
     return p;
-  }, [origen, estadoFactura, puedePagar, activos.length]);
+  }, [origen, estadoFactura, puedePagar, activos.length, hayPedidos, pedido]);
   const indice = pasos.indexOf(paso);
   const avanzar = (): void => {
     const sig = pasos[indice + 1];
@@ -357,6 +487,60 @@ export function LlegoMercancia(): React.JSX.Element {
         </div>
       </div>
 
+      {/* ── Paso 0: ¿viene de un pedido? ────────────────────────────────── */}
+      {paso === "pedido" && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-medium">¿Viene de uno de estos pedidos?</h2>
+          {pendientes.isPending || abrirPedido.isPending ? (
+            <p className="text-[0.9rem] text-muted-foreground">Buscando pedidos…</p>
+          ) : (
+            <div className="grid gap-3">
+              {(pendientes.data?.items ?? []).map((p) => (
+                <Card
+                  key={p.id}
+                  role="button"
+                  tabIndex={0}
+                  className="cursor-pointer p-4 hover:border-accent"
+                  onClick={() => abrirPedido.mutate(p)}
+                  onKeyDown={(e) => e.key === "Enter" && abrirPedido.mutate(p)}
+                >
+                  <div className="flex items-start gap-3">
+                    <ClipboardList className="mt-0.5 size-5 shrink-0 text-accent" />
+                    <div>
+                      <p className="font-medium">
+                        Pedido n.º {p.order_number} · {p.supplier_name}
+                      </p>
+                      <p className="text-[0.85rem] text-muted-foreground">
+                        {p.age_days === 0
+                          ? "Pedido hoy"
+                          : p.age_days === 1
+                            ? "Pedido ayer"
+                            : `Pedido hace ${p.age_days} días`}
+                        {p.expected_at === null
+                          ? ""
+                          : ` · esperado el ${fechaLocal(p.expected_at)}`}
+                      </p>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+              <Card
+                role="button"
+                tabIndex={0}
+                className="cursor-pointer p-4 hover:border-accent"
+                onClick={() => setPaso("origen")}
+                onKeyDown={(e) => e.key === "Enter" && setPaso("origen")}
+              >
+                <p className="font-medium">No, llegó sin pedido</p>
+                <p className="text-[0.85rem] text-muted-foreground">
+                  La compraste en el momento, o ya era tuya.
+                </p>
+              </Card>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Paso 1: ¿de quién vino? ─────────────────────────────────────── */}
       {paso === "origen" && (
         <div className="space-y-3">
@@ -413,7 +597,20 @@ export function LlegoMercancia(): React.JSX.Element {
         <div className="space-y-4">
           <h2 className="text-lg font-medium">¿Qué llegó?</h2>
 
-          {origen === "proveedor" && (
+          {pedido !== null && (
+            <div className="rounded-md border border-border bg-muted/40 p-3 text-[0.9rem]">
+              <p>
+                Del pedido n.º <strong>{pedido.order_number}</strong> a{" "}
+                <strong>{pedido.supplier_name}</strong>.
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                Cuenta lo que llegó de verdad. Si vino menos, corrige la cantidad: lo que falte
+                sigue esperando. Lo que costó ya está en el pedido, no hace falta escribirlo.
+              </p>
+            </div>
+          )}
+
+          {origen === "proveedor" && pedido === null && (
             <div className="space-y-2">
               {!creandoProveedor ? (
                 <div className="flex items-end gap-2">
@@ -479,30 +676,38 @@ export function LlegoMercancia(): React.JSX.Element {
                     <label htmlFor={`prod-${l.id}`} className="sr-only">
                       Producto de la línea {i + 1}
                     </label>
-                    <EntityPicker
-                      id={`prod-${l.id}`}
-                      value={l.producto}
-                      onChange={(v) =>
-                        setLineas((prev) =>
-                          prev.map((x) =>
-                            x.id === l.id
-                              ? {
-                                  ...x,
-                                  producto: v,
-                                  compuesto:
-                                    v === null ? false : (fichas[v.id]?.is_composed ?? false),
-                                  lleva_paquete:
-                                    v === null ? false : (fichas[v.id]?.tracks_lots ?? false),
-                                  lleva_vencimiento:
-                                    v === null ? false : (fichas[v.id]?.tracks_expiry ?? false),
-                                }
-                              : x,
-                          ),
-                        )
-                      }
-                      buscar={buscarProducto}
-                      placeholder="Busca el producto…"
-                    />
+                    {l.ordenLineaId !== null ? (
+                      // Del pedido: el producto no se cambia. Cambiarlo sería recibir otra cosa,
+                      // y eso es otra llegada, no una corrección de esta.
+                      <p id={`prod-${l.id}`} className="flex min-h-9 items-center px-1 font-medium">
+                        {l.producto?.label}
+                      </p>
+                    ) : (
+                      <EntityPicker
+                        id={`prod-${l.id}`}
+                        value={l.producto}
+                        onChange={(v) =>
+                          setLineas((prev) =>
+                            prev.map((x) =>
+                              x.id === l.id
+                                ? {
+                                    ...x,
+                                    producto: v,
+                                    compuesto:
+                                      v === null ? false : (fichas[v.id]?.is_composed ?? false),
+                                    lleva_paquete:
+                                      v === null ? false : (fichas[v.id]?.tracks_lots ?? false),
+                                    lleva_vencimiento:
+                                      v === null ? false : (fichas[v.id]?.tracks_expiry ?? false),
+                                  }
+                                : x,
+                            ),
+                          )
+                        }
+                        buscar={buscarProducto}
+                        placeholder="Busca el producto…"
+                      />
+                    )}
                   </div>
                   <Input
                     inputMode="decimal"
@@ -534,44 +739,63 @@ export function LlegoMercancia(): React.JSX.Element {
                   </p>
                 )}
 
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <FormField label="El costo que vas a poner es">
-                    {(p) => (
-                      <SimpleSelect
-                        id={p.id}
-                        value={l.por}
-                        onValueChange={(v) =>
-                          setLineas((prev) =>
-                            prev.map((x) =>
-                              x.id === l.id ? { ...x, por: v === "total" ? "total" : "unidad" } : x,
-                            ),
-                          )
-                        }
-                        options={[
-                          { value: "unidad", label: "De cada uno (100 por bolsa)" },
-                          { value: "total", label: "El total de la llegada (1.000 por 10 bolsas)" },
-                        ]}
-                      />
-                    )}
-                  </FormField>
-                  <FormField
-                    label={l.por === "unidad" ? "¿Cuánto costó cada uno?" : "¿Cuánto costó todo?"}
-                    required
-                  >
-                    {(p) => (
-                      <MoneyInput
-                        id={p.id}
-                        value={l.costo}
-                        onChange={(v) =>
-                          setLineas((prev) =>
-                            prev.map((x) => (x.id === l.id ? { ...x, costo: v } : x)),
-                          )
-                        }
-                        currency={moneda === "VES" ? "Bs." : moneda}
-                      />
-                    )}
-                  </FormField>
-                </div>
+                {/* A CIEGAS: la línea viene de un pedido y aquí no hay dinero que escribir. No
+                    es que esté escondido —no se manda, y el servidor lo rechazaría—: quien
+                    recibe cuenta bultos. */}
+                {l.ordenLineaId !== null ? (
+                  <p className="text-[0.85rem] text-muted-foreground">
+                    Lo que costó lo pone el pedido.
+                  </p>
+                ) : (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <FormField label="El costo que vas a poner es">
+                      {(p) => (
+                        <SimpleSelect
+                          id={p.id}
+                          value={l.por}
+                          onValueChange={(v) =>
+                            setLineas((prev) =>
+                              prev.map((x) =>
+                                x.id === l.id
+                                  ? { ...x, por: v === "total" ? "total" : "unidad" }
+                                  : x,
+                              ),
+                            )
+                          }
+                          options={[
+                            { value: "unidad", label: "De cada uno (100 por bolsa)" },
+                            {
+                              value: "total",
+                              label: "El total de la llegada (1.000 por 10 bolsas)",
+                            },
+                          ]}
+                        />
+                      )}
+                    </FormField>
+                    <FormField
+                      label={l.por === "unidad" ? "¿Cuánto costó cada uno?" : "¿Cuánto costó todo?"}
+                      required
+                      hint="Escribe en bolívares o en dólares: el otro lo llena el sistema."
+                    >
+                      {() => (
+                        <MoneyDualInput
+                          id={`costo-${l.id}`}
+                          fecha={fecha}
+                          valor={{ amount: l.costo, currency: l.monedaCosto }}
+                          onChange={(v) =>
+                            setLineas((prev) =>
+                              prev.map((x) =>
+                                x.id === l.id
+                                  ? { ...x, costo: v.amount, monedaCosto: v.currency }
+                                  : x,
+                              ),
+                            )
+                          }
+                        />
+                      )}
+                    </FormField>
+                  </div>
+                )}
 
                 {(l.lleva_paquete || l.lleva_vencimiento) && (
                   <div className="grid gap-2 sm:grid-cols-2">
@@ -618,29 +842,41 @@ export function LlegoMercancia(): React.JSX.Element {
                 )}
               </div>
             ))}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLineas((prev) => [...prev, lineaVacia()])}
-            >
-              <Plus /> Otro producto
-            </Button>
+            {pedido === null ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setLineas((prev) => [...prev, lineaVacia()])}
+              >
+                <Plus /> Otro producto
+              </Button>
+            ) : (
+              <p className="text-[0.85rem] text-muted-foreground">
+                ¿Te trajo algo que no estaba en el pedido? Eso entra aparte, como una llegada sin
+                pedido.
+              </p>
+            )}
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2">
-            <FormField label="Moneda de lo que pagaste" hint="La conversión la hace el sistema.">
-              {(p) => (
-                <SimpleSelect
-                  id={p.id}
-                  value={moneda}
-                  onValueChange={setMoneda}
-                  options={[
-                    { value: "VES", label: "Bolívares (Bs.)" },
-                    { value: "USD", label: "Dólares (USD)" },
-                  ]}
-                />
-              )}
-            </FormField>
+            {pedido === null && (
+              <FormField
+                label="¿En qué moneda viene el documento?"
+                hint="La de la factura del proveedor. El costo lo puedes escribir en cualquiera."
+              >
+                {(p) => (
+                  <SimpleSelect
+                    id={p.id}
+                    value={moneda}
+                    onValueChange={setMoneda}
+                    options={[
+                      { value: "VES", label: "Bolívares (Bs.)" },
+                      { value: "USD", label: "Dólares (USD)" },
+                    ]}
+                  />
+                )}
+              </FormField>
+            )}
             <FormField label="¿Qué día llegó?" hint="Hoy, o hasta dos días atrás.">
               {(p) => (
                 <Input
@@ -832,8 +1068,10 @@ export function LlegoMercancia(): React.JSX.Element {
             {origen === "proveedor" && (
               <>
                 <p>
-                  Se la compraste a <strong>{proveedor?.label}</strong>.
+                  Se la compraste a <strong>{proveedor?.label}</strong>
+                  {pedido === null ? "" : `, del pedido n.º ${pedido.order_number}`}.
                 </p>
+                {pedido !== null && <p>Lo que no haya llegado sigue esperando en «Por recibir».</p>}
                 {estadoFactura === "present" && (
                   <p>Con su factura: entra al libro de compras y da crédito fiscal.</p>
                 )}

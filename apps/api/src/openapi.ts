@@ -97,6 +97,7 @@ import {
   ListSuppliersResponse,
   CreatePurchaseOrderRequest,
   PurchaseOrderResponse,
+  ClosePurchaseOrderRequest,
   ListPurchaseOrdersResponse,
   ReceiveGoodsRequest,
   GoodsReceiptResponse,
@@ -2075,7 +2076,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/exchange-rates/preview",
-    summary: "Vista previa de conversión a la tasa de HOY (aritmética del servidor)",
+    summary: "Vista previa de conversión a la tasa del día del hecho (aritmética del servidor)",
     description:
       "El número que las pantallas enseñan al lado de un monto en la otra moneda: entre el " +
       "ancla (USD) y la funcional, con la tasa vigente del día Caracas y su fuente. El " +
@@ -2083,7 +2084,11 @@ export function buildOpenApiDocument(): object {
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
-      query: z.object({ amount: z.string(), currency: z.string().optional() }),
+      query: z.object({
+        amount: z.string(),
+        currency: z.string().optional(),
+        date: z.string().optional(),
+      }),
     },
     responses: {
       200: okJson(
@@ -2265,11 +2270,33 @@ export function buildOpenApiDocument(): object {
       query: z.object({
         status: z.string().optional(),
         supplier_id: z.string().uuid().optional(),
+        /** «1» = solo lo que sigue esperando mercancía: la bandeja «Por recibir» (ADR-0066). */
+        pending: z.string().optional(),
         page: z.coerce.number().int().min(1).optional(),
         per_page: z.coerce.number().int().min(1).max(100).optional(),
       }),
     },
     responses: { 200: okJson(listaOrdenes, "Página de órdenes."), ...erroresComunes },
+  });
+  const cerrarPedido = registry.register("ClosePurchaseOrderRequest", ClosePurchaseOrderRequest);
+  registry.registerPath({
+    method: "post",
+    path: "/v1/purchase-orders/{id}/close",
+    summary: "«No va a llegar»: cerrar un pedido con su motivo (purchase.order.manage)",
+    description:
+      "El pedido sale de «Por recibir» y deja escrito POR QUÉ. Lo recibido a medias no se toca: " +
+      "eso ya entró al kardex con su costo. No hay borrado — un pedido que desaparece sin rastro " +
+      "es una decisión que nadie puede revisar después (ADR-0066, entrega iii).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: cerrarPedido } } },
+    },
+    responses: {
+      200: okJson(ordenCompra, "El pedido, ya cerrado."),
+      ...erroresComunes,
+    },
   });
   registry.registerPath({
     method: "get",
