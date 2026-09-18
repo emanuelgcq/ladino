@@ -141,6 +141,12 @@ contable correspondiente en el preset `ve_basico`. El vocabulario lo asevera el 
   la deuda y revierte lo que la factura cargó —inventario y crédito fiscal—, y el documento entra
   al libro de compras en negativo (LIVA arts. 56 y 37; Reglamento art. 75 lit. a).
 
+- `ap.order_closed` — **el pedido no va a llegar** (ADR-0066, entrega iii). Solo va al audit: no
+  tiene plantilla contable ni evento de outbox, porque cerrar un pedido no mueve dinero ni
+  mercancía — un pedido nunca los movió. Lo que sí deja es constancia de una decisión: el payload
+  lleva `{reason, previous_status}`, y sin el motivo el cierre no se admite. Cerrar **no es
+  borrar**: el pedido y lo que se recibiera de él se quedan donde están.
+
 Una nota de crédito recibida **no** se nombra como la emitida (`fiscal.credit_note.issued`): la
 emite el proveedor, no nosotros, y confundirlas mezclaría débito con crédito fiscal.
 

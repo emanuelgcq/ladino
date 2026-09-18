@@ -250,19 +250,38 @@ impiden afirmar.
   y el selector unidad/total ya construido · menú, migas, guardia, Ctrl+K y aterrizaje con smoke
   por rol · pestaña «Falta la factura» · el control de recepciones sin factura · el E2E del ciclo
   completo de la cuenta puente, que hoy no existe.
-- **(ii)** `MoneyDualInput` · migración 70 (`capture_currency` / `capture_mode`, nulos para el
+- **(ii)** `MoneyDualInput` · migración **71** (`capture_currency` / `capture_mode`, nulos para el
   histórico porque `inventory_moves` es append-only y no admite backfill) · unidad/total en líneas
   de compra y recepción · `date` en la vista previa de conversión · flete.
 - **(iii)** Pedidos: hacer un pedido, «Por recibir», el paso 0, la recepción a ciegas, «llegó solo
-  una parte», cerrar un pedido con motivo · migración 71 (los otros dos controles).
+  una parte», cerrar un pedido con motivo · migración **72** (los otros dos controles).
+
+Los números se corrigieron al escribirlas: la migración **70** (`receipts_pending_invoice`) nació
+dentro de la entrega (i) para dar de comer a la pestaña «Falta la factura» y al control de los
+treinta días, y corrió el resto una posición. Se anota aquí porque un número de migración
+equivocado en un ADR es una pista falsa dentro de seis meses.
+
+**La ceguera se cierra en el contrato, no en la pantalla.** Una línea de llegada que trae
+`purchase_order_line_id` **no admite** `unit_amount` ni `amount`: el Zod la rechaza con 422 y el
+servidor lee el precio acordado de la línea del pedido. Esconder los campos habría bastado para
+que la pantalla se viera bien y para que cualquier cliente —el móvil, un script, el navegador de
+alguien con la consola abierta— siguiera poniendo el precio que quisiera. Si el proveedor cobró
+otra cosa, eso lo dice su factura, que es donde vive el cruce a tres vías (CLAUDE.md §2: ausencia
+de mecanismo no es prohibición).
+
+**El «demo» de `/dev/components` no se hizo.** Estaba previsto para enseñar el `MoneyDualInput`
+aislado; se cambió por usarlo en la puerta y comprobarlo en un navegador de verdad, con la tasa
+del día y la propagación al kardex y al mayor detrás. Un componente que se ve bien en una página
+de muestra no dice nada de lo que guarda.
 
 ## Reversibilidad
 
 - **Migración 69** — el DDL se revierte, pero **los documentos ya marcados sin soporte no se pueden
   representar sin la columna**: revertir con datos vivos los convertiría en facturas normales que
   entrarían al libro. Es de ida.
-- **Migración 70** — reversible por DDL; sin backfill posible, y lo capturado se perdería.
-- **Migración 71** — totalmente reversible (`drop function`).
+- **Migración 70** — totalmente reversible (`drop function`): es una lectura.
+- **Migración 71** — reversible por DDL; sin backfill posible, y lo capturado se perdería.
+- **Migración 72** — totalmente reversible (`drop function`).
 - **Contrato** — `origin` obligatorio y la salida de `unit_cost` del ajuste van en la **ventana de
   deploy del dueño**, junto al rebuild de la web (R-43: una migración aplicada antes que su cliente
   deja trabajo a medias en producción).

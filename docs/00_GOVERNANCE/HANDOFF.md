@@ -1,3 +1,139 @@
+# Handoff — 2026-09-18 (28ª entrega) — El dinero se escribe una vez, y el pedido llega solo (entregas ii y iii de ADR-0066)
+
+## Qué pasaba
+
+La entrega (i) dejó una puerta única, pero con dos costuras a la vista:
+
+1. **El costo se escribía en la moneda del documento y punto.** Quien compra en dólares y factura
+   en bolívares —que en Venezuela es media calle— tenía que convertir de cabeza antes de escribir,
+   y lo que quedaba guardado era el resultado de esa cuenta, no lo que le dijeron. Seis meses
+   después, nadie puede saber si «8.485,46» fue un precio o una conversión.
+2. **Pedir y recibir eran el mismo acto.** No había forma de encargar mercancía que todavía no ha
+   llegado, así que quien recibía tenía que saberse el precio acordado o inventárselo, y no había
+   ningún sitio donde mirar qué estaba esperando el negocio. El cruce a tres vías existía en la
+   base desde hacía meses (`purchase_order_progress`) y ninguna pantalla lo enseñaba.
+
+## Qué se cambió
+
+**Migración 71 — lo que la persona escribió.** `capture_currency` y `capture_mode` en
+`inventory_moves`, `goods_receipt_lines` y `supplier_invoice_lines`: la moneda en la que se
+escribió el importe y si fue por unidad o por el total. Vocabulario cerrado por `CHECK`
+(`'unit'`/`'total'`), FK a `currencies`, **nulos para el histórico y sin backfill posible** —
+`inventory_moves` es append-only y adivinar qué escribió alguien en marzo sería inventar un dato.
+
+**Migración 72 — los dos controles que faltaban.** `duplicate_stock_in_gaps` (la misma cantidad
+del mismo producto, el mismo día y depósito, entrada dos veces por caminos distintos: una con
+documento y otra sin él) y `backdated_stock_in`, que es un **REPORTE y no un invariante**, y va
+escrito así en la migración para que nadie lo «ascienda»: el promedio móvil se calcula en orden de
+inserción, una llegada fechada atrás no corrige el costo de lo ya vendido y ninguna suma lo ve.
+Su respuesta correcta no es cero, es «estos, y ya están explicados».
+
+**`MoneyDualInput` — el dinero se escribe una vez.** Dos campos, bolívares y dólares: se escribe
+en el que se tenga delante y **el otro lo llena el servidor**, con su tasa, su fuente y su día a la
+vista. El segundo campo es informativo y no bloquea nada, porque la conversión que vale ocurre al
+guardar, dentro de la transacción. De la pantalla sale solo lo que la persona escribió —importe y
+moneda—, nunca una tasa ni un convertido: la regla 7 prohíbe la aritmética monetaria en el cliente
+incluso para previsualizar. Si no hay tasa de ese día, se dice y no se inventa.
+
+**El flete entra por `applyLandedCost`.** La puerta acepta el transporte de la llegada y lo
+reparte por valor: sube el costo del inventario, no el gasto del mes.
+
+**Hacer un pedido.** Diálogo nuevo en «Compras y gastos» (permiso `purchase.order.manage`): es el
+único formulario de compras que sigue pidiendo precios, y por una razón — un pedido es justo el
+sitio donde se acuerda cuánto va a costar. No mueve inventario ni deuda.
+
+**«Por recibir».** Bandeja nueva en los dos Inventarios (mostrador y administración) con dos
+verbos y ni uno más: **Ya llegó** abre la puerta con el pedido cargado, y **No va a llegar** lo
+cierra con su motivo escrito (`ap.order_closed`, solo al audit: cerrar un pedido no mueve dinero
+ni mercancía). Sin motivo, el botón de cerrar está apagado. Cerrar **no es borrar**: el pedido y
+lo que se recibiera de él se quedan donde están.
+
+**El paso 0 de la puerta.** Con pedidos esperando, la primera pregunta es «¿viene de uno de estos
+pedidos?», con su salida para lo que llegó sin pedido. Sin pedidos abiertos el paso se salta solo:
+una pregunta que siempre tiene la misma respuesta no es una pregunta.
+
+**Recepción a ciegas, cerrada en el CONTRATO.** Una línea que trae `purchase_order_line_id` **no
+admite** `unit_amount` ni `amount`: Zod la rechaza con 422 y el servidor lee el precio acordado de
+la línea del pedido. Esconder los campos habría bastado para que la pantalla se viera bien y para
+que cualquier otro cliente siguiera poniendo el precio que quisiera (CLAUDE.md §2). Quien recibe
+cuenta bultos; si el proveedor cobró otra cosa, lo dice su factura.
+
+**Llegó solo una parte.** Se corrige la cantidad y lo que falte sigue esperando: el pedido
+permanece en la bandeja, `purchase_order_progress` enseña pedido/recibido/pendiente, y la cuenta
+puente queda debiendo exactamente lo recibido.
+
+## Un defecto que encontró el QA de pantalla, no los tests
+
+`GET /v1/purchase-orders?pending=1` filtraba **solo** por el estado DERIVADO de las recepciones
+(`purchase_order_status`), que a propósito ignora lo cerrado a mano. Consecuencia: un pedido
+recién cerrado —con su motivo escrito y su aviso en pantalla— **seguía en la bandeja**. Lo cazó el
+E2E del ciclo completo al comprobar que salía de «Por recibir»; ningún test de compras lo miraba,
+porque ninguno cerraba un pedido y volvía a listar. El filtro ahora exige las dos condiciones: que
+el pedido siga vivo (la columna) y que le falte mercancía (las recepciones).
+
+## Pruebas
+
+- **pgTAP 071** (4) y **072** (4).
+- **`e2e-llegada` pasa de 11 a 17**: se suman el costo escrito por total y en dólares sobre una
+  factura en bolívares (con lo escrito Y lo derivado guardados), la moneda que no cruza con el
+  ancla rechazada en vez de inventarse una tasa, el flete que sube el valor del inventario, **el
+  ciclo entero del pedido** (bandeja → recepción a ciegas y parcial → diferencia visible → factura
+  → cuenta puente a cero → cierre con motivo → no se cierra dos veces) y la prueba de que a ciegas
+  no se admiten importes ni sin pedido se pueden omitir.
+- Suite de la API completa: **399 tests en verde**.
+
+## QA de pantalla, en un navegador de verdad
+
+Tres guiones de Playwright contra el stack local, **49 comprobaciones, 0 hallazgos**, con la
+propagación verificada **contra la base, no contra la pantalla**: kardex, mayor, libro de compras,
+deuda con el proveedor y los invariantes que cruzan módulos.
+
+| Guion | Qué recorre | Comprobaciones |
+|---|---|---|
+| `20-llegada` | pedido → «Por recibir» → recepción a ciegas y parcial → propagación → cierre con motivo | 26 |
+| `21-dual` | el costo escrito en dólares sobre una compra en bolívares, en las dos direcciones | 15 |
+| `22-paso0` | el paso 0 con pedidos esperando, decir que no, volver atrás y elegir uno | 8 |
+
+Capturas en `docs/08_UX/capturas-llego-mercancia/` (9 a 14).
+
+**Dos cosas que solo se ven en pantalla, y que ningún test veía:**
+
+1. **La tasa se estaba pintando cruda.** La primera versión de `MoneyDualInput` enseñaba
+   `{vista.data.source}` — «BCV oficial vía DolarAPI (2026-09-15T00:00:00-04:00)»— debajo del
+   campo. Lo cazó `tasa.test.ts`, que existe desde que el dueño decidió (2026-09-16) que una tasa
+   se lee «Tasa BCV: 848,5458» y nada más. Ahora pasa por `tasaLimpia()`, que además distingue una
+   tasa tecleada de una del BCV. **El gate hizo su trabajo sobre código nuevo que no lo esperaba.**
+2. **La demo sembraba un proveedor al que no se le podía comprar.** `seed-demo.sql` cargaba la
+   regla general de IVA (`taxpayer_type` nulo) solo para **ventas**, y su proveedor «Alimentos
+   Polares del Centro» es contribuyente **especial**: comprarle con factura moría con LAD50, «no
+   hay regla tributaria vigente… contraparte especial». Es la respuesta **correcta** del sistema
+   —regla 8: no se inventa una alícuota— ante un catálogo de demostración incompleto. Arreglado en
+   la siembra, que ahora carga la regla general para las dos puntas. Cambio de un script de
+   desarrollo; no toca ninguna regla de producción.
+
+**Hallazgo del entorno, no del producto:** `pnpm demo:seed` deja la empresa de demostración con
+**seis huecos de `inventory_coverage_gaps`** y una diferencia kardex↔mayor de 174.100 — la siembra
+mete la existencia inicial a pelo (`seed-demo-*`), sin asiento ni cola. No es de esta entrega: las
+cifras son idénticas antes y después de cada operación, y por eso el QA asevera «no empeora» y el
+cero absoluto lo asevera el E2E sobre fixture limpia. Arreglarlo es hacer que la siembra entre por
+la puerta, `POST /v1/arrivals`, que es justo lo que ADR-0066 vino a decir.
+
+## Lo que queda abierto
+
+- **P-29 sigue siendo del asesor:** el IGTF al pagarle a un proveedor en divisas. La puerta **no
+  asevera nada** al respecto y no percibe IGTF en el pago al proveedor; está en
+  `PENDIENTES_ASESOR` como `VALIDAR-TRIBUTARIO`.
+- **La devolución al proveedor** sigue fuera de alcance, como se acordó.
+- **Las migraciones 71 y 72 y los cambios de contrato esperan la ventana de deploy** con el
+  rebuild (R-43). Lo de la entrega (i) —migraciones 69 y 70, `origin` obligatorio— sigue esperando
+  la misma ventana: van juntas.
+
+HOMOLOGATION_IMPACT = **NO** para estas dos entregas (nada cambia en la emisión ni en los libros;
+71 y 72 son columnas de captura y funciones de lectura). El **YES** de ADR-0066 sigue siendo el de
+la entrega (i).
+
+---
+
 # Handoff — 2026-09-18 (27ª entrega) — La mercancía entra por una puerta (entrega i de ADR-0066)
 
 ## Qué pasaba

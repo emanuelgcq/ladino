@@ -775,3 +775,34 @@ cambio se hizo con su prueba delante.
 
 **Deja de ser aceptable:** si alguien añade una entrada nueva ANTES de esta en el grupo Operación
 sin mirar el test: el aterrizaje se movería sin que nadie lo decidiera.
+
+### R-47 · `capture_currency` y `capture_mode` son nulos para todo lo anterior a la migración 71
+
+- **Severidad:** Baja · **Disparador:** leer lo capturado de un documento anterior al 2026-09-18 y
+  tratar el nulo como «lo escribió en la moneda del documento»
+- **Dónde:** `inventory_moves`, `goods_receipt_lines`, `supplier_invoice_lines` (migración 71)
+
+Las columnas nacen nulas y **no admiten backfill**: `inventory_moves` es append-only, y adivinar
+en qué moneda escribió alguien un importe en marzo sería inventar un dato con pinta de dato. El
+nulo significa exactamente «no se sabe», y quien lo lea tiene que decirlo así — no rellenarlo con
+la moneda del documento, que es la suposición cómoda y probablemente falsa para media base.
+
+**Deja de ser aceptable:** si alguna pantalla o informe empieza a mostrar «escrito en Bs.» para
+filas con nulo. La defensa es que no hay valor por omisión en el esquema y el `CHECK` solo admite
+el vocabulario cerrado cuando la columna trae valor.
+
+### R-48 · `backdated_stock_in` es un reporte, y un reporte no se lee como un gate
+
+- **Severidad:** Media · **Disparador:** alguien mete `platform.backdated_stock_in()` en `verify`,
+  en CI o en un panel con un semáforo
+- **Dónde:** migración 72; `docs/00_GOVERNANCE/adr/ADR-0066` §5 y §8
+
+Su respuesta correcta **no es cero**: una llegada fechada hacia atrás con ventas entre medias es
+un hecho legítimo y frecuente, y el promedio móvil —que se calcula en orden de inserción— no
+recalcula el costo de lo ya vendido. La función dice qué movimientos salieron con un costo que la
+llegada posterior habría cambiado, para que una persona lo mire. Convertirla en gate enseñaría a
+reejecutar hasta el verde, que es como muere un gate (CLAUDE.md §3).
+
+**Deja de ser aceptable:** en el momento en que aparezca en un paso de `verify` o en una alerta
+automática. La defensa hoy es el comentario de la migración y el de la función, que lo dicen con
+todas sus letras; no hay mecanismo que lo impida.
