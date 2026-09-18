@@ -1,17 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { ArrowLeftRight, ArrowDownToLine, ArrowUpFromLine, Scale, TimerReset } from "lucide-react";
+import { ArrowLeftRight, ArrowUpFromLine, Scale, TimerReset } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
-import {
-  FormField,
-  MoneyInput,
-  EntityPicker,
-  importeValido,
-  type EntityOption,
-} from "../../components/forms.js";
+import { FormField, EntityPicker, type EntityOption } from "../../components/forms.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
 import { Button } from "../../ui/button.js";
 import { Input } from "../../ui/input.js";
@@ -36,7 +31,6 @@ import type {
 } from "../../lib.js";
 import { fechaLocal, fechaHoraLocal } from "../../fechas.js";
 import { sufijoDeArchivo } from "../../app/rif.js";
-import { tasaLimpia } from "../../tasa.js";
 
 /**
  * Inventario — Fase B. Cuatro superficies en pestañas: existencias (con el
@@ -47,7 +41,14 @@ import { tasaLimpia } from "../../tasa.js";
  * movimiento tal como el esquema los calculó y guardó (`quantity_after`,
  * `value_after`, `unit_cost`). Recalcularlos aquí sería una segunda verdad.
  */
-type Operacion = "entrada" | "salida" | "ajuste" | "transferencia";
+/**
+ * INVENTARIO NO METE MERCANCÍA (ADR-0066 §7). Aquí se cuenta, se ajusta y se traslada; lo que
+ * ENTRA de fuera —comprado o aportado— pasa por «Llegó mercancía», que además pregunta de quién
+ * vino, si hay factura y si ya se pagó, y deriva el asiento de eso. La «entrada de existencias»
+ * que vivía aquí era la segunda puerta: mandaba todo contra «aportes en inventario» aunque la
+ * mercancía se hubiera comprado y pagado.
+ */
+type Operacion = "salida" | "ajuste" | "transferencia";
 
 const OPERACION: Record<
   Operacion,
@@ -60,18 +61,6 @@ const OPERACION: Record<
     permiso: string;
   }
 > = {
-  entrada: {
-    etiqueta: "Entrada",
-    articulo: "la",
-    icono: <ArrowDownToLine />,
-    permiso: "inventory.move",
-    // Una entrada directa se contabiliza como APORTE (inventario contra «Aportes en
-    // inventario», ADR-0060): es para el inventario inicial o lo que trae el dueño. Lo
-    // COMPRADO va por Compras, que baja la caja o crea la deuda con el proveedor (QA de
-    // pantalla 2026-09-15, h. 39).
-    consecuencia:
-      "Úsala para inventario inicial o mercancía que aporta el dueño: en contabilidad entra como aporte, no como compra. Si la compraste, regístrala en Compras y gastos. El costo promedio del producto en ese depósito se recalcula, y el movimiento no se edita ni se borra después.",
-  },
   salida: {
     etiqueta: "Salida",
     articulo: "la",
@@ -100,6 +89,7 @@ const OPERACION: Record<
 
 export function Inventario(): React.JSX.Element {
   const { empresa, llamar, puede } = useSesion();
+  const navigate = useNavigate();
   const [busqueda, setBusqueda] = useState("");
   const [almacen, setAlmacen] = useState("");
   const [operacion, setOperacion] = useState<Operacion | null>(null);
@@ -202,12 +192,7 @@ export function Inventario(): React.JSX.Element {
             {(Object.keys(OPERACION) as Operacion[])
               .filter((op) => puede(OPERACION[op].permiso))
               .map((op) => (
-                <Button
-                  key={op}
-                  variant={op === "entrada" ? "primary" : "secondary"}
-                  size="sm"
-                  onClick={() => setOperacion(op)}
-                >
+                <Button key={op} variant="secondary" size="sm" onClick={() => setOperacion(op)}>
                   {OPERACION[op].icono} {OPERACION[op].etiqueta}
                 </Button>
               ))}
@@ -268,12 +253,16 @@ export function Inventario(): React.JSX.Element {
             empty={{
               title: "Sin existencias con ese filtro",
               description:
-                "La primera entrada de mercancía abre el kardex del producto — clic en una fila para verlo.",
+                "La primera llegada de mercancía abre el kardex del producto — clic en una fila para verlo.",
               ...(puede("inventory.move")
                 ? {
                     action: (
-                      <Button variant="primary" size="sm" onClick={() => setOperacion("entrada")}>
-                        Registrar entrada
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => void navigate("/admin/llego-mercancia")}
+                      >
+                        ¿Te llegó mercancía? Regístrala aquí
                       </Button>
                     ),
                   }
@@ -483,24 +472,8 @@ function Movimiento({
     reason: "",
     reference: "",
   });
-  // El costo se pone COMO LA PERSONA LO SEPA (dueño, 2026-09-17): «1.000 por 10 bolsas» o «100
-  // cada bolsa». Por unidad es lo que piden el alta de producto y las compras, así que es lo
-  // predeterminado; el total sigue disponible y es el servidor quien lo reparte.
-  const [costoPor, setCostoPor] = useState<"unidad" | "total">("unidad");
   const [confirmando, setConfirmando] = useState(false);
   const [error, setError] = useState<unknown>(null);
-
-  // Vista previa de la conversión — ARITMÉTICA DEL SERVIDOR, nunca de aquí.
-  const montoLimpio = form.amount.trim().replace(",", ".");
-  const vista = useQuery({
-    queryKey: ["fx-preview", empresa.id, montoLimpio, form.currency],
-    enabled: operacion === "entrada" && importeValido(montoLimpio),
-    staleTime: 30_000,
-    queryFn: () =>
-      llamar<{ rate: string; source: string; in_functional: string; in_anchor: string }>(
-        `/v1/exchange-rates/preview?amount=${montoLimpio}&currency=${form.currency}`,
-      ),
-  });
 
   const def = OPERACION[operacion];
   const cantidadValida =
@@ -511,7 +484,6 @@ function Movimiento({
     producto !== null &&
     form.warehouse_id !== "" &&
     cantidadValida &&
-    (operacion !== "entrada" || importeValido(montoLimpio)) &&
     // La SALIDA también exige motivo: sin él no se sabe si fue merma, consumo o regalo, y en el
     // mayor cae igual en «Ajuste de inventario» (QA de pantalla 2026-09-15, h. 42).
     ((operacion !== "ajuste" && operacion !== "salida") || form.reason.trim().length >= 3) &&
@@ -526,21 +498,7 @@ function Movimiento({
       ...(form.reference.trim() === "" ? {} : { reference: form.reference.trim() }),
     };
     try {
-      if (operacion === "entrada") {
-        await llamar("/v1/inventory/receipts", {
-          method: "POST",
-          headers: { "Idempotency-Key": crypto.randomUUID() },
-          body: JSON.stringify({
-            ...comun,
-            warehouse_id: form.warehouse_id,
-            quantity: form.quantity,
-            // Uno de los dos, nunca los dos: el servidor calcula el que falta (h. 44).
-            ...(costoPor === "unidad" ? { unit_amount: montoLimpio } : { amount: montoLimpio }),
-            currency: form.currency,
-            // Sin fx: el SERVIDOR valora con la tasa del BCV del día (ADR-0064 §1).
-          }),
-        });
-      } else if (operacion === "salida") {
+      if (operacion === "salida") {
         await llamar("/v1/inventory/issues", {
           method: "POST",
           headers: { "Idempotency-Key": crypto.randomUUID() },
@@ -660,64 +618,6 @@ function Movimiento({
               />
             )}
           </FormField>
-          {operacion === "entrada" && (
-            <>
-              <FormField label="El costo que vas a poner es" className="sm:col-span-2">
-                {(a) => (
-                  <SimpleSelect
-                    id={a.id}
-                    value={costoPor}
-                    onValueChange={(v) => setCostoPor(v === "total" ? "total" : "unidad")}
-                    options={[
-                      { value: "unidad", label: "De cada uno (100 por bolsa)" },
-                      { value: "total", label: "El total de la llegada (1.000 por 10 bolsas)" },
-                    ]}
-                  />
-                )}
-              </FormField>
-              <FormField
-                label={costoPor === "unidad" ? "¿Cuánto costó cada uno?" : "¿Cuánto costó todo?"}
-                required
-                hint={
-                  costoPor === "unidad"
-                    ? "Por unidad, como en el alta de producto y en compras."
-                    : "El total de lo que llegó; el costo de cada uno lo saca el sistema."
-                }
-              >
-                {(a) => (
-                  <MoneyInput
-                    id={a.id}
-                    value={form.amount}
-                    onChange={(v) => setForm({ ...form, amount: v })}
-                    currency={form.currency}
-                  />
-                )}
-              </FormField>
-              <FormField label="Moneda" required>
-                {(a) => (
-                  <SimpleSelect
-                    id={a.id}
-                    value={form.currency}
-                    onValueChange={(v) => setForm({ ...form, currency: v })}
-                    options={[
-                      { value: "USD", label: "Dólares (USD)" },
-                      { value: "VES", label: "Bolívares (Bs.)" },
-                    ]}
-                  />
-                )}
-              </FormField>
-              {/* La equivalencia del día, calculada por el servidor: se ve lo
-                  que vale en la otra moneda ANTES de registrar, y queda claro
-                  con qué tasa y de qué fuente se valorará. */}
-              {importeValido(montoLimpio) && vista.data && (
-                <p className="text-[0.85rem] text-muted-foreground tabular-nums sm:col-span-2">
-                  {form.currency === "USD"
-                    ? `≈ ${mostrarImporte({ amount: vista.data.in_functional, currency: "VES" })} · ${tasaLimpia(vista.data.rate)}`
-                    : `≈ ${mostrarImporte({ amount: vista.data.in_anchor, currency: "USD" })} · ${tasaLimpia(vista.data.rate)}`}
-                </p>
-              )}
-            </>
-          )}
           {(operacion === "ajuste" || operacion === "salida") && (
             <FormField label="Motivo" required className="sm:col-span-2">
               {(a) => (
@@ -770,11 +670,6 @@ function Movimiento({
           {operacion === "transferencia"
             ? ` · de ${nombreDeposito(form.warehouse_id)} a ${nombreDeposito(form.to_warehouse_id)}`
             : ` · ${nombreDeposito(form.warehouse_id)}`}
-          {operacion === "entrada" && importeValido(montoLimpio)
-            ? costoPor === "unidad"
-              ? `, a ${mostrarImporte({ amount: montoLimpio, currency: form.currency })} cada uno`
-              : `, ${mostrarImporte({ amount: montoLimpio, currency: form.currency })} en total`
-            : ""}
           . {def.consecuencia}
         </ConfirmDialog>
       </DialogContent>

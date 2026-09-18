@@ -411,6 +411,26 @@ export function totalDeEntrada(
   return ok(unitario.value.times(q.value).toDecimalPlaces(8, 4).toFixed(8));
 }
 
+/**
+ * Y el camino inverso: el costo POR UNIDAD cuando la persona escribió el TOTAL de la línea
+ * (ADR-0066). Se deriva en el SERVIDOR, a ocho decimales, porque dividir dinero en el cliente
+ * es exactamente lo que la regla 7 prohíbe.
+ */
+export function unitarioDeEntrada(
+  amount: string,
+  quantity: string,
+): Result<string, { code: "VALIDATION_FAILED"; message: string }> {
+  const total = parseDecimal(amount);
+  const q = parseDecimal(quantity);
+  if (!total.ok || !q.ok || q.value.isZero()) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Cantidad o costo total no interpretables.",
+    });
+  }
+  return ok(total.value.dividedBy(q.value).toDecimalPlaces(8, 4).toFixed(8));
+}
+
 export async function receiveStock(
   uow: UnitOfWork,
   input: ReceiveStockInput,

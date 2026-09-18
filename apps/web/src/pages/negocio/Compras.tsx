@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Paperclip, Plus, Receipt, ShoppingCart, Trash2 } from "lucide-react";
+import { Paperclip, Plus, Receipt, ShoppingCart } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { errorDePersona } from "../../lib.js";
 import { mostrarImporte } from "../../money.js";
@@ -18,17 +19,10 @@ import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
 import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
-import {
-  EntityPicker,
-  FormField,
-  MoneyInput,
-  importeValido,
-  type EntityOption,
-} from "../../components/forms.js";
+import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
-import { AVISO_PRECIO_COMPRA } from "../../components/capa-fiscal/textos.js";
 import { fechaRelativa } from "./comunes.js";
-import { useConFacturas } from "../../app/modo-venta.js";
+import { fechaLocal } from "../../fechas.js";
 
 /**
  * COMPRAS Y GASTOS (Fase C, PARTE 10): lo que el negocio paga. Dos mundos en
@@ -69,12 +63,6 @@ interface Cuenta {
   is_active: boolean;
   is_system: boolean;
 }
-interface ProductoFila {
-  id: string;
-  sku: string;
-  name: string;
-  kind: "good" | "service";
-}
 interface FormaDePago {
   id: string;
   name: string;
@@ -83,7 +71,19 @@ interface FormaDePago {
   is_active: boolean;
 }
 
-const CANT_RE = /^\d{1,16}(\.\d{1,8})?$/;
+/** Lo recibido que todavía no tiene factura (ADR-0066 §8). */
+interface RecepcionPendiente {
+  id: string;
+  received_on: string;
+  age_days: number;
+  supplier_id: string;
+  supplier_name: string;
+  delivery_note_ref: string | null;
+  quantity_received: string;
+  quantity_invoiced: string;
+  pending_amount: string;
+}
+
 const POR_PAGINA = 20;
 const CATEGORIAS_GASTO = [
   "Alquiler",
@@ -118,14 +118,6 @@ const ES_FORMA_DE_COMPRA = new Set<string>(FORMAS_DE_COMPRA.map((i) => i.value))
 function esFormaDeCompra(kind: string): kind is FormaDeCompra {
   return ES_FORMA_DE_COMPRA.has(kind);
 }
-function monedaDeForma(kind: string): string {
-  return FORMAS_DE_COMPRA.find((i) => i.value === kind)?.moneda ?? "VES";
-}
-
-const MONEDAS_COMPRA = [
-  { value: "VES", label: "Bolívares (Bs.)" },
-  { value: "USD", label: "Dólares (USD)" },
-];
 
 /** La misma cara para todo listado que no pudo cargar: el motivo y el reintento. */
 function ErrorDeLista({
@@ -160,15 +152,18 @@ function ListaCargando(): React.JSX.Element {
 
 export function ComprasNegocio(): React.JSX.Element {
   const { empresa, llamar, puede } = useSesion();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   // ADR-0048: el GASTO revela la estructura de costos — es del administrador.
   // El encargado entra por la mercancía: su pestaña inicial es Compras y la
   // de Gastos ni se le enseña.
   const puedeGastos = puede("expense.read");
   const puedeComprar = puede("purchase.invoice.register");
-  const [pestana, setPestana] = useState<"gastos" | "compras">(puedeGastos ? "gastos" : "compras");
+  const [pestana, setPestana] = useState<"gastos" | "compras" | "falta">(
+    puedeGastos ? "gastos" : "compras",
+  );
+  const [enganchando, setEnganchando] = useState<RecepcionPendiente | null>(null);
   const [nuevoGasto, setNuevoGasto] = useState(false);
-  const [nuevaCompra, setNuevaCompra] = useState(false);
   const [pagando, setPagando] = useState<FacturaProveedor | null>(null);
   const puedePagar = puede("purchase.payment.register");
 
@@ -222,9 +217,20 @@ export function ComprasNegocio(): React.JSX.Element {
   const listaFacturas = facturas.data?.pages.flatMap((p) => p.items) ?? [];
   const totalFacturas = facturas.data?.pages[0]?.total ?? 0;
 
+  /**
+   * «FALTA LA FACTURA» (ADR-0066 §8): lo que entró al depósito y todavía no tiene su factura.
+   * Sin esta lista, la cuenta «mercancía recibida por facturar» crece sin que nadie la mire.
+   */
+  const pendientes = useQuery({
+    queryKey: ["recepciones-sin-factura", empresa.id],
+    queryFn: () => llamar<{ items: RecepcionPendiente[] }>("/v1/goods-receipts?pending_invoice=1"),
+  });
+  const cuantasFaltan = pendientes.data?.items.length ?? 0;
+
   const pestanas = [
     ...(puedeGastos ? ([["gastos", "Gastos"]] as const) : []),
     ["compras", "Compras a proveedores"],
+    ["falta", cuantasFaltan > 0 ? `Falta la factura (${cuantasFaltan})` : "Falta la factura"],
   ] as const;
 
   return (
@@ -233,8 +239,8 @@ export function ComprasNegocio(): React.JSX.Element {
         <h1 className="text-xl font-semibold">Compras y gastos</h1>
         <div className="flex-1" />
         {puedeComprar && (
-          <Button variant="secondary" onClick={() => setNuevaCompra(true)}>
-            <ShoppingCart /> Registrar compra
+          <Button variant="secondary" onClick={() => void navigate("/admin/llego-mercancia")}>
+            <ShoppingCart /> Llegó mercancía
           </Button>
         )}
         {puedeGastos && (
@@ -278,7 +284,7 @@ export function ComprasNegocio(): React.JSX.Element {
         ))}
       </div>
 
-      {pestana === "gastos" ? (
+      {pestana === "gastos" && puedeGastos ? (
         <div role="tabpanel" id="compras-panel-gastos" aria-labelledby="compras-tab-gastos">
           {gastos.isPending ? (
             <ListaCargando />
@@ -331,7 +337,7 @@ export function ComprasNegocio(): React.JSX.Element {
             </>
           )}
         </div>
-      ) : (
+      ) : pestana === "compras" ? (
         <div role="tabpanel" id="compras-panel-compras" aria-labelledby="compras-tab-compras">
           {facturas.isPending ? (
             <ListaCargando />
@@ -342,12 +348,16 @@ export function ComprasNegocio(): React.JSX.Element {
               <ShoppingCart className="mx-auto size-8 text-faint-foreground" />
               <p className="mt-2 font-medium">Sin compras registradas</p>
               <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
-                Cuando llegue mercancía con su factura, regístrala aquí: entra al depósito y queda
-                claro cuánto le debes a cada proveedor.
+                Cuando te llegue mercancía, regístrala en «Llegó mercancía»: entra al depósito y
+                queda claro cuánto le debes a cada proveedor.
               </p>
               {puedeComprar && (
-                <Button variant="primary" className="mt-4" onClick={() => setNuevaCompra(true)}>
-                  <ShoppingCart /> Registrar compra
+                <Button
+                  variant="primary"
+                  className="mt-4"
+                  onClick={() => void navigate("/admin/llego-mercancia")}
+                >
+                  <ShoppingCart /> Llegó mercancía
                 </Button>
               )}
             </Card>
@@ -399,6 +409,65 @@ export function ComprasNegocio(): React.JSX.Element {
             </>
           )}
         </div>
+      ) : null}
+
+      {pestana === "falta" && (
+        <div role="tabpanel" id="compras-panel-falta" aria-labelledby="compras-tab-falta">
+          {pendientes.isPending ? (
+            <ListaCargando />
+          ) : pendientes.isError ? (
+            <ErrorDeLista error={pendientes.error} onReintentar={() => void pendientes.refetch()} />
+          ) : cuantasFaltan === 0 ? (
+            <Card className="p-8 text-center">
+              <Receipt className="mx-auto size-8 text-faint-foreground" />
+              <p className="mt-2 font-medium">No falta ninguna factura</p>
+              <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
+                Todo lo que entró al depósito tiene su factura registrada.
+              </p>
+            </Card>
+          ) : (
+            <div className="space-y-2">
+              {pendientes.data.items.map((r) => (
+                <Card key={r.id} className="flex flex-wrap items-center gap-3 p-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium">{r.supplier_name}</p>
+                    <p className="text-[0.85rem] text-muted-foreground">
+                      Llegó el {fechaLocal(r.received_on)}
+                      {r.delivery_note_ref === null ? "" : ` · ${r.delivery_note_ref}`} ·{" "}
+                      {r.age_days === 0
+                        ? "hoy"
+                        : r.age_days === 1
+                          ? "hace 1 día"
+                          : `hace ${r.age_days} días`}
+                    </p>
+                  </div>
+                  {r.age_days >= 30 && (
+                    <span className="rounded-full bg-warning-soft px-2 py-0.5 text-[0.78rem] text-warning-soft-foreground">
+                      Lleva más de un mes
+                    </span>
+                  )}
+                  {puedeComprar && (
+                    <Button variant="secondary" size="sm" onClick={() => setEnganchando(r)}>
+                      Ya llegó la factura
+                    </Button>
+                  )}
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {enganchando !== null && (
+        <EngancharFactura
+          recepcion={enganchando}
+          onCerrar={() => setEnganchando(null)}
+          onHecho={() => {
+            setEnganchando(null);
+            void pendientes.refetch();
+            recargar();
+          }}
+        />
       )}
 
       {nuevoGasto && <RegistrarGasto onCerrar={() => setNuevoGasto(false)} onListo={recargar} />}
@@ -411,13 +480,6 @@ export function ComprasNegocio(): React.JSX.Element {
             setPagando(null);
             recargar();
           }}
-        />
-      )}
-      {nuevaCompra && (
-        <RegistrarCompra
-          proveedores={proveedores.data?.items ?? []}
-          onCerrar={() => setNuevaCompra(false)}
-          onListo={recargar}
         />
       )}
     </div>
@@ -677,457 +739,13 @@ function RegistrarGasto({
   );
 }
 
-interface LineaCompra {
-  /** Identidad ESTABLE de la fila: la clave de React no puede ser el índice. */
-  id: string;
-  producto: EntityOption | null;
-  cantidad: string;
-  precio: string;
-}
-
-function lineaVacia(): LineaCompra {
-  return { id: crypto.randomUUID(), producto: null, cantidad: "", precio: "" };
-}
-
-function RegistrarCompra({
-  proveedores,
-  onCerrar,
-  onListo,
-}: {
-  proveedores: Proveedor[];
-  onCerrar: () => void;
-  onListo: () => void;
-}): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
-  const conFacturas = useConFacturas();
-  const toast = useToast();
-  const [proveedor, setProveedor] = useState<string | null>(null);
-  const [creandoProveedor, setCreandoProveedor] = useState(false);
-  const [nuevoNombre, setNuevoNombre] = useState("");
-  const [nuevoRif, setNuevoRif] = useState("");
-  const [nroFactura, setNroFactura] = useState("");
-  const [nroControl, setNroControl] = useState("");
-  const [lineas, setLineas] = useState<LineaCompra[]>(() => [lineaVacia()]);
-  const [pagarAhora, setPagarAhora] = useState(false);
-  const [forma, setForma] = useState<string | null>(null);
-  // La moneda de la factura del proveedor: la de los precios unitarios. Por
-  // defecto sigue a la forma de pago elegida (Zelle → USD) y la persona puede
-  // cambiarla.
-  const [moneda, setMoneda] = useState("VES");
-  const qc = useQueryClient();
-
-  // El catálogo NO se trae entero (antes: `per_page=100` y los demás no
-  // existían): cada línea busca en el servidor por nombre o código. Solo
-  // bienes — un servicio no entra a un depósito.
-  const buscarProducto = useCallback(
-    async (q: string): Promise<EntityOption[]> => {
-      const r = await llamar<{ items: ProductoFila[] }>(
-        `/v1/products?only_active=1&per_page=50${q === "" ? "" : `&search=${encodeURIComponent(q)}`}`,
-      );
-      return r.items
-        .filter((p) => p.kind === "good")
-        .map((p) => ({ id: p.id, label: p.name, detalle: p.sku }));
-    },
-    [llamar],
-  );
-  const formas = useQuery({
-    queryKey: ["formas-pago", empresa.id],
-    enabled: pagarAhora,
-    queryFn: () => llamar<{ methods: FormaDePago[] }>("/v1/payment-methods"),
-  });
-  const depositos = useQuery({
-    queryKey: ["depositos", empresa.id],
-    staleTime: 5 * 60_000,
-    queryFn: () =>
-      llamar<{ id: string; name: string; status: string; is_default: boolean }[]>("/v1/warehouses"),
-  });
-  // El PRINCIPAL por defecto (migración 60) — no «el primero por código», que con un depósito
-  // nuevo mandaba la compra a otro lado. Con más de uno activo, la persona elige a cuál llega.
-  const activos = (depositos.data ?? []).filter((d) => d.status === "active");
-  const [depositoElegido, setDepositoElegido] = useState<string | null>(null);
-  const deposito =
-    depositoElegido ?? activos.find((d) => d.is_default)?.id ?? activos[0]?.id ?? null;
-  const buscandoDeposito = depositos.isPending;
-
-  /**
-   * Las formas con las que se paga: las CONFIGURADAS cuyo tipo sea un
-   * forma de pago de compra (con su cuenta), más las base que ninguna
-   * configurada cubra — la misma regla que los botones de Cobrar.
-   */
-  const opcionesDePago = useMemo(() => {
-    const configuradas = (formas.data?.methods ?? []).filter(
-      (f) => f.is_active && esFormaDeCompra(f.kind),
-    );
-    const cubiertos = new Set(configuradas.map((f) => f.kind));
-    return [
-      ...configuradas.map((f) => ({ value: f.id, label: f.name })),
-      ...FORMAS_DE_COMPRA.filter((i) => !cubiertos.has(i.value)).map((i) => ({
-        value: i.value,
-        label: i.label,
-      })),
-    ];
-  }, [formas.data]);
-
-  function elegirForma(v: string): void {
-    setForma(v);
-    const configurada = (formas.data?.methods ?? []).find((f) => f.id === v);
-    setMoneda(monedaDeForma(configurada?.kind ?? v));
-  }
-
-  const crearProveedor = useMutation({
-    mutationFn: () =>
-      llamar<{ id: string }>("/v1/suppliers", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        // El tipo de persona y de contribuyente los INFIERE el servidor del
-        // prefijo del documento: la pantalla no decide nada tributario.
-        body: JSON.stringify({
-          company_id: empresa.id,
-          legal_name: nuevoNombre.trim(),
-          tax_id: nuevoRif.trim() === "" ? null : nuevoRif.trim().toUpperCase(),
-          supplier_kind: "nacional",
-        }),
-      }),
-    onSuccess: (r) => {
-      toast.success("Proveedor agregado");
-      setProveedor(r.id);
-      setCreandoProveedor(false);
-      void qc.invalidateQueries({ queryKey: ["proveedores", empresa.id] });
-    },
-    onError: (e) => toast.error("No se pudo agregar el proveedor", errorDePersona(e)),
-  });
-
-  const lineasValidas = lineas.filter(
-    (l) =>
-      l.producto !== null &&
-      CANT_RE.test(l.cantidad.trim().replace(",", ".")) &&
-      !esCero(l.cantidad) &&
-      importeValido(l.precio.trim().replace(",", ".")),
-  );
-  const listo =
-    proveedor !== null &&
-    deposito !== null &&
-    nroFactura.trim() !== "" &&
-    nroControl.trim() !== "" &&
-    lineasValidas.length > 0 &&
-    lineasValidas.length === lineas.filter((l) => l.producto !== null).length &&
-    (!pagarAhora || forma !== null);
-
-  // Sobregiro al pagar en el acto (ADR-0062 §4): se pregunta y se reenvía confirmado.
-  const [sinSaldo, setSinSaldo] = useState<string | null>(null);
-
-  const registrar = useMutation({
-    mutationFn: (forzar: boolean) => {
-      const configurada = (formas.data?.methods ?? []).find((f) => f.id === forma);
-      // La forma configurada manda su forma de pago Y su cuenta; una forma base
-      // manda solo la forma de pago. Nada fuera del enum sale de aquí.
-      const pago =
-        !pagarAhora || forma === null
-          ? null
-          : configurada !== undefined
-            ? esFormaDeCompra(configurada.kind)
-              ? {
-                  instrument: configurada.kind,
-                  account_id: configurada.account_id,
-                  ...(forzar ? { allow_negative_balance: true } : {}),
-                }
-              : null
-            : esFormaDeCompra(forma)
-              ? { instrument: forma, ...(forzar ? { allow_negative_balance: true } : {}) }
-              : null;
-      if (pagarAhora && pago === null) {
-        return Promise.reject(new Error("Esa forma no sirve para pagar a un proveedor."));
-      }
-      return llamar("/v1/purchases/simple", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          supplier_id: proveedor,
-          warehouse_id: deposito,
-          currency: moneda,
-          supplier_document_number: nroFactura.trim(),
-          supplier_control_number: nroControl.trim(),
-          lines: lineasValidas.map((l) => ({
-            product_id: l.producto!.id,
-            quantity: l.cantidad.trim().replace(",", "."),
-            unit_price: l.precio.trim().replace(",", "."),
-          })),
-          ...(pago === null ? {} : { payment: pago }),
-        }),
-      });
-    },
-    onSuccess: () => {
-      toast.success(
-        "Compra registrada",
-        pagarAhora
-          ? "La mercancía entró y la factura quedó pagada."
-          : "La mercancía entró; la factura queda por pagar.",
-      );
-      onListo();
-      onCerrar();
-    },
-    onError: (e) => {
-      const falta = esSinSaldo(e);
-      if (falta !== null) {
-        setSinSaldo(falta);
-        return;
-      }
-      toast.error("No se pudo registrar la compra", errorDePersona(e));
-    },
-  });
-
-  const etiquetaMoneda = moneda === "VES" ? "Bs." : moneda;
-
-  return (
-    <>
-      <Dialog open onOpenChange={(v) => !v && onCerrar()}>
-        <DialogContent className="max-w-lg">
-          <DialogTitle>Registrar compra</DialogTitle>
-          <DialogDescription>
-            Mercancía con la factura del proveedor: entra al depósito y a lo que debes.
-          </DialogDescription>
-          <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1 pt-2">
-            {!creandoProveedor ? (
-              <div className="flex items-end gap-2">
-                <FormField label="Proveedor" required className="flex-1">
-                  {(p) => (
-                    <SimpleSelect
-                      id={p.id}
-                      value={proveedor}
-                      onValueChange={setProveedor}
-                      options={proveedores.map((s) => ({ value: s.id, label: s.legal_name }))}
-                      placeholder="Elige el proveedor…"
-                    />
-                  )}
-                </FormField>
-                <Button variant="secondary" onClick={() => setCreandoProveedor(true)}>
-                  <Plus /> Nuevo
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-2 rounded-md border border-border p-3">
-                <FormField label="Nombre del proveedor" required>
-                  {(p) => (
-                    <Input
-                      {...p}
-                      value={nuevoNombre}
-                      onChange={(e) => setNuevoNombre(e.target.value)}
-                      autoFocus
-                    />
-                  )}
-                </FormField>
-                <FormField label="Cédula o RIF" required hint="El de la factura que te entregó.">
-                  {(p) => (
-                    <Input {...p} value={nuevoRif} onChange={(e) => setNuevoRif(e.target.value)} />
-                  )}
-                </FormField>
-                <div className="flex justify-end gap-2">
-                  <Button variant="ghost" size="sm" onClick={() => setCreandoProveedor(false)}>
-                    Cancelar
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    disabled={
-                      nuevoNombre.trim() === "" ||
-                      nuevoRif.trim() === "" ||
-                      crearProveedor.isPending
-                    }
-                    onClick={() => crearProveedor.mutate()}
-                  >
-                    Agregar
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-2">
-              <FormField label="N° de la factura" required>
-                {(p) => (
-                  <Input
-                    {...p}
-                    value={nroFactura}
-                    onChange={(e) => setNroFactura(e.target.value)}
-                  />
-                )}
-              </FormField>
-              <FormField
-                label="N° impreso de la factura"
-                required
-                hint="El que trae impresa la factura del proveedor."
-              >
-                {(p) => (
-                  <Input
-                    {...p}
-                    value={nroControl}
-                    onChange={(e) => setNroControl(e.target.value)}
-                  />
-                )}
-              </FormField>
-            </div>
-
-            <FormField label="Moneda de la factura" required hint="La de los precios que trae.">
-              {(p) => (
-                <SimpleSelect
-                  id={p.id}
-                  value={moneda}
-                  onValueChange={setMoneda}
-                  options={MONEDAS_COMPRA}
-                />
-              )}
-            </FormField>
-
-            <div className="space-y-2">
-              <p className="text-[0.88rem] font-medium">¿Qué llegó?</p>
-              {lineas.map((l, i) => (
-                <div key={l.id} className="flex items-start gap-2">
-                  <div className="flex-1">
-                    <label htmlFor={`compra-producto-${l.id}`} className="sr-only">
-                      Producto de la línea {i + 1}
-                    </label>
-                    <EntityPicker
-                      id={`compra-producto-${l.id}`}
-                      value={l.producto}
-                      onChange={(v) =>
-                        setLineas((prev) =>
-                          prev.map((x) => (x.id === l.id ? { ...x, producto: v } : x)),
-                        )
-                      }
-                      buscar={buscarProducto}
-                      placeholder="Producto…"
-                    />
-                  </div>
-                  <Input
-                    inputMode="decimal"
-                    value={l.cantidad}
-                    onChange={(e) =>
-                      setLineas((prev) =>
-                        prev.map((x) => (x.id === l.id ? { ...x, cantidad: e.target.value } : x)),
-                      )
-                    }
-                    placeholder="Cant."
-                    className="w-20"
-                    aria-label={`Cantidad de la línea ${i + 1}`}
-                  />
-                  <div className="w-32">
-                    <label htmlFor={`compra-precio-${l.id}`} className="sr-only">
-                      Precio de la línea {i + 1}
-                    </label>
-                    <MoneyInput
-                      id={`compra-precio-${l.id}`}
-                      value={l.precio}
-                      onChange={(v) =>
-                        setLineas((prev) =>
-                          prev.map((x) => (x.id === l.id ? { ...x, precio: v } : x)),
-                        )
-                      }
-                      currency={etiquetaMoneda}
-                    />
-                  </div>
-                  {lineas.length > 1 && (
-                    <Button
-                      variant="ghost"
-                      size="iconSm"
-                      aria-label={`Quitar la línea ${i + 1}`}
-                      onClick={() => setLineas((prev) => prev.filter((x) => x.id !== l.id))}
-                    >
-                      <Trash2 />
-                    </Button>
-                  )}
-                </div>
-              ))}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setLineas((prev) => [...prev, lineaVacia()])}
-              >
-                <Plus /> Otro producto
-              </Button>
-              <p className="text-[0.8rem] text-faint-foreground">
-                {/* Quien da recibos no ve impuestos: el precio es lo que pagó (app/rif.ts). */}
-                {conFacturas ? AVISO_PRECIO_COMPRA : "El precio es lo que pagaste por cada unidad."}
-              </p>
-            </div>
-
-            <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
-              <span className="text-[0.9rem]">
-                La pagué completa ya
-                <span className="block text-[0.78rem] text-muted-foreground">
-                  Si no, queda en «lo que debo» hasta que la pagues.
-                </span>
-              </span>
-              <Switch
-                checked={pagarAhora}
-                onCheckedChange={setPagarAhora}
-                aria-label="La pagué completa"
-              />
-            </label>
-            {pagarAhora && (
-              <FormField label="¿Con qué la pagaste?" required>
-                {(p) => (
-                  <SimpleSelect
-                    id={p.id}
-                    value={forma}
-                    onValueChange={elegirForma}
-                    options={opcionesDePago}
-                    placeholder={formas.isPending ? "Cargando…" : "Elige…"}
-                  />
-                )}
-              </FormField>
-            )}
-
-            {activos.length > 1 && (
-              <FormField label="¿A qué depósito llega?" required>
-                {(p) => (
-                  <SimpleSelect
-                    id={p.id}
-                    value={deposito}
-                    onValueChange={setDepositoElegido}
-                    options={activos.map((d) => ({
-                      value: d.id,
-                      label: d.is_default ? `${d.name} (principal)` : d.name,
-                    }))}
-                  />
-                )}
-              </FormField>
-            )}
-
-            {deposito === null && !buscandoDeposito && (
-              <p role="alert" className="text-[0.85rem] text-warning-soft-foreground">
-                Falta un depósito: lo configura quien administra el negocio (Administración →
-                Inventario). Sin él, la mercancía no tiene dónde entrar.
-              </p>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={onCerrar}>
-              Cancelar
-            </Button>
-            <Button
-              variant="primary"
-              disabled={!listo || registrar.isPending}
-              onClick={() => registrar.mutate(false)}
-            >
-              {registrar.isPending ? "Registrando…" : "Registrar compra"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      {sinSaldo !== null && (
-        <ConfirmarSobregiro
-          mensaje={sinSaldo}
-          onCancelar={() => setSinSaldo(null)}
-          onConfirmar={async () => {
-            await registrar.mutateAsync(true);
-            setSinSaldo(null);
-          }}
-        />
-      )}
-    </>
-  );
-}
-
+/*
+ * Aquí vivía «Registrar compra», el formulario de un paso que pedía dos números de factura
+ * OBLIGATORIOS y no admitía una compra sin factura. Se retiró con ADR-0066: la mercancía entra
+ * por una sola puerta —«Llegó mercancía»— que pregunta el hecho y deja que el servidor decida
+ * cómo se registra. Esta pantalla conserva todo lo demás: gastos, historial, lo que debo y el
+ * pago de facturas.
+ */
 /**
  * PAGAR una factura de proveedor que quedó debiendo (ADR-0049, Nivel B de la
  * auditoría de superficie): antes solo se podía pagar EN el momento de
@@ -1277,5 +895,98 @@ function PagarFactura({
         />
       )}
     </>
+  );
+}
+
+/**
+ * «YA LLEGÓ LA FACTURA»: engancha la factura del proveedor a lo que YA entró al depósito. No
+ * vuelve a mover existencia —eso pasó el día de la recepción— y devuelve a cero la cuenta
+ * «mercancía recibida por facturar». Si el precio de la factura difiere del de la recepción, el
+ * servidor revaloriza el inventario (ADR-0060 §2).
+ */
+function EngancharFactura({
+  recepcion,
+  onCerrar,
+  onHecho,
+}: {
+  recepcion: RecepcionPendiente;
+  onCerrar: () => void;
+  onHecho: () => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const toast = useToast();
+  const [numero, setNumero] = useState("");
+  const [control, setControl] = useState("");
+  const detalle = useQuery({
+    queryKey: ["recepcion", recepcion.id],
+    queryFn: () =>
+      llamar<{
+        receipt: { transaction_currency: string };
+        lines: {
+          id: string;
+          product_id: string;
+          quantity: string;
+          unit_price_transaction: string;
+        }[];
+      }>(`/v1/goods-receipts/${recepcion.id}`),
+  });
+
+  const enganchar = useMutation({
+    mutationFn: () =>
+      llamar("/v1/supplier-invoices", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          supplier_id: recepcion.supplier_id,
+          supplier_document_number: numero.trim(),
+          ...(control.trim() === "" ? {} : { supplier_control_number: control.trim() }),
+          invoice_date: recepcion.received_on,
+          currency: detalle.data?.receipt.transaction_currency ?? "VES",
+          lines: (detalle.data?.lines ?? []).map((l) => ({
+            goods_receipt_line_id: l.id,
+            product_id: l.product_id,
+            quantity: l.quantity,
+            unit_price: l.unit_price_transaction,
+          })),
+        }),
+      }),
+    onSuccess: () => {
+      toast.success("Factura registrada", "Lo que recibiste ya está facturado.");
+      onHecho();
+    },
+    onError: (e) => toast.error("No se pudo registrar la factura", errorDePersona(e)),
+  });
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onCerrar()}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>Ya llegó la factura</DialogTitle>
+        <DialogDescription>
+          De {recepcion.supplier_name}, por lo que entró el {fechaLocal(recepcion.received_on)}. La
+          mercancía no se mueve otra vez: solo queda facturada.
+        </DialogDescription>
+        <div className="space-y-3 pt-2">
+          <FormField label="N° de la factura" required hint="Como viene en el papel.">
+            {(p) => <Input {...p} value={numero} onChange={(e) => setNumero(e.target.value)} />}
+          </FormField>
+          <FormField label="N° de control" hint="El que trae impreso, si lo trae.">
+            {(p) => <Input {...p} value={control} onChange={(e) => setControl(e.target.value)} />}
+          </FormField>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onCerrar}>
+            Cancelar
+          </Button>
+          <Button
+            variant="primary"
+            disabled={numero.trim() === "" || detalle.isPending || enganchar.isPending}
+            onClick={() => enganchar.mutate()}
+          >
+            {enganchar.isPending ? "Registrando…" : "Registrar la factura"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

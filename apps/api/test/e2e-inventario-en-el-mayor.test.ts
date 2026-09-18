@@ -208,6 +208,7 @@ describe("el inventario en el mayor: kardex ↔ mayor en cero después de cada h
 
   it("ENTRADA DIRECTA · inventario contra aportes en inventario", async () => {
     const r = await pedir("POST", "/v1/inventory/receipts", {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: W1,
       product_id: ACEITE,

@@ -172,14 +172,17 @@ export function inventoryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
           "La entrada se valora con la tasa del BCV del día; ya no se escribe otra tasa a mano.",
       });
     }
-    const { unit_amount: unitario, amount: total, ...resto } = parsed.data;
+    // EL ORIGEN, declarado (ADR-0066 §3). El esquema solo admite «aporte» —la mercancía que
+    // ya era tuya— y aquí se traduce a su contrapartida contable, que es donde se decide. La
+    // mercancía de un proveedor entra por la llegada, que registra además documento y dinero.
+    const { unit_amount: unitario, amount: total, origin: _origen, ...resto } = parsed.data;
     let monto = total;
     if (monto === undefined) {
       const calculado = totalDeEntrada(unitario ?? "", resto.quantity);
       if (!calculado.ok) throw new DominioError(calculado.error);
       monto = calculado.value;
     }
-    const entrada = { ...resto, amount: monto };
+    const entrada = { ...resto, amount: monto, accounting: "stock_opening" as const };
     const { actor } = c.get("ladino.auth");
     const r = await withTransaction(sql, actor, (uow) => receiveStock(uow, entrada));
     if (!r.ok) throw new DominioError(r.error);

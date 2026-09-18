@@ -735,12 +735,38 @@ export async function registerSupplierInvoice(
      where id = ${input.supplier_id} and company_id = ${input.company_id}`;
   if (!prov) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
 
-  // La identificación del emisor: o control (nacional) o referencia (extranjero).
-  if (input.supplier_control_number === undefined && input.supplier_document_ref === undefined) {
+  /**
+   * CON O SIN SOPORTE FISCAL (ADR-0066 §2). Una compra sin factura es una compra: entra al
+   * inventario y mueve dinero. Lo que no hace es entrar al libro ni generar crédito fiscal, y
+   * por eso no se le pide identificación del emisor — no la hay.
+   */
+  const conSoporte = input.fiscal_support !== false;
+
+  // La identificación del emisor: o control (nacional) o referencia (extranjero). Se exige a lo
+  // que VA AL LIBRO, que es el motivo con el que se escribió esta regla.
+  if (
+    conSoporte &&
+    input.supplier_control_number === undefined &&
+    input.supplier_document_ref === undefined
+  ) {
     return err({
       code: "VALIDATION_FAILED",
       message:
         "La factura necesita el número de control del proveedor o, si es extranjero, la referencia de su documento origen: sin ninguno no es asentable en el libro de compras.",
+    });
+  }
+
+  /**
+   * La retención sobre una compra SIN soporte está abierta con el asesor (PENDIENTES_ASESOR,
+   * P-28): la norma retiene al pago o al abono en cuenta, y si nace también sin factura, sobre
+   * qué base lo hace no es algo que Ladino pueda decidir. Hasta que se responda no se retiene, y
+   * pedirlo FALLA en vez de ignorarse en silencio.
+   */
+  if (!conSoporte && (input.retention_concepts?.length ?? 0) > 0) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Una compra sin factura no practica retención: sin documento no hay base declarable. Está consultado con el asesor (P-28).",
     });
   }
 
@@ -763,8 +789,11 @@ export async function registerSupplierInvoice(
   // compra de una empresa especial dejaba el IVA atrapado en «Mercancía recibida por
   // facturar» (QA de pantalla 2026-09-15, h. 75; R-34). VALIDAR-TRIBUTARIO: P-17 sigue
   // abierta para que el asesor lo confirme con su artículo.
+  // Y sin documento no hay crédito fiscal que recuperar, sea cual sea el contribuyente: el
+  // costo entra entero al inventario (rama `if_tax_not_recoverable` del preset, ADR-0066 §2).
   const ivaRecuperable =
-    ctx.value.companyTaxpayerType === "ordinario" || ctx.value.companyTaxpayerType === "especial";
+    conSoporte &&
+    (ctx.value.companyTaxpayerType === "ordinario" || ctx.value.companyTaxpayerType === "especial");
 
   const tasa = await tasaA(
     sql,
@@ -858,13 +887,15 @@ export async function registerSupplierInvoice(
         insert into public.supplier_invoices
           (tenant_id, company_id, supplier_id, purchase_order_id, supplier_document_number,
            supplier_control_number, supplier_document_ref, invoice_date, due_date, status,
-           posted_at, tax_is_recoverable, transaction_currency, functional_currency, fx_rate,
+           posted_at, tax_is_recoverable, fiscal_support, transaction_currency,
+           functional_currency, fx_rate,
            rate_source, rate_timestamp, rounding_policy_id, rules_version, notes)
         values (${ctx.value.tenantId}, ${input.company_id}, ${input.supplier_id},
-                ${input.purchase_order_id ?? null}, ${input.supplier_document_number},
+                ${input.purchase_order_id ?? null}, ${input.supplier_document_number ?? null},
                 ${input.supplier_control_number ?? null}, ${input.supplier_document_ref ?? null},
                 ${input.invoice_date}::date, ${input.due_date ?? null}, 'draft', null,
-                ${ivaRecuperable}, ${input.currency}, ${ctx.value.functionalCurrency},
+                ${ivaRecuperable}, ${conSoporte}, ${input.currency},
+                ${ctx.value.functionalCurrency},
                 ${tasa.value.rate.toFixed()}, ${tasa.value.source}, now(), ${POLICY.id},
                 ${RULES_VERSION}, ${input.notes ?? null})
         returning id`;
@@ -890,7 +921,9 @@ export async function registerSupplierInvoice(
         // transaction_type='purchase' (ADR-0038). Sin regla no hay factura.
         let taxRuleId: string | null = null;
         let tasaImp = parseDecimal("0");
-        if (prov.supplier_kind === "nacional") {
+        // Sin soporte fiscal no se resuelve alícuota: lo que se pagó ES el costo, y el CHECK de
+        // la base exige impuesto cero (migración 69).
+        if (prov.supplier_kind === "nacional" && conSoporte) {
           const [regla] = await sp<{ tax_rule_id: string; rate: string }[]>`
             select tax_rule_id, rate::text as rate
               from platform.resolve_tax(${input.company_id}, ${input.invoice_date}::date,
@@ -1030,8 +1063,9 @@ export async function registerSupplierInvoice(
     "ap.invoice_posted",
     {
       supplier_id: input.supplier_id,
-      supplier_document_number: input.supplier_document_number,
+      supplier_document_number: input.supplier_document_number ?? null,
       supplier_control_number: input.supplier_control_number ?? null,
+      fiscal_support: conSoporte,
       total_amount: detalle.value.total_amount,
       retention_total: detalle.value.retention_total,
       tax_is_recoverable: ivaRecuperable,
@@ -1122,7 +1156,7 @@ export async function registerSupplierInvoice(
     tasa: tasa.value.rate,
     ivaRecuperable,
     fecha: input.invoice_date,
-    documento: input.supplier_document_number,
+    documento: input.supplier_document_number ?? "sin número",
   });
   if (!revalorizada.ok) return revalorizada;
   return detalle;
@@ -1413,7 +1447,8 @@ async function leerFactura(
            supplier_control_number, supplier_document_ref, invoice_date::text as invoice_date,
            due_date::text as due_date, status, subtotal_amount::text as subtotal_amount,
            tax_amount::text as tax_amount, total_amount::text as total_amount,
-           tax_is_recoverable, retention_total::text as retention_total, transaction_currency,
+           tax_is_recoverable, fiscal_support,
+           retention_total::text as retention_total, transaction_currency,
            functional_currency, fx_rate::text as fx_rate, rate_source
       from public.supplier_invoices where id = ${invoiceId} and company_id = ${companyId}`;
   if (!f) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });

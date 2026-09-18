@@ -133,6 +133,7 @@ describe("recetas de productos compuestos", () => {
 
   it("el compuesto NO admite entrada de stock: 409 COMPOSED_HAS_NO_STOCK", async () => {
     const r = await pedir("POST", "/v1/inventory/receipts", {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: W1,
       product_id: AREPA,
@@ -151,6 +152,7 @@ describe("recetas de productos compuestos", () => {
       [LECHE, "8", "100"],
     ] as const) {
       const e = await pedir("POST", "/v1/inventory/receipts", {
+        origin: "aporte",
         company_id: COMPANY,
         warehouse_id: W1,
         product_id: producto,
@@ -229,6 +231,7 @@ describe("vencimientos y FEFO", () => {
 
     for (const lote of [viejo!.id, pronto!.id]) {
       const e = await pedir("POST", "/v1/inventory/receipts", {
+        origin: "aporte",
         company_id: COMPANY,
         warehouse_id: W1,
         product_id: QUESO,
@@ -289,6 +292,7 @@ describe("variantes", () => {
 
     for (const [i, variante] of variantes.entries()) {
       const e = await pedir("POST", "/v1/inventory/receipts", {
+        origin: "aporte",
         company_id: COMPANY,
         warehouse_id: W1,
         product_id: variante,

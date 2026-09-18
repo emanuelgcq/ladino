@@ -105,6 +105,7 @@ afterAll(async () => {
 describe("inventario de extremo a extremo", () => {
   it("POST /receipts costea el promedio; GET /stock lo devuelve y GET /moves es el kardex", async () => {
     const e1 = await pedir("POST", "/v1/inventory/receipts", JEFE, {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: W1,
       product_id: PROD,
@@ -116,6 +117,7 @@ describe("inventario de extremo a extremo", () => {
     expect(((await e1.json()) as { unit_cost: string }).unit_cost).toBe("100.00000000");
 
     const e2 = await pedir("POST", "/v1/inventory/receipts", JEFE, {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: W1,
       product_id: PROD,
@@ -129,6 +131,7 @@ describe("inventario de extremo a extremo", () => {
 
     // Total Y por unidad a la vez es ambiguo: se rechaza.
     const ambas = await pedir("POST", "/v1/inventory/receipts", JEFE, {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: W1,
       product_id: PROD,
@@ -188,6 +191,7 @@ describe("inventario de extremo a extremo", () => {
 
   it("el almacenista mueve SU almacén y recibe 403 en el otro (permiso acotado)", async () => {
     const suyo = await pedir("POST", "/v1/inventory/receipts", ALMACENISTA, {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: W1,
       product_id: PROD,
@@ -198,6 +202,7 @@ describe("inventario de extremo a extremo", () => {
     expect(suyo.status).toBe(201);
 
     const ajeno = await pedir("POST", "/v1/inventory/receipts", ALMACENISTA, {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: W2,
       product_id: PROD,
@@ -330,6 +335,7 @@ describe("inventario de extremo a extremo", () => {
                       (now() at time zone 'America/Caracas')::date, now())`;
 
     const r = await pedir("POST", "/v1/inventory/receipts", JEFE, {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: W1,
       product_id: PROD,
@@ -367,6 +373,7 @@ describe("inventario de extremo a extremo", () => {
 
     // Una fecha sin tasa NO se inventa: 409 con la voz clara.
     const sinTasa = await pedir("POST", "/v1/inventory/receipts", JEFE, {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: W1,
       product_id: PROD,
@@ -377,5 +384,29 @@ describe("inventario de extremo a extremo", () => {
     });
     expect(sinTasa.status).toBe(409);
     expect(((await sinTasa.json()) as { code: string }).code).toBe("EXCHANGE_RATE_MISSING");
+  });
+
+  // ── EL ORIGEN, OBLIGATORIO (ADR-0066 §3) ──────────────────────────────────
+  // La mercancía ya no entra «sin más»: toda entrada declara de dónde viene, porque el origen
+  // es lo que elige su contrapartida contable. Esta ruta admite solo «aporte» —lo que ya era
+  // tuyo—; lo que trae un proveedor entra por la llegada, que registra documento y dinero.
+  it("una entrada SIN origen se rechaza y el mensaje remite a la puerta", async () => {
+    const r = await pedir("POST", "/v1/inventory/receipts", JEFE, {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      product_id: PROD,
+      quantity: "1",
+      unit_amount: "10",
+      currency: "VES",
+    });
+    expect(r.status).toBe(422);
+    const cuerpo = JSON.stringify(await r.json());
+    expect(cuerpo).toMatch(/Llegó mercancía/);
+    // Y lo que se rechaza NO se escribe: la existencia no se mueve.
+    const [n] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.inventory_moves
+       where company_id = ${COMPANY} and product_id = ${PROD} and quantity = 1
+         and functional_amount = 10`;
+    expect(n!.n).toBe("0");
   });
 });

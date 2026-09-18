@@ -158,6 +158,10 @@ export {
   ApAgingResponse,
   SupplierStatementResponse,
   ListPurchaseOrdersResponse,
+  ArrivalLineRequest,
+  RegisterArrivalRequest,
+  ArrivalResponse,
+  ArrivalImpactResponse,
 } from "./purchases.js";
 export {
   AccountKind,

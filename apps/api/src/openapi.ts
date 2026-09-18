@@ -109,6 +109,9 @@ import {
   RegisterSupplierPaymentRequest,
   SupplierPaymentResponse,
   SimplePurchaseRequest,
+  RegisterArrivalRequest,
+  ArrivalResponse,
+  ArrivalImpactResponse,
   SimplePurchaseResponse,
   RetentionReceiptResponse,
   CreateRetentionRuleRequest,
@@ -2467,6 +2470,54 @@ export function buildOpenApiDocument(): object {
     },
     responses: {
       201: okJson(respuestaPago, "Pago aplicado, con el comprobante si se pidió."),
+      ...erroresComunes,
+    },
+  });
+  const llegada = registry.register("RegisterArrivalRequest", RegisterArrivalRequest);
+  const llegadaResp = registry.register("ArrivalResponse", ArrivalResponse);
+  registry.registerPath({
+    method: "post",
+    path: "/v1/arrivals",
+    summary: "Llegó mercancía: la ÚNICA puerta por la que entra la mercancía (ADR-0066)",
+    description:
+      "La persona describe el hecho y el servidor deriva el asiento, en UNA transacción. Sin " +
+      "`supplier_id` es mercancía que ya era suya (inventario inicial o aporte, contra aportes " +
+      "en inventario). Con proveedor, `invoice` dice el resto: «present» es la compra con " +
+      "factura —libro de compras, crédito fiscal o IVA al costo, retención si hay regla—, " +
+      "«pending» deja la recepción contra «mercancía recibida por facturar», y «none» es la " +
+      "compra SIN soporte fiscal, que entra al costo pagado y queda FUERA del libro. El costo " +
+      "de cada línea va por unidad o por el total de la línea, y el otro lo calcula el " +
+      "servidor. La fecha está acotada (ADR-0066 §5). Los permisos los comprueba cada pieza: " +
+      "inventory.move para el aporte, purchase.receive para recibir, purchase.invoice.register " +
+      "para la factura.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: llegada } } },
+    },
+    responses: {
+      201: okJson(llegadaResp, "Qué salida tomó la llegada, con su recepción, factura y pago."),
+      ...erroresComunes,
+      409: errorRef("Documento duplicado del proveedor, sin tasa, o sin regla de IVA."),
+    },
+  });
+  const impactoLlegada = registry.register("ArrivalImpactResponse", ArrivalImpactResponse);
+  registry.registerPath({
+    method: "get",
+    path: "/v1/arrivals/impact",
+    summary: "Lo que se vendió desde una fecha (antes de fechar una llegada hacia atrás)",
+    description:
+      "El promedio móvil se calcula en el ORDEN en que entran los movimientos: una llegada " +
+      "fechada hacia atrás NO corrige el costo de lo que se vendió entre medias. La pantalla " +
+      "enseña esta cuenta antes de confirmar, porque ningún invariante la ve — todos comparan " +
+      "sumas, y esto es un problema de orden (ADR-0066 §5).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({ from: z.string(), product_ids: z.string().optional() }),
+    },
+    responses: {
+      200: okJson(impactoLlegada, "Unidades salidas por producto desde esa fecha."),
       ...erroresComunes,
     },
   });

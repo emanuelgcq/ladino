@@ -10,6 +10,7 @@ import {
   RegisterSupplierPaymentRequest,
   SimplePurchaseRequest,
   CreateRetentionRuleRequest,
+  RegisterArrivalRequest,
 } from "@ladino/schemas";
 import {
   createSupplier,
@@ -20,6 +21,8 @@ import {
   registerSupplierCreditNote,
   registerSupplierPayment,
   simplePurchase,
+  registerArrival,
+  ventasIntermedias,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -278,6 +281,29 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     return c.json(r.value, 201);
   });
 
+  /**
+   * «FALTA LA FACTURA» (ADR-0066 §8). Lo recibido que todavía no está facturado, con su
+   * antigüedad: la misma consulta que alimenta el aviso de los 30 días, para que la pantalla y
+   * el control no puedan decir cosas distintas.
+   */
+  app.get("/v1/goods-receipts", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const pendientes = c.req.query("pending_invoice") === "1";
+    const items = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLecturaDeCompras(tx, actor, companyId, ["purchase.receive"]);
+      if (!pendientes) return [];
+      return tx<Record<string, unknown>[]>`
+        select receipt_id as id, received_on::text as received_on, age_days,
+               supplier_id, supplier_name, delivery_note_ref,
+               quantity_received::text as quantity_received,
+               quantity_invoiced::text as quantity_invoiced,
+               pending_amount::text as pending_amount
+          from platform.receipts_pending_invoice(${companyId})`;
+    });
+    return c.json({ items }, 200);
+  });
+
   app.get("/v1/goods-receipts/:id", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
@@ -470,6 +496,47 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const r = await withTransaction(sql, actor, (uow) => simplePurchase(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
+  });
+
+  /**
+   * LA LLEGADA DE MERCANCÍA (ADR-0066) — la única puerta. Un solo caso de uso transaccional
+   * decide cuál de las cuatro salidas contables le toca al hecho que la persona describió;
+   * los permisos los comprueba cada pieza que se compone, con su alcance de almacén.
+   */
+  app.post("/v1/arrivals", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = RegisterArrivalRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => registerArrival(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
+  /**
+   * Lo que se vendió desde una fecha: la pantalla lo muestra ANTES de confirmar una llegada
+   * fechada hacia atrás, porque ese costo ya quedó registrado y no se corrige (ADR-0066 §5).
+   */
+  app.get("/v1/arrivals/impact", async (c) => {
+    const { companyId } = requireCompany(c);
+    const desde = c.req.query("from") ?? "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(desde)) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "«from» debe ser una fecha YYYY-MM-DD.",
+      });
+    }
+    const productos = (c.req.query("product_ids") ?? "")
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p !== "")
+      .map((p) => idValido(p));
+    const { actor } = c.get("ladino.auth");
+    const filas = await withTransaction(sql, actor, ({ sql: tx }) =>
+      ventasIntermedias(tx, companyId, desde, productos),
+    );
+    return c.json({ sales_since: filas }, 200);
   });
 
   app.get("/v1/retention-receipts", async (c) => {

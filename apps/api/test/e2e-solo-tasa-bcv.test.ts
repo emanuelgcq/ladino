@@ -141,6 +141,7 @@ describe("solo existe la tasa del BCV", () => {
   it("§4 — una entrada de inventario ya no se valora a «otra tasa»", async () => {
     // Ids cualesquiera: el rechazo va antes de mirar producto, depósito o permisos.
     const r = await pedir("POST", "/v1/inventory/receipts", {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: crypto.randomUUID(),
       product_id: crypto.randomUUID(),

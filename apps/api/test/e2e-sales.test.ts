@@ -222,6 +222,7 @@ beforeAll(async () => {
   // fabricar un estado que el propio sistema no sabe producir, y el costo que
   // la factura copia dejaría de ser comprobable.
   const semilla = await pedir("POST", "/v1/inventory/receipts", VENDEDOR, {
+    origin: "aporte",
     company_id: COMPANY,
     warehouse_id: W1,
     product_id: PROD,

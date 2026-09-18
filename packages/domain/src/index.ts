@@ -27,6 +27,7 @@ export { createPriceList, setPrice, type PricingError } from "./pricing.js";
 export {
   receiveStock,
   totalDeEntrada,
+  unitarioDeEntrada,
   issueStock,
   issueStockBatch,
   adjustStock,
@@ -38,6 +39,13 @@ export {
   revalueStock,
 } from "./inventory.js";
 export { consumeRecipe, type RecipeError } from "./recipes.js";
+// ADR-0066: la ÚNICA puerta por la que la mercancía entra al negocio.
+export {
+  registerArrival,
+  ventasIntermedias,
+  DIAS_HACIA_ATRAS,
+  type ArrivalError,
+} from "./arrivals.js";
 export {
   createCustomer,
   updateCustomer,

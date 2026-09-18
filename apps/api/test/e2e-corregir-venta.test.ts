@@ -196,6 +196,7 @@ beforeAll(async () => {
     [PAN, null, "10", "80"],
   ] as const) {
     const r = await pedir("POST", "/v1/inventory/receipts", {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: W1,
       product_id: producto,

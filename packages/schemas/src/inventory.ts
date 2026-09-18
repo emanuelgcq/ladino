@@ -73,6 +73,19 @@ export const ReceiveStockApiRequest = ReceiveStockRequest.omit({ amount: true })
     amount: amount.optional(),
     /** Costo POR UNIDAD en `currency`; el total lo calcula el servidor. */
     unit_amount: amount.optional(),
+    /**
+     * EL ORIGEN, OBLIGATORIO (ADR-0066 §3). Toda entrada declara de dónde viene: esta ruta es
+     * la de la mercancía que YA ERA TUYA —inventario inicial o aporte del dueño—, que se asienta
+     * contra «aportes en inventario». Lo que viene de un proveedor entra por la llegada, que
+     * además registra su documento y su dinero. Sin origen no se persiste: una entrada sin
+     * contrapartida declarada es exactamente lo que este ADR cierra.
+     */
+    origin: z.literal("aporte", {
+      errorMap: () => ({
+        message:
+          "Declara el origen de la entrada: «aporte» es la mercancía que ya era tuya (inventario inicial). La mercancía de un proveedor entra por «Llegó mercancía», que registra además su documento y su dinero.",
+      }),
+    }),
   })
   .strict()
   .refine((r) => (r.amount === undefined) !== (r.unit_amount === undefined), {

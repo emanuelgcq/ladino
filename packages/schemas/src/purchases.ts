@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { InventoryMoveResponse } from "./inventory.js";
 
 /**
  * Contratos de compras (migración 22, ADR-0039/0040). Todo importe y toda
@@ -156,8 +157,12 @@ export const RegisterSupplierInvoiceRequest = z
     company_id: uuid,
     supplier_id: uuid,
     purchase_order_id: uuid.optional(),
-    /** El correlativo DEL PROVEEDOR, tal como él lo emitió. */
-    supplier_document_number: z.string().trim().min(1).max(60),
+    /**
+     * El correlativo DEL PROVEEDOR, tal como él lo emitió. OPCIONAL desde ADR-0066: una compra
+     * sin soporte fiscal no tiene número que copiar, y exigirlo era lo que empujaba a
+     * inventarlo. La llave contra el doble pago es condicional (migración 69).
+     */
+    supplier_document_number: z.string().trim().min(1).max(60).optional(),
     /** Su número de control. Nulo para el extranjero, que aporta referencia. */
     supplier_control_number: z.string().trim().min(1).max(60).optional(),
     supplier_document_ref: z.string().trim().min(1).max(120).optional(),
@@ -176,6 +181,12 @@ export const RegisterSupplierInvoiceRequest = z
      * `purchase.price_variance.approve`; sin él, la factura se rechaza.
      */
     approve_price_variance: z.boolean().optional(),
+    /**
+     * FALSE = compra real SIN soporte fiscal (ADR-0066 §2): entra al inventario y al dinero,
+     * NO al libro de compras y NO genera crédito fiscal. Por omisión, true.
+     * VALIDAR-TRIBUTARIO: P-27 y P-28 de PENDIENTES_ASESOR.
+     */
+    fiscal_support: z.boolean().optional(),
   })
   .strict();
 export type RegisterSupplierInvoiceRequest = z.infer<typeof RegisterSupplierInvoiceRequest>;
@@ -370,7 +381,7 @@ export const SupplierInvoiceResponse = z
     company_id: uuid,
     supplier_id: uuid,
     purchase_order_id: uuid.nullable(),
-    supplier_document_number: z.string(),
+    supplier_document_number: z.string().nullable(),
     supplier_control_number: z.string().nullable(),
     supplier_document_ref: z.string().nullable(),
     invoice_date: z.string(),
@@ -381,6 +392,8 @@ export const SupplierInvoiceResponse = z
     total_amount: z.string(),
     /** ADR-0040 §7: derivado del contribuyente de la EMPRESA. */
     tax_is_recoverable: z.boolean(),
+    /** ADR-0066 §2: false = compra sin soporte fiscal, fuera del libro y sin crédito fiscal. */
+    fiscal_support: z.boolean(),
     retention_total: z.string(),
     transaction_currency: z.string(),
     functional_currency: z.string(),
@@ -544,3 +557,113 @@ export const SimplePurchaseResponse = z
   })
   .strict();
 export type SimplePurchaseResponse = z.infer<typeof SimplePurchaseResponse>;
+
+/**
+ * LA LLEGADA DE MERCANCÍA (ADR-0066) — el contrato de la única puerta por la que la mercancía
+ * entra al negocio. La persona describe el hecho y el servidor deriva el asiento:
+ *
+ *   · sin `supplier_id`        → «ya era mía»: inventario inicial o aporte;
+ *   · `invoice: "present"`     → compra con factura: libro, crédito fiscal o costo, retención;
+ *   · `invoice: "pending"`     → recepción: la factura llega después;
+ *   · `invoice: "none"`        → compra sin soporte fiscal: fuera del libro y sin crédito.
+ */
+export const ArrivalLineRequest = z
+  .object({
+    product_id: uuid,
+    quantity,
+    /** El costo POR UNIDAD de la línea. */
+    unit_amount: amount.optional(),
+    /** O el TOTAL de la línea: uno de los dos, nunca los dos. El otro lo calcula el servidor. */
+    amount: amount.optional(),
+    /** La línea del pedido que satisface, si la llegada viene de uno. */
+    purchase_order_line_id: uuid.optional(),
+    /** Lote y vencimiento: obligatorios de hecho para el producto que los lleva (FEFO). */
+    lot_code: z.string().trim().min(1).max(60).optional(),
+    lot_expires_at: z.string().date().optional(),
+  })
+  .strict()
+  .refine((l) => (l.unit_amount === undefined) !== (l.amount === undefined), {
+    message:
+      "Da el costo por unidad (unit_amount) o el total de la línea (amount): uno de los dos.",
+  });
+export type ArrivalLineRequest = z.infer<typeof ArrivalLineRequest>;
+
+export const RegisterArrivalRequest = z
+  .object({
+    company_id: uuid,
+    warehouse_id: uuid,
+    /** La moneda en la que se escribió el costo. La conversión la hace el servidor. */
+    currency,
+    /** Ausente = la mercancía YA ERA TUYA (inventario inicial o aporte del dueño). */
+    supplier_id: uuid.optional(),
+    /** Con proveedor: en qué estado está su factura. Obligatorio si hay proveedor. */
+    invoice: z.enum(["present", "pending", "none"]).optional(),
+    /** Referencia del documento del proveedor: solo con `invoice: "present"`. */
+    supplier_document_number: z.string().trim().min(1).max(60).optional(),
+    supplier_control_number: z.string().trim().min(1).max(60).optional(),
+    supplier_document_ref: z.string().trim().min(1).max(120).optional(),
+    /** El día que llegó. Por omisión, hoy en Venezuela. Acotado en el servidor (ADR-0066 §5). */
+    arrived_on: z.string().date().optional(),
+    /** Guía, nota de entrega, «lo traje yo»: queda en el documento. */
+    reference: z.string().trim().min(1).max(60).optional(),
+    /** El pedido del que viene, si viene de uno. */
+    purchase_order_id: uuid.optional(),
+    retention_concepts: z.array(z.string().trim().min(1).max(40)).max(10).optional(),
+    /** Pagada en el acto. Ausente = queda debiendo. */
+    payment: z
+      .object({
+        instrument: PurchaseInstrument,
+        /** Lo pagado. Ausente = el saldo entero de la factura. */
+        amount: amount.optional(),
+        account_id: uuid.optional(),
+        reference: z.string().trim().min(1).max(100).optional(),
+        allow_negative_balance: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    lines: z.array(ArrivalLineRequest).min(1).max(200),
+  })
+  .strict()
+  .refine((r) => (r.supplier_id === undefined) === (r.invoice === undefined), {
+    message:
+      "Con proveedor hay que decir en qué estado está su factura (present, pending, none); sin proveedor, no hay factura que declarar.",
+  })
+  .refine((r) => r.supplier_id !== undefined || r.payment === undefined, {
+    message: "La mercancía que ya era tuya no se paga a nadie.",
+  })
+  .refine(
+    (r) =>
+      r.invoice === "present" ||
+      (r.supplier_document_number === undefined &&
+        r.supplier_control_number === undefined &&
+        r.supplier_document_ref === undefined),
+    { message: "Los datos de la factura solo se mandan cuando la factura existe." },
+  );
+export type RegisterArrivalRequest = z.infer<typeof RegisterArrivalRequest>;
+
+export const ArrivalResponse = z
+  .object({
+    /** Cuál de las cuatro salidas contables tomó la llegada. */
+    kind: z.enum(["own", "receipt", "invoiced", "unsupported"]),
+    receipt: GoodsReceiptResponse.nullable(),
+    invoice: SupplierInvoiceResponse.nullable(),
+    payment: SupplierPaymentResponse.nullable(),
+    /** Movimientos de kardex del camino «ya era mía»; en los demás van dentro de la recepción. */
+    moves: z.array(InventoryMoveResponse),
+  })
+  .strict();
+export type ArrivalResponse = z.infer<typeof ArrivalResponse>;
+
+/**
+ * Lo que se vendió entre la fecha de la llegada y hoy. La pantalla lo muestra ANTES de
+ * confirmar una llegada fechada hacia atrás: ese costo ya quedó registrado y no se corrige
+ * (ADR-0066 §5).
+ */
+export const ArrivalImpactResponse = z
+  .object({
+    sales_since: z.array(
+      z.object({ product_id: uuid, name: z.string(), quantity: z.string() }).strict(),
+    ),
+  })
+  .strict();
+export type ArrivalImpactResponse = z.infer<typeof ArrivalImpactResponse>;

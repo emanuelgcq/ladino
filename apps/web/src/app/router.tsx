@@ -7,6 +7,7 @@ import { Clientes } from "../pages/clientes/Clientes.js";
 import { Productos } from "../pages/catalogo/Productos.js";
 import { Precios } from "../pages/catalogo/Precios.js";
 import { Inventario } from "../pages/inventario/Inventario.js";
+import { LlegoMercancia } from "../pages/negocio/LlegoMercancia.js";
 import { Compras } from "../pages/compras/Compras.js";
 import { Contabilidad } from "../pages/contabilidad/Contabilidad.js";
 import { Libros } from "../pages/libros/Libros.js";
@@ -134,6 +135,7 @@ export const router = createBrowserRouter([
       { path: "admin/productos", element: <Productos /> },
       { path: "admin/precios", element: <Precios /> },
       { path: "admin/inventario", element: <Inventario /> },
+      { path: "admin/llego-mercancia", element: <LlegoMercancia /> },
       { path: "admin/compras", element: <Compras /> },
       { path: "admin/contabilidad", element: <Contabilidad /> },
       { path: "admin/libros", element: <Libros /> },

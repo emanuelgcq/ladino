@@ -15,6 +15,7 @@ import {
   ShoppingCart,
   Store,
   Tags,
+  Truck,
   Users,
   Wallet,
   type LucideIcon,
@@ -112,6 +113,15 @@ export const NAV_ADMIN: NavGroup[] = [
         label: "Clientes",
         icon: Users,
         permiso: ["customer.tax_id.manage", "accounting.read"],
+      },
+      {
+        // LA ÚNICA PUERTA (ADR-0066). Sin `fiscal` —una empresa sin RIF también recibe
+        // mercancía— y sin `advanced`: no depende de que el módulo de compras esté activo.
+        // Los tres permisos son los tres caminos: aportar, recibir y facturar.
+        to: "/admin/llego-mercancia",
+        label: "Llegó mercancía",
+        icon: Truck,
+        permiso: ["inventory.move", "purchase.receive", "purchase.invoice.register"],
       },
       {
         to: "/compras",
@@ -259,6 +269,7 @@ export const CRUMBS: Record<string, string> = {
   "/admin/productos": "Productos",
   "/admin/precios": "Listas de precios",
   "/admin/inventario": "Inventario",
+  "/admin/llego-mercancia": "Llegó mercancía",
   "/admin/compras": "Compras",
   "/admin/contabilidad": "Contabilidad",
   "/admin/libros": "Libros fiscales",

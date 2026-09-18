@@ -1036,4 +1036,77 @@ describe("compras de extremo a extremo", () => {
     // 4. Y la deuda con el proveedor bajó por el total de la nota.
     expect(Number(f.total_amount) - Number(n.balance)).toBe(5000 + ivaNota);
   });
+
+  // ── LA COMPRA SIN SOPORTE FISCAL (ADR-0066 §2, migración 69) ──────────────
+  // Compró en el mercado y no le dieron factura. Antes esto no cabía: o se inventaba un número
+  // —y entraba un documento inexistente al libro de compras— o se registraba como aporte del
+  // dueño y el dinero que salió de la caja no salía en ningún sitio.
+
+  it("la compra sin factura queda registrada y debida, pero NO entra al libro ni al crédito fiscal", async () => {
+    const [antes] = await sql<{ c: string }[]>`
+      select creditos::text as c
+        from platform.recompute_iva_period(${COMPANY}, ${HOY}::date, ${HOY}::date, 0)`;
+
+    const r = await pedir("POST", "/v1/supplier-invoices", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      invoice_date: HOY,
+      currency: "VES",
+      fiscal_support: false,
+      lines: [{ product_id: PROD_A, quantity: "20", unit_price: "500" }],
+    });
+    expect(r.status, await r.clone().text()).toBe(201);
+    const f = (await r.json()) as {
+      id: string;
+      supplier_document_number: string | null;
+      tax_amount: string;
+      total_amount: string;
+      tax_is_recoverable: boolean;
+      fiscal_support: boolean;
+    };
+    // Sin factura no hay número que copiar, y ya no se exige.
+    expect(f.supplier_document_number).toBeNull();
+    expect(f.fiscal_support).toBe(false);
+    // Sin documento no hay IVA que declarar ni que recuperar: lo pagado ES el costo.
+    expect(f.tax_amount).toBe("0.00000000");
+    expect(f.tax_is_recoverable).toBe(false);
+    expect(f.total_amount).toBe("10000.00000000");
+
+    // No está en el libro de compras: el libro relaciona documentos.
+    const [enLibro] = await sql<{ n: string }[]>`
+      select count(*)::text as n
+        from platform.purchases_book(${COMPANY}, ${HOY}::date, ${HOY}::date)
+       where invoice_id = ${f.id}`;
+    expect(enLibro!.n).toBe("0");
+
+    // Y no sube el crédito fiscal del período.
+    const [despues] = await sql<{ c: string }[]>`
+      select creditos::text as c
+        from platform.recompute_iva_period(${COMPANY}, ${HOY}::date, ${HOY}::date, 0)`;
+    expect(despues!.c).toBe(antes!.c);
+
+    // Pero la deuda con el proveedor existe, y el hecho tiene asiento o cola: nunca ninguno.
+    const [saldo] = await sql<{ s: string }[]>`
+      select platform.supplier_invoice_balance(${COMPANY}, ${f.id})::text as s`;
+    expect(saldo!.s).toBe("10000.00000000");
+    const [cobertura] = await sql<{ n: string }[]>`
+      select count(*)::text as n from platform.accounting_coverage_gaps(${COMPANY})
+       where source_id = ${f.id}`;
+    expect(cobertura!.n).toBe("0");
+  });
+
+  it("una compra sin factura NO practica retención: se para y dice por qué", async () => {
+    const r = await pedir("POST", "/v1/supplier-invoices", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      invoice_date: HOY,
+      currency: "VES",
+      fiscal_support: false,
+      retention_concepts: ["iva_compras"],
+      lines: [{ product_id: PROD_A, quantity: "1", unit_price: "100" }],
+    });
+    expect(r.status).toBe(422);
+    const cuerpo = (await r.json()) as { message: string };
+    expect(cuerpo.message).toMatch(/sin factura no practica retención/i);
+  });
 });

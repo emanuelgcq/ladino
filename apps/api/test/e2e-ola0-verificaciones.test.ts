@@ -165,6 +165,7 @@ describe("Ola 0 · verificaciones ejecutadas", () => {
   // cambiar su aserción.
   it("V1 · un producto con lote y existencia en ese lote se vende (descuenta del lote)", async () => {
     const entrada = await pedir("POST", "/v1/inventory/receipts", {
+      origin: "aporte",
       company_id: COMPANY,
       warehouse_id: W1,
       product_id: QUESO,
