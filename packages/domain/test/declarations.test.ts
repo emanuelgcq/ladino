@@ -24,7 +24,7 @@ describe("aTxtRetencionesIva", () => {
     // La PORCIÓN retenida (75 %), no la alícuota del IVA.
     rate: "0.75000000",
     retained_amount: "120.00000000",
-    legal_source: "PA 0049",
+    legal_source: "PA SNAT/2025/000054",
     receipt_status: "issued",
   };
 

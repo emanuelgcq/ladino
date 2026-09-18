@@ -27,7 +27,7 @@
 -- =============================================================================
 
 begin;
-select plan(71);
+select plan(72);
 
 -- ── Fixtures ─────────────────────────────────────────────────────────────────
 insert into auth.users (id) values ('aaaa0022-0000-4000-8000-0000000000a1');
@@ -572,7 +572,18 @@ select is(platform.supplier_invoice_balance(
             'aaaa0022-0000-4000-8000-0000000000a2', 'aaaa0022-0000-4000-8000-00000000cb01'::uuid),
   10440::numeric, 'la nota de crédito recibida REDUCE el saldo: 11 600 − 1 160 = 10 440');
 
--- ── 11. El pago: bruto cancela deuda, neto sale del banco ───────────────────
+-- ── 11. El pago: cancela lo que se le debe al PROVEEDOR ─────────────────────
+-- Desde la migración 68 la retención nace al REGISTRAR la factura —registrarla como cuenta
+-- por pagar es el abono en cuenta, y la PA SNAT/2025/000054 retiene «al pago o al abono en
+-- cuenta, lo que ocurra primero»—, así que el saldo la descuenta desde entonces y el pago no
+-- retiene nada. Antes esta misma fixture escribía un pago que retenía 1 200 al pagar.
+update public.supplier_invoices set retention_total = 1200
+ where id = 'aaaa0022-0000-4000-8000-00000000cb01'::uuid;
+select is(platform.supplier_invoice_balance(
+            'aaaa0022-0000-4000-8000-0000000000a2', 'aaaa0022-0000-4000-8000-00000000cb01'::uuid),
+  9240::numeric,
+  'practicada la retención, al PROVEEDOR se le deben 1 200 menos: 10 440 − 1 200 = 9 240');
+
 -- Desde la migración 29 todo pago LLEVA cuenta.
 insert into public.company_accounts (id, tenant_id, company_id, name, currency, kind) values
   ('aaaa0022-0000-4000-8000-000000000ca1', 'aaaa0022-0000-4000-8000-00000000000a',
@@ -585,12 +596,12 @@ insert into public.supplier_payments
 values
   ('aaaa0022-0000-4000-8000-00000000000a', 'aaaa0022-0000-4000-8000-0000000000a2',
    'aaaa0022-0000-4000-8000-00000000ba01'::uuid, 'aaaa0022-0000-4000-8000-00000000cb01'::uuid,
-   now(), 'transferencia', 10440, 1200, 9240, 10440, 'VES', 1, 10440, 'VES', 'identidad', now(),
+   now(), 'transferencia', 9240, 0, 9240, 9240, 'VES', 1, 9240, 'VES', 'identidad', now(),
    'aaaa0022-0000-4000-8000-000000000ca1');
 select is(platform.supplier_invoice_balance(
             'aaaa0022-0000-4000-8000-0000000000a2', 'aaaa0022-0000-4000-8000-00000000cb01'::uuid),
   0::numeric,
-  'el pago BRUTO cancela la deuda entera: lo retenido se le debe al fisco, no al proveedor');
+  'y pagando ese neto la factura queda saldada: lo retenido se le debe al FISCO, no a él');
 
 select throws_ok($$
   insert into public.supplier_payments
@@ -607,7 +618,7 @@ $$, '23514', null,
   'un pago donde bruto ≠ retenido + neto se rechaza: el descuadre sería dinero que no está en ningún lado');
 
 select throws_ok($$
-  update public.supplier_payments set gross_amount = 1 where gross_amount = 10440
+  update public.supplier_payments set gross_amount = 1 where gross_amount = 9240
 $$, 'LAD06', null, 'un pago a proveedor es append-only: no se edita');
 
 -- ── 12. Append-only de los documentos confirmados ───────────────────────────

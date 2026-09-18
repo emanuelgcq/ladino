@@ -127,6 +127,23 @@ Y dos eventos que ya existían ganan un consumidor contable (migración 58, ADR-
 reposición de una venta anulada. El ORIGEN va en `source_kind`, nunca en un nombre de evento
 paralelo.
 
+## Compras (migraciones 22 y 28; nota de crédito recibida, migración 67)
+
+Los escribe `packages/domain/src/purchases.ts` y son a la vez el `source_event` de la plantilla
+contable correspondiente en el preset `ve_basico`. El vocabulario lo asevera el pgTAP 26.
+
+- `ap.invoice_posted` — se registró la factura del proveedor. Desde la migración 68 su asiento
+  acredita al proveedor el **neto** y al fisco lo retenido: la retención se practica al abono en
+  cuenta (ADR-0065 §3).
+- `ap.payment_made` — se le pagó al proveedor. Cancela el neto; ya no crea el pasivo con el fisco.
+- `ap.credit_note_received` — **llegó una nota de crédito del proveedor** (migración 67). Es el
+  mismo nombre en el audit, en el outbox y en la plantilla: un hecho, un nombre. Su asiento baja
+  la deuda y revierte lo que la factura cargó —inventario y crédito fiscal—, y el documento entra
+  al libro de compras en negativo (LIVA arts. 56 y 37; Reglamento art. 75 lit. a).
+
+Una nota de crédito recibida **no** se nombra como la emitida (`fiscal.credit_note.issued`): la
+emite el proveedor, no nosotros, y confundirlas mezclaría débito con crédito fiscal.
+
 ## Estructura organizacional
 
 Sección nueva (S0.5). Las cuatro anteriores —Fiscal, Accounting, Inventory, Money— cubren el

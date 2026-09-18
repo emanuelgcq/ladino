@@ -142,7 +142,10 @@ select is(
                                -- Corregir una venta (migración 59, ADR-0061):
                                'sales.receipt_return.issued', 'ar.credit_refunded',
                                -- Mover dinero entre cuentas (migración 61, ADR-0062 §3):
-                               'treasury.transfer.registered')),
+                               'treasury.transfer.registered',
+                               -- Nota de crédito recibida (migración 67, ADR-0065 §1): el
+                               -- MISMO nombre que ya emite registerSupplierCreditNote.
+                               'ap.credit_note_received')),
   0::bigint,
   'los eventos del preset son los del OUTBOX, con su nombre real: no se inventa un vocabulario paralelo');
 

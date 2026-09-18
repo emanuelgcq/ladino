@@ -1058,6 +1058,30 @@ export async function registerSupplierInvoice(
   if (!impuestoFunc.ok) return impuestoFunc;
   const totalFunc = subtotalFunc.value.plus(impuestoFunc.value);
 
+  /**
+   * LO RETENIDO, POR TRIBUTO (ADR-0065 §3, migración 68). Registrar la factura como cuenta
+   * por pagar ES el abono en cuenta, y la PA SNAT/2025/000054 (G.O. 43.171, vigente desde
+   * 2025-08-01) retiene «al pago o al abono en cuenta, lo que ocurra primero»: el pasivo con
+   * el fisco nace AQUÍ, no cuando se le pague al proveedor. Al proveedor se le acredita el
+   * neto. Los importes ya vienen en moneda funcional: `supplier_retentions` guarda la base y
+   * lo retenido convertidos (migración 65).
+   */
+  const [retenido] = await sql<{ iva: string; islr: string }[]>`
+    select coalesce(sum(retained_amount) filter (where retention_code = 'iva'), 0)::text as iva,
+           coalesce(sum(retained_amount) filter (where retention_code = 'islr'), 0)::text as islr
+      from public.supplier_retentions where supplier_invoice_id = ${facturaId}`;
+  const ivaRetenido = parseDecimal(retenido?.iva ?? "0");
+  if (!ivaRetenido.ok) {
+    return err({ code: "VALIDATION_FAILED", message: ivaRetenido.error.message });
+  }
+  const islrRetenido = parseDecimal(retenido?.islr ?? "0");
+  if (!islrRetenido.ok) {
+    return err({ code: "VALIDATION_FAILED", message: islrRetenido.error.message });
+  }
+  const retenidoTotal = ivaRetenido.value.plus(islrRetenido.value);
+  // El neto SALE del total, no se añade: el asiento cuadra por construcción.
+  const netoFunc = totalFunc.minus(retenidoTotal);
+
   // El asiento de la compra. `taxRecoverable` es la bandera que decide si el
   // IVA va a crédito fiscal o al costo (ADR-0040 §7): la plantilla tiene las
   // dos ramas y este booleano elige, sin que nadie escriba una cuenta aquí.
@@ -1075,6 +1099,10 @@ export async function registerSupplierInvoice(
       subtotal: subtotalFunc.value.toFixed(8),
       tax_amount: impuestoFunc.value.toFixed(8),
       total: totalFunc.toFixed(8),
+      net_amount: netoFunc.toFixed(8),
+      retained_iva: ivaRetenido.value.toFixed(8),
+      retained_islr: islrRetenido.value.toFixed(8),
+      retained_total: retenidoTotal.toFixed(8),
     },
     conditions: {
       taxRecoverable: ivaRecuperable,
@@ -1654,8 +1682,10 @@ export async function registerSupplierCreditNote(
   const ctx = await autorizar(sql, actor.userId, input.company_id, "purchase.credit_note.register");
   if (!ctx.ok) return ctx;
 
-  const [factura] = await sql<{ supplier_id: string; status: string }[]>`
-    select supplier_id, status from public.supplier_invoices
+  const [factura] = await sql<
+    { supplier_id: string; status: string; tax_is_recoverable: boolean }[]
+  >`
+    select supplier_id, status, tax_is_recoverable from public.supplier_invoices
      where id = ${input.supplier_invoice_id} and company_id = ${input.company_id}`;
   if (!factura) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   if (!["posted", "paid"].includes(factura.status)) {
@@ -1759,6 +1789,49 @@ export async function registerSupplierCreditNote(
       return n!.id;
     });
 
+    // EL ASIENTO DE LA NOTA (ADR-0065 §1, migración 67). La nota devuelve mercancía: baja la
+    // deuda con el proveedor y revierte lo que la factura cargó — inventario y crédito fiscal
+    // (LIVA art. 37: el impuesto de la operación anulada se deduce del crédito fiscal), o
+    // inventario por el total si el IVA no era recuperable. Antes NO generaba asiento: la deuda
+    // bajaba en el auxiliar y el mayor seguía debiendo el bruto, y ningún control lo veía.
+    const [importes] = await sql<{ sub: string; imp: string; tot: string }[]>`
+      select subtotal_amount::text as sub, tax_amount::text as imp, total_amount::text as tot
+        from public.supplier_credit_notes where id = ${nota}`;
+    const aFunc = (v: string): Result<Decimal, PurchaseError> => {
+      const d = parseDecimal(v);
+      if (!d.ok) return err({ code: "VALIDATION_FAILED", message: d.error.message });
+      return ok(d.value.times(tasa.value.rate).toDecimalPlaces(8, 4));
+    };
+    const subFunc = aFunc(importes?.sub ?? "0");
+    if (!subFunc.ok) return subFunc;
+    const impFunc = aFunc(importes?.imp ?? "0");
+    if (!impFunc.ok) return impFunc;
+    // El total funcional es la SUMA de las dos partes convertidas, no el total convertido:
+    // redondeados por separado podrían diferir y descuadrar el asiento (misma regla que la
+    // factura de compra).
+    const totFunc = subFunc.value.plus(impFunc.value);
+    const contable = await generateJournalFromDocument(sql, {
+      tenantId: ctx.value.tenantId,
+      companyId: input.company_id,
+      sourceKind: "purchase_credit_note",
+      sourceEvent: "ap.credit_note_received",
+      sourceId: nota,
+      postingDate: input.note_date,
+      postedBy: actor.userId,
+      description: `Nota de crédito del proveedor ${input.supplier_document_number}`,
+      functionalCurrency: ctx.value.functionalCurrency,
+      amounts: {
+        subtotal: subFunc.value.toFixed(8),
+        tax_amount: impFunc.value.toFixed(8),
+        total: totFunc.toFixed(8),
+      },
+      conditions: { taxRecoverable: factura.tax_is_recoverable },
+      backlink: { table: "supplier_credit_notes", id: nota },
+    });
+    if (!contable.ok) {
+      return err({ code: "VALIDATION_FAILED", message: contable.error.message });
+    }
+
     const [total] = await sql<{ t: string }[]>`
       select total_amount::text as t from public.supplier_credit_notes where id = ${nota}`;
     const [saldo] = await sql<{ s: string }[]>`
@@ -1776,6 +1849,7 @@ export async function registerSupplierCreditNote(
         supplier_document_number: input.supplier_document_number,
         total_amount: total?.t ?? "0",
         balance_after: saldo?.s ?? "0",
+        journal_entry_id: contable.value.kind === "posted" ? contable.value.entryId : null,
       },
     );
     return ok({ id: nota, total_amount: total?.t ?? "0", balance: saldo?.s ?? "0" });
@@ -1866,14 +1940,16 @@ export async function registerSupplierPayment(
   }
 
   /**
-   * La retención se APLICA aquí: fue calculada al registrar la factura, con la
-   * regla vigente entonces, y se descuenta del pago. El proveedor cobra el
-   * NETO; el bruto es lo que cancela la deuda.
+   * LA RETENCIÓN YA ESTÁ PRACTICADA (ADR-0065 §3, migración 68). Se calculó y se asentó al
+   * REGISTRAR la factura: registrarla como cuenta por pagar es el abono en cuenta, y la
+   * PA SNAT/2025/000054 retiene «al pago o al abono en cuenta, lo que ocurra primero». Lo que
+   * queda por pagarle al PROVEEDOR es el neto, que es justo lo que devuelve
+   * `supplier_invoice_balance`. Aquí no se descuenta nada más: hacerlo se la cobraría dos
+   * veces, una al fisco en el asiento de la factura y otra al proveedor en el pago.
    *
-   * VALIDAR-TRIBUTARIO: la norma retiene «al pago o al abono en cuenta, lo que
-   * ocurra primero», y el abono en cuenta puede ser el registro mismo de la
-   * factura. Si el asesor confirma esa lectura, lo que cambia es CUÁNDO se
-   * entera al fisco, no el cálculo — que ya está congelado desde el registro.
+   * Lo que sí ocurre al pagar es que las retenciones pasan a `applied` y se emite el
+   * comprobante que el proveedor se lleva. (Cuándo debe ENTREGARSE ese comprobante bajo la
+   * providencia nueva está abierto con el asesor: PENDIENTES_ASESOR, P-26.)
    */
   const pendientes = await sql<{ id: string; retained_amount: string }[]>`
     select id, retained_amount::text as retained_amount from public.supplier_retentions
@@ -1890,36 +1966,22 @@ export async function registerSupplierPayment(
   // en un abono parcial exigiría prorratearla, y una retención prorrateada no
   // se corresponde con ninguna base declarable.
   const cancelaTodo = saldo.ok && bruto.value.amount.equals(saldo.value);
-  // La retención vive en MONEDA FUNCIONAL (supplier_retentions.functional_currency).
-  const aRetener = cancelaTodo ? totalRetenido : totalRetenido.times(0);
+  // El pago no retiene nada: lo retenido se le acreditó al fisco al registrar la factura.
+  const aRetener = totalRetenido.times(0);
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   const funcional = aFuncional(bruto.value, tasa.value.rate, ctx.value.functionalCurrency);
   if (!funcional.ok) return funcional;
 
   /**
-   * LAS DOS MONEDAS, SIN MEZCLAR (hallado por e2e-cuenta-de-caja, 2026-09-15).
-   * Antes el neto era «bruto en la moneda del pago − retención en funcional», y
-   * el asiento recibía ese neto en dólares contra un total en bolívares: todo
-   * pago a proveedor en divisa, con las plantillas cargadas, moría con 422
-   * «asiento descuadrado». Ahora:
-   *   · el NETO del pago (lo que cobra el proveedor, en la moneda del pago) resta
-   *     la retención CONVERTIDA a esa moneda con la tasa del pago;
-   *   · el asiento va entero en funcional: total = bruto × tasa, retenciones en
-   *     funcional, y el neto funcional es la resta de los dos — cuadra por
-   *     construcción, sin redondeo que lo descuadre.
+   * LAS DOS MONEDAS, SIN MEZCLAR (hallado por e2e-cuenta-de-caja, 2026-09-15). El neto era
+   * «bruto en la moneda del pago − retención en funcional», y el asiento recibía ese neto en
+   * dólares contra un total en bolívares: todo pago a proveedor en divisa moría con 422
+   * «asiento descuadrado». Desde la migración 68 el pago no resta retención ninguna —lo
+   * retenido salió del saldo al registrar la factura—, así que las dos monedas ya no se
+   * cruzan: lo que sale del banco es lo que se paga, y su conversión es una sola.
    */
-  const retencionEnPago =
-    input.currency === ctx.value.functionalCurrency
-      ? aRetener
-      : aRetener.dividedBy(tasa.value.rate).toDecimalPlaces(8, 4);
-  const neto = bruto.value.amount.minus(retencionEnPago);
-  if (neto.isNegative()) {
-    return err({
-      code: "VALIDATION_FAILED",
-      message: "La retención supera el pago: el proveedor no puede cobrar un importe negativo.",
-    });
-  }
+  const neto = bruto.value.amount.minus(aRetener);
   const netoFuncional = funcional.value.amount.minus(aRetener);
 
   // La cuenta de la que SALE el efectivo (migración 29): la explícita si el
@@ -2018,7 +2080,7 @@ export async function registerSupplierPayment(
             values (${ctx.value.tenantId}, ${input.company_id}, ${factura.supplier_id},
                     ${input.supplier_invoice_id}, ${serie}, ${num!.n}::bigint, 'issued',
                     ${fecha}, to_char(${fecha}::timestamptz, 'YYYY-MM'),
-                    ${aRetener.toFixed(8)}, ${ctx.value.functionalCurrency})
+                    ${totalRetenido.toFixed(8)}, ${ctx.value.functionalCurrency})
             returning id, supplier_id, supplier_invoice_id, series,
                       receipt_number::int as receipt_number, control_number::int as control_number,
                       status,

@@ -616,10 +616,12 @@ describe("compras de extremo a extremo", () => {
       retenido_iva: "480.00000000",
     });
 
-    // Y lo que se le debe hoy a ese proveedor, en bolívares.
+    // Y lo que se le debe hoy a ese PROVEEDOR, en bolívares: la factura es de 116 USD, pero
+    // 480 Bs (12 USD) de ella se le deben al FISCO desde que se registró la factura
+    // (ADR-0065 §3, migración 68). Al proveedor se le deben 104 USD × 40 = 4 160.
     const [deuda] = await sql<{ d: string }[]>`
       select platform.supplier_debt_today(${COMPANY}, ${f.id})::text as d`;
-    expect(deuda!.d).toBe("4640.00");
+    expect(deuda!.d).toBe("4160.00");
   });
 
   it("al proveedor EXTRANJERO no se le retiene, y su factura registra el documento origen", async () => {
@@ -724,7 +726,9 @@ describe("compras de extremo a extremo", () => {
     const facturas = await pedir("GET", "/v1/supplier-invoices?status=posted", COMPRADOR);
     const lista = (await facturas.json()) as { items: Record<string, string>[] };
     const f = lista.items.find((i) => i["supplier_document_number"] === `FAC-${RUN}-2`)!;
-    expect(f["balance"]).toBe("46400.00000000");
+    // 46 400 de factura menos 4 800 retenidos: al proveedor se le deben 41 600 desde que se
+    // registró (el abono en cuenta es la retención, ADR-0065 §3).
+    expect(f["balance"]).toBe("41600.00000000");
 
     const nc = await pedir("POST", "/v1/supplier-credit-notes", COMPRADOR, {
       company_id: COMPANY,
@@ -739,10 +743,10 @@ describe("compras de extremo a extremo", () => {
     expect(nc.status).toBe(201);
     const n = (await nc.json()) as { total_amount: string; balance: string };
     expect(n.total_amount).toBe("4640.00000000");
-    expect(n.balance).toBe("41760.00000000");
+    expect(n.balance).toBe("36960.00000000");
   });
 
-  it("el pago aplica la retención: el proveedor cobra el neto y el bruto cancela la deuda", async () => {
+  it("el pago cancela el NETO: lo retenido ya se le debía al fisco desde el registro", async () => {
     const facturas = await pedir("GET", "/v1/supplier-invoices?status=posted", COMPRADOR);
     const lista = (await facturas.json()) as { items: Record<string, string>[] };
     const f = lista.items.find((i) => i["supplier_document_number"] === `FAC-${RUN}-2`)!;
@@ -757,6 +761,12 @@ describe("compras de extremo a extremo", () => {
       issue_retention_receipt: true,
       // Lo que se prueba es la RETENCIÓN, no el saldo: la cuenta no tiene con qué y el
       // sobregiro se confirma explícitamente (ADR-0062 §4).
+      //
+      // Desde la migración 68 el pago NO retiene: la retención se practicó al registrar la
+      // factura —registrarla como cuenta por pagar es el abono en cuenta, y la
+      // PA SNAT/2025/000054 retiene al pago o al abono, lo que ocurra primero—, así que el
+      // saldo ya viene neto y lo que sale del banco es ese saldo entero. El comprobante sí
+      // se emite aquí, y dice lo que se retuvo.
       allow_negative_balance: true,
     });
     expect(p.status).toBe(201);
@@ -766,9 +776,9 @@ describe("compras de extremo a extremo", () => {
       balance: string;
       invoice_status: string;
     };
-    // Saldo 41 760; retención 4 800; el proveedor cobra 36 960.
-    expect(cuerpo.payment["gross_amount"]).toBe("41760.00000000");
-    expect(cuerpo.payment["retained_amount"]).toBe("4800.00000000");
+    // Saldo 36 960 (46 400 − 4 800 retenidos − 4 640 de la nota): el proveedor cobra eso.
+    expect(cuerpo.payment["gross_amount"]).toBe("36960.00000000");
+    expect(cuerpo.payment["retained_amount"]).toBe("0.00000000");
     expect(cuerpo.payment["net_amount"]).toBe("36960.00000000");
     expect(cuerpo.balance).toBe("0.00000000");
     expect(cuerpo.invoice_status).toBe("paid");
@@ -939,5 +949,91 @@ describe("compras de extremo a extremo", () => {
     const [n] = await sql<{ n: string }[]>`
       select count(*)::text as n from public.supplier_invoices where purchase_order_id = ${s.order.id}`;
     expect(n!.n).toBe("1");
+  });
+
+  // ── LA NOTA DE CRÉDITO RECIBIDA (ADR-0065 §1, migración 67) ───────────────
+  // Antes: la nota bajaba la deuda con el proveedor, NO generaba asiento, no entraba al libro
+  // de compras y no restaba el crédito fiscal de la planilla. Nada lo detectaba, porque la
+  // cobertura contable ni miraba esa tabla. LIVA arts. 56 y 37; Reglamento arts. 70 y 75 lit. a.
+
+  it("la nota de crédito del proveedor se asienta, entra al libro y resta el crédito fiscal", async () => {
+    // Factura DIRECTA, sin orden: lo que se prueba es la nota, no el ciclo de la orden.
+    const factura = await pedir("POST", "/v1/supplier-invoices", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_id: PROV,
+      supplier_document_number: `FAC-NC-${RUN}`,
+      supplier_control_number: `00-NC${RUN}`,
+      invoice_date: HOY,
+      currency: "VES",
+      // El IVA de la factura lo calcula el servidor con la regla vigente: aquí no se dicta.
+      lines: [{ product_id: PROD_A, quantity: "10", unit_price: "1000" }],
+    });
+    expect(factura.status, await factura.clone().text()).toBe(201);
+    const f = (await factura.json()) as {
+      id: string;
+      subtotal_amount: string;
+      tax_amount: string;
+      total_amount: string;
+    };
+
+    // El crédito fiscal del período ANTES de la nota.
+    const [antes] = await sql<{ c: string }[]>`
+      select creditos::text as c
+        from platform.recompute_iva_period(${COMPANY}, ${HOY}::date, ${HOY}::date, 0)`;
+
+    const nota = await pedir("POST", "/v1/supplier-credit-notes", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_invoice_id: f.id,
+      supplier_document_number: `NC-${RUN}`,
+      supplier_control_number: `00-NCC${RUN}`,
+      note_date: HOY,
+      currency: "VES",
+      reason: "Devolución de mercancía defectuosa",
+      lines: [
+        {
+          product_id: PROD_A,
+          quantity: "5",
+          unit_price: "1000",
+          // La mitad del IVA de la factura: la mitad de la mercancía se devuelve.
+          tax_amount: (Number(f.tax_amount) / 2).toFixed(8),
+        },
+      ],
+    });
+    expect(nota.status, await nota.clone().text()).toBe(201);
+    const n = (await nota.json()) as { id: string; total_amount: string; balance: string };
+
+    // 1. La nota tiene su asiento (o su fila en cola, si la empresa no importó plantillas):
+    //    lo que NO puede es no tener ninguno de los dos.
+    const [cobertura] = await sql<{ n: string }[]>`
+      select count(*)::text as n
+        from platform.accounting_coverage_gaps(${COMPANY})
+       where source_kind = 'purchase_credit_note' and source_id = ${n.id}`;
+    expect(cobertura!.n).toBe("0");
+    const [enlace] = await sql<{ asiento: string | null; cola: string }[]>`
+      select (select journal_entry_id::text from public.supplier_credit_notes where id = ${n.id})
+               as asiento,
+             (select count(*)::text from public.journal_generation_queue
+               where company_id = ${COMPANY} and source_id = ${n.id}) as cola`;
+    expect(enlace!.asiento !== null || enlace!.cola !== "0").toBe(true);
+
+    // 2. El libro de compras la registra en NEGATIVO, con su número de documento.
+    const [enLibro] = await sql<{ total: string; iva: string }[]>`
+      select total_amount::text as total, iva_credito::text as iva
+        from platform.purchases_book(${COMPANY}, ${HOY}::date, ${HOY}::date)
+       where supplier_document_number = ${`NC-${RUN}`}`;
+    const ivaNota = Number(f.tax_amount) / 2;
+    expect(Number(enLibro!.total)).toBe(-(5000 + ivaNota));
+    expect(Number(enLibro!.iva)).toBe(-ivaNota);
+
+    // 3. La declaración resta ese IVA del crédito fiscal del período (LIVA art. 37).
+    const [despues] = await sql<{ c: string }[]>`
+      select creditos::text as c
+        from platform.recompute_iva_period(${COMPANY}, ${HOY}::date, ${HOY}::date, 0)`;
+    const delta = Number(despues!.c) - Number(antes!.c);
+    // El «antes» ya incluye la factura: lo que la nota cambia es RESTAR su IVA (LIVA art. 37).
+    expect(delta).toBe(-ivaNota);
+
+    // 4. Y la deuda con el proveedor bajó por el total de la nota.
+    expect(Number(f.total_amount) - Number(n.balance)).toBe(5000 + ivaNota);
   });
 });

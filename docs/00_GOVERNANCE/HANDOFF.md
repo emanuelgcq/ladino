@@ -1,3 +1,103 @@
+# Handoff — 2026-09-18 (26ª entrega) — QA fiscal: la nota del proveedor y la retención
+
+## Qué pasaba
+
+El QA fiscal de todos los módulos con comportamiento tributario encontró seis cosas. Las dos
+primeras se probaron con cifras contra la base local y son las graves:
+
+1. **La nota de crédito recibida del proveedor no existía para la contabilidad.** Bajaba la deuda
+   en el auxiliar y ya: sin asiento, fuera del libro de compras y sin restar el crédito fiscal de
+   la declaración. Y ningún control lo veía, porque `accounting_coverage_gaps` ni miraba esa tabla.
+2. **El libro de compras y la planilla decían cifras distintas** cuando había una factura anulada:
+   el libro sumaba su IVA y la planilla no. Faltaba el test que los comparara.
+3. **El pasivo por retención de IVA nacía al PAGAR**, no al registrar la factura. La norma retiene
+   «al pago o al abono en cuenta, lo que ocurra primero», y registrar la factura como cuenta por
+   pagar **es** el abono en cuenta (respuesta verificada por el dueño con su asesoría). Una factura
+   registrada y sin pagar al cierre dejaba al negocio debiéndole al SENIAT un importe que su
+   balance no reconocía, y acreditándole al proveedor un bruto que no iba a cobrar.
+
+Las otras tres eran de controles: se podía INSERTAR una línea en un asiento ya posteado (la
+protección cubría UPDATE y DELETE), la anulación de una venta con el costo en cola salía como
+hueco de cobertura sin serlo, y `inventory_ledger_gap` ignoraba el corte de la regularización que
+su hermana sí respeta.
+
+## Qué se cambió
+
+**Migración 67 — la nota del proveedor y lo que nadie vigilaba** (ADR-0065 §1, §2, §4-§6):
+- `supplier_credit_notes.journal_entry_id` + su plantilla en el preset (`ap.credit_note_received`),
+  sembrada también para las empresas que ya lo importaron;
+- `purchases_book` v3: la factura anulada aparece con importes en **cero** (traza del Reglamento
+  art. 70 sin crédito fiscal, Ley art. 37) y la nota de crédito recibida entra **en negativo**;
+- `recompute_iva_period` resta las notas posteadas **del período de la nota** (Reglamento art. 11);
+- `accounting_coverage_gaps` v2: cubre la nota, el cobro, el pago a proveedor y la percepción de
+  IGTF;
+- `assert_line_insert_only_on_draft()`: una línea nueva en un asiento posteado falla con LAD06;
+- `inventory_coverage_gaps` no cuenta los movimientos de un documento anulado cuyo kardex netea a
+  cero, e `inventory_ledger_gap` respeta `inventory_ledger_cutovers`.
+
+**Migración 68 — la retención nace al registrar la factura** (ADR-0065 §3):
+- el asiento de la factura acredita las retenciones por pagar y acredita cuentas por pagar por el
+  **neto**; el del pago debita ese neto y ya no crea el pasivo con el fisco;
+- `supplier_invoice_balance` descuenta la retención **convirtiéndola a la moneda de la factura**
+  (vive en bolívares; la factura puede estar en dólares — restarlas sin convertir era el error);
+- las dos plantillas se corrigen **en sitio, sin versionar**, y el porqué está razonado en el ADR:
+  no cambió la regla, cambió nuestra lectura, y versionar por fecha del hecho reproduciría el
+  error a propósito en los documentos con fecha pasada.
+
+**Inventario:** la llegada admite el costo **de cada uno** o **el total de la llegada**, a elegir
+(«1.000 por 10 bolsas» o «100 cada una»).
+
+**Documentación:** ADR-0065 nuevo (y en el índice), `RETENTIONS_SPEC` §Oportunidad,
+`REGULATORY_STATUS` (LIVA arts. 56 y 37; Reglamento arts. 70, 75 lit. a y 11; la oportunidad de la
+000054), `EVENT_CATALOG` §Compras, `PENDIENTES_ASESOR` (P-25 prorrata, P-26 comprobante, y las
+tres respuestas del dueño como R-1/R-2/R-3), `RISK_REGISTER` R-43 y R-44.
+
+## Pruebas
+
+- **pgTAP 067** (9): libro y planilla dicen 800 con una anulada de por medio; la anulada en cero;
+  la nota en negativo; el período de la nota es el suyo; la cobertura la ve; **variante rota**:
+  insertar en un asiento posteado → LAD06, y en un borrador sigue viviendo; el corte respetado.
+- **pgTAP 068** (6): las plantillas del preset dicen lo que deben; el saldo descuenta la retención
+  en bolívares **y en dólares** (116 − 480 Bs = 104 USD, no −364); pagado el neto, cero.
+- **E2E compras**: la nota de crédito del proveedor se asienta, entra al libro y resta el crédito
+  fiscal (27/27).
+- **E2E contabilidad**: la factura con retención asienta cuatro líneas —inventario, IVA crédito
+  fiscal, proveedor 2.080, fisco 240—, el pago cancela 2.080 sin retener, y **el pasivo con el
+  fisco sobrevive al pago** (15/15).
+
+### Aserciones de tests EXISTENTES que cambiaron
+
+Todas son consecuencia directa del modelo aprobado; ninguna se tocó por conveniencia:
+
+| Test | Antes | Ahora | Por qué |
+|---|---|---|---|
+| `022_purchases_test.sql` (57) | el pago bruto 10.440 con 1.200 retenidos salda la factura | la retención se practica al registrar (saldo 9.240) y el pago del neto la salda | migración 68 |
+| `025_accounting_test.sql` | la lista de TRUNCATE | añade `supplier_credit_notes` y sus líneas | FK nueva de la migración 67 |
+| `026_journal_generator_test.sql` | vocabulario de eventos | añade `ap.credit_note_received` | migración 67 |
+| `e2e-purchases` · dólares | deuda de hoy 4.640 Bs | 4.160 Bs (116 − 12 USD retenidos) | migración 68 |
+| `e2e-purchases` · nota de crédito | saldo 46.400 → 41.760 | 41.600 → 36.960 | migración 68 |
+| `e2e-purchases` · pago | bruto 41.760, retenido 4.800, neto 36.960 | bruto 36.960, retenido 0, neto 36.960 | migración 68 |
+| `e2e-bcv` (24ª entrega) | «a mano» en el mensaje de fuente caída | «rige la última tasa» | migración 66 |
+
+## Lo que queda abierto
+
+- **El VPS sigue sin actualizar** y ahora hay **dos migraciones nuevas (67 y 68)**. La 68 exige la
+  ventana: con la migración aplicada y la API vieja, toda factura de compra se iría a la cola
+  («la plantilla pide el importe net_amount»). Se aplican **en la misma ventana** del
+  `git pull && docker compose up -d --build`, y el dueño da el go.
+- **R-43**: las facturas con retención anteriores a la 68 dejan un residuo en cuentas por pagar
+  (en producción, 2 de la empresa de pruebas «ferretería»). Y si una factura de compra queda en
+  la cola ANTES del deploy, al reprocesarla pedirá `net_amount` y volverá a la cola: hoy la cola
+  de producción no tiene ninguna, y se comprueba después del deploy.
+- **R-44**: producción tiene dos reglas de retención **de plataforma** cargadas en el QA, una
+  citando la PA SNAT/2015/0049 **derogada**. Decisión del dueño: desactivarlas o sustituirlas.
+- **P-25** (prorrata: ¿las no sujetas en el denominador?) y **P-26** (plazo de entrega del
+  comprobante) siguen siendo del asesor. La prorrata global v1 se mantiene, marcada.
+
+HOMOLOGATION_IMPACT = **YES** (libro de compras, declaración de IVA y oportunidad de la retención).
+
+---
+
 # Handoff — 2026-09-17 (25ª entrega) — La foto del producto no se guardaba
 
 ## Qué pasaba

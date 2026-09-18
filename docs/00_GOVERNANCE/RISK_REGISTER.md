@@ -707,3 +707,42 @@ diferencia con nota de débito o de crédito. Hoy solo se asienta el diferencial
 
 **Deja de ser aceptable:** cuando el asesor confirme el art. 51 (P-20). Mitigación: el diseño
 está en ADR-0064 §3.
+
+### R-43 · Las facturas con retención anteriores a la migración 68 dejan un residuo en cuentas por pagar
+
+- **Severidad:** Media · **Disparador:** pagar una factura de proveedor registrada ANTES de la
+  migración 68 que tenga retención calculada
+- **Dónde:** migración 68 (plantillas de compra y pago corregidas en sitio); ADR-0065 §3
+
+El asiento de esa factura, hecho con la plantilla vieja, acredita al proveedor el BRUTO y no
+reconoce el pasivo con el fisco. Desde la migración 68 su saldo en el auxiliar viene neto y el
+pago debita ese neto: en cuentas por pagar quedan los bolívares de la retención, y el pasivo con
+el SENIAT nunca se asentó. El auxiliar dice la verdad; el mayor arrastra el error anterior.
+
+**Deja de ser aceptable:** al cerrar el período de una empresa con facturas así. Mitigación: un
+asiento manual por factura (débito cuentas por pagar / crédito retención de IVA por pagar); la
+consulta que las lista está en la cabecera de la migración. En producción son 2, las dos de la
+empresa de pruebas «ferretería».
+
+**Variante de la misma causa:** una factura de compra que quede **en la cola** antes del deploy
+(por un papel sin cuenta, por ejemplo) guarda sus importes SIN `net_amount`, y al reprocesarla
+con la plantilla nueva volverá a la cola diciendo «la plantilla pide el importe net_amount». Hoy
+en producción la cola no tiene ninguna (`sales_invoice`, `payment_received`, `igtf_perception` y
+una nota de venta). Comprobarlo después del deploy: `select count(*) from
+public.journal_generation_queue where source_kind = 'purchase_invoice' and status = 'pending'`.
+Si aparece alguna, su asiento se hace a mano.
+
+### R-44 · Producción arrastra dos reglas de retención de plataforma citando una providencia derogada
+
+- **Severidad:** Media · **Disparador:** cualquier empresa sin reglas propias que retenga IVA
+- **Dónde:** `retention_rules` con `company_id is null` en producción (cargadas en el QA)
+
+Una de ellas cita la **PA SNAT/2015/0049**, derogada por la PA SNAT/2025/000054 desde el
+01/08/2025. La norma copiada viaja al comprobante y al informe: una retención practicada hoy
+saldría citando una providencia que no existe. El porcentaje (75 %) coincide, así que el importe
+no cambia; lo que está mal es la fuente.
+
+**Deja de ser aceptable:** con la primera retención real. Mitigación: son datos de producción y
+la decisión es del dueño — desactivar las dos reglas de plataforma y que cada empresa cargue la
+suya (ADR-0057), o cargar una nueva con la fuente correcta y desactivar la vieja. Una regla citada
+por una retención tiene FK: **no se borra, se desactiva.**

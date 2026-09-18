@@ -478,12 +478,122 @@ describe("el gancho contable — R-20", () => {
        where company_id = ${COMPANY} and source_id = ${p.payment.id}
          and source_event = 'ap.payment_made'`;
     expect(asientoPago?.id).toBeDefined();
-    // Sin retenciones cargadas en retention_rules, el pago no retiene nada y el
-    // asiento son dos líneas. Con retenciones serían cuatro.
+    // El pago son DOS líneas: cuentas por pagar contra la caja. Desde la migración 68 no
+    // hay más: lo retenido ya se le acreditó al fisco en el asiento de la factura, y el pago
+    // solo cancela lo que quedaba debiéndole al proveedor.
     const pagoLineas = await sql<{ deb: string; cred: string }[]>`
       select functional_debit::text as deb, functional_credit::text as cred
         from public.journal_lines where entry_id = ${asientoPago!.id}`;
     expect(pagoLineas.length).toBeGreaterThanOrEqual(2);
+    expect(await huecos()).toHaveLength(0);
+  });
+
+  /**
+   * LA RETENCIÓN NACE AL REGISTRAR LA FACTURA (ADR-0065 §3, migración 68).
+   *
+   * La PA SNAT/2025/000054 (G.O. 43.171, vigente desde 2025-08-01, derogó la 0049) retiene
+   * «al pago o al abono en cuenta, LO QUE OCURRA PRIMERO», y registrar la factura como cuenta
+   * por pagar es el abono en cuenta. Antes, una factura con retención registrada y sin pagar
+   * le acreditaba al proveedor el BRUTO y no le debía nada al SENIAT: el balance del cierre
+   * mentía en las dos puntas. Ningún test lo veía porque el asiento de la compra se miraba
+   * solo en una empresa sin reglas de retención cargadas.
+   */
+  it("la factura con retención le acredita al proveedor el NETO y al fisco lo retenido", async () => {
+    // La regla, PROPIA de esta empresa: cuando una empresa tiene reglas suyas vigentes,
+    // `resolve_retention` solo mira esas (ADR-0057, migración 47). Así este caso no depende
+    // del catálogo global ni compite con los otros E2E que corren a la vez. Se carga por SQL
+    // porque el permiso de catálogo no es lo que aquí se prueba.
+    await sql.begin(async (tx) => {
+      await tx`select set_config('ladino.actor_id', ${CONTADOR}, true)`;
+      await tx`insert into public.retention_rules
+                 (tenant_id, company_id, jurisdiction, retention_code, concept_code,
+                  taxpayer_type, formula_kind, rate, effective_from, legal_source, priority)
+               values (${TENANT}, ${COMPANY}, 'VE', 'iva', 'iva_compras', 'ordinario',
+                       'rate', 0.75, ${AYER}::date,
+                       'Carga de prueba E2E — PA SNAT/2025/000054. VALIDAR-SENIAT antes de producción.',
+                       50)`;
+    });
+
+    const r = await pedir("POST", "/v1/supplier-invoices", {
+      company_id: COMPANY,
+      supplier_id: PROVEEDOR,
+      supplier_document_number: `FAC-RET-${RUN}`,
+      supplier_control_number: "00-0000077",
+      invoice_date: HOY,
+      currency: "VES",
+      lines: [{ product_id: PROD, quantity: "5", unit_price: "400" }],
+      retention_concepts: ["iva_compras"],
+    });
+    expect(r.status, await r.clone().text()).toBe(201);
+    const inv = (await r.json()) as {
+      id: string;
+      total_amount: string;
+      retention_total: string;
+    };
+    // 5 × 400 = 2 000 de base, 320 de IVA, 2 320 de total; 75 % de 320 = 240 retenidos.
+    expect(inv.total_amount).toBe("2320.00000000");
+    expect(inv.retention_total).toBe("240.00000000");
+
+    const [i] = await sql<{ journal_entry_id: string | null }[]>`
+      select journal_entry_id from public.supplier_invoices where id = ${inv.id}`;
+    expect(i?.journal_entry_id).not.toBeNull();
+    const lineas = await sql<{ code: string; deb: string; cred: string }[]>`
+      select a.code, jl.functional_debit::text as deb, jl.functional_credit::text as cred
+        from public.journal_lines jl join public.accounts a on a.id = jl.account_id
+       where jl.entry_id = ${i!.journal_entry_id!} order by jl.line_number`;
+    // Inventario 2 000 D · IVA crédito fiscal 320 D · proveedor 2 080 C · fisco 240 C.
+    expect(lineas).toHaveLength(4);
+    expect(lineas[0]!.deb).toBe("2000.00000000");
+    expect(lineas[1]!.deb).toBe("320.00000000");
+    expect(lineas[2]!.cred).toBe("2080.00000000");
+    expect(lineas[3]!.cred).toBe("240.00000000");
+    // Y la cuenta del crédito es la del fisco, no otra del pasivo: se compara la CUENTA
+    // configurada para el papel, no su código escrito a mano.
+    const [cuentaFisco] = await sql<{ account_id: string }[]>`
+      select account_id from public.company_account_settings
+       where company_id = ${COMPANY} and purpose = 'retention_iva_payable'
+         and effective_to is null`;
+    const [enElFisco] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.journal_lines
+       where entry_id = ${i!.journal_entry_id!} and account_id = ${cuentaFisco!.account_id}
+         and functional_credit = 240`;
+    expect(enElFisco!.n).toBe("1");
+
+    // El auxiliar dice lo mismo que el mayor: al proveedor se le debe el neto.
+    const [saldo] = await sql<{ s: string }[]>`
+      select platform.supplier_invoice_balance(${COMPANY}, ${inv.id})::text as s`;
+    expect(saldo!.s).toBe("2080.00000000");
+
+    // Y el pago cancela ESE neto, sin volver a retener.
+    const pago = await pedir("POST", "/v1/supplier-payments", {
+      company_id: COMPANY,
+      supplier_invoice_id: inv.id,
+      gross_amount: "2080",
+      currency: "VES",
+      instrument: "transferencia",
+      allow_negative_balance: true,
+    });
+    expect(pago.status, await pago.clone().text()).toBe(201);
+    const p = (await pago.json()) as {
+      payment: { retained_amount: string; net_amount: string };
+      invoice_status: string;
+    };
+    expect(p.payment.retained_amount).toBe("0.00000000");
+    expect(p.payment.net_amount).toBe("2080.00000000");
+    expect(p.invoice_status).toBe("paid");
+
+    // El pasivo con el fisco SOBREVIVE al pago: nació con la factura y se salda cuando se
+    // entere, no cuando se le pague al proveedor. Antes nacía aquí.
+    const [fisco] = await sql<{ debit_total: string; credit_total: string }[]>`
+      select debit_total::text, credit_total::text
+        from platform.recompute_ledger(${COMPANY}, ${cuentaFisco!.account_id})`;
+    expect(fisco!.credit_total).toBe("240.00000000");
+    expect(fisco!.debit_total).toBe("0.00000000");
+
+    // La retención queda practicada y aplicada, con su comprobante pendiente de emitir.
+    const [ret] = await sql<{ status: string }[]>`
+      select status from public.supplier_retentions where supplier_invoice_id = ${inv.id}`;
+    expect(ret!.status).toBe("applied");
     expect(await huecos()).toHaveLength(0);
   });
 

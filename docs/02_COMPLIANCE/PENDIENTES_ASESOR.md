@@ -452,13 +452,69 @@ es del BCV.
 
 ---
 
+## P-25 · Prorrata: ¿las operaciones NO SUJETAS entran en el denominador? (VALIDAR-TRIBUTARIO)
+
+**Hoy:** el prorrateo del crédito fiscal de la empresa con ventas gravadas y exentas es
+**global** (v1): el denominador son **todas** las ventas del período —gravadas, exentas y no
+sujetas—, que es la lectura **conservadora**, porque un denominador mayor deduce **menos**
+crédito fiscal. La cifra sale marcada `VALIDAR-TRIBUTARIO` en la declaración.
+
+**Falta:** confirmar si las operaciones **no sujetas** van dentro o fuera del denominador. Y
+recordar, para no prorratear de más: la **LIVA art. 35** permite **contabilidad separada** de las
+compras destinadas a operaciones gravadas; con ella, esas compras **no se prorratean** y su
+crédito se deduce entero.
+
+**Qué se rompe si la respuesta es otra:** cambia el crédito fiscal deducible de cada período con
+ventas mixtas — cifras ya generadas. Va junto con **P-4**.
+
+**Dónde se toca:** `packages/domain/src/declarations.ts` (prorrata), pantalla «Declarar IVA».
+
+---
+
+## P-26 · Entrega del comprobante de retención, ahora que se retiene antes (VALIDAR-SENIAT)
+
+**Hoy:** desde la migración 68, la retención de IVA se **practica al registrar** la factura del
+proveedor (el abono en cuenta, PA SNAT/2025/000054) y su pasivo con el fisco nace ahí. El
+**comprobante** se sigue emitiendo y numerando **al pagar**, con su permiso propio.
+
+**Falta:** confirmar el plazo de **entrega** del comprobante al proveedor bajo la 000054 (fuentes
+secundarias: los dos primeros días hábiles del período siguiente) y si el momento correcto de
+emitirlo es el del abono en cuenta, no el del pago. Texto primario de la Gaceta pendiente de
+archivar en `EXPEDIENTE_TECNICO.md`.
+
+**Qué se rompe si la respuesta es otra:** el comprobante se emitiría en el registro de la
+factura, no en el pago — cambia el momento de numerar, no el cálculo ni el asiento.
+
+**Dónde se toca:** `packages/domain/src/purchases.ts` (`registerSupplierPayment`),
+`docs/02_COMPLIANCE/RETENTIONS_SPEC.md`.
+
+---
+
+## Resueltas por el dueño con su asesoría (2026-09-17)
+
+Quedan escritas aquí porque el código las cita como fuente de una regla.
+
+- **R-1 · Nota de crédito recibida del proveedor.** Lleva asiento, entra al libro de compras en
+  negativo y **resta el crédito fiscal** de la declaración, en el **período de recepción de la
+  nota** (LIVA arts. 56 y 37; Reglamento arts. 70, 75 lit. a y 11). Implementado en la
+  migración 67.
+- **R-2 · Factura de proveedor anulada.** Va en el libro **con importes en cero**: se conserva la
+  traza cronológica (Reglamento art. 70) sin crédito fiscal (LIVA art. 37). Mismo criterio para
+  una nota anulada. Migración 67.
+- **R-3 · Oportunidad de la retención de IVA.** Nace **al pago o al abono en cuenta, lo que
+  ocurra primero**, y registrar la factura como cuenta por pagar **es** el abono en cuenta: el
+  pasivo con el fisco nace al registrar (PA SNAT/2025/000054). Migración 68. Lo que queda abierto
+  de este punto es **P-26**.
+
+---
+
 ## Resumen para la conversación con el asesor
 
 Si el tiempo con el asesor es corto, este es el orden por **coste de resolverlo
 tarde**:
 
 1. **P-3** (arrastre combinado vs. separado) — migración sobre tabla con historia.
-2. **P-4** (prorrata) — cambia cifras ya generadas.
+2. **P-4** y **P-25** (prorrata: método y denominador) — cambian cifras ya generadas.
 3. **P-7** (layout del TXT) — bloquea la primera carga real al portal.
 4. **P-1** (casillas) — bloquea que la planilla deje de ser «demostrativa».
 5. **P-8** y **P-9** (IGTF: exenciones y reintegro) — solo si la empresa es SPE.

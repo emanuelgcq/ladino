@@ -22,6 +22,24 @@ PA102 define requisitos específicos y una numeración de 14 caracteres para com
 ## Estados
 draft → calculated → issued → applied → reported.
 
+## Oportunidad: cuándo se practica (PA SNAT/2025/000054)
+
+La retención se practica **al pago o al abono en cuenta, lo que ocurra primero**. En Ladino,
+**registrar la factura del proveedor como cuenta por pagar ES el abono en cuenta**, de modo que:
+
+- la retención se **calcula** al registrar la factura, con la regla vigente ese día (ADR-0039), y
+  queda congelada con su norma copiada;
+- su **pasivo con el fisco** nace en ese mismo acto: el asiento de la factura acredita
+  `retention_iva_payable` / `retention_islr_payable` y acredita al proveedor el **neto**
+  (ADR-0065 §3, migración 68);
+- el **saldo del auxiliar** de proveedores descuenta lo retenido: al proveedor se le debe el
+  neto, y lo retenido se le debe al fisco;
+- el **pago** cancela ese neto y **no retiene nada**: la retención ya está practicada.
+
+El **comprobante** se emite y numera al pagar, con el permiso `retention.receipt.issue`. Su plazo
+de entrega —y si debería emitirse ya en el abono en cuenta— es consulta abierta con el asesor
+(`PENDIENTES_ASESOR.md`, P-26).
+
 ## Reglas
 - evitar doble retención sobre misma base/documento/concepto;
 - conservar versión de regla;

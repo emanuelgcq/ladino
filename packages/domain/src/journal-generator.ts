@@ -125,6 +125,9 @@ const TABLAS_BACKLINK = new Set([
   "customer_refunds",
   // ADR-0062 §3 (migración 61): la transferencia entre cuentas, con el mismo guard.
   "treasury_transfers",
+  // ADR-0065 §1 (migración 67): la nota de crédito RECIBIDA del proveedor. Antes la tabla ni
+  // siquiera tenía columna para el enlace, y la nota no producía asiento ninguno.
+  "supplier_credit_notes",
 ]);
 
 /**
