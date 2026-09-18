@@ -490,6 +490,61 @@ factura, no en el pago — cambia el momento de numerar, no el cálculo ni el as
 
 ---
 
+## P-27 · La compra pagada SIN factura: qué la respalda y qué se puede deducir (VALIDAR-TRIBUTARIO)
+
+**Hoy:** no se puede registrar. La pantalla exige el número y el número de control de la factura
+del proveedor, así que una compra real pagada a quien no factura termina como «aporte del dueño»
+—y el dinero que salió de la caja no sale en ningún sitio— o con un número inventado dentro del
+libro de compras. Desde ADR-0066 se registra como **compra sin soporte fiscal**: entra al depósito
+al costo pagado, el dinero sale o queda deuda, **no** entra al libro y **no** genera crédito
+fiscal, y queda marcada y filtrable.
+
+**Falta:** ¿qué documento respalda en Venezuela una compra a quien no está obligado a facturar (o
+no factura), y qué efecto tiene en el **costo deducible para ISLR** y en el **crédito fiscal**?
+Como precedente regional: en Colombia existe el «documento soporte en adquisiciones a no obligados
+a facturar», que **genera el comprador** con numeración autorizada, y sin él la administración
+rechaza el costo. No se afirma que exista un equivalente venezolano.
+
+**Qué se rompe si la respuesta es otra:** si existe un documento que deba emitirse, hay que
+construirlo (numeración, formato, entrega) y la compra dejaría de estar «fuera del libro».
+
+**Dónde se toca:** ADR-0066 §2 · migración 69 (`fiscal_support`) · `purchases_book`.
+
+---
+
+## P-28 · ¿Se retiene sobre una compra sin soporte fiscal? (VALIDAR-TRIBUTARIO)
+
+**Hoy:** no se practica retención sobre una compra sin soporte.
+
+**Falta:** la retención nace **al pago o al abono en cuenta, lo que ocurra primero**
+(PA SNAT/2025/000054, ADR-0065 §3). Si el hecho generador es el abono en cuenta, ¿nace también
+cuando la operación no tiene factura? Y si nace, ¿sobre qué base, si no hay IVA discriminado?
+
+**Qué se rompe si la respuesta es otra:** aparecería un pasivo con el fisco que hoy no se registra,
+y el comprobante de retención tendría que emitirse sobre un documento sin identificación del
+emisor.
+
+**Dónde se toca:** `packages/domain/src/purchases.ts` (retenciones) · ADR-0066 §2.
+
+---
+
+## P-29 · IGTF al pagar a un proveedor en divisa (VALIDAR-TRIBUTARIO)
+
+**Hoy:** pagar a un proveedor desde una cuenta en divisa (efectivo USD, Zelle, USDT) **no** genera
+ninguna percepción ni gasto de IGTF en Ladino. El pago hace exactamente lo que hacía antes de
+ADR-0066: no se afirma nada nuevo.
+
+**Falta:** ¿el pago en divisa a un proveedor genera IGTF a cargo de quien paga (Decreto 4.972,
+3 % en divisas), y con qué tratamiento contable — gasto del período o mayor costo de la compra?
+Ladino ya percibe IGTF en **ventas**; la punta de compras nunca se decidió.
+
+**Qué se rompe si la respuesta es otra:** cada pago en divisa a proveedor llevaría una línea más en
+su asiento y una obligación declarable que hoy no se está registrando.
+
+**Dónde se toca:** `registerSupplierPayment` · `docs/02_COMPLIANCE/IGTF_SPEC.md` · ADR-0066.
+
+---
+
 ## Resueltas por el dueño con su asesoría (2026-09-17)
 
 Quedan escritas aquí porque el código las cita como fuente de una regla.
