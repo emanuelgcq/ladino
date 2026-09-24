@@ -1,3 +1,139 @@
+# Handoff — 2026-09-20 (29ª entrega) — La cuenta se pregunta, no se adivina (ADR-0067)
+
+## Qué pasaba
+
+El dueño lo vio probando la puerta: «me dice método de pago, mas no me dice con qué cuenta la
+pagué — Banesco, Mercantil, cuenta en dólares, efectivo, USDT. Eso no está bien planteado, ¿cómo
+se va a propagar?».
+
+Se propagaba mal, y hay cifras. El pago **sí** guarda una cuenta, y de ahí salen el saldo, el mayor
+y el cierre de caja. Lo que faltaba es que alguien la eligiera: si el cliente no manda ninguna, el
+servidor la deduce con la escalera de ADR-0062 §1 —forma configurada → cuenta propia de la familia,
+**la más antigua** → «Sin asignar»—. Con una cuenta por familia acierta siempre. Con dos, «la más
+antigua» no es una regla de negocio: es un desempate.
+
+En producción, en la empresa «Ladino», que tiene Banesco **y** Banco Mercantil:
+
+| Instrumento | Dónde cayó |
+|---|---|
+| `zelle` | Zelle 64 · **Caja USD 41** · Sin asignar 3 |
+| `efectivo_usd` | **Zelle 43** · Caja USD 27 |
+| `pago_movil` | Banco Mercantil 136 · Sin asignar 6 |
+| `transferencia` | Banco Mercantil 122 · Sin asignar 1 |
+
+**Banesco existe, está activa y no ha recibido un bolívar.** Efectivo en dólares acabó en la cuenta
+de Zelle. En «ferretería», «Sin asignar (VES)» acumula 42.646,12 mientras «Caja Bs» está en
+−50.000. Y la causa de fondo: **`payment_methods` está vacía en las ocho empresas** — esa tabla es
+justo la que ata «pago móvil» a «Mercantil», y sin ella todo el sistema cae al desempate.
+
+No era un fallo de una pantalla. De las cinco que mueven dinero, **dos ya lo hacían bien** —cobrar
+un documento y registrar un gasto— y tres no: el POS, el pago a proveedor y la puerta.
+
+## Qué se cambió
+
+**ADR-0067.** La escalera del servidor se queda intacta —la API es la API, y la app móvil o una
+integración registran pagos sin pantalla—. Lo que cambia es que **una pantalla no la usa como
+sustituto de una pregunta**: con una sola candidata no se pregunta, con más de una se pregunta, y
+**sin preselección** — una preselección es la misma adivinanza con un sello encima. El instrumento
+y la cuenta siguen siendo **dos hechos** y los dos se guardan: de un mismo Banesco salen un pago
+móvil y una transferencia, y el IGTF de lo pagado en divisas (P-29) se decide sobre el instrumento,
+no sobre el nombre de la cuenta.
+
+**Migración 73 — `platform.money_landing_gaps()`.** El informe de lo que ya cayó donde nadie
+eligió: movimientos en una cuenta de **sistema**, o en una cuenta cuya **familia no corresponde** al
+instrumento. Es un **INFORME y no un invariante**, y va escrito así en la migración: su respuesta
+correcta no es cero, porque «Sin asignar» es legítima mientras no exista una cuenta de esa familia.
+Nada se reescribe: un pago es un hecho con su fecha, su autor y su asiento (regla 2).
+
+**Dos endpoints.** `GET /v1/treasury/accounts/candidates` devuelve, por instrumento, las cuentas
+propias de su familia **en el mismo orden en que el servidor las resolvería**, y `fixed_by_method`
+cuando una forma configurada ya decide. **No devuelve saldos**: elegir la cuenta no es ver el
+dinero, así que lo puede pedir quien registra el movimiento —la cajera, el encargado— sin tener
+`treasury.read`. `GET /v1/treasury/landing-gaps` sirve el informe, y ese sí exige `treasury.read`.
+
+**Las tres pantallas.** La puerta y el pago a proveedor preguntan «¿de qué cuenta salió?» cuando
+hay más de una, y avisan —sin preguntar— cuando no hay ninguna: «va a quedar en Sin asignar hasta
+que lo repartas». **El POS no pregunta dos veces: abre el botón.** Donde antes había «Pago móvil»
+ahora hay «Pago móvil · Banesco» y «Pago móvil · Mercantil». Un toque, igual que antes, y el botón
+dice a dónde va el dinero.
+
+**«Mi dinero» enseña el informe**, con el enlace mental a «Mover plata», que es la herramienta que
+ya existía (ADR-0062 §3) para repartir lo que está en el sitio equivocado.
+
+## El fallo que solo apareció al elegir la cuenta
+
+Con la cuenta elegida, el sobregiro empezó a saltar de verdad — y ahí se vio que **el botón
+«Registrarlo igual» de la puerta no podía funcionar nunca**. La clave de idempotencia nace al
+entrar a la pantalla (ADR-0066, para que un doble clic no cree dos llegadas), pero confirmar el
+sobregiro manda un cuerpo **distinto**, con `allow_negative_balance`. Misma clave, otro cuerpo: el
+servidor respondía `IDEMPOTENCY_KEY_REUSED` — «esa operación ya se registró con otros datos» — y
+la llegada moría ahí.
+
+Estaba así desde la entrega (i). Ninguna prueba lo veía porque ninguna hacía saltar el sobregiro:
+con la cuenta deducida, el dinero salía de donde hubiera saldo.
+
+Arreglado con una clave **derivada y determinista**: `${clave}:sobregiro` para el intento forzado.
+Dos cuerpos, dos claves, y repetir cualquiera de los dos sigue sin duplicar nada. Las otras cuatro
+pantallas con confirmación de sobregiro generan la clave por llamada, así que no lo tenían.
+
+## Pruebas
+
+- **pgTAP 073** (4): un gasto de una cuenta propia no sale; desde «Sin asignar» sí; efectivo salido
+  de un banco sale como `familia_no_corresponde`; el mismo pago desde la caja no.
+- **`e2e-treasury` +5**: con dos bancos las candidatas son las dos y en el orden de resolución; el
+  efectivo no ve los bancos y el dólar no ve los bolívares; ninguna trae saldo; con forma
+  configurada viene `fixed_by_method`; **quien cobra puede elegir la cuenta y NO puede ver el
+  dinero** (403 en `/v1/treasury/accounts`); el informe enseña lo de «Sin asignar» y calla lo que
+  cayó bien, y no lo ve quien no puede ver el dinero.
+- **`e2e-llegada` +1**: la misma clave con `allow_negative_balance` responde
+  `IDEMPOTENCY_KEY_REUSED`; con la clave derivada entra, el saldo queda en −700 a propósito, y
+  repetirla no crea una segunda llegada.
+- Suite de la API completa: **405 en verde**.
+
+**Y el gate cazó un bug con horario que no es de esta entrega.** `022_purchases_test.sql` sembraba
+la tasa del día con `current_date` mientras `supplier_debt_today` la busca por
+`platform.caracas_day(now())`. El contenedor corre en UTC, así que **a partir de las ocho de la
+noche de Venezuela** el test sembraba la tasa para mañana y el escenario moría con «no hay tasa
+vigente hoy». Llevaba ahí desde la migración 65 y solo falla en esa ventana de cuatro horas — la
+cuarta aparición de la familia de bugs de CLAUDE.md §3, y la primera que caza el reloj en vez de
+una persona. Corregido a `platform.caracas_day(now())`, que es lo que el `039` ya hacía bien.
+
+**ASEVERACIÓN EXISTENTE CAMBIADA** (se avisa, como toca): en `e2e-treasury`, el listado de gastos
+esperaba `total = 3` y ahora espera **5**. Son los dos gastos que registra el test del informe —uno
+desde una cuenta propia y otro desde «Sin asignar»—. El número cuenta lo que ese fichero crea, no
+un invariante del negocio; queda dicho en un comentario al lado.
+
+## QA de pantalla
+
+Guion `24-cuenta`, **13 comprobaciones, 0 hallazgos**, sobre la empresa de la demo, que arranca
+**sin una sola cuenta propia** — exactamente como las ocho de producción:
+
+1. sin cuenta de esa familia, la puerta **avisa** de que va a caer en «Sin asignar» y no pregunta
+   lo que no tiene respuesta;
+2. creadas Banesco y Mercantil, **pregunta**, y «Seguir» no se enciende hasta elegir: nada viene
+   preseleccionado;
+3. ofrece **las dos**, y eligiendo Mercantil —la que la escalera nunca habría escogido— el aviso de
+   sobregiro nombra **Mercantil**, y tras confirmar el pago queda en Mercantil;
+4. el POS abre el botón por cuenta;
+5. «Mi dinero» enseña los movimientos de la siembra que cayeron en «Sin asignar».
+
+## Lo que queda abierto
+
+- **El histórico no se toca**, por decisión del dueño: el informe lo enseña y quien mueva el dinero
+  lo mueve con «Mover plata». `money_landing_gaps()` va a salir con filas el primer día en las
+  ocho empresas — eso es lo que se pidió.
+- **Configurar las formas de pago** sigue siendo lo que arregla la raíz: mientras
+  `payment_methods` esté vacía, la pantalla pregunta cada vez en lugar de saberlo. Está como
+  empujón en «Mi dinero», no como barrera — un negocio tiene que poder vender su primer día.
+- **P-29** (IGTF al pagar en divisa) sigue siendo del asesor.
+- **La migración 73 y los cambios de contrato esperan la ventana de deploy** con el rebuild. Las
+  migraciones 67–72 ya están aplicadas en producción (28ª entrega); esta es la única nueva.
+
+HOMOLOGATION_IMPACT = **NO**. Ningún documento fiscal cambia, ninguna alícuota, ningún libro:
+cambia a qué caja entra y de qué caja sale el dinero, que es tesorería y mayor.
+
+---
+
 # Handoff — 2026-09-18 (28ª entrega) — El dinero se escribe una vez, y el pedido llega solo (entregas ii y iii de ADR-0066)
 
 ## Qué pasaba

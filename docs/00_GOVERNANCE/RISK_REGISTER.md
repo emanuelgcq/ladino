@@ -806,3 +806,33 @@ reejecutar hasta el verde, que es como muere un gate (CLAUDE.md §3).
 **Deja de ser aceptable:** en el momento en que aparezca en un paso de `verify` o en una alerta
 automática. La defensa hoy es el comentario de la migración y el de la función, que lo dicen con
 todas sus letras; no hay mecanismo que lo impida.
+
+### R-49 · `money_landing_gaps` es un informe, y sale con filas desde el primer día
+
+- **Severidad:** Media · **Disparador:** alguien lo mete en `verify`, en CI o en un semáforo, o
+  lee sus filas como «algo está roto»
+- **Dónde:** migración 73; `docs/00_GOVERNANCE/adr/ADR-0067` §4
+
+Su respuesta correcta **no es cero**: «Sin asignar» es legítima mientras el negocio no tenga una
+cuenta de esa familia — ADR-0062 §3 la creó justo para eso y para repartirla. En las ocho empresas
+de producción va a salir con filas el día que se aplique, porque `payment_methods` está vacía y
+todo cayó por el desempate de antigüedad. Es lo que se pidió: enseñar, no tapar.
+
+**Deja de ser aceptable:** en cuanto aparezca en un paso de `verify` o en una alerta automática.
+Es el mismo riesgo que R-48 sobre `backdated_stock_in`, y la defensa es la misma —el comentario de
+la migración, el de la función y este apunte—: no hay mecanismo que lo impida.
+
+### R-50 · Mientras `payment_methods` siga vacía, se pregunta la cuenta en cada cobro y cada pago
+
+- **Severidad:** Baja · **Disparador:** un negocio con dos o más cuentas de la misma familia y
+  ninguna forma de pago configurada
+- **Dónde:** ADR-0067 §1; «Mi dinero» → formas de pago
+
+La pregunta «¿de qué cuenta salió?» aparece porque el sistema no lo sabe, y no lo sabe porque nadie
+ató «pago móvil» a «Mercantil». Configurar la forma la hace desaparecer: es la diferencia entre un
+sistema que pregunta cada vez y uno que lo sabe. No se obliga a configurarlas antes de cobrar
+—un negocio tiene que poder vender su primer día—, así que el coste se paga en toques hasta que
+alguien las configure.
+
+**Deja de ser aceptable:** si la fricción hace que alguien elija «la primera que salga» sin mirar.
+Entonces habría que empujar la configuración en el onboarding, no en un aviso de «Mi dinero».
