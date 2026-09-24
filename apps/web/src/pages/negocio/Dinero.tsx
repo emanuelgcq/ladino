@@ -12,12 +12,14 @@ import {
   Plus,
   RefreshCw,
   Smartphone,
+  TriangleAlert,
   Wallet,
 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { errorDePersona } from "../../lib.js";
 import { mostrarImporte } from "../../money.js";
 import { compararImportes } from "../../components/decimal-compare.js";
+import { ETIQUETA_FORMA } from "../../components/formas-de-pago.js";
 import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
 import {
@@ -58,6 +60,19 @@ interface Resumen {
   lo_que_debo: string;
   tasa_del_dia: { rate: string; rate_date: string; source: string; es_de_hoy: boolean } | null;
 }
+/** Una fila del informe de ADR-0067 §4. */
+interface CaidaDeDinero {
+  kind: string;
+  movement_id: string;
+  occurred_on: string;
+  instrument: string | null;
+  amount: string;
+  currency: string;
+  account_id: string;
+  account_name: string;
+  problem: "sin_asignar" | "familia_no_corresponde";
+}
+
 interface FormaDePago {
   id: string;
   name: string;
@@ -164,6 +179,18 @@ export function Dinero(): React.JSX.Element {
     queryKey: ["formas-pago", empresa.id],
     queryFn: () => llamar<{ methods: FormaDePago[] }>("/v1/payment-methods"),
   });
+  /**
+   * DÓNDE CAYÓ EL DINERO QUE NADIE ELIGIÓ (ADR-0067 §4). Informe, no invariante: su respuesta
+   * correcta no es cero, porque «Sin asignar» es legítima mientras no exista una cuenta de esa
+   * familia. Lo que haya que mover lo mueve una persona con «Mover plata», ahí abajo.
+   */
+  const caidas = useQuery({
+    queryKey: ["donde-cayo", empresa.id],
+    enabled: puedeDinero,
+    retry: false,
+    queryFn: () => llamar<{ items: CaidaDeDinero[] }>("/v1/treasury/landing-gaps"),
+  });
+
   const cierres = useQuery({
     queryKey: ["cierres", empresa.id],
     enabled: puedeDinero,
@@ -326,6 +353,54 @@ export function Dinero(): React.JSX.Element {
                 );
               })}
             </div>
+          )}
+        </section>
+      )}
+
+      {puedeDinero && (caidas.data?.items.length ?? 0) > 0 && (
+        <section className="space-y-3" aria-labelledby="donde-cayo-titulo">
+          <div className="flex items-center gap-2">
+            <TriangleAlert className="size-5 text-warning-soft-foreground" />
+            <h2 id="donde-cayo-titulo" className="font-medium">
+              Dinero que no sabemos dónde ponerte
+            </h2>
+            <span className="rounded-full bg-warning-soft px-2 py-0.5 text-[0.78rem] text-warning-soft-foreground tabular-nums">
+              {caidas.data!.items.length}
+            </span>
+          </div>
+          <p className="text-[0.85rem] text-muted-foreground">
+            Estos movimientos cayeron en «Sin asignar», o en una cuenta que no cuadra con la forma
+            de pago —efectivo que salió de un banco, por ejemplo—. No están perdidos ni mal
+            contados: están en el sitio equivocado. Muévelos con «Mover plata», ahí abajo.
+          </p>
+          <div className="divide-y divide-border rounded-md border border-border bg-surface">
+            {caidas.data!.items.slice(0, 12).map((c) => (
+              <div
+                key={c.movement_id}
+                className="flex flex-wrap items-center gap-2 px-3 py-2 text-[0.9rem]"
+              >
+                <span className="w-24 shrink-0 text-[0.82rem] text-muted-foreground">
+                  {fechaLocal(c.occurred_on)}
+                </span>
+                <span className="min-w-0 flex-1 truncate">
+                  {c.kind}
+                  {c.instrument === null
+                    ? ""
+                    : " · " + (ETIQUETA_FORMA[c.instrument] ?? c.instrument)}
+                </span>
+                <span className="font-mono text-[0.85rem] tabular-nums">
+                  {mostrarImporte({ amount: c.amount, currency: c.currency })}
+                </span>
+                <span className="w-40 shrink-0 truncate text-[0.82rem] text-muted-foreground">
+                  {c.problem === "sin_asignar" ? "quedó en" : "salió de"} {c.account_name}
+                </span>
+              </div>
+            ))}
+          </div>
+          {caidas.data!.items.length > 12 && (
+            <p className="text-[0.82rem] text-faint-foreground">
+              Y {caidas.data!.items.length - 12} más.
+            </p>
           )}
         </section>
       )}

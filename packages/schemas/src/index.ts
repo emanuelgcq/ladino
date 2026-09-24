@@ -214,6 +214,11 @@ export {
   ListCashClosingsResponse,
   KeepDailyRateRequest,
   DailyRateResponse,
+  CandidateAccountResponse,
+  CandidatesByInstrument,
+  ListCandidateAccountsResponse,
+  MoneyLandingGapResponse,
+  ListMoneyLandingGapsResponse,
 } from "./treasury.js";
 export {
   NegocioResumenResponse,

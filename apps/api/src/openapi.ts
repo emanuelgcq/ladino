@@ -178,6 +178,8 @@ import {
   UpdateCompanyAccountRequest,
   CompanyAccountResponse,
   ListCompanyAccountsResponse,
+  ListCandidateAccountsResponse,
+  ListMoneyLandingGapsResponse,
   CreatePaymentMethodRequest,
   UpdatePaymentMethodRequest,
   PaymentMethodResponse,
@@ -3420,6 +3422,14 @@ export function buildOpenApiDocument(): object {
     "ListCompanyAccountsResponse",
     ListCompanyAccountsResponse,
   );
+  const cuentasCandidatas = registry.register(
+    "ListCandidateAccountsResponse",
+    ListCandidateAccountsResponse,
+  );
+  const huecosDeCaida = registry.register(
+    "ListMoneyLandingGapsResponse",
+    ListMoneyLandingGapsResponse,
+  );
   const crearCuentaTes = registry.register(
     "CreateCompanyAccountRequest",
     CreateCompanyAccountRequest,
@@ -3458,6 +3468,41 @@ export function buildOpenApiDocument(): object {
     security: [{ bearerAuth: [] }],
     request: { headers: companyHeader },
     responses: { 200: okJson(cuentasTesoreria, "Las cuentas."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/treasury/accounts/candidates",
+    summary: "De qué cuentas puede salir el dinero de este instrumento (ADR-0067 §1)",
+    description:
+      "Las cuentas PROPIAS y activas de la familia del instrumento, en la moneda del pago, en el " +
+      "MISMO orden en que el servidor las resolvería si no se mandara ninguna (ADR-0062 §1): la " +
+      "primera es la que caería por omisión. Existe para que la pantalla PREGUNTE de qué cuenta " +
+      "sale el dinero en vez de dejar que el servidor lo adivine cuando hay más de una; con dos " +
+      "bancos, «la más antigua» no es una regla de negocio, es un desempate.\n\n" +
+      "**No devuelve saldos**, y es a propósito: elegir la cuenta no es ver el dinero (ADR-0048). " +
+      "`fixed_by_method` trae la cuenta que fija una forma de pago configurada — cuando la hay, " +
+      "no hay nada que preguntar.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(cuentasCandidatas, "Las candidatas de cada instrumento, en orden de resolución."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/treasury/landing-gaps",
+    summary: "Dónde cayó el dinero que nadie eligió — INFORME, no invariante (ADR-0067 §4)",
+    description:
+      "Cobros, pagos a proveedor y gastos que cayeron en una cuenta de SISTEMA («Sin asignar») o " +
+      "en una cuenta cuya familia no corresponde al instrumento —efectivo salido de un banco, un " +
+      "pago móvil salido de la caja física—.\n\n" +
+      "**Su respuesta correcta NO es cero**: «Sin asignar» es legítima mientras el negocio no " +
+      "tenga una cuenta de esa familia. Nada se reescribe aquí; lo que haya que mover lo mueve " +
+      "una persona con la transferencia entre cuentas (ADR-0062 §3).",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(huecosDeCaida, "Las filas del informe."), ...erroresComunes },
   });
   registry.registerPath({
     method: "post",

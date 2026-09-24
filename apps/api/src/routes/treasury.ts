@@ -11,6 +11,8 @@ import {
 } from "@ladino/schemas";
 import {
   listCompanyAccounts,
+  listCandidateAccounts,
+  listMoneyLandingGaps,
   createCompanyAccount,
   updateCompanyAccount,
   listPaymentMethods,
@@ -121,6 +123,31 @@ export function treasuryRoutes(
     return c.json({ accounts: r.value }, 200);
   });
 
+  /**
+   * LAS CANDIDATAS (ADR-0067 §1): de qué cuentas puede salir el dinero de este instrumento, para
+   * que la pantalla PREGUNTE en vez de dejar que el servidor adivine. Sin saldos: elegir la
+   * cuenta no es ver el dinero.
+   */
+  app.get("/v1/treasury/accounts/candidates", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, async (uow) => {
+      const [empresa] = await uow.sql<{ functional_currency_code: string }[]>`
+        select functional_currency_code from public.companies where id = ${companyId}`;
+      return listCandidateAccounts(uow, companyId, empresa?.functional_currency_code ?? "VES");
+    });
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json({ instruments: r.value }, 200);
+  });
+
+  /** El informe de dónde cayó el dinero que nadie eligió (ADR-0067 §4). Solo lectura. */
+  app.get("/v1/treasury/landing-gaps", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => listMoneyLandingGaps(uow, companyId));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json({ items: r.value }, 200);
+  });
   app.post("/v1/treasury/accounts", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);
     const parsed = CreateCompanyAccountRequest.safeParse(await c.req.json().catch(() => null));

@@ -165,3 +165,47 @@ export function opcionesDePagoDeCompra(
     })),
   ];
 }
+
+/** Una cuenta a la que puede ir (o de la que puede salir) el dinero. Sin saldo: ADR-0067 §1. */
+export interface CuentaCandidata {
+  id: string;
+  name: string;
+  currency: string;
+  kind: string;
+}
+export interface CandidatasDeInstrumento {
+  instrument: string;
+  currency: string;
+  accounts: CuentaCandidata[];
+  fixed_by_method: string | null;
+}
+
+/**
+ * QUÉ HACER CON LAS CANDIDATAS DE UN INSTRUMENTO (ADR-0067 §1). La regla de familia vive en el
+ * servidor y no se copia aquí: esto solo decide si hay algo que preguntar.
+ *
+ * - `"fija"` — la forma configurada ya dice la cuenta. No se pregunta: para eso se configuró.
+ * - `"una"` — hay exactamente una candidata. No se pregunta: no hay nada que elegir.
+ * - `"ninguna"` — el negocio no tiene cuenta de esa familia. Tampoco se pregunta, pero **se
+ *   avisa**: el dinero va a caer en «Sin asignar», y eso la persona tiene derecho a saberlo antes
+ *   de confirmar, no a descubrirlo en el saldo.
+ * - `"elegir"` — hay varias. **Se pregunta, y sin preselección**: una preselección es la misma
+ *   adivinanza con un sello encima.
+ */
+export type QueHacerConLaCuenta = "fija" | "una" | "ninguna" | "elegir";
+
+export function decidirCuenta(c: CandidatasDeInstrumento | undefined): {
+  que: QueHacerConLaCuenta;
+  cuentaUnica: string | null;
+  opciones: CuentaCandidata[];
+} {
+  if (c === undefined) return { que: "ninguna", cuentaUnica: null, opciones: [] };
+  if (c.fixed_by_method !== null) {
+    return { que: "fija", cuentaUnica: c.fixed_by_method, opciones: c.accounts };
+  }
+  if (c.accounts.length === 0) return { que: "ninguna", cuentaUnica: null, opciones: [] };
+  if (c.accounts.length === 1) {
+    return { que: "una", cuentaUnica: c.accounts[0]!.id, opciones: c.accounts };
+  }
+  return { que: "elegir", cuentaUnica: null, opciones: c.accounts };
+}

@@ -130,6 +130,8 @@ export {
 } from "./company-settings.js";
 export {
   listCompanyAccounts,
+  listCandidateAccounts,
+  listMoneyLandingGaps,
   previsualizarConversion,
   createCompanyAccount,
   updateCompanyAccount,

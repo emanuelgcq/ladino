@@ -24,7 +24,9 @@ import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import {
   FORMAS_DE_COMPRA,
   esFormaDeCompra,
+  decidirCuenta,
   type FormaDePago,
+  type CandidatasDeInstrumento,
 } from "../../components/formas-de-pago.js";
 import { HacerPedido } from "../../components/HacerPedido.js";
 import { fechaRelativa } from "./comunes.js";
@@ -753,6 +755,7 @@ function PagarFactura({
   const toast = useToast();
   const [monto, setMonto] = useState(factura.balance);
   const [forma, setForma] = useState<string | null>(null);
+  const [cuenta, setCuenta] = useState<string | null>(null);
   // Sobregiro: sin saldo se pregunta antes de dejar la cuenta en negativo (ADR-0062 §4).
   const [sinSaldo, setSinSaldo] = useState<string | null>(null);
 
@@ -780,9 +783,32 @@ function PagarFactura({
     ];
   }, [formas.data]);
 
+  /**
+   * DE QUÉ CUENTA SALE (ADR-0067 §1). Elegir solo la forma dejaba que el servidor dedujera la
+   * cuenta, y con dos bancos «la más antigua» es un desempate, no una regla: en producción eso
+   * puso 122 transferencias en Mercantil y ni un bolívar en Banesco.
+   */
+  const candidatas = useQuery({
+    queryKey: ["cuentas-candidatas", empresa.id],
+    staleTime: 60_000,
+    retry: false,
+    queryFn: () =>
+      llamar<{ instruments: CandidatasDeInstrumento[] }>("/v1/treasury/accounts/candidates"),
+  });
+  const configuradaElegida = (formas.data?.methods ?? []).find((f) => f.id === forma);
+  const instrumentoElegido = configuradaElegida?.kind ?? forma;
+  const deCuenta = useMemo(
+    () =>
+      decidirCuenta(candidatas.data?.instruments.find((i) => i.instrument === instrumentoElegido)),
+    [candidatas.data, instrumentoElegido],
+  );
+  const cuentaDelPago =
+    configuradaElegida?.account_id ?? (deCuenta.que === "elegir" ? cuenta : deCuenta.cuentaUnica);
+  const faltaElegirCuenta = deCuenta.que === "elegir" && cuenta === null;
+
   const pagar = useMutation({
     mutationFn: (forzar: boolean) => {
-      const configurada = (formas.data?.methods ?? []).find((f) => f.id === forma);
+      const configurada = configuradaElegida;
       const tipoDePago = configurada?.kind ?? forma;
       if (tipoDePago === null || !esFormaDeCompra(tipoDePago)) {
         return Promise.reject(new Error("Esa forma no sirve para pagar a un proveedor."));
@@ -796,7 +822,7 @@ function PagarFactura({
           gross_amount: monto.trim().replace(",", "."),
           currency: factura.transaction_currency,
           instrument: tipoDePago,
-          ...(configurada === undefined ? {} : { account_id: configurada.account_id }),
+          ...(cuentaDelPago == null ? {} : { account_id: cuentaDelPago }),
           ...(forzar ? { allow_negative_balance: true } : {}),
         }),
       });
@@ -847,12 +873,39 @@ function PagarFactura({
                 <SimpleSelect
                   id={p.id}
                   value={forma}
-                  onValueChange={setForma}
+                  onValueChange={(v) => {
+                    setForma(v);
+                    setCuenta(null);
+                  }}
                   placeholder={formas.isPending ? "Cargando…" : "Elige…"}
                   options={opcionesDePago}
                 />
               )}
             </FormField>
+            {forma !== null && deCuenta.que === "elegir" && (
+              <FormField
+                label="¿De qué cuenta sale?"
+                required
+                hint="Tienes más de una: dinos cuál, para que el saldo de cada una diga la verdad."
+              >
+                {(p) => (
+                  <SimpleSelect
+                    id={p.id}
+                    value={cuenta}
+                    onValueChange={setCuenta}
+                    options={deCuenta.opciones.map((c) => ({ value: c.id, label: c.name }))}
+                    placeholder="Elige…"
+                  />
+                )}
+              </FormField>
+            )}
+            {/* Solo con la consulta respondida: mientras carga no se afirma dónde va a caer. */}
+            {forma !== null && candidatas.isSuccess && deCuenta.que === "ninguna" && (
+              <p className="rounded-md bg-muted p-3 text-[0.88rem] sm:col-span-2">
+                No tienes una cuenta de ese tipo, así que el pago va a quedar en «Sin asignar» hasta
+                que lo repartas. Puedes crear la cuenta en <strong>Mi dinero</strong>.
+              </p>
+            )}
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={onCerrar}>
@@ -861,7 +914,10 @@ function PagarFactura({
             <Button
               variant="primary"
               disabled={
-                forma === null || !importeValido(monto.trim().replace(",", ".")) || pagar.isPending
+                forma === null ||
+                faltaElegirCuenta ||
+                !importeValido(monto.trim().replace(",", ".")) ||
+                pagar.isPending
               }
               onClick={() => pagar.mutate(false)}
             >

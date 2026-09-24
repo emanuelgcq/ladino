@@ -32,6 +32,10 @@ const MIRON = crypto.randomUUID();
 const ROL = crypto.randomUUID();
 const ROL_MIRON = crypto.randomUUID();
 const CERRADOR = crypto.randomUUID();
+const CAJERA = crypto.randomUUID();
+const ROL_CAJERA = crypto.randomUUID();
+const MEM_CAJERA = crypto.randomUUID();
+const ASIG_CAJERA = crypto.randomUUID();
 const ROL_CERRADOR = crypto.randomUUID();
 const MEM_CERRADOR = crypto.randomUUID();
 const ASIG_CERRADOR = crypto.randomUUID();
@@ -48,6 +52,16 @@ let sqlApi: ReturnType<typeof createClient>;
 let app: ReturnType<typeof buildApp>;
 let CAJA = "";
 let ZELLE = "";
+let BANESCO = "";
+let MERCANTIL = "";
+
+/** Lo que devuelve `/v1/treasury/accounts/candidates` por instrumento (ADR-0067 §1). */
+interface Candidatas {
+  instrument: string;
+  currency: string;
+  accounts: { id: string; name: string; currency: string; kind: string }[];
+  fixed_by_method: string | null;
+}
 
 const tokenDe = (sub: string) =>
   new SignJWT({ role: "authenticated" })
@@ -89,7 +103,7 @@ beforeAll(async () => {
   sql = createClient(URL_LOCAL);
   sqlApi = createClient(URL_API);
   app = buildApp({ sql: sqlApi, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
-  await sql`insert into auth.users (id) values (${GESTOR}), (${MIRON}), (${CERRADOR})
+  await sql`insert into auth.users (id) values (${GESTOR}), (${MIRON}), (${CERRADOR}), (${CAJERA})
             on conflict (id) do nothing`;
   // El caso «sin tasa no hay gasto en divisa» exige empezar SIN tasas USD→VES,
   // vengan de donde vengan: otras suites, la demo local ('BCV'), confirmaciones.
@@ -109,7 +123,8 @@ beforeAll(async () => {
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values
              (${ROL}, null, ${`e2eteso_${RUN}`}, 'Gestor tesorería', false),
              (${ROL_MIRON}, null, ${`e2eteso_miron_${RUN}`}, 'Mirón tesorería', false),
-             (${ROL_CERRADOR}, null, ${`e2eteso_cierre_${RUN}`}, 'Cerrador', false)`;
+             (${ROL_CERRADOR}, null, ${`e2eteso_cierre_${RUN}`}, 'Cerrador', false),
+             (${ROL_CAJERA}, null, ${`e2eteso_cajera_${RUN}`}, 'Cajera', false)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
              (${ROL}, 'treasury.read'), (${ROL}, 'treasury.account.manage'),
              (${ROL}, 'expense.register'), (${ROL}, 'expense.read'),
@@ -117,16 +132,19 @@ beforeAll(async () => {
              (${ROL}, 'accounting.account.manage'), (${ROL}, 'accounting.template.manage'),
              (${ROL}, 'accounting.read'),
              (${ROL_MIRON}, 'treasury.read'),
-             (${ROL_CERRADOR}, 'cash.close')
+             (${ROL_CERRADOR}, 'cash.close'),
+             (${ROL_CAJERA}, 'sales.payment.register')
              on conflict do nothing`;
     await tx`insert into public.memberships (id, tenant_id, user_id) values
              (${MEM}, ${TENANT}, ${GESTOR}), (${MEM_MIRON}, ${TENANT}, ${MIRON}),
-             (${MEM_CERRADOR}, ${TENANT}, ${CERRADOR})`;
+             (${MEM_CERRADOR}, ${TENANT}, ${CERRADOR}),
+             (${MEM_CAJERA}, ${TENANT}, ${CAJERA})`;
     await tx`insert into public.user_role_assignments
                (id, tenant_id, membership_id, role_id, company_id) values
              (${ASIG}, ${TENANT}, ${MEM}, ${ROL}, null),
              (${ASIG_MIRON}, ${TENANT}, ${MEM_MIRON}, ${ROL_MIRON}, null),
-             (${ASIG_CERRADOR}, ${TENANT}, ${MEM_CERRADOR}, ${ROL_CERRADOR}, null)`;
+             (${ASIG_CERRADOR}, ${TENANT}, ${MEM_CERRADOR}, ${ROL_CERRADOR}, null),
+             (${ASIG_CAJERA}, ${TENANT}, ${MEM_CAJERA}, ${ROL_CAJERA}, null)`;
   });
 });
 
@@ -404,11 +422,132 @@ describe("tesorería de extremo a extremo", () => {
     expect(sinPermiso.status).toBe(200);
   });
 
+  // ── ADR-0067: la cuenta se pregunta, no se adivina ───────────────────────
+  it("con dos bancos, las candidatas son LAS DOS y en el orden en que el servidor resolvería", async () => {
+    // Dos cuentas de la MISMA familia y moneda: aquí es donde la escalera de ADR-0062 §1
+    // deja de ser una regla y pasa a ser un desempate por antigüedad.
+    const banesco = await pedir("POST", "/v1/treasury/accounts", GESTOR, {
+      company_id: COMPANY,
+      name: "Banesco",
+      currency: "VES",
+      kind: "bank",
+    });
+    expect(banesco.status).toBe(201);
+    BANESCO = ((await banesco.json()) as { id: string }).id;
+    const mercantil = await pedir("POST", "/v1/treasury/accounts", GESTOR, {
+      company_id: COMPANY,
+      name: "Banco Mercantil",
+      currency: "VES",
+      kind: "bank",
+    });
+    expect(mercantil.status).toBe(201);
+    MERCANTIL = ((await mercantil.json()) as { id: string }).id;
+
+    const r = await pedir("GET", "/v1/treasury/accounts/candidates", GESTOR);
+    expect(r.status, await r.clone().text()).toBe(200);
+    const c = (await r.json()) as { instruments: Candidatas[] };
+    const transferencia = c.instruments.find((i) => i.instrument === "transferencia");
+    expect(transferencia).toBeDefined();
+    expect(transferencia!.accounts.map((a) => a.name)).toEqual(["Banesco", "Banco Mercantil"]);
+    expect(transferencia!.fixed_by_method).toBeNull();
+
+    // El efectivo NO ve los bancos: el arqueo contaría billetes que no están (ADR-0062 §1).
+    const efectivo = c.instruments.find((i) => i.instrument === "efectivo_bs");
+    expect(efectivo!.accounts.map((a) => a.name)).toEqual(["Caja Bs"]);
+
+    // Y el dólar tiene lo suyo, no lo de bolívares.
+    const zelle = c.instruments.find((i) => i.instrument === "zelle");
+    expect(zelle!.accounts.map((a) => a.name)).toEqual(["Zelle"]);
+
+    // NINGUNA trae saldo: elegir la cuenta no es ver el dinero (ADR-0067 §1).
+    const conSaldo = c.instruments.flatMap((i) => i.accounts).filter((a) => "balance" in a);
+    expect(conSaldo).toEqual([]);
+  });
+
+  it("con una forma configurada no hay nada que preguntar: la cuenta viene fijada", async () => {
+    const m = await pedir("POST", "/v1/payment-methods", GESTOR, {
+      company_id: COMPANY,
+      name: "Mercantil transferencias",
+      kind: "transferencia",
+      account_id: MERCANTIL,
+    });
+    expect(m.status, await m.clone().text()).toBe(201);
+
+    const r = await pedir("GET", "/v1/treasury/accounts/candidates", GESTOR);
+    const c = (await r.json()) as { instruments: Candidatas[] };
+    const transferencia = c.instruments.find((i) => i.instrument === "transferencia");
+    expect(transferencia!.fixed_by_method).toBe(MERCANTIL);
+    // Las candidatas siguen ahí: la pantalla decide con `fixed_by_method`, no adivinando.
+    expect(transferencia!.accounts).toHaveLength(2);
+  });
+
+  it("quien COBRA puede elegir la cuenta, pero no puede ver el dinero", async () => {
+    // El permiso de las candidatas es el de quien REGISTRA el movimiento. La cajera tiene que
+    // poder decir «entró por Mercantil» sin que la pantalla le enseñe cuánto hay en Mercantil.
+    const candidatas = await pedir("GET", "/v1/treasury/accounts/candidates", CAJERA);
+    expect(candidatas.status, await candidatas.clone().text()).toBe(200);
+    const c = (await candidatas.json()) as { instruments: Candidatas[] };
+    expect(c.instruments.find((i) => i.instrument === "transferencia")!.accounts).toHaveLength(2);
+
+    const cuentas = await pedir("GET", "/v1/treasury/accounts", CAJERA);
+    expect(cuentas.status).toBe(403);
+  });
+
+  it("el informe enseña lo que cayó en «Sin asignar» y calla lo que cayó bien", async () => {
+    // Un gasto pagado de una cuenta propia: normal, no se informa.
+    const bueno = await pedir("POST", "/v1/expenses", GESTOR, {
+      company_id: COMPANY,
+      category: "Luz",
+      account_id: BANESCO,
+      amount: "10",
+      allow_negative_balance: true,
+    });
+    expect(bueno.status, await bueno.clone().text()).toBe(201);
+
+    const antes = await pedir("GET", "/v1/treasury/landing-gaps", GESTOR);
+    expect(antes.status).toBe(200);
+    expect(((await antes.json()) as { items: unknown[] }).items).toEqual([]);
+
+    // Y ahora uno que cae en la cuenta de sistema, que es lo que pasaba cuando nadie elegía.
+    const [sinAsignar] = await sql<{ id: string }[]>`
+      insert into public.company_accounts
+        (tenant_id, company_id, name, currency, kind, is_system)
+      values (${TENANT}, ${COMPANY}, 'Sin asignar (VES)', 'VES', 'cash', true)
+      returning id`;
+    const malo = await pedir("POST", "/v1/expenses", GESTOR, {
+      company_id: COMPANY,
+      category: "Agua",
+      account_id: sinAsignar!.id,
+      amount: "20",
+      allow_negative_balance: true,
+    });
+    expect(malo.status, await malo.clone().text()).toBe(201);
+
+    const r = await pedir("GET", "/v1/treasury/landing-gaps", GESTOR);
+    const filas = (await r.json()) as { items: { problem: string; account_name: string }[] };
+    expect(filas.items).toHaveLength(1);
+    expect(filas.items[0]!.problem).toBe("sin_asignar");
+    expect(filas.items[0]!.account_name).toBe("Sin asignar (VES)");
+
+    // Es un INFORME: no arregla nada y el dinero sigue donde cayó.
+    const [saldo] = await sql<{ balance: string }[]>`
+      select balance::text from public.company_account_balances
+       where account_id = ${sinAsignar!.id}`;
+    expect(Number(saldo!.balance)).toBe(-20);
+  });
+
+  it("y el informe no lo ve quien no puede ver el dinero", async () => {
+    const r = await pedir("GET", "/v1/treasury/landing-gaps", CAJERA);
+    expect(r.status).toBe(403);
+  });
   it("los listados responden y la conciliación cuadra al final", async () => {
     const gastos = await pedir("GET", "/v1/expenses", GESTOR);
     expect(gastos.status).toBe(200);
     const lg = (await gastos.json()) as { items: unknown[]; total: number };
-    expect(lg.total).toBe(3);
+    // Eran 3 hasta ADR-0067: los dos gastos que registra el test del informe —uno pagado de una
+    // cuenta propia y otro de «Sin asignar»— son los que hacen 5. El número cuenta lo que este
+    // fichero creó, no un invariante del negocio.
+    expect(lg.total).toBe(5);
 
     const cierres = await pedir("GET", "/v1/cash-closings", GESTOR);
     expect(cierres.status).toBe(200);

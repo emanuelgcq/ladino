@@ -15,6 +15,9 @@ import type {
   CashClosingResponse,
   CreateTreasuryTransferRequest,
   TreasuryTransferResponse,
+  CandidateAccountResponse,
+  CandidatesByInstrument,
+  MoneyLandingGapResponse,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
@@ -1014,4 +1017,105 @@ export async function transferBetweenAccounts(
     journal_entry_id: generado.value.kind === "queued" ? null : generado.value.entryId,
     accounting: generado.value.kind === "queued" ? "queued" : "posted",
   } as TreasuryTransferResponse);
+}
+
+/**
+ * LAS CUENTAS CANDIDATAS (ADR-0067 §1): de dónde puede salir el dinero de este instrumento, en
+ * esta moneda, **en el mismo orden en que las resolvería `resolverCuentaEfectivo`**. Comparten la
+ * familia y el `order by` a propósito: si la pregunta de la pantalla y el último recurso del
+ * servidor se ordenaran distinto, la primera opción de la lista no sería la que cae por omisión y
+ * nadie entendería por qué.
+ *
+ * Devuelve TAMBIÉN la cuenta que fija una forma de pago configurada. Cuando la hay, no hay nada
+ * que preguntar: para eso se configuró.
+ *
+ * El permiso es el de quien REGISTRA el movimiento, no el de quien ve el dinero, y por eso no
+ * viaja ningún saldo (ADR-0048; la misma frontera del catálogo de formas de pago).
+ */
+export async function listCandidateAccounts(
+  uow: UnitOfWork,
+  companyId: string,
+  functionalCurrency: string,
+): Promise<Result<CandidatesByInstrument[], TreasuryError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Elegir la cuenta exige un usuario." });
+  }
+  const ctx = await companyScope(sql, actor.userId, companyId, [
+    "treasury.read",
+    "cash.close",
+    "sales.invoice.issue",
+    "sales.payment.register",
+    "purchase.payment.register",
+    "expense.register",
+  ]);
+  if (!ctx.ok) return ctx;
+
+  // Dos consultas para TODOS los instrumentos, no una por cada uno: el POS pinta ocho botones y
+  // no va a hacer ocho viajes para saber a dónde lleva cada uno.
+  const cuentas = await sql<
+    { id: string; name: string; currency: string; kind: string; created_at: string }[]
+  >`
+    select ca.id, ca.name, ca.currency, ca.kind, ca.created_at::text as created_at
+      from public.company_accounts ca
+     where ca.company_id = ${companyId} and ca.is_active and not ca.is_system
+     order by ca.created_at`;
+  const metodos = await sql<{ kind: string; account_id: string; currency: string }[]>`
+    select pm.kind, pm.account_id, ca.currency
+      from public.payment_methods pm
+      join public.company_accounts ca on ca.id = pm.account_id
+     where pm.company_id = ${companyId} and pm.is_active and ca.is_active
+     order by pm.created_at`;
+
+  const filas: CandidatesByInstrument[] = [];
+  for (const [instrument, cual] of Object.entries(MONEDA_DE_INSTRUMENTO)) {
+    if (SIN_EFECTIVO.has(instrument)) continue;
+    // «cualquiera» (tarjeta, otro) se resuelve en la moneda funcional: es la que la pantalla
+    // ofrece por omisión, y quien liquide en otra la elige en su propia lista.
+    const moneda = cual === "USD" ? "USD" : functionalCurrency;
+    const familia = FAMILIA_DE_INSTRUMENTO[instrument] ?? ["cash", "bank", "wallet"];
+    const propias = cuentas
+      .filter((c) => c.currency === moneda && familia.includes(c.kind))
+      // El MISMO orden que `resolverCuentaEfectivo`: por familia y luego por antigüedad. Si la
+      // lista de la pantalla y el último recurso del servidor se ordenaran distinto, la primera
+      // opción no sería la que cae por omisión y nadie entendería por qué.
+      .sort(
+        (a, b) =>
+          familia.indexOf(a.kind) - familia.indexOf(b.kind) ||
+          a.created_at.localeCompare(b.created_at),
+      )
+      .map(({ id, name, currency, kind }) => ({ id, name, currency, kind }));
+    const fijada = metodos.find((m) => m.kind === instrument && m.currency === moneda);
+    filas.push({
+      instrument,
+      currency: moneda,
+      accounts: propias as CandidateAccountResponse[],
+      fixed_by_method: fijada?.account_id ?? null,
+    });
+  }
+  return ok(filas);
+}
+
+/**
+ * EL INFORME de ADR-0067 §4: dónde cayó el dinero que nadie eligió. Solo lectura, y su respuesta
+ * correcta no es cero — lo dice la migración 73 y lo repite aquí quien lo llame.
+ */
+export async function listMoneyLandingGaps(
+  uow: UnitOfWork,
+  companyId: string,
+): Promise<Result<MoneyLandingGapResponse[], TreasuryError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Ver el informe exige un usuario real." });
+  }
+  const ctx = await companyScope(sql, actor.userId, companyId, "treasury.read");
+  if (!ctx.ok) return ctx;
+  const filas = await sql<MoneyLandingGapResponse[]>`
+    select kind, movement_id, occurred_on::text as occurred_on, instrument,
+           -- A las unidades mínimas de su moneda, igual que los saldos (ADR-0063 §4): el mismo
+           -- dinero no puede leerse «USD 40,368» aquí y «USD 40,37» en la tarjeta de la cuenta.
+           round(amount, platform.currency_minor_units(currency))::text as amount,
+           currency, account_id, account_name, problem
+      from platform.money_landing_gaps(${companyId})`;
+  return ok(filas);
 }

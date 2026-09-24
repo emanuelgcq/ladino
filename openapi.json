@@ -13843,6 +13843,141 @@
         ],
         "additionalProperties": false
       },
+      "ListCandidateAccountsResponse": {
+        "type": "object",
+        "properties": {
+          "instruments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "instrument": {
+                  "type": "string"
+                },
+                "currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                "accounts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "currency": {
+                        "type": "string",
+                        "pattern": "^[A-Z]{3}$"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "cash",
+                          "bank",
+                          "wallet"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "currency",
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "fixed_by_method": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                }
+              },
+              "required": [
+                "instrument",
+                "currency",
+                "accounts",
+                "fixed_by_method"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "instruments"
+        ],
+        "additionalProperties": false
+      },
+      "ListMoneyLandingGapsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "movement_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "occurred_on": {
+                  "type": "string"
+                },
+                "instrument": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "amount": {
+                  "type": "string",
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                "account_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "account_name": {
+                  "type": "string"
+                },
+                "problem": {
+                  "type": "string",
+                  "enum": [
+                    "sin_asignar",
+                    "familia_no_corresponde"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "movement_id",
+                "occurred_on",
+                "instrument",
+                "amount",
+                "currency",
+                "account_id",
+                "account_name",
+                "problem"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
+      },
       "CreateCompanyAccountRequest": {
         "type": "object",
         "properties": {
@@ -30580,6 +30715,154 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CompanyAccountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/treasury/accounts/candidates": {
+      "get": {
+        "summary": "De qué cuentas puede salir el dinero de este instrumento (ADR-0067 §1)",
+        "description": "Las cuentas PROPIAS y activas de la familia del instrumento, en la moneda del pago, en el MISMO orden en que el servidor las resolvería si no se mandara ninguna (ADR-0062 §1): la primera es la que caería por omisión. Existe para que la pantalla PREGUNTE de qué cuenta sale el dinero en vez de dejar que el servidor lo adivine cuando hay más de una; con dos bancos, «la más antigua» no es una regla de negocio, es un desempate.\n\n**No devuelve saldos**, y es a propósito: elegir la cuenta no es ver el dinero (ADR-0048). `fixed_by_method` trae la cuenta que fija una forma de pago configurada — cuando la hay, no hay nada que preguntar.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Las candidatas de cada instrumento, en orden de resolución.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListCandidateAccountsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/treasury/landing-gaps": {
+      "get": {
+        "summary": "Dónde cayó el dinero que nadie eligió — INFORME, no invariante (ADR-0067 §4)",
+        "description": "Cobros, pagos a proveedor y gastos que cayeron en una cuenta de SISTEMA («Sin asignar») o en una cuenta cuya familia no corresponde al instrumento —efectivo salido de un banco, un pago móvil salido de la caja física—.\n\n**Su respuesta correcta NO es cero**: «Sin asignar» es legítima mientras el negocio no tenga una cuenta de esa familia. Nada se reescribe aquí; lo que haya que mover lo mueve una persona con la transferencia entre cuentas (ADR-0062 §3).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Las filas del informe.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListMoneyLandingGapsResponse"
                 }
               }
             }

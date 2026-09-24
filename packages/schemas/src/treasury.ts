@@ -278,3 +278,65 @@ export const DailyRateResponse = z
   })
   .strict();
 export type DailyRateResponse = z.infer<typeof DailyRateResponse>;
+
+/**
+ * UNA CUENTA CANDIDATA (ADR-0067 §1): de dónde puede salir —o a dónde puede entrar— el dinero de
+ * un instrumento concreto, en una moneda concreta.
+ *
+ * **Sin saldo, y es a propósito.** Elegir de qué cuenta sale el dinero no es «ver el dinero»: la
+ * cajera que cobra y el encargado que paga una compra tienen que poder decir «salió de Mercantil»
+ * sin que la pantalla les enseñe cuánto hay en Mercantil, que es lo que ADR-0048 reserva a
+ * `treasury.read`. Es la misma frontera que ya se trazó con el catálogo de formas de pago.
+ */
+export const CandidateAccountResponse = z
+  .object({
+    id: uuid,
+    name: z.string(),
+    currency,
+    kind: TreasuryAccountKind,
+  })
+  .strict();
+export type CandidateAccountResponse = z.infer<typeof CandidateAccountResponse>;
+
+export const CandidatesByInstrument = z
+  .object({
+    instrument: z.string(),
+    currency,
+    /**
+     * En el MISMO orden en que el servidor las resolvería (ADR-0062 §1): la primera es la que
+     * caería por omisión. La pantalla no la preselecciona —una preselección es la adivinanza con
+     * un sello (ADR-0067 §1)—, pero el orden hace que la lista se lea de lo más probable a lo
+     * menos.
+     */
+    accounts: z.array(CandidateAccountResponse),
+    /** La cuenta que fija la forma de pago configurada, si hay una: entonces no se pregunta. */
+    fixed_by_method: uuid.nullable(),
+  })
+  .strict();
+export type CandidatesByInstrument = z.infer<typeof CandidatesByInstrument>;
+
+export const ListCandidateAccountsResponse = z
+  .object({ instruments: z.array(CandidatesByInstrument) })
+  .strict();
+export type ListCandidateAccountsResponse = z.infer<typeof ListCandidateAccountsResponse>;
+
+/** Una fila del informe de ADR-0067 §4: dinero que cayó donde nadie eligió. */
+export const MoneyLandingGapResponse = z
+  .object({
+    kind: z.string(),
+    movement_id: uuid,
+    occurred_on: z.string(),
+    instrument: z.string().nullable(),
+    amount,
+    currency,
+    account_id: uuid,
+    account_name: z.string(),
+    problem: z.enum(["sin_asignar", "familia_no_corresponde"]),
+  })
+  .strict();
+export type MoneyLandingGapResponse = z.infer<typeof MoneyLandingGapResponse>;
+
+export const ListMoneyLandingGapsResponse = z
+  .object({ items: z.array(MoneyLandingGapResponse) })
+  .strict();
+export type ListMoneyLandingGapsResponse = z.infer<typeof ListMoneyLandingGapsResponse>;

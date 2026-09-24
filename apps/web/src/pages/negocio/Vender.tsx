@@ -50,7 +50,12 @@ import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
-import { ETIQUETA_FORMA, FORMAS_BASE, MONEDA_FORMA } from "../../components/formas-de-pago.js";
+import {
+  ETIQUETA_FORMA,
+  FORMAS_BASE,
+  MONEDA_FORMA,
+  type CandidatasDeInstrumento,
+} from "../../components/formas-de-pago.js";
 import { formatearDocumento } from "./comunes.js";
 import { BotonEscanear, type Lectura } from "../../components/EscanerCodigo.js";
 import { tasaLimpia } from "../../tasa.js";
@@ -1427,6 +1432,21 @@ function Cobrar({
     queryFn: () => llamar<{ methods: FormaDePago[] }>("/v1/payment-methods"),
   });
 
+  /**
+   * A DÓNDE ENTRA EL DINERO (ADR-0067 §3). El mostrador se mide en toques: preguntar «¿a qué
+   * cuenta?» después de cada forma de pago es inaceptable donde se cobra con una mano. Así que
+   * aquí no se pregunta — **se abre el botón**: cuando una forma base tiene más de una cuenta
+   * candidata, salen «Pago móvil · Banesco» y «Pago móvil · Mercantil» en vez de un «Pago móvil»
+   * que caía en la que el servidor eligiera por antigüedad.
+   */
+  const candidatas = useQuery({
+    queryKey: ["cuentas-candidatas", empresa.id],
+    staleTime: 60_000,
+    retry: false,
+    queryFn: () =>
+      llamar<{ instruments: CandidatasDeInstrumento[] }>("/v1/treasury/accounts/candidates"),
+  });
+
   // Las formas que se OFRECEN: las configuradas del negocio (con su cuenta)
   // más TODAS las formas base que ninguna configurada cubra.
   const botones = useMemo(() => {
@@ -1445,17 +1465,33 @@ function Cobrar({
       account_id: f.account_id,
     }));
     for (const inst of FORMAS_BASE) {
-      if (!configuradas.some((f) => f.kind === inst)) {
-        base.push({
-          clave: inst,
-          etiqueta: ETIQUETA_FORMA[inst]!,
-          instrument: inst,
-          currency: MONEDA_FORMA[inst]!,
-        });
+      if (configuradas.some((f) => f.kind === inst)) continue;
+      const cuentas =
+        candidatas.data?.instruments.find((i) => i.instrument === inst)?.accounts ?? [];
+      if (cuentas.length > 1) {
+        for (const c of cuentas) {
+          base.push({
+            clave: `${inst}:${c.id}`,
+            etiqueta: `${ETIQUETA_FORMA[inst]!} · ${c.name}`,
+            instrument: inst,
+            currency: MONEDA_FORMA[inst]!,
+            account_id: c.id,
+          });
+        }
+        continue;
       }
+      base.push({
+        clave: inst,
+        etiqueta: ETIQUETA_FORMA[inst]!,
+        instrument: inst,
+        currency: MONEDA_FORMA[inst]!,
+        // Con una sola candidata se manda igual: que el servidor la deduzca y que la pantalla la
+        // sepa tienen que dar lo mismo, y mandarla lo deja escrito.
+        ...(cuentas.length === 1 ? { account_id: cuentas[0]!.id } : {}),
+      });
     }
     return base;
-  }, [formas.data]);
+  }, [formas.data, candidatas.data]);
 
   // ── La vista previa del SERVIDOR (ADR-0059): cuánto abona cada forma, su
   // impuesto a las transacciones, el vuelto, lo que falta y cuánto pedir en cada forma.

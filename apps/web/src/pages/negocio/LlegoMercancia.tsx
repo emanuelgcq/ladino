@@ -17,7 +17,12 @@ import {
   type EntityOption,
 } from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
-import { opcionesDePagoDeCompra, type FormaDePago } from "../../components/formas-de-pago.js";
+import {
+  opcionesDePagoDeCompra,
+  decidirCuenta,
+  type FormaDePago,
+  type CandidatasDeInstrumento,
+} from "../../components/formas-de-pago.js";
 import { fechaLocal } from "../../fechas.js";
 import { MoneyDualInput } from "../../components/MoneyDualInput.js";
 import { TARJETAS_FACTURA } from "../../components/capa-fiscal/textos.js";
@@ -152,6 +157,7 @@ export function LlegoMercancia(): React.JSX.Element {
   const [nroControl, setNroControl] = useState("");
   const [pagada, setPagada] = useState<boolean | null>(null);
   const [forma, setForma] = useState<string | null>(null);
+  const [cuenta, setCuenta] = useState<string | null>(null);
   const [deposito, setDeposito] = useState<string | null>(null);
   const [sinSaldo, setSinSaldo] = useState<string | null>(null);
   const [hecho, setHecho] = useState<{ kind: string; productos: number } | null>(null);
@@ -206,6 +212,31 @@ export function LlegoMercancia(): React.JSX.Element {
    * `PurchaseInstrument` no la admite. Tarjeta y «Otra», que el cobro no ofrece, sí entran.
    */
   const opcionesDePago = useMemo(() => opcionesDePagoDeCompra(formas.data?.methods), [formas.data]);
+
+  /**
+   * DE QUÉ CUENTA SALIÓ (ADR-0067 §1). El servidor sabe deducirla, pero con dos bancos «la más
+   * antigua» es un desempate, no una regla: si hay más de una candidata se pregunta, y sin
+   * preseleccionar ninguna.
+   */
+  const candidatas = useQuery({
+    queryKey: ["cuentas-candidatas", empresa.id],
+    enabled: pagada === true,
+    staleTime: 60_000,
+    retry: false,
+    queryFn: () =>
+      llamar<{ instruments: CandidatasDeInstrumento[] }>("/v1/treasury/accounts/candidates"),
+  });
+  const elegida = opcionesDePago.find((o) => o.clave === forma);
+  const deCuenta = useMemo(
+    () =>
+      decidirCuenta(candidatas.data?.instruments.find((i) => i.instrument === elegida?.instrument)),
+    [candidatas.data, elegida?.instrument],
+  );
+  // La cuenta que va a viajar: la que fija la forma configurada, la única candidata, o la que la
+  // persona eligió. Nunca una adivinada por la pantalla.
+  const cuentaDelPago =
+    elegida?.account_id ?? (deCuenta.que === "elegir" ? cuenta : deCuenta.cuentaUnica);
+  const faltaElegirCuenta = deCuenta.que === "elegir" && cuenta === null;
 
   const buscarProveedor = useCallback(
     async (q: string): Promise<EntityOption[]> => {
@@ -350,18 +381,27 @@ export function LlegoMercancia(): React.JSX.Element {
 
   const registrar = useMutation({
     mutationFn: (forzar: boolean) => {
-      const elegida = opcionesDePago.find((o) => o.clave === forma);
       const pago =
         pagada !== true || elegida === undefined
           ? undefined
           : {
               instrument: elegida.instrument,
-              ...(elegida.account_id == null ? {} : { account_id: elegida.account_id }),
+              ...(cuentaDelPago == null ? {} : { account_id: cuentaDelPago }),
               ...(forzar ? { allow_negative_balance: true } : {}),
             };
       return llamar<{ kind: string }>("/v1/arrivals", {
         method: "POST",
-        headers: { "Idempotency-Key": clave },
+        /**
+         * DOS CUERPOS, DOS CLAVES. La clave nace al entrar para que un doble clic no cree dos
+         * llegadas, pero confirmar el sobregiro manda un cuerpo DISTINTO —con
+         * `allow_negative_balance`— y con la misma clave el servidor respondía, con razón,
+         * `IDEMPOTENCY_KEY_REUSED`: «esa operación ya se registró con otros datos». Es decir, el
+         * botón «Registrarlo igual» no podía funcionar nunca. Lo destapó el QA de ADR-0067, en
+         * cuanto elegir la cuenta hizo que el sobregiro saltara de verdad.
+         *
+         * El sufijo es DETERMINISTA, no un uuid nuevo: repetir la confirmación tampoco duplica.
+         */
+        headers: { "Idempotency-Key": forzar ? `${clave}:sobregiro` : clave },
         body: JSON.stringify({
           company_id: empresa.id,
           warehouse_id: depositoElegido,
@@ -1014,17 +1054,49 @@ export function LlegoMercancia(): React.JSX.Element {
                 <SimpleSelect
                   id={p.id}
                   value={forma}
-                  onValueChange={setForma}
+                  onValueChange={(v) => {
+                    setForma(v);
+                    setCuenta(null);
+                  }}
                   options={opcionesDePago.map((o) => ({ value: o.clave, label: o.etiqueta }))}
                   placeholder={formas.isFetching ? "Cargando…" : "Elige…"}
                 />
               )}
             </FormField>
           )}
+          {pagada === true && forma !== null && deCuenta.que === "elegir" && (
+            <FormField
+              label="¿De qué cuenta salió?"
+              required
+              hint="Tienes más de una: dinos cuál, para que el saldo de cada una diga la verdad."
+            >
+              {(p) => (
+                <SimpleSelect
+                  id={p.id}
+                  value={cuenta}
+                  onValueChange={setCuenta}
+                  options={deCuenta.opciones.map((c) => ({ value: c.id, label: c.name }))}
+                  placeholder="Elige…"
+                />
+              )}
+            </FormField>
+          )}
+          {/* Solo cuando la consulta YA respondió: mientras carga, `decidirCuenta(undefined)` dice
+              «ninguna», y enseñar «va a caer en Sin asignar» antes de saberlo es asustar sin
+              motivo. */}
+          {pagada === true &&
+            forma !== null &&
+            candidatas.isSuccess &&
+            deCuenta.que === "ninguna" && (
+              <p className="rounded-md bg-muted p-3 text-[0.88rem]">
+                No tienes una cuenta de ese tipo, así que el pago va a quedar en «Sin asignar» hasta
+                que lo repartas. Puedes crear la cuenta en <strong>Mi dinero</strong>.
+              </p>
+            )}
           <div className="flex justify-end">
             <Button
               variant="primary"
-              disabled={pagada === null || (pagada && forma === null)}
+              disabled={pagada === null || (pagada && (forma === null || faltaElegirCuenta))}
               onClick={avanzar}
             >
               Seguir
