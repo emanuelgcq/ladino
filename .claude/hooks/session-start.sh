@@ -3,7 +3,7 @@
 set -uo pipefail
 echo "=== LADINO — contexto de sesión ==="
 echo "Rama: $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'sin git')"
-echo "Migraciones aplicadas: $(ls -1 supabase/migrations/*.sql 2>/dev/null | wc -l)"
+echo "Migraciones en el repo: $(ls -1 supabase/migrations/*.sql 2>/dev/null | wc -l) (las APLICADAS en producción se miran en supabase_migrations.schema_migrations)"
 echo ""
 echo "RECORDATORIO:"
 echo " - Investigar y planificar antes de implementar. Esperar aprobación explícita."

@@ -105,7 +105,7 @@ control tiene una prueba automatizada que falla si el control desaparece.**
 | pgTAP — 13 suites, **368 aserciones** | aislamiento, append-only, RBAC, procedencia, constraints | ✅ |
 | `pnpm test:concurrency` | outbox bajo N sesiones reales de `pgbench` | fuera de `verify` **a propósito**: es muestral |
 | Gate de coste (pgTAP 013) | que la resolución de permisos no se degrade en la ruta de RLS | ✅ |
-| `rls-security-auditor` · `fiscal-reviewer` | revisión al cerrar todo lo de rigor máximo | proceso |
+| `auditor-codigo` · `auditor-fiscal` (antes `rls-security-auditor` · `fiscal-reviewer`) | revisión al cerrar todo lo de rigor máximo | proceso |
 
 **Dos propiedades del enfoque de prueba que conviene declarar, porque no son habituales:**
 

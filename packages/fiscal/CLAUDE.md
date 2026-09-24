@@ -4,7 +4,8 @@ Bounded context fiscal. **Release train propio.** Es el único lugar del reposit
 vive el conocimiento de documentos fiscales, numeración y adaptadores de imprenta.
 
 Antes de tocar cualquier archivo aquí: lee `docs/02_COMPLIANCE/` completo e invoca el
-subagente `fiscal-reviewer` al terminar. Sin excepción.
+subagente `auditor-fiscal` al terminar (heredó el papel de `fiscal-reviewer`, incluido el veredicto
+`HOMOLOGATION_IMPACT`). Sin excepción.
 
 ## Reglas absolutas
 

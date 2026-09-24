@@ -197,7 +197,7 @@ capas y lo que destapa un test que pasa por el motivo que no es.
 
 Denegar con `using (false)` / `with check (false)` **no es lo mismo** que no
 crear la policy, aunque el efecto inmediato coincida. La RLS deniega por defecto,
-sí — pero esa denegación no la ve un `grep`, ni el `rls-security-auditor`, ni
+sí — pero esa denegación no la ve un `grep`, ni el `auditor-codigo`, ni
 quien lea el esquema dentro de un año.
 
 `false` es la prohibición **escrita**: greppable, comentable, auditable. Y no

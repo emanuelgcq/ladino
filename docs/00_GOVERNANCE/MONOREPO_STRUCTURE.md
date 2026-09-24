@@ -11,11 +11,15 @@ ladino/
   .mcp.json                    # servidores MCP: supabase (read-only), github
   .claude/
     settings.json              # permisos allow/ask/deny + hooks
-    hooks/                     # guard-immutability, guard-infra, post-edit-verify, session-start
-    agents/                    # spec-explorer, migration-author, accounting-invariants,
-                               # fiscal-reviewer, rls-security-auditor, mobile-expo
-    skills/                    # nuevo-modulo, migracion-supabase, caso-de-uso, adr,
-                               # deploy-vps, revision-completa, handoff
+    hooks/                     # guard-immutability, guard-infra, guard-agentes, subagent-stop,
+                               # post-edit-verify, session-start, lib-json (sin jq)
+    agents/                    # el equipo: validador, auditor-codigo, auditor-fiscal,
+                               # estratega-producto, escritor-tests, reparador, revisor;
+                               # apoyo: spec-explorer, migration-author, mobile-expo
+    skills/                    # orquestaciones: auditoria, arreglar, investigar, recorrido;
+                               # conocimiento: familias-de-error, migracion-supabase, caso-de-uso,
+                               # adr, handoff, nuevo-modulo, deploy-vps
+  scripts/                     # gate-verdict.sh (veredicto del gate), hooks-selftest.sh
   apps/
     web/        CLAUDE.md      # Vite + React + React Router + TanStack Query
     mobile/     CLAUDE.md      # Expo + React Native

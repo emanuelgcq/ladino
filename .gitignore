@@ -38,3 +38,11 @@ Thumbs.db
 
 # Salidas locales de Claude Code
 .claude/settings.local.json
+
+# Memoria LOCAL de los agentes (líneas base del validador, etc.): no se versiona.
+# La de .claude/agent-memory/ (auditor-fiscal, estratega-producto) SÍ se versiona: es conocimiento compartido.
+.claude/agent-memory-local/
+
+# Evidencia cruda del recorrido (capturas y texto de cada pantalla): la leen los agentes, no se versiona.
+# Las capturas de HALLAZGOS sí van a docs/08_UX/capturas-recorrido/.
+.recorrido/

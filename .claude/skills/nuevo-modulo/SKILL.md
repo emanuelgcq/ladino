@@ -37,11 +37,11 @@ Presenta y espera aprobación explícita:
 
 ## Fase 3 — Revisar
 
-- Si toca dinero → subagente `accounting-invariants`.
-- Si toca facturación/impuestos → subagente `fiscal-reviewer`.
-- Siempre tras migración → subagente `rls-security-auditor`.
-- `pnpm verify` en verde.
-- Recorre `docs/00_GOVERNANCE/DEFINITION_OF_DONE.md` punto por punto y muestra el checklist marcado.
+- Si toca dinero, datos o permisos → subagente `auditor-codigo` (hereda los checklists de
+  invariantes contables y de RLS/aislamiento).
+- Si toca facturación/impuestos → subagente `auditor-fiscal` (emite `HOMOLOGATION_IMPACT`).
+- Antes de commitear → subagente `revisor` sobre el diff (recorre la Definition of Done).
+- Gate → subagente `validador`, o `pnpm gate` (`scripts/gate-verdict.sh`) — nunca a ojo.
 
 ## Fase 4 — Entregar
 

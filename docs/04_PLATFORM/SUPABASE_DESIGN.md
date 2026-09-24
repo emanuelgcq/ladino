@@ -35,7 +35,8 @@ Se leen de la base, no de claims estáticos de larga vida: quitar un membership 
 en la siguiente consulta, sin esperar a que expire un token.
 
 Una tabla sin RLS es una fuga de datos entre clientes. No existen excepciones temporales.
-El subagente `rls-security-auditor` cruza `pg_tables` con `pg_policies` y reporta cualquier hueco.
+El subagente `auditor-codigo` (que heredó el checklist de `rls-security-auditor`) cruza `pg_tables`
+con `pg_policies` y reporta cualquier hueco.
 
 ## Append-only — defensa en dos capas (ADR-0006)
 

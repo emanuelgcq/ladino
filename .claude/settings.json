@@ -87,7 +87,21 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": ".claude/hooks/guard-infra.sh" }
+          { "type": "command", "command": ".claude/hooks/guard-infra.sh" },
+          { "type": "command", "command": ".claude/hooks/guard-immutability.sh" }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__.*",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/guard-agentes.sh" }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/subagent-stop.sh" }
         ]
       }
     ],

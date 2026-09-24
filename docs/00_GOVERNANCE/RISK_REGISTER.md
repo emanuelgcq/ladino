@@ -836,3 +836,44 @@ alguien las configure.
 
 **Deja de ser aceptable:** si la fricción hace que alguien elija «la primera que salga» sin mirar.
 Entonces habría que empujar la configuración en el onboarding, no en un aviso de «Mi dinero».
+
+### R-51 · `guard-agentes.sh` es una barandilla que lee texto, no una jaula
+
+- **Severidad:** Media · **Disparador:** un agente que quiere escribir, o empujar, y no por descuido
+- **Dónde:** `.claude/hooks/guard-agentes.sh`; CLAUDE.md §8; 30ª entrega del HANDOFF
+
+El guardián decide leyendo el TEXTO del comando. Lo que no está en el texto no lo ve: un script propio
+(`node -e`, un `.mjs` que escribe), una tabla cuyo nombre se arma en una variable, un intérprete
+que no conoce. Tres revisiones lo apretaron —y la tercera enseñó que cada forma de «entender» mejor
+el comando (neutralizar comillas, acotar el `-h` al tramo de psql) abre salidas nuevas—, así que
+ahora es estricto a propósito: todo `>` cuenta, salvo el SQL entre comillas simples de `psql -c`, y
+`-h` es un host en todo el comando. Eso deja **falsos positivos declarados** (`grep -h`, `du -h`,
+`awk 'NR>1'`, `grep "=> {"`), anclados en `scripts/hooks-selftest.sh` y escritos en las definiciones
+de los tres agentes de lectura con terminal. La primera capa sigue siendo `tools`/`disallowedTools`.
+
+Evasiones conocidas y **declaradas, no parcheadas** (una revisión adversarial las señaló por lectura
+del código; parchearlas una a una es la carrera que la tercera revisión enseñó a no correr):
+- `gh`: el valor pegado a la opción (`-fclave=valor` en `gh api`), un verbo de lectura como valor de
+  una opción desconocida, `gh.exe`, una ruta absoluta o el nombre entre comillas, y los alias y
+  extensiones;
+- programas que escriben por sus propias opciones, sin ningún `>`: `psql -o`, `-L`/`--log-file`,
+  `PSQLRC`, `sort -o`, `curl -o`, `git diff --output`.
+
+**Deja de ser aceptable:** si un agente llega a escribir en el repo o al remoto saltándose el hook.
+Entonces el confinamiento tiene que pasar al sistema de ficheros (un worktree de solo lectura, un
+usuario sin permisos), no a una regex más.
+
+### R-52 · Los hooks cuestan unos 3 s por cada Bash, y sin Node bloquean la sesión entera
+
+- **Severidad:** Baja · **Disparador:** sesiones largas con muchos comandos; una máquina sin `node`
+  en el PATH de Claude Code
+- **Dónde:** `.claude/hooks/lib-json.sh`, `.claude/settings.json`
+
+Cada guardián llama a Node varias veces por invocación (unas diez en total por comando, medido por
+el revisor: infra ~1 s, immutability ~1,8 s, agentes ~0,5 s). Un solo proceso que extraiga todos los
+campos lo bajaría. Y si falta Node, los guardianes FALLAN CERRADOS —es lo buscado, tras el apagón de
+`jq`—: la sesión principal queda bloqueada en todo Edit, Write, Bash y MCP, y solo se sale arreglando
+el PATH por fuera de Claude Code.
+
+**Deja de ser aceptable:** si la latencia empuja a desactivar los hooks. Antes de eso, un único
+lector de campos por hook.

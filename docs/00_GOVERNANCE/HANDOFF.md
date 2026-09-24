@@ -1,3 +1,126 @@
+# Handoff — 2026-09-24 (30ª entrega) — El equipo de diez agentes, y los guardianes que no guardaban
+
+## Qué pasaba
+
+Los tres hooks guardianes de `.claude/hooks/` —los que CLAUDE.md §2 cita con «hay hooks que las
+bloquean»— **aprobaban todo** en la máquina del dueño. Leían su entrada con `jq`, `jq` no estaba
+instalado, cada campo salía vacío, el hook llegaba a `[ -z "$FILE" ] && exit 0` y salía en verde.
+Editar una migración aplicada, `service_role` en la web y reiniciar n8n pasaban con exit 0. Nadie
+lo vio porque un guardián que no dispara es indistinguible de uno que no tiene nada que disparar.
+
+Salió al montar el equipo de agentes que pidió el dueño, cuando se probó un hook contra una entrada
+que tenía que bloquear.
+
+## Qué se cambió
+
+**El equipo — `.claude/agents/`, diez agentes.** Siete nuevos: `auditor-codigo`, `auditor-fiscal`,
+`estratega-producto` (encuentran), `escritor-tests` (prueba), `reparador` (arregla), `revisor`
+(revisa) y `validador` (valida). Se conservan `spec-explorer`, `mobile-expo` y `migration-author`
+(este último para funcionalidades nuevas; el reparador solo escribe migraciones de arreglo). Salen
+`accounting-invariants`, `rls-security-auditor` y `fiscal-reviewer`, absorbidos por los auditores.
+Las reglas R1–R9 van idénticas en los diez. Todos en `permissionMode: auto`, por decisión del dueño;
+el suelo son los hooks.
+
+**Los guardianes, rehechos y autoprobados.** `lib-json.sh` lee el JSON con Node y **falla cerrado**:
+sin Node, sin JSON legible o sin la propia librería, bloquea. Un `trap EXIT` convierte cualquier
+salida que no sea 0 ni 2 en 2, porque Claude Code trata el exit 1 como «error no bloqueante» y deja
+pasar la herramienta (pasó de verdad: con `TMPDIR` sin definir, `guard-agentes` salía con 1). Los
+guardianes corren **sin `pipefail`**: con él, un contenido de más de ~64 KB con la coincidencia al
+principio hacía que `grep -q` saliera antes, `printf` recibiera EPIPE y el guardián aprobara.
+`scripts/hooks-selftest.sh` (`pnpm hooks:selftest`) da a cada regla una entrada que TIENE que
+bloquear y otra que TIENE que pasar: **107 casos**. La del contenido grande se comprobó con su
+variante rota: con `pipefail` de vuelta, el caso sale rojo.
+
+**`guard-agentes.sh`, nuevo** — solo para subagentes (la sesión principal no se toca): confina lo
+que escribe cada agente (por Edit/Write **y** por Bash: `sed -i`, `git commit`, `rm`, `mv`; `cp`,
+`touch`, `tee` en posición de orden; y toda redirección: `>`, `>>`, `1>`, `2>`, `&>`, `>|`, `>&f`,
+`<>`), y hace cumplir R6: ni push (`git push` en todas sus formas), ni `gh` fuera de una lista
+blanca de lectura, ni MCP de GitHub de escritura, ni MCP de Supabase, ni CLI de Supabase contra el
+remoto, ni ssh, ni un host de Postgres que no sea local (`-h` se mira en todo el comando), ni
+despliegues. **Es estricto a propósito**: todo `>` cuenta como redirección, esté donde esté, con
+una sola excepción estrecha —el SQL entre comillas simples de `psql -c`, en un comando de una línea
+sin comillas dobles, barras invertidas ni heredoc—. Intentar «entender» mejor el comando abrió
+salidas nuevas dos veces (ver Pruebas). El precio son falsos positivos declarados (`grep -h`,
+`du -h`, `awk 'NR>1'`, `grep "=> {"`), anclados en la autoprueba y explicados en las definiciones
+de los tres agentes de lectura con terminal. **Es una barandilla, no una jaula** (R-51).
+
+**`subagent-stop.sh`, nuevo** — rechaza (una vez) el informe de un agente del equipo que no trae los
+campos de su definición (R8). **Falla abierto**, a propósito: en `SubagentStop`, bloquear significa
+que el agente no termina nunca. **Comprobado contra el runtime real** (no contra la autoprueba): el
+`SubagentStop` de Claude Code trae `last_assistant_message`, `agent_transcript_path`, `agent_type`,
+`agent_id` y `stop_hook_active`, entre otros. Si algún día no trae el informe, el hook lo lee del
+transcript del agente. Los campos de la última entrada real quedan en
+`$TMPDIR/ladino-subagentstop/ultima-entrada-campos.txt`.
+
+**`guard-immutability.sh`**: además de `edits[]` de MultiEdit y heredocs aplanados, la regla de
+append-only en ficheros cubre ya `truncate`, `table` y `only`, igual que la de Bash; y una regla 6
+nueva impide que un `Write` deje HANDOFF.md con menos entregas de las que tenía.
+
+**`scripts/gate-verdict.sh` — la única forma de leer el gate** (`pnpm gate`). Rojo si `VERIFY
+EXIT` ≠ 0, si hay un `Failed:`, si faltan `All tests successful`, `openapi:check OK` o
+`release:manifest:check OK`, si hay menos de 40 líneas de paso, o si vitest, pgTAP o sus ficheros
+bajan respecto de una línea base. En esta entrega dio rojo una vez con razón (formato de tres
+guiones sin commitear) y verde después.
+
+**Skills.** Nuevas: `/auditoria`, `/arreglar <ID>` (escritor-tests → reparador → revisor, con una
+sola devolución → validador → commit y push de la sesión principal), `/investigar`, `/recorrido` y
+`familias-de-error` (F1–F9). `handoff` ya no dice «sobrescribe»: antepone la entrada y conserva la
+historia. `session-start.sh` dice «Migraciones en el repo: N» y no «aplicadas». Sale
+`revision-completa`.
+
+## Pruebas
+
+`pnpm hooks:selftest`: **153 casos** en verde. La autoprueba valida además que cada fixture sea
+JSON: uno armado a mano no lo era, el hook fallaba abierto con «no se pudo leer» y el caso pasaba
+por la razón equivocada, con el arreglo y sin él. Los casos del contenido grande (guard-immutability,
+guard-infra y subagent-stop) se comprobaron con su variante rota: con `pipefail` de vuelta, salen
+rojos. Gate: verde con 736 líneas de paso, vitest 805 en 19 paquetes y pgTAP 1264 en 70 ficheros,
+igual que la línea base. **Ninguna aserción existente cambió**: el diff no toca ningún test.
+
+Revisión: tres pasadas del `revisor`, y la tercera es la lección de la entrega.
+- **Primera pasada.** Pidió cambios por once hallazgos, y se cerraron todos.
+- **Segunda pasada.** Encontró siete nuevos (N1–N7).
+- **Tercera pasada.** Revisó el arreglo de N1–N7 y demostró que **había abierto catorce salidas y
+  falsos positivos nuevos**: neutralizar los `>` entre comillas dejaba pasar `echo "$(… > f)"`,
+  `eval`, `bash -x -c` y un apóstrofo en un comentario, y acotar el `-h` dejaba pasar
+  `psql -c "…;" -h remoto`. Es el patrón de CLAUDE.md §3: el arreglo trae fallos nuevos.
+
+La respuesta no fue un arreglo más listo. Se volvió a lo estricto, se dejó una sola excepción
+estrecha y se anclaron en la autoprueba las catorce formas que había encontrado. Por la regla de
+`/arreglar` (una sola devolución), no hubo cuarta ronda de arreglos. Sí hubo una **revisión
+adversarial acotada de antemano** sobre las dos piezas nuevas, con esta regla: lo que tuviera hueco
+se quitaba o se declaraba, sin volver a parchear.
+- **La excepción de psql** salió sin hueco: el shell y el awk parten igual las comillas simples bajo
+  sus condiciones, y los metacomandos de psql que escriben llevan todos una barra invertida.
+- **El filtro de `gh`** tiene evasiones plausibles, y quedó **declarado** como barandilla, no como
+  lista blanca, en su comentario y en R-51.
+
+Un cambio a una comprobación ya revisada, dicho para que el dueño lo sepa: en la autoprueba, la
+búsqueda de `jq` ya no confunde la opción `--jq` de gh con el programa. El fichero no estaba en HEAD.
+
+## Lo que queda abierto
+
+- **Decisión del dueño (F7):** la regla de append-only exime todo `supabase/tests/*`, y no solo el
+  pgTAP que prueba el rechazo. Hoy la usan siete ficheros (008, 011, 019, 025, 027, 058, 067).
+  Estrecharla exigiría marcar esos tests. Lo decide el dueño.
+- **Decisión del dueño:** ¿merece ADR el cambio de gobierno (el equipo, R6 por hook, gate-verdict
+  como única fuente)? Hoy vive en CLAUDE.md §5 y §8.
+- **Decisión del dueño:** Playwright no es dependencia del repo. `scripts/recorrido/` lo carga de
+  la caché de npx o de `PLAYWRIGHT_PATH`.
+- **R-51 (nuevo):** `guard-agentes.sh` lee texto: un script propio lo esquiva, y lo estricto deja
+  falsos positivos declarados. Si un agente llegara a saltárselo, el confinamiento pasa al sistema
+  de ficheros, no a otra regex.
+- **R-52 (nuevo):** los hooks cuestan unos 3 s por cada Bash, y sin Node en el PATH bloquean la
+  sesión entera (el fallo cerrado buscado).
+- **Pendiente de antes:** la migración 73 a producción y el rebuild del VPS, en la ventana del dueño.
+  Y **rotar el token de gestión de Supabase**, que circuló por el chat.
+- Sigue el **recorrido de la A a la Z** (`/recorrido`), con sus hallazgos en
+  `docs/00_GOVERNANCE/AUDITORIAS/recorrido-2026-09-24.md`.
+
+HOMOLOGATION_IMPACT = NO (herramientas de trabajo y guardianes; no cambia ningún comportamiento fiscal)
+
+---
+
 # Handoff — 2026-09-20 (29ª entrega) — La cuenta se pregunta, no se adivina (ADR-0067)
 
 ## Qué pasaba

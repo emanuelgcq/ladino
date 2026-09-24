@@ -74,7 +74,7 @@ error en él se arregla con un `UPDATE`. Un asiento mal cuadrado, no.
 
 | Rigor | Dónde | Qué implica |
 |---|---|---|
-| **Máximo** | dinero · contabilidad · fiscal · aislamiento multi-tenant · auditoría | ADR **antes** del código, pgTAP/property tests exhaustivos, `rls-security-auditor` **y** `fiscal-reviewer` al cerrar |
+| **Máximo** | dinero · contabilidad · fiscal · aislamiento multi-tenant · auditoría | ADR **antes** del código, pgTAP/property tests exhaustivos, `auditor-codigo` **y** `auditor-fiscal` al cerrar |
 | **Normal** | maestros · catálogos · CRM · reportes · notificaciones · UI | una pasada de revisión; ADR **solo si la decisión es irreversible** |
 
 Y sobre datos: **auditoría completa sobre tablas con datos, ligera sobre tablas vacías.** Una
@@ -266,19 +266,29 @@ pnpm openapi              # regenerar openapi.json desde los schemas
 **Los pasos 5, 10 y 11 necesitan Docker y el stack local levantado** (`pnpm db:start`): desde
 S0.5, el paso de test incluye la integración de la API contra Postgres real (ADR-0016).
 
-**El resultado del `verify` se lee por `VERIFY EXIT` y por `Failed:`, nunca a ojo.** En esta
-máquina se corre con `TURBO_CONCURRENCY=1` (memoria) y la salida se manda a un log; el veredicto
-es `echo "VERIFY EXIT=$?"` al final más `grep -E "VERIFY EXIT|Failed:"` sobre ese log. Un
-`Result: PASS` de turbo no es el veredicto: turbo cubre cuatro de los once pasos. La regla existe
-porque el módulo de clientes salió con lint en rojo leyendo la cola del log (2026-08-26).
+**El veredicto del gate lo da `scripts/gate-verdict.sh`, y solo él — nunca se lee a ojo.**
 
-**Y un `VERIFY EXIT=0` tampoco basta por sí solo: hay que ver que el log tiene los pasos.**
-Invocado como `pnpm verify` dentro de una cadena, Windows puede resolverlo al builtin `verify`
-de cmd, que imprime `VERIFY is off.` y devuelve 0 — un log de dos líneas y un verde que no
-verificó nada (visto el 2026-08-26 en el módulo de inventario). Se usa **`pnpm run verify`** y se
-cuenta: `grep -cE "^@ladino/[a-z-]+:(lint|typecheck|test|build)"` sobre el log tiene que dar
-decenas de líneas, y `All tests successful` tiene que aparecer (el pgTAP). Un gate que puede
-apagarse solo y dar verde es peor que no tenerlo.
+```bash
+pnpm gate                                                  # corre el gate y lo juzga
+bash scripts/gate-verdict.sh judge <log> <exit> --base F   # juzga un log contra una línea base
+```
+
+Rojo si `VERIFY EXIT` ≠ 0, si hay un `Failed:`, si faltan `All tests successful`, `openapi:check OK`
+o `release:manifest:check OK`, si hay menos de 40 líneas de paso, o si vitest, pgTAP o sus ficheros
+bajan respecto de la línea base (**un test menos es rojo**). Existe por tres verdes falsos: el módulo
+de clientes salió con lint en rojo leyendo la cola del log (2026-08-26); invocado como `pnpm verify`,
+Windows lo resuelve al builtin `verify` de cmd, que imprime `VERIFY is off.` y devuelve 0 (inventario,
+2026-08-26); y un test que desaparece no hace ruido. Un `Result: PASS` de turbo tampoco es el
+veredicto: turbo cubre cuatro de los once pasos. Un gate que puede apagarse solo y dar verde es peor
+que no tenerlo.
+
+**Los hooks guardianes se autoprueban con `pnpm hooks:selftest`**: para cada regla, una entrada que
+TIENE que bloquear y otra que TIENE que pasar. Hasta el 2026-09-24 leían su entrada con `jq`, que no
+estaba instalado: salían con exit 0 y **aprobaban todo** — editar una migración aplicada,
+`service_role` en la web, reiniciar n8n. Ahora leen con Node y, si no pueden leer su entrada o no
+encuentran su librería, bloquean; y cualquier salida inesperada (un exit que no sea 0 ni 2, que
+Claude Code trata como «error no bloqueante» y deja pasar) se convierte en bloqueo. La excepción es `subagent-stop.sh`, que falla abierto a propósito:
+en `SubagentStop`, bloquear significa que el agente no puede terminar nunca.
 
 **`test:concurrency` NO está dentro de `verify`, y es deliberado.** Es una prueba de *muestreo*:
 abre N sesiones, compite durante T segundos y comprueba que nadie se lleva la misma fila dos
@@ -322,12 +332,30 @@ Ninguna UI persiste "estado final" de dinero, stock o documentos fiscales. Siemp
 de uso de dominio transaccional que valide permisos → bloquee → calcule → persista → audite →
 emita evento outbox → confirme commit.
 
-## 8. Subagentes disponibles
+## 8. El equipo de agentes
 
-`spec-explorer` · `migration-author` · `accounting-invariants` · `fiscal-reviewer` ·
-`rls-security-auditor` · `mobile-expo`
+**El trabajo se hace con el equipo de `.claude/agents/`: encuentra → prueba → arregla → revisa →
+valida.** Nadie revisa su propio trabajo.
 
-Delega a ellos las tareas de lectura amplia y revisión. El contexto principal es para decidir.
+| Papel | Agente | Qué hace |
+|---|---|---|
+| Encuentra | `auditor-codigo` | dinero, familias de error, datos, contabilidad, permisos y aislamiento, tiempos |
+| Encuentra | `auditor-fiscal` | la norma venezolana vigente, documentos, libros; `HOMOLOGATION_IMPACT` |
+| Encuentra | `estratega-producto` | lo que cada pantalla promete contra lo que hace; el mercado |
+| Prueba | `escritor-tests` | el test en rojo que demuestra el hallazgo, antes del arreglo |
+| Arregla | `reparador` | el cambio mínimo que lo pone en verde, con su migración y su documentación |
+| Revisa | `revisor` | el diff en contexto limpio; bloquea si cambió una aserción existente |
+| Valida | `validador` | el gate con `scripts/gate-verdict.sh` y los invariantes |
+| Apoyo | `spec-explorer` · `migration-author` · `mobile-expo` | specs · migraciones de funcionalidades nuevas · app Expo |
+
+Las orquestaciones son skills: `/auditoria`, `/arreglar <ID>`, `/investigar`, `/recorrido`. Las
+reglas R1–R9 van en el cuerpo de los diez agentes, idénticas. Los agentes trabajan en modo
+automático y los hooks son el suelo que no cruzan: `guard-agentes.sh` confina lo que cada uno puede
+escribir y les impide push, despliegue, VPS y base remota (R6) —también por MCP y por `gh`—;
+`subagent-stop.sh` rechaza un informe sin el formato de su agente (R8). Es una **barandilla, no una
+jaula**: lee el texto del comando, y un agente decidido puede escribir con un script propio. Convierte
+un descuido en un error visible; la primera capa sigue siendo `tools`/`disallowedTools` de cada agente. Delega en ellos la lectura amplia y la revisión: el
+contexto principal es para decidir.
 
 ## 9. Estado del proyecto
 
