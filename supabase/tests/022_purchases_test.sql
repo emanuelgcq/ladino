@@ -681,7 +681,12 @@ select is((select tax_is_recoverable from public.supplier_invoices
 -- El escenario carga la tasa OFICIAL del día (la única que existe: migración 66).
 insert into public.exchange_rates
   (from_currency, to_currency, rate, source, rate_date, rate_timestamp, tenant_id, company_id)
-values ('USD', 'VES', 40, 'prueba-022', current_date, now(),
+-- El DÍA DE CARACAS, no `current_date`: el contenedor corre en UTC y desde las ocho de la noche
+-- de Venezuela ya está en el día siguiente, así que la tasa se sembraba para MAÑANA mientras
+-- `supplier_debt_today` la buscaba para HOY —`platform.caracas_day(now())`— y el escenario moría
+-- con «no hay tasa vigente hoy». Un test que pasa a las tres de la tarde y falla a las 21:00 es
+-- esta familia de bugs otra vez (CLAUDE.md §3); el 039 ya lo hacía bien.
+values ('USD', 'VES', 40, 'prueba-022', platform.caracas_day(now()), now(),
         null, null);
 select cmp_ok((select count(*) from platform.ap_aging(
                  'aaaa0022-0000-4000-8000-0000000000a2', null, current_date)), '>=', 0::bigint,
