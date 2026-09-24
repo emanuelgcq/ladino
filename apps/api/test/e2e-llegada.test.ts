@@ -809,6 +809,66 @@ describe("llegó mercancía — la única puerta (ADR-0066)", () => {
     expect(conAmbos.status, await conAmbos.clone().text()).toBe(422);
   });
 
+  // ── 16. Confirmar el sobregiro NO es repetir la misma operación ──────────
+  // La puerta nace con UNA clave de idempotencia para que un doble clic no cree dos llegadas.
+  // Pero confirmar el sobregiro manda un cuerpo DISTINTO —con `allow_negative_balance`— y con
+  // la misma clave el servidor responde, con razón, que esa clave ya se usó con otros datos:
+  // el botón «Registrarlo igual» no podía funcionar nunca. Aquí queda fijado el contrato del
+  // que depende el arreglo de la pantalla: cuerpo distinto ⇒ clave distinta.
+  it("el mismo idempotency-key con `allow_negative_balance` se rechaza; con otra clave, entra", async () => {
+    // Una cuenta propia en cero y una forma que la use: pagar desde ahí es sobregiro seguro.
+    const [cuenta] = await sql<{ id: string }[]>`
+      insert into public.company_accounts (tenant_id, company_id, name, currency, kind)
+      values (${TENANT}, ${COMPANY}, 'Banco vacío', 'VES', 'bank')
+      returning id`;
+
+    const cuerpo = (forzar: boolean): Record<string, unknown> => ({
+      company_id: COMPANY,
+      warehouse_id: W1,
+      currency: "VES",
+      supplier_id: PROV,
+      invoice: "none" as const,
+      lines: [{ product_id: PROD, quantity: "1", unit_amount: "700" }],
+      payment: {
+        instrument: "transferencia" as const,
+        account_id: cuenta!.id,
+        ...(forzar ? { allow_negative_balance: true } : {}),
+      },
+    });
+
+    const llave = crypto.randomUUID();
+    const primera = await pedir("POST", "/v1/arrivals", JEFE, cuerpo(false), llave);
+    expect(primera.status, await primera.clone().text()).toBe(409);
+    const falta = (await primera.json()) as { code: string; message: string };
+    expect(falta.code).toBe("INSUFFICIENT_FUNDS");
+    // El mensaje nombra LA CUENTA ELEGIDA, no otra: es lo único que distingue este camino.
+    expect(falta.message).toMatch(/Banco vacío/);
+
+    // Confirmar con LA MISMA clave: el servidor lo para, y por eso la pantalla no puede
+    // reutilizarla. Se asevera el CÓDIGO, que es lo único que separa esto de un 409 cualquiera.
+    const mismaClave = await pedir("POST", "/v1/arrivals", JEFE, cuerpo(true), llave);
+    expect(mismaClave.status).toBe(409);
+    expect(((await mismaClave.json()) as { code: string }).code).toBe("IDEMPOTENCY_KEY_REUSED");
+
+    // Con la clave derivada —determinista, no un uuid nuevo— la llegada entra.
+    const otra = await pedir("POST", "/v1/arrivals", JEFE, cuerpo(true), `${llave}:sobregiro`);
+    expect(otra.status, await otra.clone().text()).toBe(201);
+
+    // Y el dinero salió de la cuenta que se eligió, que ahora está en negativo a propósito.
+    const [saldo] = await sql<{ balance: string }[]>`
+      select balance::text from public.company_account_balances
+       where account_id = ${cuenta!.id}`;
+    expect(Number(saldo!.balance)).toBe(-700);
+
+    // Repetir la confirmación con la MISMA clave derivada no crea una segunda llegada.
+    const repetida = await pedir("POST", "/v1/arrivals", JEFE, cuerpo(true), `${llave}:sobregiro`);
+    // El replay devuelve la MISMA respuesta con el mismo 201, no un 200 distinto (ADR-0018).
+    expect(repetida.status).toBe(201);
+    const [otraVez] = await sql<{ balance: string }[]>`
+      select balance::text from public.company_account_balances
+       where account_id = ${cuenta!.id}`;
+    expect(Number(otraVez!.balance)).toBe(-700);
+  });
   // ── 11. EL CRITERIO: los invariantes, en cero por los cuatro caminos ──────
   it("EL CRITERIO: cobertura contable vacía, kardex materializado = recalculado, kardex = mayor", async () => {
     const huecos = await sql<{ source_kind: string; problem: string }[]>`
