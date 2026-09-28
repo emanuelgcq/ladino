@@ -854,7 +854,72 @@ export async function issueStockBatch(
     input.warehouse_id,
   ]);
   if (!ctx.ok) return ctx;
+  return sacarLote(uow, ctx.value, input);
+}
 
+/**
+ * LA SALIDA DE KARDEX DE UNA VENTA (ADR-0068 §1). El paso interior lo autoriza
+ * la operación que lo contiene: quien vende saca la mercancía que vende, tenga
+ * o no `inventory.move` —el cajero no lo tiene y no debe tenerlo, porque ese
+ * permiso abre la salida SUELTA—. Se exige `sales.invoice.issue` sobre la
+ * empresa Y sobre ESTE almacén (`ladino_user_has_scope`), igual que la ruta
+ * suelta exige el suyo: un rol de venta acotado a un depósito no vende desde
+ * otro. Mismo patrón que la reposición al anular (ADR-0061 §2) y `revalorizar`.
+ */
+export async function issueStockBatchForSale(
+  uow: UnitOfWork,
+  input: IssueStockBatchInput,
+): Promise<Result<InventoryMoveResponse[], InventoryError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "Mover existencias exige un usuario real.",
+    });
+  }
+  if (input.lines.length === 0) return ok([]);
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "sales.invoice.issue", [
+    input.warehouse_id,
+  ]);
+  if (!ctx.ok) return ctx;
+  return sacarLote(uow, ctx.value, input);
+}
+
+/**
+ * LA ENTRADA AL KARDEX DENTRO DE OTRA OPERACIÓN (ADR-0068 §1): la autoriza el permiso
+ * de la operación que la contiene, sobre la empresa y sobre el almacén de destino. La
+ * ruta suelta sigue siendo `receiveStock` (`inventory.move`).
+ *   · `sales.return.manage`: el reingreso de una devolución;
+ *   · `purchase.receive`: la recepción de una compra;
+ *   · `product.manage`: la existencia inicial del alta simple de un producto.
+ */
+export type PermisoDeEntrada = "sales.return.manage" | "purchase.receive" | "product.manage";
+
+export async function receiveStockFor(
+  uow: UnitOfWork,
+  input: ReceiveStockInput,
+  permiso: PermisoDeEntrada,
+): Promise<Result<InventoryMoveResponse, InventoryError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "Mover existencias exige un usuario real.",
+    });
+  }
+  const ctx = await autorizar(sql, actor.userId, input.company_id, permiso, [input.warehouse_id]);
+  if (!ctx.ok) return ctx;
+  return ingresar(uow, actor.userId, ctx.value, input);
+}
+
+/** La salida en lote, YA autorizada por quien llama (la ruta suelta o la venta). */
+async function sacarLote(
+  uow: UnitOfWork,
+  ctxValue: Contexto,
+  input: IssueStockBatchInput,
+): Promise<Result<InventoryMoveResponse[], InventoryError>> {
+  const { sql } = uow;
+  const ctx = { ok: true as const, value: ctxValue };
   const occurredAt = input.occurred_at ?? null;
   const momentoTasa = ahora(input.occurred_at);
 

@@ -141,3 +141,20 @@ Ahora las cuatro fuentes están en el control.
   conservador, porque deduce menos crédito. Con contabilidad separada no hay prorrata
   (art. 35). Pregunta concreta en `PENDIENTES_ASESOR.md`.
 - Los puntos abiertos de ADR-0064 §3 (nota por fiado cobrado a otra tasa), P-19, P-21 y P-22.
+
+## Enmienda del 2026-09-28 — la anulación de una compra en un período ya presentado
+
+Decisión del dueño al responder el recorrido (R-2 ampliada, `PENDIENTES_ASESOR.md`):
+- Si una factura de proveedor se anula cuando su período ya está **cerrado y** su libro de compras
+  ya se **generó o** su IVA ya se **declaró**, ese libro no cambia.
+- La anulación entra en el libro del período en curso como reversa del crédito fiscal: una línea en
+  negativo, marcada «ajuste de período anterior».
+- La planilla la lleva en su casilla de ajustes de créditos de períodos anteriores
+  (`ajuste_creditos_anteriores`), fuera de la prorrata (P-46).
+- En cualquier otro caso sigue valiendo R-2 tal cual: en el libro con importes en cero, en su propio
+  período.
+
+El momento de la anulación lo sella la base (`supplier_invoices.annulled_at`, migraciones 120000 y
+120200). El sello no admite un valor dado ni se puede mover después: con él se decide qué libro
+cambia. Implementación: migraciones `20260928120000`–`120200` y pgTAP 078. Lo que queda para el
+asesor está en P-46.

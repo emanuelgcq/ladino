@@ -13,8 +13,8 @@ import type {
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
-import { createPriceList, setPrice } from "./pricing.js";
-import { receiveStock } from "./inventory.js";
+import { createPriceListForProduct, setPriceForProduct } from "./pricing.js";
+import { receiveStockFor } from "./inventory.js";
 
 /**
  * Casos de uso del catálogo de productos — la plantilla de create-company.ts
@@ -569,17 +569,23 @@ export async function createProductSimple(
       fx = { rate: t.rate, source: t.source ?? "manual", at: new Date().toISOString() };
     }
     const total = costoUnit.value.times(cantidad.value).toDecimalPlaces(8, 4);
-    const recibido = await receiveStock(uow, {
-      company_id: input.company_id,
-      warehouse_id: almacen,
-      product_id: producto.id,
-      quantity: input.initial_stock.quantity,
-      amount: total.toFixed(8),
-      currency: monedaCosto,
-      ...(fx === undefined ? {} : { fx }),
-      reference: "inventario-inicial",
-      note: "Inventario inicial del alta simple",
-    });
+    // La existencia inicial la autoriza EL ALTA (`product.manage`), no `inventory.move`
+    // (ADR-0068 §1): quien da de alta el producto registra lo que ya tiene.
+    const recibido = await receiveStockFor(
+      uow,
+      {
+        company_id: input.company_id,
+        warehouse_id: almacen,
+        product_id: producto.id,
+        quantity: input.initial_stock.quantity,
+        amount: total.toFixed(8),
+        currency: monedaCosto,
+        ...(fx === undefined ? {} : { fx }),
+        reference: "inventario-inicial",
+        note: "Inventario inicial del alta simple",
+      },
+      "product.manage",
+    );
     if (!recibido.ok) {
       const e = recibido.error;
       if (e.code === "PERMISSION_REQUIRED" || e.code === "NOT_FOUND") {
@@ -608,6 +614,10 @@ export async function createProductSimple(
  * otra moneda (createCompany las siembra en la funcional), se usa o se crea la
  * variante `detal USD` — cambiarle la moneda a una lista con precios puestos
  * reinterpretaría todos sus importes de golpe.
+ *
+ * La lista y el precio los autoriza EL ALTA (`product.manage`), no
+ * `price_list.manage`: quien da de alta un producto le pone su precio
+ * (ADR-0068 §1, B-16; y la importación, que pasa por aquí fila a fila, C-08).
  */
 async function ponerPrecioEnLista(
   uow: UnitOfWork,
@@ -629,7 +639,7 @@ async function ponerPrecioEnLista(
         join public.price_lists l on l.id = cs.default_price_list_id
        where cs.company_id = ${companyId} and l.status = 'active'`;
     if (predeterminada !== undefined && predeterminada.currency_code === precio.currency) {
-      const puestoDirecto = await setPrice(uow, predeterminada.id, {
+      const puestoDirecto = await setPriceForProduct(uow, predeterminada.id, {
         company_id: companyId,
         product_id: productId,
         amount: precio.amount,
@@ -666,7 +676,7 @@ async function ponerPrecioEnLista(
     });
   }
   if (listaId === undefined) {
-    const creada = await createPriceList(uow, {
+    const creada = await createPriceListForProduct(uow, {
       company_id: companyId,
       name: nombre,
       currency_code: precio.currency,
@@ -679,7 +689,7 @@ async function ponerPrecioEnLista(
     }
     listaId = creada.value.id;
   }
-  const puesto = await setPrice(uow, listaId, {
+  const puesto = await setPriceForProduct(uow, listaId, {
     company_id: companyId,
     product_id: productId,
     amount: precio.amount,

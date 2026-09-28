@@ -225,14 +225,20 @@ describe("Ola 0 · verificaciones ejecutadas", () => {
     expect(cobro.status).toBe(201);
     const pagoId = ((await cobro.json()) as { payment: { id: string } }).payment.id;
 
-    const debitos = await sql<{ purpose: string }[]>`
-        select s.purpose
+    // ADR-0070 (J-01): la caja tiene su SUBCUENTA propia; el papel cash_usd lo tiene su PADRE, la
+    // cuenta de familia. Antes se aseveraba el papel sobre la cuenta debitada, que fijaba el mapeo a
+    // la familia compartida (causa de J-01). Cambiado por RESPUESTA §5.2.4.
+    const debitos = await sql<{ account_id: string; subcuenta: string; purpose: string | null }[]>`
+        select l.account_id, ca.ledger_account_id as subcuenta, s.purpose
           from public.journal_entries e
           join public.journal_lines l on l.entry_id = e.id
-          join public.company_account_settings s
-            on s.company_id = e.company_id and s.account_id = l.account_id
+          join public.accounts a on a.id = l.account_id
+          join public.company_accounts ca on ca.id = ${CAJA_USD}
+          left join public.company_account_settings s
+            on s.company_id = e.company_id and s.account_id = a.parent_id
          where e.company_id = ${COMPANY} and e.source_kind = 'payment_received'
            and e.source_id = ${pagoId} and l.debit_amount > 0`;
+    expect(debitos.map((d) => d.account_id)).toContain(debitos[0]!.subcuenta);
     expect(debitos.map((d) => d.purpose)).toContain("cash_usd");
     expect(debitos.map((d) => d.purpose)).not.toContain("cash_bs");
   });

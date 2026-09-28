@@ -424,6 +424,11 @@ export const SupplierInvoiceResponse = z
     functional_currency: z.string(),
     fx_rate: z.string(),
     rate_source: z.string(),
+    /**
+     * K-04 (ADR-0069 §4): la fecha en que se REGISTRÓ, si `invoice_date` cae en un período
+     * cerrado o antes del inicio de actividades; `null` si entró en su fecha.
+     */
+    accounting_date: z.string().nullable(),
     retentions: z.array(SupplierRetentionResponse),
   })
   .strict();

@@ -903,6 +903,18 @@ export interface BookReconciliation {
     cuadra: boolean;
   }[];
   balanced: boolean;
+  /** L-06: dónde, documento a documento, libro y mayor no dicen lo mismo. */
+  discrepancies?: {
+    concepto: string;
+    document_id: string | null;
+    document_kind: string | null;
+    journal_entry_id: string | null;
+    entry_number: number | null;
+    libro: string;
+    mayor: string;
+  }[];
+  /** Documentos posteados sin asiento ni cola (`accounting_coverage_gaps`). */
+  coverage_gaps?: { source_kind: string; source_id: string; problem: string }[];
 }
 export interface BookFormatAdapter {
   code: string;
@@ -967,6 +979,8 @@ export interface IvaPeriodResult {
   cuota_a_pagar: string;
   excedente_siguiente: string;
   detalle: IvaPeriodDetalle[];
+  /** Ajustes a los créditos de períodos anteriores (R-2 ampliada). Cero o negativo; aparte de creditos_deducibles, entra en la cuota. */
+  ajuste_creditos_anteriores?: string;
   /** La moneda de todas las cifras de arriba. */
   functional_currency: string;
   generator_version: string;

@@ -172,6 +172,8 @@ Por eso esta categoría de test se escribe aparte y a propósito. Los que ya exi
 | Valor del kardex = saldo del mayor de inventario | `inventory_ledger_gap()` | inventario ↔ contabilidad (ADR-0060) |
 | Movimiento de valor ⇒ asiento **o** cola | `inventory_coverage_gaps()` | inventario ↔ contabilidad |
 | Venta anulada ⇒ su kardex netea a cero | `annulled_stock_gaps()` | ventas ↔ inventario (ADR-0061) |
+| Libro fiscal = mayor + cola | `book_ledger_reconciliation()` | fiscal ↔ contabilidad (L-02) |
+| Caja de tesorería = su subcuenta contable, propia y hoja | `treasury_ledger_gaps()` | tesorería ↔ contabilidad (ADR-0070) |
 
 **Al cerrar un módulo, la pregunta no es «¿pasan sus tests?» sino «¿qué invariante cruza este
 módulo con los anteriores, y quién lo mira?».** Si la respuesta es «nadie», ese es el trabajo que

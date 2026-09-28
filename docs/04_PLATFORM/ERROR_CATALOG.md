@@ -52,7 +52,9 @@ Comprobado sobre las funciones realmente instaladas. **Cada uno es único en tie
 | `LAD54` | `platform.assert_retention_receipt_number()` | cambiar el correlativo de un comprobante de retención emitido, o reemitir uno anulado. El número se conserva al anular (ADR-0039 §5) | `FISCAL_NUMBERING_INVALID` | `409` |
 | `LAD59` | `platform.assert_entry_balanced()` | la partida doble no cuadra EN MONEDA FUNCIONAL, el asiento tiene menos de dos líneas, o su importe es cero. El mensaje lleva la diferencia exacta: sin ella hay que volver a sumar, y quien vuelve a sumar suma distinto | `ENTRY_UNBALANCED` | `409` |
 | `LAD60` | `platform.set_account_path()` | ciclo en la jerarquía de cuentas: el padre ya desciende del hijo | `VALIDATION_FAILED` | `422` |
-| `LAD61` | `platform.assert_entry_balanced()` | asiento con fecha en un período CERRADO. Reabrirlo exige permiso propio y motivo escrito | `PERIOD_CLOSED` | `409` |
+| `LAD61` | `platform.assert_entry_balanced()` · desde 20260928130000 también `platform.assert_entry_period_admits()` (al CREAR, también un borrador: K-05) | asiento con fecha en un período CERRADO. Reabrirlo exige permiso propio y motivo escrito; el mensaje de creación da la salida: «Reábrelo con motivo, o fecha el asiento en el período abierto» | `PERIOD_CLOSED` | `409` |
+| `LAD91` | `platform.period_for_date()` · `platform.closing_period_for_year()` (ADR-0069 §3, K-05) | fecha anterior al inicio de actividades de la empresa (`companies.activity_start_date`) o posterior al último día del período en curso (día de Caracas). Se comprueba exista o no el período | `PERIOD_OUT_OF_RANGE` | `422` |
+| `LAD92` | `platform.assert_entry_period_admits()` (ADR-0069 §2, K-03) | el período de cierre («13») solo admite `year_end_close` y ajustes `manual`, fechados el 31-12; y el asiento de cierre no va en un mes | `VALIDATION_FAILED` | `422` |
 | `LAD62` | `platform.assert_entry_balanced()` | la cuenta agrupa (no es hoja), está desactivada, o exige dimensiones analíticas y la línea no las trae | `ACCOUNT_NOT_POSTABLE` | `409` |
 | `LAD55` | *caso de uso* (`applyLandedCost`) | prorrateo `by_weight` con alguna línea sin peso. **No lo lanza la base**: el esquema admite `unit_weight` nulo porque no todo producto lo tiene; lo que no admite es repartir un flete solo entre lo que sí pesa, y eso lo decide el caso de uso. Mismo patrón que LAD45 | `MISSING_WEIGHT` | `422` |
 | `LAD67` | `platform.assert_payment_account_currency()` | el pago, gasto o cierre declara una moneda distinta a la de su cuenta de tesorería: un Zelle no entra a Caja Bs (migración 29) | `VALIDATION_FAILED` | `422` |
@@ -70,7 +72,7 @@ el código y se corrige el espejo.
 | `code` | `person_message` |
 |---|---|
 | `VALIDATION_FAILED` | Algo en el formulario no está bien. Revisa los campos marcados y vuelve a intentar. |
-| `PERMISSION_REQUIRED` | Tu usuario no puede hacer esto. Pídele acceso a quien administra el negocio. |
+| `PERMISSION_REQUIRED` | Necesitas el permiso para <acción>. Pídeselo a quien administra el negocio. — la acción sale de `ACCION_DE_PERMISO` según el permiso que nombra `message` (ADR-0068 §4); si no nombra ninguno conocido: «Tu usuario no puede hacer esto. Pídele acceso a quien administra el negocio.» |
 | `NOT_FOUND` | Eso no existe o no está disponible para ti. |
 | `DUPLICATE` | Ya hay uno igual registrado. Busca el que existe en vez de crear otro. |
 | `EXCHANGE_RATE_MISSING` | Falta la tasa BCV. Tráela en Mi dinero y vuelve a intentar. |
@@ -83,6 +85,7 @@ el código y se corrige el espejo.
 | `UPSTREAM_UNAVAILABLE` | No se pudo consultar el BCV en este momento. Intenta de nuevo en un rato; mientras tanto rige la última tasa. |
 | `STORAGE_UNAVAILABLE` | No se pudo guardar el archivo. Intenta de nuevo en un rato; si sigue, avísanos. |
 | `PERIOD_CLOSED` | Ese mes ya está cerrado en contabilidad. Habla con quien lleva los números. |
+| `PERIOD_OUT_OF_RANGE` | Esa fecha no se puede usar: es anterior al inicio de actividades del negocio o está en un mes que todavía no llega. |
 | `COMPANY_SUSPENDED` | El negocio está suspendido en el sistema. Contacta a soporte. |
 | `COSTING_MISMATCH` | La existencia cambió mientras guardabas. Vuelve a intentar: casi siempre pasa a la primera. |
 | `PAYLOAD_TOO_LARGE` | El archivo es demasiado grande. Prueba con uno más liviano. |
@@ -100,6 +103,7 @@ fijos): el texto dice qué pasó y qué hacer con los datos del caso.
 | `WAREHOUSE_IN_USE` | `409` | Apagar el depósito principal, o uno que todavía tiene mercancía (migración 60) |
 | `OVER_INVOICED` | `409` | Lo facturado de una mercancía (acumulado, facturas no anuladas) pasaría de lo recibido (h. 86) |
 | `MEMBER_NOT_REGISTERED` | `404` | Agregar a una persona cuyo correo no tiene cuenta en Ladino (h. 74) |
+| `MEMBER_PROTECTED` | `403` | Un gestor acotado a la empresa intenta quitar roles o desactivar al Titular de la cuenta, o desactivar a quien trabaja en otra empresa que él no gestiona (ADR-0068 §3, N-02). El `person_message` es el del dominio: «Esa persona es el Titular de la cuenta: sus roles y su acceso solo los cambia el propio Titular.» / «Esa persona también trabaja en otra empresa de la cuenta. Quítale el rol en esta empresa; desactivarla del todo lo hace quien administra todas sus empresas.» |
 | `ENTRY_GENERATED_BY_DOCUMENT` | `409` | Reversar desde el Diario un asiento generado por un documento: se corrige desde el documento (h. 67) |
 
 ## Códigos de una sola ejecución — NO llegan a la API
@@ -119,6 +123,19 @@ de compras tengan RLS forzada, que ninguna append-only tenga privilegio de mutac
 `fiscal_number_ranges` admita `retention_receipt`) y `LAD52` (migración 21: que `tax_rules` NAZCA VACÍA, que ningún régimen se siembre
 en `per_document`, que ninguno vaya sin norma citada, y que `payments`/`exchange_gain_loss` no
 tengan privilegio de mutación) son de una sola ejecución: abortan la migración, no llegan a la API.
+
+`LAD82` — **integridad de la contabilidad de tesorería**; tampoco llega a la API: ningún caso de
+uso lo dispara con una petición. Nació en la migración 56 (20260915130000, autochequeo de una sola
+ejecución: que ni el preset `ve_basico` ni una plantilla vigente nombren una caja constante
+—`cash_bs`/`cash_usd`— en un hecho de tesorería). Desde ADR-0070 (J-01) lo lanzan además funciones
+instaladas que corren solo desde la reparación (`scripts/reparar/adr-0070-subcuentas.mjs`, con el rol
+dueño de la base):
+- `platform.treasury_create_subaccount`: la cuenta de familia que se pide como padre no existe;
+- `platform.treasury_subaccounts_repair_finish`: el asiento de reclasificación NO está posteado
+  (una reparación a medias no se cierra), o una cuenta de familia no quedó en saldo propio CERO tras
+  la reclasificación.
+Cualquiera de las dos aborta la transacción de esa empresa: queda como estaba, sin subcuentas ni
+asiento. El script lo cuenta como error y termina con exit ≠ 0.
 
 `LAD51` **ya está en uso desde los casos de uso de ventas**: «no hay tasa de cambio vigente para la
 fecha». Se reservó antes de usarse, que es la regla de abajo, y el día que llegó su caso —emitir o

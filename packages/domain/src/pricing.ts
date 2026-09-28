@@ -24,15 +24,38 @@ export type PricingError =
   | { code: "VALIDATION_FAILED"; message: string }
   | { code: "PRICE_OVERLAP"; message: string };
 
+/**
+ * El permiso que autoriza un precio: el suyo propio en la ruta suelta, o el de la
+ * operación que lo contiene — el alta de producto, con `product.manage` (ADR-0068 §1,
+ * B-16/C-08). La lista y el precio de un alta los pone quien puede dar de alta.
+ */
+type PermisoDePrecio = "price_list.manage" | "product.manage";
+
 export async function createPriceList(
   uow: UnitOfWork,
   input: CreatePriceListRequest,
+): Promise<Result<PriceListResponse, PricingError>> {
+  return crearLista(uow, input, "price_list.manage");
+}
+
+/** La lista que crea un ALTA de producto: la autoriza `product.manage` (ADR-0068 §1). */
+export async function createPriceListForProduct(
+  uow: UnitOfWork,
+  input: CreatePriceListRequest,
+): Promise<Result<PriceListResponse, PricingError>> {
+  return crearLista(uow, input, "product.manage");
+}
+
+async function crearLista(
+  uow: UnitOfWork,
+  input: CreatePriceListRequest,
+  permiso: PermisoDePrecio,
 ): Promise<Result<PriceListResponse, PricingError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Los maestros exigen un usuario real." });
   }
-  const scope = await companyScope(sql, actor.userId, input.company_id, "price_list.manage");
+  const scope = await companyScope(sql, actor.userId, input.company_id, permiso);
   if (!scope.ok) return scope;
   if (scope.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
@@ -104,11 +127,29 @@ export async function setPrice(
   priceListId: string,
   input: SetPriceRequest,
 ): Promise<Result<PriceItemResponse, PricingError>> {
+  return ponerPrecio(uow, priceListId, input, "price_list.manage");
+}
+
+/** El precio que pone un ALTA de producto: lo autoriza `product.manage` (ADR-0068 §1). */
+export async function setPriceForProduct(
+  uow: UnitOfWork,
+  priceListId: string,
+  input: SetPriceRequest,
+): Promise<Result<PriceItemResponse, PricingError>> {
+  return ponerPrecio(uow, priceListId, input, "product.manage");
+}
+
+async function ponerPrecio(
+  uow: UnitOfWork,
+  priceListId: string,
+  input: SetPriceRequest,
+  permiso: PermisoDePrecio,
+): Promise<Result<PriceItemResponse, PricingError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Los maestros exigen un usuario real." });
   }
-  const scope = await companyScope(sql, actor.userId, input.company_id, "price_list.manage");
+  const scope = await companyScope(sql, actor.userId, input.company_id, permiso);
   if (!scope.ok) return scope;
   if (scope.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });

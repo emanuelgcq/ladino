@@ -54,6 +54,15 @@ import { hoyLocal, fechaLocal } from "../../fechas.js";
 import { useConFacturas } from "../../app/modo-venta.js";
 import { tasaLimpia } from "../../tasa.js";
 
+/** «2026-08-19» → «agosto de 2026». Solo presentación: el mes lo decidió la API. */
+function mesDe(iso: string): string {
+  return new Intl.DateTimeFormat("es-VE", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${iso.slice(0, 10)}T00:00:00Z`));
+}
+
 /**
  * Compras — Fase B. Cuatro superficies: órdenes (con recepción y landed cost),
  * nueva orden, cuentas por pagar (estado de cuenta, facturas y matching de
@@ -1772,7 +1781,7 @@ function RegistrarFacturaProveedor({
     setError(null);
     setOcupado(true);
     try {
-      await llamar("/v1/supplier-invoices", {
+      const r = await llamar<{ accounting_date: string | null }>("/v1/supplier-invoices", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
@@ -1793,6 +1802,14 @@ function RegistrarFacturaProveedor({
         }),
       });
       toast.success("Factura registrada", "Entró a cuentas por pagar con su IVA resuelto.");
+      // K-04 (ADR-0069 §4): si su mes está cerrado, entró al período en curso con su fecha
+      // original. Solo se enseña lo que dice la API.
+      if (r.accounting_date !== null && r.accounting_date !== undefined) {
+        toast.info(
+          "Entró al período en curso",
+          `Entró al período en curso (${mesDe(r.accounting_date)}) porque ${mesDe(fecha)} está cerrado.`,
+        );
+      }
       onCerrar(true);
     } catch (e) {
       setError(e);
@@ -1915,7 +1932,7 @@ function NotaCreditoProveedor({
     setError(null);
     setOcupado(true);
     try {
-      await llamar("/v1/supplier-credit-notes", {
+      const r = await llamar<{ accounting_date: string | null }>("/v1/supplier-credit-notes", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
@@ -1933,6 +1950,14 @@ function NotaCreditoProveedor({
         }),
       });
       toast.success("Nota de crédito registrada", "La deuda con el proveedor bajó.");
+      // K-04 (ADR-0069 §4): si su mes está cerrado, entró al período en curso con su fecha
+      // original. Solo se enseña lo que dice la API.
+      if (r.accounting_date !== null && r.accounting_date !== undefined) {
+        toast.info(
+          "Entró al período en curso",
+          `Entró al período en curso (${mesDe(r.accounting_date)}) porque ${mesDe(fecha)} está cerrado.`,
+        );
+      }
       onCerrar(true);
     } catch (e) {
       setError(e);

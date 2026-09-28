@@ -136,6 +136,10 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "activity_start_date": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -256,6 +260,10 @@
             "nullable": true,
             "minLength": 3,
             "maxLength": 30
+          },
+          "activity_start_date": {
+            "type": "string",
+            "format": "date"
           }
         },
         "required": [
@@ -1555,6 +1563,10 @@
             "type": "string",
             "minLength": 3,
             "maxLength": 300
+          },
+          "activity_start_date": {
+            "type": "string",
+            "format": "date"
           }
         },
         "additionalProperties": false
@@ -8089,6 +8101,10 @@
           "rate_source": {
             "type": "string"
           },
+          "accounting_date": {
+            "type": "string",
+            "nullable": true
+          },
           "retentions": {
             "type": "array",
             "items": {
@@ -8164,6 +8180,7 @@
           "functional_currency",
           "fx_rate",
           "rate_source",
+          "accounting_date",
           "retentions"
         ],
         "additionalProperties": false
@@ -9353,6 +9370,10 @@
               "rate_source": {
                 "type": "string"
               },
+              "accounting_date": {
+                "type": "string",
+                "nullable": true
+              },
               "retentions": {
                 "type": "array",
                 "items": {
@@ -9428,6 +9449,7 @@
               "functional_currency",
               "fx_rate",
               "rate_source",
+              "accounting_date",
               "retentions"
             ],
             "additionalProperties": false
@@ -10062,6 +10084,10 @@
               "rate_source": {
                 "type": "string"
               },
+              "accounting_date": {
+                "type": "string",
+                "nullable": true
+              },
               "retentions": {
                 "type": "array",
                 "items": {
@@ -10137,6 +10163,7 @@
               "functional_currency",
               "fx_rate",
               "rate_source",
+              "accounting_date",
               "retentions"
             ],
             "additionalProperties": false
@@ -10515,7 +10542,8 @@
             "enum": [
               "draft",
               "posted",
-              "reversed"
+              "reversed",
+              "discarded"
             ]
           },
           "posted_at": {
@@ -10614,7 +10642,8 @@
                 "enum": [
                   "draft",
                   "posted",
-                  "reversed"
+                  "reversed",
+                  "discarded"
                 ]
               },
               "posted_at": {
@@ -10800,7 +10829,8 @@
                   "enum": [
                     "draft",
                     "posted",
-                    "reversed"
+                    "reversed",
+                    "discarded"
                   ]
                 },
                 "posted_at": {
@@ -10923,6 +10953,9 @@
             },
             "minItems": 2,
             "maxItems": 500
+          },
+          "closing_period": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -11511,6 +11544,25 @@
         ],
         "additionalProperties": false
       },
+      "DiscardJournalEntryRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "company_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
       "FiscalBookResponse": {
         "type": "object",
         "properties": {
@@ -11712,6 +11764,12 @@
                       "type": "string",
                       "nullable": true,
                       "format": "uuid"
+                    },
+                    "booked_on": {
+                      "type": "string"
+                    },
+                    "received_late": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -11737,7 +11795,9 @@
                     "retenido_iva",
                     "retenido_islr",
                     "total_amount",
-                    "journal_entry_id"
+                    "journal_entry_id",
+                    "booked_on",
+                    "received_late"
                   ],
                   "additionalProperties": false
                 },
@@ -11974,6 +12034,75 @@
           },
           "balanced": {
             "type": "boolean"
+          },
+          "discrepancies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "concepto": {
+                  "type": "string"
+                },
+                "document_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "document_kind": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "journal_entry_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "entry_number": {
+                  "type": "integer",
+                  "nullable": true
+                },
+                "libro": {
+                  "type": "string"
+                },
+                "mayor": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "concepto",
+                "document_id",
+                "document_kind",
+                "journal_entry_id",
+                "entry_number",
+                "libro",
+                "mayor"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "coverage_gaps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source_kind": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "problem": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source_kind",
+                "source_id",
+                "problem"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -12347,6 +12476,12 @@
                           "type": "string",
                           "nullable": true,
                           "format": "uuid"
+                        },
+                        "booked_on": {
+                          "type": "string"
+                        },
+                        "received_late": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -12372,7 +12507,9 @@
                         "retenido_iva",
                         "retenido_islr",
                         "total_amount",
-                        "journal_entry_id"
+                        "journal_entry_id",
+                        "booked_on",
+                        "received_late"
                       ],
                       "additionalProperties": false
                     },
@@ -13151,6 +13288,10 @@
               "additionalProperties": false
             }
           },
+          "ajuste_creditos_anteriores": {
+            "type": "string",
+            "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
+          },
           "functional_currency": {
             "type": "string"
           },
@@ -13259,6 +13400,10 @@
                     ],
                     "additionalProperties": false
                   }
+                },
+                "ajuste_creditos_anteriores": {
+                  "type": "string",
+                  "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
                 },
                 "functional_currency": {
                   "type": "string"
@@ -14928,7 +15073,7 @@
     "/v1/members": {
       "get": {
         "summary": "Los miembros del negocio y sus roles",
-        "description": "ADR-0049: membresías del tenant de la empresa activa, con correo y asignaciones. Exige membership.read a nivel de negocio (rol plano).",
+        "description": "ADR-0049/ADR-0068 §3: membresías de la empresa activa, con correo y asignaciones. Exige membership.read sobre la empresa de la cabecera (asignación de esa empresa o de nivel tenant). El Titular de la cuenta (asignación de nivel tenant) ve la cuenta entera; un gestor acotado a la empresa ve a las personas con rol en ella (y al Titular), con solo las asignaciones de esa empresa o de la cuenta.",
         "security": [
           {
             "bearerAuth": []
@@ -14956,7 +15101,7 @@
             }
           },
           "403": {
-            "description": "Sin membership.read a nivel de negocio.",
+            "description": "Sin membership.read sobre esta empresa.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14969,7 +15114,7 @@
       },
       "post": {
         "summary": "Agregar un miembro por su correo",
-        "description": "La persona se registra sola en Ladino y el dueño la agrega por correo con uno de los seis roles de sistema. Un rol acotado recibe bindings a TODOS los almacenes de la empresa. Exige membership.manage a nivel de negocio.",
+        "description": "La persona se registra sola en Ladino y el dueño la agrega por correo con uno de los seis roles de sistema. Un rol acotado recibe bindings a TODOS los almacenes de la empresa; un owner recibe además warehouse_ops acotado a la empresa. Exige membership.manage sobre la empresa de la cabecera. Si la persona estaba desactivada, agregarla la reactiva, y un gestor acotado pasa la misma guarda que al cambiar el acceso.",
         "security": [
           {
             "bearerAuth": []
@@ -15006,7 +15151,7 @@
             }
           },
           "403": {
-            "description": "Sin membership.manage a nivel de negocio.",
+            "description": "Sin membership.manage sobre esta empresa (PERMISSION_REQUIRED); o, al reactivar a un desactivado, es el Titular o trabaja en otra empresa que el gestor no gestiona (MEMBER_PROTECTED).",
             "content": {
               "application/json": {
                 "schema": {
@@ -15031,7 +15176,7 @@
     "/v1/members/assignments/{id}": {
       "delete": {
         "summary": "Quitar un rol asignado",
-        "description": "Elimina la asignación y sus bindings. El dueño no puede quitarse a sí mismo el rol de dueño. Exige membership.manage a nivel de negocio.",
+        "description": "Elimina la asignación y sus bindings. El dueño no puede quitarse a sí mismo el rol de dueño. Exige membership.manage sobre la empresa de la cabecera; un gestor acotado solo quita asignaciones de esa empresa y ninguna del Titular de la cuenta.",
         "security": [
           {
             "bearerAuth": []
@@ -15052,7 +15197,7 @@
             }
           },
           "403": {
-            "description": "Sin membership.manage a nivel de negocio.",
+            "description": "Sin membership.manage sobre esta empresa (PERMISSION_REQUIRED), o la asignación es del Titular de la cuenta y quien pide es un gestor acotado (MEMBER_PROTECTED).",
             "content": {
               "application/json": {
                 "schema": {
@@ -15062,7 +15207,7 @@
             }
           },
           "404": {
-            "description": "La asignación no existe en este negocio.",
+            "description": "La asignación no existe en este negocio o, para un gestor acotado, es de otra empresa.",
             "content": {
               "application/json": {
                 "schema": {
@@ -15077,7 +15222,7 @@
     "/v1/members/{id}/status": {
       "put": {
         "summary": "Activar o desactivar el acceso de un miembro",
-        "description": "Desactivar la membresía corta el acceso ENTERO en la consulta siguiente (ADR-0014). Nadie puede desactivarse a sí mismo. Exige membership.manage a nivel de negocio.",
+        "description": "Desactivar la membresía corta el acceso ENTERO en la consulta siguiente (ADR-0014). Nadie puede desactivarse a sí mismo. Exige membership.manage sobre la empresa de la cabecera. Un gestor acotado solo cambia el acceso de quien tiene rol en esa empresa, no tiene roles en empresas que él no gestiona y no es el Titular de la cuenta.",
         "security": [
           {
             "bearerAuth": []
@@ -15107,7 +15252,7 @@
             }
           },
           "403": {
-            "description": "Sin membership.manage a nivel de negocio.",
+            "description": "Sin membership.manage sobre esta empresa (PERMISSION_REQUIRED), o la persona es el Titular o trabaja en otra empresa que el gestor no gestiona (MEMBER_PROTECTED).",
             "content": {
               "application/json": {
                 "schema": {
@@ -15117,7 +15262,7 @@
             }
           },
           "404": {
-            "description": "La membresía no existe en este negocio.",
+            "description": "La membresía no existe en este negocio o, para un gestor acotado, no tiene rol en esta empresa.",
             "content": {
               "application/json": {
                 "schema": {
@@ -27748,6 +27893,107 @@
         "responses": {
           "201": {
             "description": "Contra-asiento posteado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalEntryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/journal-entries/{id}/discard": {
+      "post": {
+        "summary": "Descartar un BORRADOR (permiso accounting.entry.create)",
+        "description": "K-06, ADR-0069: el borrador pasa a `discarded` con rastro en audit_events. No se borra. Un asiento posteado NO se descarta nunca (regla 2): se reversa.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscardJournalEntryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Borrador descartado.",
             "content": {
               "application/json": {
                 "schema": {

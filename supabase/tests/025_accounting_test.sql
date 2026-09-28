@@ -112,7 +112,12 @@ select throws_ok($$
      set status = 'reopened', reopened_at = now(),
          reopened_by = 'aaaa0025-0000-4000-8000-0000000000a1', reopened_reason = 'corto'
    where id = 'aaaa0025-0000-4000-8000-0000000000d2'
-$$, '23514', null,
+$$, '23514',
+  -- ADR-0069 §5 (autorizado por el dueño, 2026-09-28): antes el mensaje era `null`, y el
+  -- 23514 lo daba `fiscal_periods_closed_chk` (closed_at seguía puesto), que habría saltado
+  -- también con un motivo válido. Ahora se asevera QUÉ CHECK rechaza. El ciclo real
+  -- cerrar → reabrir → cerrar → reabrir está en pgTAP 079.
+  'new row for relation "fiscal_periods" violates check constraint "fiscal_periods_reopened_chk"',
   'reabrir con un motivo de cuatro letras se rechaza: «corto» no es una justificación');
 
 -- ── 4. LA PARTIDA DOBLE, en Postgres ────────────────────────────────────────

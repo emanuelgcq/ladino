@@ -69,6 +69,10 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // vive el invariante: llegan aquí aunque el caso de uso no los traduzca.
   LAD59: { code: "ENTRY_UNBALANCED", status: 409 },
   LAD61: { code: "PERIOD_CLOSED", status: 409 },
+  // ADR-0069 (K-05, K-03): fecha antes del inicio de actividades o más allá del período en
+  // curso (LAD91); asiento que el período de cierre no admite (LAD92). Los levanta el esquema.
+  LAD91: { code: "PERIOD_OUT_OF_RANGE", status: 422 },
+  LAD92: { code: "VALIDATION_FAILED", status: 422 },
   LAD62: { code: "ACCOUNT_NOT_POSTABLE", status: 409 },
   // Migración 22 (ADR-0039). Los levanta el ESQUEMA —resolve_retention y el
   // trigger del comprobante—, así que llegan aquí aunque el caso de uso no los
@@ -148,6 +152,7 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   // estado (cuadra el asiento, reabre el período, elige una hoja) y reintenta.
   ENTRY_UNBALANCED: 409, // LAD59
   PERIOD_CLOSED: 409, // LAD61
+  PERIOD_OUT_OF_RANGE: 422, // LAD91
   ACCOUNT_NOT_POSTABLE: 409, // LAD62
   ACCOUNT_PURPOSE_MISSING: 409,
   // Compras (migración 22, ADR-0039/0040). RETENTION_RULE_MISSING es «no puedo
@@ -181,6 +186,9 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   OVER_INVOICED: 409,
   // QA 2026-09-15 h. 74: agregar a quien no tiene cuenta. 404 como antes, con su mensaje.
   MEMBER_NOT_REGISTERED: 404,
+  // ADR-0068 §3 (N-02): un gestor acotado a la empresa no toca al Titular de la cuenta ni
+  // desactiva a quien trabaja en otra empresa. 403 con su mensaje de persona, no el genérico.
+  MEMBER_PROTECTED: 403,
   // QA 2026-09-15 h. 67: un asiento generado por un documento se corrige desde el documento.
   ENTRY_GENERATED_BY_DOCUMENT: 409,
   // ADR-0062 §4: el egreso deja la cuenta en negativo y nadie lo confirmó. 409: el cuerpo está
@@ -326,6 +334,8 @@ function mensajePara(code: string): string {
       return "El asiento no cuadra: la suma de débitos debe igualar la de créditos.";
     case "PERIOD_CLOSED":
       return "El período contable de esa fecha está cerrado.";
+    case "PERIOD_OUT_OF_RANGE":
+      return "La fecha está fuera de los períodos contables: antes del inicio de actividades o más allá del mes en curso.";
     case "ACCOUNT_NOT_POSTABLE":
       return "Esa cuenta no admite movimientos: elige una cuenta de detalle activa.";
     case "ACCOUNT_PURPOSE_MISSING":
@@ -392,6 +402,8 @@ export function mensajePersona(code: string): string {
       return "Los datos del cliente quedaron impresos en esa factura y no se cambian. Si están mal, se corrige con una nota de crédito.";
     case "PERIOD_CLOSED":
       return "Ese mes ya está cerrado en contabilidad. Habla con quien lleva los números.";
+    case "PERIOD_OUT_OF_RANGE":
+      return "Esa fecha no se puede usar: es anterior al inicio de actividades del negocio o está en un mes que todavía no llega.";
     case "COMPANY_SUSPENDED":
       return "El negocio está suspendido en el sistema. Contacta a soporte.";
     case "COSTING_MISMATCH":
@@ -467,7 +479,108 @@ const PERSONA_FIJA = new Set([
   "MONEY_ERROR",
 ]);
 
+/**
+ * QUÉ PERMITE CADA PERMISO, EN PALABRAS DE PERSONA (RESPUESTA_RECORRIDO §2.8, ADR-0068 §4).
+ * Un 403 dice qué falta —«Necesitas el permiso para anular ventas»— y NUNCA el nombre técnico
+ * (`sales.invoice.annul`), que sigue en `message` para los logs y los tests. Las descripciones
+ * de `public.permissions` no sirven: hablan de «tenant», «postear», «plan». Un permiso que no
+ * esté aquí cae en la frase genérica: nunca se enseña su clave.
+ */
+const ACCION_DE_PERMISO: Readonly<Record<string, string>> = {
+  "accounting.account.manage": "cambiar el plan de cuentas",
+  "accounting.entry.create": "crear asientos contables",
+  "accounting.entry.post": "contabilizar asientos",
+  "accounting.entry.reverse": "revertir asientos contables",
+  "accounting.period.close": "cerrar meses en contabilidad",
+  "accounting.period.reopen": "reabrir meses en contabilidad",
+  "accounting.read": "ver la contabilidad",
+  "accounting.template.manage": "configurar cómo se contabiliza cada operación",
+  "ap.read": "ver lo que el negocio debe a sus proveedores",
+  "ar.read": "ver lo que deben los clientes",
+  "branch.manage": "administrar sucursales",
+  "branch.read": "ver las sucursales",
+  "cash_register.manage": "administrar las cajas",
+  "cash_register.operate": "abrir y operar una caja",
+  "cash_register.read": "ver las cajas",
+  "cash.close": "cerrar la caja del día",
+  "company.manage": "crear y administrar empresas",
+  "company.read": "ver los datos de la empresa",
+  "company.settings.manage": "cambiar los ajustes del negocio",
+  "company.tax_id.manage": "cambiar el RIF de la empresa",
+  "customer.block": "bloquear y desbloquear clientes",
+  "customer.manage": "crear y editar clientes",
+  "customer.tax_id.manage": "cambiar el RIF de un cliente",
+  "expense.read": "ver los gastos",
+  "expense.register": "registrar gastos",
+  "fiscal_book.export": "exportar los libros fiscales",
+  "fiscal_book.read": "ver los libros fiscales",
+  "fiscal.audit.read": "ver el rastro fiscal",
+  "fiscal.contingency.manage": "registrar talonarios de contingencia",
+  "fiscal.range.manage": "cargar números de control de la imprenta",
+  "fiscal.regime.manage": "cambiar cómo factura el negocio",
+  "fx.rate.manage": "traer la tasa del día",
+  "inventory.adjust": "ajustar existencias",
+  "inventory.expired": "despachar mercancía vencida",
+  "inventory.move": "mover mercancía en el almacén",
+  "inventory.negative": "dejar una existencia en negativo",
+  "inventory.threshold.manage": "definir mínimos y máximos de existencia",
+  "inventory.transfer": "pasar mercancía de un almacén a otro",
+  "invoice.issue": "emitir facturas",
+  "journal.post": "contabilizar asientos",
+  "journal.reverse": "revertir asientos contables",
+  "membership.manage": "administrar a las personas de la empresa",
+  "membership.read": "ver a las personas de la empresa",
+  "period.close": "cerrar meses en contabilidad",
+  "period.reopen": "reabrir meses en contabilidad",
+  "price_list.manage": "cambiar precios y listas de precios",
+  "product.manage": "crear y editar productos",
+  "product.recipe.manage": "definir recetas de productos",
+  "product.tax_category.set": "cambiar el impuesto de un producto",
+  "product.variant.manage": "crear variantes de productos",
+  "purchase.credit_note.register": "registrar notas de crédito de proveedores",
+  "purchase.invoice.register": "registrar facturas de proveedores",
+  "purchase.landed_cost.apply": "cargar gastos de importación",
+  "purchase.order.manage": "hacer órdenes de compra",
+  "purchase.payment.register": "pagar a proveedores",
+  "purchase.price_variance.approve": "aprobar un precio de compra fuera de lo pactado",
+  "purchase.receive": "recibir mercancía",
+  "report.export": "exportar reportes",
+  "retention.receipt.issue": "emitir comprobantes de retención",
+  "retention.rules.manage": "cargar reglas de retención",
+  "role.manage": "asignar roles",
+  "role.read": "ver los roles",
+  "sales.invoice.annul": "anular ventas",
+  "sales.invoice.issue": "vender",
+  "sales.order.manage": "hacer pedidos de venta",
+  "sales.payment.register": "registrar cobros",
+  "sales.price_list.override": "cambiar la lista de precios de una venta",
+  "sales.quote.manage": "hacer cotizaciones",
+  "sales.return.manage": "registrar devoluciones",
+  "supplier.bank_account.approve": "aprobar la cuenta bancaria de un proveedor",
+  "supplier.manage": "crear y editar proveedores",
+  "tax.rules.manage": "cargar reglas de impuestos",
+  "tenant.read": "ver los datos de la cuenta",
+  "treasury.account.manage": "administrar cuentas y formas de pago",
+  "treasury.read": "ver el dinero del negocio",
+  "treasury.reassign": "reasignar pagos entre cuentas",
+  "warehouse.manage": "administrar almacenes",
+  "warehouse.move": "mover mercancía en el almacén",
+  "warehouse.read": "ver los almacenes",
+};
+
+/** El 403 de persona: el primer permiso reconocible del `message` técnico, en palabras. */
+export function personaDePermiso(message: string): string {
+  for (const clave of message.match(/[a-z_]+(?:\.[a-z_]+)+/g) ?? []) {
+    const accion = ACCION_DE_PERMISO[clave];
+    if (accion !== undefined) {
+      return `Necesitas el permiso para ${accion}. Pídeselo a quien administra el negocio.`;
+    }
+  }
+  return mensajePersona("PERMISSION_REQUIRED");
+}
+
 function personaDeDominio(code: string, message: string): string {
+  if (code === "PERMISSION_REQUIRED") return personaDePermiso(message);
   if (PERSONA_FIJA.has(code)) return mensajePersona(code);
   const limpio = message.trim();
   return limpio === "" ? mensajePersona(code) : limpio;

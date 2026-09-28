@@ -47,10 +47,10 @@ import type {
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
-import { issueStockBatch, receiveStock, reponerSalidasDeDocumento } from "./inventory.js";
+import { issueStockBatchForSale, receiveStockFor, reponerSalidasDeDocumento } from "./inventory.js";
 import { exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
-import { reverseJournalEntry } from "./accounting.js";
+import { reverseJournalEntryForAnnulment } from "./accounting.js";
 import { modoDeVenta } from "./modo-venta.js";
 
 /**
@@ -1582,7 +1582,9 @@ async function emitirVenta(
     // mismo criterio de antes (bien, no compuesto) leído del dato que ya está.
     const conKardex = calculadas.value.lineas.filter((l) => l.esInventariable);
     if (conKardex.length > 0) {
-      const mov = await issueStockBatch(uow, {
+      // La salida la autoriza LA VENTA (`sales.invoice.issue` + alcance del almacén), no
+      // `inventory.move`: el cajero vende sin poder mover mercancía suelta (ADR-0068, N-01).
+      const mov = await issueStockBatchForSale(uow, {
         company_id: input.company_id,
         warehouse_id: input.warehouse_id,
         lines: conKardex.map((l) => ({
@@ -1936,14 +1938,20 @@ export async function annulInvoice(
     const [conAsiento] = await sql<{ journal_entry_id: string | null }[]>`
       select journal_entry_id from public.documents where id = ${documentId}`;
     if (conAsiento?.journal_entry_id != null) {
-      const reverso = await reverseJournalEntry(
-        uow,
-        conAsiento.journal_entry_id,
-        { company_id: input.company_id, reason: `Anulación del ${nombre}: ${input.reason}` },
-        { desdeDocumento: true },
-      );
+      // La reversa la autoriza LA ANULACIÓN (`sales.invoice.annul`), no
+      // `accounting.entry.reverse` (ADR-0068 §1, N-04).
+      const reverso = await reverseJournalEntryForAnnulment(uow, conAsiento.journal_entry_id, {
+        company_id: input.company_id,
+        reason: `Anulación del ${nombre}: ${input.reason}`,
+      });
       if (!reverso.ok) {
-        return err({ code: "VALIDATION_FAILED", message: reverso.error.message });
+        // Un permiso que falta es un 403 legible, no un «dato inválido» con el nombre técnico
+        // del permiso en la pantalla (N-04; la rama hermana del kardex ya lo hacía).
+        return err(
+          reverso.error.code === "PERMISSION_REQUIRED"
+            ? { code: "PERMISSION_REQUIRED", message: reverso.error.message }
+            : { code: "VALIDATION_FAILED", message: reverso.error.message },
+        );
       }
     } else {
       await sql`
@@ -3146,18 +3154,30 @@ export async function confirmReturn(
       const importe = toma.equals(queda)
         ? valor.value.minus(valorVolvio.value)
         : valor.value.times(toma).dividedBy(salio.value).toDecimalPlaces(8, 4);
-      const mov = await receiveStock(uow, {
-        company_id: companyId,
-        warehouse_id: dev.warehouse_id,
-        product_id: l.product_id,
-        ...(t.lot_id === null ? {} : { lot_id: t.lot_id }),
-        quantity: toma.toFixed(),
-        amount: importe.toFixed(8),
-        currency: ctx.value.functionalCurrency,
-        sourceDocumentId: returnId,
-        accounting: "document",
-      });
-      if (!mov.ok) return err({ code: "VALIDATION_FAILED", message: mov.error.message });
+      // El reingreso lo autoriza LA DEVOLUCIÓN (`sales.return.manage`), no `inventory.move`
+      // (ADR-0068 §1).
+      const mov = await receiveStockFor(
+        uow,
+        {
+          company_id: companyId,
+          warehouse_id: dev.warehouse_id,
+          product_id: l.product_id,
+          ...(t.lot_id === null ? {} : { lot_id: t.lot_id }),
+          quantity: toma.toFixed(),
+          amount: importe.toFixed(8),
+          currency: ctx.value.functionalCurrency,
+          sourceDocumentId: returnId,
+          accounting: "document",
+        },
+        "sales.return.manage",
+      );
+      if (!mov.ok) {
+        return err(
+          mov.error.code === "PERMISSION_REQUIRED"
+            ? { code: "PERMISSION_REQUIRED", message: mov.error.message }
+            : { code: "VALIDATION_FAILED", message: mov.error.message },
+        );
+      }
       const v = parseDecimal(mov.value.functional_amount);
       if (reingresado.ok && v.ok)
         reingresado = { ok: true, value: reingresado.value.plus(v.value) };

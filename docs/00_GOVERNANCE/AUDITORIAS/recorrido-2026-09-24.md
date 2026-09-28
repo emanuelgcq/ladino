@@ -3350,7 +3350,7 @@ Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes 
 | B-13 | baja | abierto | — |
 | B-14 | baja | abierto | — |
 | B-15 | baja | abierto | — |
-| B-16 | baja | abierto | — |
+| B-16 | baja | cerrado (ola 1) | ADR-0068 |
 | B-17 | baja | abierto | — |
 | B-18 | baja | abierto | — |
 | B-19 | baja | abierto | — |
@@ -3361,7 +3361,7 @@ Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes 
 | C-05 | media | abierto | — |
 | C-06 | media | abierto | — |
 | C-07 | media | abierto | — |
-| C-08 | media | abierto | — |
+| C-08 | media | cerrado (ola 1) | ADR-0068 |
 | C-09 | media | abierto | — |
 | C-10 | media | abierto | — |
 | C-11 | media | abierto | — |
@@ -3434,7 +3434,7 @@ Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes 
 | G-05 | alta | abierto | — |
 | G-06 | alta | abierto | — |
 | G-07 | alta | abierto | — |
-| G-08 | alta | abierto | — |
+| G-08 | alta | cerrado (ola 1) | ADR-0068 |
 | G-09 | media | abierto | — |
 | G-10 | media | abierto | — |
 | G-11 | media | abierto | — |
@@ -3475,33 +3475,33 @@ Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes 
 | I-10 | baja | abierto | — |
 | I-11 | baja | abierto | — |
 | I-12 | baja | abierto | — |
-| J-01 | crítica | abierto | — |
+| J-01 | crítica | cerrado (ola 1) | ADR-0070 · migraciones 20260928110000 y 20260928110100 · reparación `scripts/reparar/adr-0070-subcuentas.mjs` · `pnpm recorrido J`: J-01 ✓. Aserciones cambiadas por RESPUESTA §5.2.4: 056 (tres) y `e2e-cuenta-de-caja.test.ts` (`:224`, variante rota) — codificaban el mapeo a la familia que ADR-0070 sustituye |
 | J-02 | alta | abierto | — |
 | J-03 | alta | abierto | — |
 | J-04 | media | abierto | — |
 | J-05 | baja | abierto | — |
-| K-01 | crítica | abierto | — |
-| K-02 | alta | abierto | — |
-| K-03 | alta | abierto | — |
-| K-04 | alta | abierto | — |
-| K-05 | media | abierto | — |
-| K-06 | media | abierto | — |
+| K-01 | crítica | cerrado (ola 1) | migración 20260928130000, pgTAP 079, E2E periods-have-history, recorrido K |
+| K-02 | alta | cerrado (ola 1) | migración 20260928130000, pgTAP 079, E2E periods-have-history, recorrido K |
+| K-03 | alta | cerrado (ola 1) | migración 20260928130000, pgTAP 079, E2E periods-have-history, recorrido K |
+| K-04 | alta | cerrado (ola 1) | migraciones 20260928130000 (suelo), 20260928130100 (libro sobre 20260928120000) y 20260928130200 (planilla sobre 20260928120300); enrutado de factura, NC, landed cost, recepción, pago y gasto; marca en Libros y aviso en Compras; E2E accounting-hooks «K-04»; ventana LIVA art. 33 sin aplicar (P-35) |
+| K-05 | media | cerrado (ola 1) | migración 20260928130000, pgTAP 079, E2E periods-have-history, recorrido K |
+| K-06 | media | cerrado (ola 1) | migración 20260928130000, pgTAP 079, E2E periods-have-history, recorrido K |
 | K-07 | alta | abierto | — |
 | K-08 | media | abierto | — |
 | K-09 | media | abierto | — |
 | K-10 | media | abierto | — |
-| K-11 | media | abierto | — |
+| K-11 | media | cerrado (ola 1) | ADR-0068 |
 | K-12 | baja | abierto | — |
 | K-13 | baja | abierto | — |
 | K-14 | baja | abierto | — |
 | K-15 | baja | abierto | — |
-| L-01 | crítica | abierto | — |
-| L-02 | alta | abierto | — |
+| L-01 | crítica | cerrado (ola 1) | migración 20260928120000: NC en negativo en libro, pantalla y CSV; pgTAP 074 y 078 |
+| L-02 | alta | cerrado (ola 1) | conciliación en el gate: pgTAP 074 sin todo, invariante 12 del recorrido, fila en CLAUDE.md §3; 046:170 ya no aplica el signo |
 | L-03 | alta | abierto | — |
 | L-04 | alta | abierto | — |
 | L-05 | alta | abierto | — |
-| L-06 | media | abierto | — |
-| L-07 | media | abierto | — |
+| L-06 | media | cerrado (ola 1) | discrepancias y coverage_gaps en la conciliación (campos opcionales), con enlaces; concepto en palabras |
+| L-07 | media | cerrado (ola 1) | anulada con número e importes en cero en libro y CSV (P-34) |
 | L-08 | media | abierto | — |
 | L-09 | media | abierto | — |
 | L-10 | media | abierto | — |
@@ -3523,10 +3523,10 @@ Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes 
 | M-11 | media | abierto | — |
 | M-12 | media | abierto | — |
 | M-13 | baja | abierto | — |
-| N-01 | crítica | abierto | — |
-| N-02 | alta | abierto | — |
+| N-01 | crítica | cerrado (ola 1) | ADR-0068 |
+| N-02 | alta | cerrado (ola 1) | ADR-0068 |
 | N-03 | alta | abierto | — |
-| N-04 | alta | abierto | — |
+| N-04 | alta | cerrado (ola 1) | ADR-0068 · e2e-una-venta-por-oficio (el asiento se lee de la base) · `pnpm recorrido N` en verde |
 | N-05 | media | abierto | — |
 | N-06 | media | abierto | — |
 | N-07 | media | abierto | — |

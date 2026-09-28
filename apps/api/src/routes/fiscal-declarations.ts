@@ -165,6 +165,7 @@ export function fiscalDeclarationsRoutes(
                cuota_a_pagar::text as cuota_a_pagar,
                excedente_siguiente::text as excedente_siguiente,
                detalle,
+               ajuste_creditos_anteriores::text as ajuste_creditos_anteriores,
                (select c.functional_currency_code from public.companies c
                  where c.id = ${companyId}) as functional_currency,
                generator_version, dataset_hash, created_by,

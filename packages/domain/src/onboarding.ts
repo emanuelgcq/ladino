@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@ladino/core";
+import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork } from "@ladino/db";
 import type { OnboardBusinessRequest, OnboardBusinessResponse } from "@ladino/schemas";
 import { createCompany, RULES_VERSION } from "./create-company.js";
@@ -61,6 +62,19 @@ export async function onboardBusiness(
   // mañana, no un bypass.
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
+  // ADR-0069 §3 (K-05): el inicio de actividades no puede ser futuro. Se valida ANTES de
+  // escribir nada, para no escribir de balde (withTransaction revierte igual ante un err). Comparación de fechas ISO
+  // (date contra date, el día de hoy EN CARACAS).
+  if (
+    input.activity_start_date !== undefined &&
+    input.activity_start_date > diaNegocio(new Date())
+  ) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "La fecha de inicio de actividades no puede ser futura.",
+    });
+  }
+
   // ── 2. La empresa ─────────────────────────────────────────────────────────
   // Sin RIF todavía (el modo recibos existe para eso): placeholder DERIVADO
   // del tenant — determinista, único, y honesto en su prefijo. /empezar
@@ -97,6 +111,12 @@ export async function onboardBusiness(
   });
   if (!empresa.ok) return empresa;
   const companyId = empresa.value.id;
+  // Sin fecha, la columna toma su omisión: el día del alta en Caracas (migración 20260928130000).
+  if (input.activity_start_date !== undefined) {
+    await sql`
+      update public.companies set activity_start_date = ${input.activity_start_date}::date
+       where id = ${companyId}`;
+  }
 
   // ── 2-ter. SIN RIF, LA EMPRESA NACE VENDIENDO CON RECIBOS ─────────────────
   // (plan «Ladino sin RIF», A2). Antes nacía SIN régimen y la caja respondía 409

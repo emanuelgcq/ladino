@@ -82,12 +82,24 @@ export function fiscalBooksRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
         select concepto, libro::text as libro, mayor::text as mayor, en_cola::text as en_cola,
                diferencia::text as diferencia, cuadra
           from platform.book_ledger_reconciliation(${companyId}, ${from}::date, ${to}::date)`;
+      // L-06: el detalle de lo que no cuadra, documento a documento y asiento a asiento, y los
+      // huecos de cobertura — lo único que autoriza a decir «un documento sin asiento» o «un
+      // asiento sin documento». Campos NUEVOS y opcionales del contrato.
+      const discrepancies = await tx<Record<string, unknown>[]>`
+        select concepto, document_id, document_kind, journal_entry_id,
+               entry_number::int as entry_number, libro::text as libro, mayor::text as mayor
+          from platform.book_ledger_discrepancies(${companyId}, ${from}::date, ${to}::date)`;
+      const coverageGaps = await tx<Record<string, unknown>[]>`
+        select source_kind, source_id, problem
+          from platform.accounting_coverage_gaps(${companyId})`;
       return {
         period_from: from,
         period_to: to,
         currency: empresa?.moneda ?? "",
         rows,
         balanced: rows.every((r) => r["cuadra"] === true),
+        discrepancies,
+        coverage_gaps: coverageGaps,
       };
     });
     return c.json(cuerpo, 200);

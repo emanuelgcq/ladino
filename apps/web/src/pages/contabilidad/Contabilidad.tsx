@@ -59,7 +59,16 @@ const ESTADO_ASIENTO: Record<string, { etiqueta: string; tone: BadgeTone }> = {
   draft: { etiqueta: "Borrador", tone: "neutral" },
   posted: { etiqueta: "Posteado", tone: "accent" },
   reversed: { etiqueta: "Reversado", tone: "warning" },
+  discarded: { etiqueta: "Descartado", tone: "neutral" },
 };
+
+/** El período de cierre del ejercicio es el mes 13 (ADR-0069 §2). */
+const etiquetaPeriodo = (p: { year: number; month: number } | null): string =>
+  p === null
+    ? ""
+    : p.month === 13
+      ? `Cierre ${p.year}`
+      : `${p.year}-${String(p.month).padStart(2, "0")}`;
 
 /**
  * Orígenes de un asiento (`source_kind` del servidor) con su etiqueta en
@@ -712,11 +721,14 @@ function Diario(): React.JSX.Element {
   const [hasta, setHasta] = useState("");
   const [abierto, setAbierto] = useState<string | null>(null);
   const [posteando, setPosteando] = useState<string | null>(null);
+  const [descartando, setDescartando] = useState<string | null>(null);
+  const [motivoDescarte, setMotivoDescarte] = useState("");
   const [reversando, setReversando] = useState<string | null>(null);
   const [motivo, setMotivo] = useState("");
   const [error, setError] = useState<unknown>(null);
   const puedePostear = puede("accounting.entry.post");
   const puedeReversar = puede("accounting.entry.reverse");
+  const puedeDescartar = puede("accounting.entry.create");
 
   // Cambiar un filtro vuelve a la página 1: la página 4 de otro filtro no
   // significa nada.
@@ -758,6 +770,24 @@ function Diario(): React.JSX.Element {
         body: JSON.stringify({ company_id: empresa.id }),
       });
       toast.success("Asiento posteado", "Ya está en el mayor y es inmutable.");
+      recargar();
+    } catch (e) {
+      setError(e);
+      throw e;
+    }
+  }
+
+  // K-06: un borrador se descarta con motivo y queda en auditoría. Un posteado, nunca.
+  async function descartar(id: string): Promise<void> {
+    setError(null);
+    try {
+      await llamar(`/v1/journal-entries/${id}/discard`, {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ company_id: empresa.id, reason: motivoDescarte.trim() }),
+      });
+      toast.success("Borrador descartado", "Queda en el diario como descartado, con su motivo.");
+      setMotivoDescarte("");
       recargar();
     } catch (e) {
       setError(e);
@@ -839,6 +869,11 @@ function Diario(): React.JSX.Element {
                   Postear
                 </Button>
               )}
+              {e.status === "draft" && puedeDescartar && (
+                <Button variant="ghost" size="sm" onClick={() => setDescartando(e.id)}>
+                  Descartar
+                </Button>
+              )}
               {/* Solo los MANUALES: un asiento generado por un documento se corrige desde el
                   documento (QA de pantalla 2026-09-15, h. 67). */}
               {e.status === "posted" && e.source_kind === "manual" && puedeReversar && (
@@ -851,7 +886,7 @@ function Diario(): React.JSX.Element {
         },
       },
     ],
-    [puedePostear, puedeReversar],
+    [puedePostear, puedeReversar, puedeDescartar],
   );
 
   return (
@@ -884,6 +919,7 @@ function Diario(): React.JSX.Element {
                   { value: "draft", label: "Borrador" },
                   { value: "posted", label: "Posteado" },
                   { value: "reversed", label: "Reversado" },
+                  { value: "discarded", label: "Descartado" },
                 ]}
               />
             </div>
@@ -945,6 +981,28 @@ function Diario(): React.JSX.Element {
             placeholder="Motivo (obligatorio, queda en auditoría)…"
             value={motivo}
             onChange={(e) => setMotivo(e.target.value)}
+          />
+        </div>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={descartando !== null}
+        onOpenChange={(v) => !v && setDescartando(null)}
+        title="Descartar el borrador"
+        confirmLabel="Descartar el borrador"
+        destructive
+        onConfirm={() => descartar(descartando ?? "")}
+      >
+        <div className="space-y-2">
+          <p>
+            El borrador no llega al mayor y deja de contar para el cierre del período. No se borra:
+            queda en el diario como <strong>descartado</strong>, con tu motivo en auditoría.
+          </p>
+          <Textarea
+            aria-label="Motivo del descarte"
+            placeholder="Motivo (obligatorio, queda en auditoría)…"
+            value={motivoDescarte}
+            onChange={(e) => setMotivoDescarte(e.target.value)}
           />
         </div>
       </ConfirmDialog>
@@ -1702,9 +1760,7 @@ function Cierre(): React.JSX.Element {
               <TBody>
                 {d.periodos.map((p) => (
                   <TR key={p.id}>
-                    <TD className="font-mono text-[0.84rem]">
-                      {p.year}-{String(p.month).padStart(2, "0")}
-                    </TD>
+                    <TD className="font-mono text-[0.84rem]">{etiquetaPeriodo(p)}</TD>
                     <TD>
                       <Badge
                         tone={
@@ -1819,7 +1875,7 @@ function Cierre(): React.JSX.Element {
       <ConfirmDialog
         open={cerrando !== null}
         onOpenChange={(v) => !v && setCerrando(null)}
-        title={`Cerrar ${cerrando?.year ?? ""}-${String(cerrando?.month ?? "").padStart(2, "0")}`}
+        title={`Cerrar ${etiquetaPeriodo(cerrando ?? null)}`}
         confirmLabel="Cerrar el período"
         onConfirm={() => cerrar(cerrando?.id ?? "")}
       >
@@ -1831,7 +1887,7 @@ function Cierre(): React.JSX.Element {
       <ConfirmDialog
         open={reabriendo !== null}
         onOpenChange={(v) => !v && setReabriendo(null)}
-        title={`Reabrir ${reabriendo?.year ?? ""}-${String(reabriendo?.month ?? "").padStart(2, "0")}`}
+        title={`Reabrir ${etiquetaPeriodo(reabriendo ?? null)}`}
         confirmLabel="Reabrir el período"
         destructive
         confirmDisabled={motivo.trim().length < 10}

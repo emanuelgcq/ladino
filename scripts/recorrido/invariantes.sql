@@ -1,6 +1,6 @@
 -- Invariantes que cruzan módulos (CLAUDE.md §3), para UNA empresa. Solo lectura.
 -- Uso:  docker exec -i supabase_db_ladino psql -U postgres -At -v cid=<uuid> < scripts/recorrido/invariantes.sql
--- Todas deberían dar 0 salvo los dos INFORMES del final (backdated_stock_in, money_landing_gaps),
+-- Todas deberían dar 0 salvo los dos INFORMES (backdated_stock_in, money_landing_gaps),
 -- cuya respuesta correcta NO es cero (R-48, R-49).
 \pset fieldsep ' | '
 select 'stock_reconciliation (filas con diferencia)', count(*)::text
@@ -23,14 +23,18 @@ select 'ledger_balances vs recompute_ledger (cuentas con diferencia)', count(*):
           from public.ledger_balances where company_id = :'cid' group by account_id) lb
  cross join lateral platform.recompute_ledger(:'cid', lb.account_id, null, null) r
  where r.debit_total is distinct from lb.d or r.credit_total is distinct from lb.c;
+-- ADR-0070 (J-01): cada caja de tesorería tiene su subcuenta propia y hoja, y en moneda funcional su saldo es
+-- el de su subcuenta. «Sin asignar» (ADR-0067) es una caja más, con su subcuenta: no hay perdón que listar. La
+-- igualdad en moneda original de las cajas en divisa llega con J-04 (E-11).
+select 'treasury_ledger_gaps (cajas ≠ su subcuenta)', count(*)::text from platform.treasury_ledger_gaps(:'cid');
 select 'cola de asientos pendiente', count(*)::text
   from public.journal_generation_queue where company_id = :'cid' and status = 'pending';
 select 'outbox pending/in_flight/dead', coalesce(string_agg(status || '=' || n, ', '), '(vacío)')
   from (select status, count(*) n from public.outbox where company_id = :'cid' and status <> 'published' group by status) s;
 select 'INFORME backdated_stock_in (no es invariante)', count(*)::text from platform.backdated_stock_in(:'cid');
 select 'INFORME money_landing_gaps (no es invariante)', count(*)::text from platform.money_landing_gaps(:'cid');
--- Desde el bloque L: la conciliación «libro = mayor + cola» de septiembre (platform.book_ledger_reconciliation).
--- Es un INFORME, no un invariante del guion: hoy da rojo en E2 y E3 por el hallazgo L-01 (el libro de ventas suma
--- las notas de crédito). Se mira para saber si cambia, no para cerrar un bloque en rojo.
-select 'INFORME conciliación libro-mayor sep (conceptos que NO cuadran)', count(*)::text
-  from platform.book_ledger_reconciliation(:'cid', date '2026-09-01', date '2026-09-30') where not cuadra;
+-- L-02: la conciliación «libro fiscal = mayor + cola» (platform.book_ledger_reconciliation) es INVARIANTE desde
+-- la migración 20260928120000, que firmó la NC en negativo (L-01). Sobre TODA la historia de la empresa, no un
+-- mes: una NC de agosto que el libro sumara se vería igual que una de septiembre.
+select 'book_ledger_reconciliation toda la historia (conceptos que NO cuadran)', count(*)::text
+  from platform.book_ledger_reconciliation(:'cid', date '1900-01-01', date '2999-12-31') where not cuadra;

@@ -427,6 +427,115 @@ describe("el gancho contable — R-20", () => {
     expect(await huecos()).toHaveLength(0);
   });
 
+  it("K-04: la factura de un mes CERRADO entra al período abierto con su fecha original, marcada en el libro y con su crédito ahí", async () => {
+    // ADR-0069 §4. Un mes que seguro es anterior al en curso, y cerrado. El cierre va por SQL:
+    // la cola de este fichero tiene pendientes a propósito y el caso de uso no cerraría.
+    const MES_PASADO = diaCaracas(-40);
+    await sql`update public.companies set activity_start_date = '2025-01-01' where id = ${COMPANY}`;
+    // La regla global de IVA de este fichero rige desde AYER, y el impuesto de un documento es
+    // el de SU fecha. Reglas PROPIAS de la empresa desde 2025 (venta y compra, para no dejar
+    // la venta sin regla: las propias desplazan a las globales), con la misma alícuota de prueba.
+    await sql`
+      insert into public.tax_rules (tenant_id, company_id, jurisdiction, tax_code, taxpayer_type,
+                                    product_tax_category, rate, effective_from, legal_source,
+                                    priority, transaction_type)
+      select ${TENANT}, ${COMPANY}, 'VE', 'iva', 'ordinario', 'gravado_general', 0.16,
+             '2025-01-01'::date, 'Carga de prueba E2E (K-04) — VALIDAR-SENIAT antes de producción.',
+             10, t
+        from unnest(array['sale', 'purchase']) t`;
+    const [p] = await sql<{ id: string }[]>`
+      select platform.period_for_date(${COMPANY}, ${MES_PASADO}::date) as id`;
+    await sql`update public.fiscal_periods
+                 set status = 'closed', closed_at = now(), closed_by = ${CONTADOR}
+               where id = ${p!.id}`;
+
+    const creditosHoy = async (): Promise<string> => {
+      const [x] = await sql<{ c: string }[]>`
+        select creditos::text as c
+          from platform.recompute_iva_period(${COMPANY}, ${HOY}::date, ${HOY}::date, 0)`;
+      return x!.c;
+    };
+    const antesHoy = await creditosHoy();
+
+    const r = await pedir("POST", "/v1/supplier-invoices", {
+      company_id: COMPANY,
+      supplier_id: PROVEEDOR,
+      supplier_document_number: `TARDE-${RUN}`,
+      supplier_control_number: "00-0000099",
+      invoice_date: MES_PASADO,
+      currency: "VES",
+      lines: [{ product_id: PROD, quantity: "5", unit_price: "400" }],
+    });
+    expect(r.status).toBe(201); // antes: 409 PERIOD_CLOSED, la factura no entraba nunca
+    const { id, accounting_date } = (await r.json()) as { id: string; accounting_date: string };
+    expect(accounting_date).toBe(HOY); // la respuesta lo dice, y la web avisa con eso
+
+    const [f] = await sql<{ original: string; contable: string | null; asiento: string | null }[]>`
+      select i.invoice_date::text as original, i.accounting_date::text as contable,
+             (select e.posting_date::text from public.journal_entries e
+               where e.id = i.journal_entry_id) as asiento
+        from public.supplier_invoices i where i.id = ${id}`;
+    expect(f).toEqual({ original: MES_PASADO, contable: HOY, asiento: HOY });
+
+    // El libro del período de REGISTRO la lleva, marcada y con su fecha original; el del mes
+    // original, no.
+    const libro = await sql<
+      { booked_on: string; received_late: boolean; invoice_date: string; credito: boolean }[]
+    >`select booked_on::text as booked_on, received_late, invoice_date::text as invoice_date,
+             iva_credito = 320 as credito
+        from platform.purchases_book(${COMPANY}, ${HOY}::date, ${HOY}::date)
+       where invoice_id = ${id}`;
+    expect(libro).toEqual([
+      { booked_on: HOY, received_late: true, invoice_date: MES_PASADO, credito: true },
+    ]);
+    const viejo = await sql`
+      select 1 from platform.purchases_book(${COMPANY}, ${MES_PASADO}::date, ${MES_PASADO}::date)
+       where invoice_id = ${id}`;
+    expect(viejo).toHaveLength(0);
+
+    // El crédito se deduce en el período de registro, no en el original.
+    const [planillaVieja] = await sql<{ creditos: string }[]>`
+      select creditos::text as creditos
+        from platform.recompute_iva_period(${COMPANY}, ${MES_PASADO}::date, ${MES_PASADO}::date, 0)`;
+    expect(Number(planillaVieja!.creditos)).toBe(0);
+    // …y EN el período de registro, exactamente sus 320.
+    const [delta] = await sql<{ ok: boolean }[]>`
+      select ${await creditosHoy()}::numeric - ${antesHoy}::numeric = 320 as ok`;
+    expect(delta!.ok).toBe(true);
+
+    // El PAGO fechado en el mes cerrado tampoco se rechaza: su asiento va al período en curso
+    // y el pago conserva su fecha.
+    const pago = await pedir("POST", "/v1/supplier-payments", {
+      company_id: COMPANY,
+      supplier_invoice_id: id,
+      gross_amount: "2320",
+      currency: "VES",
+      instrument: "transferencia",
+      paid_at: `${MES_PASADO}T12:00:00-04:00`,
+      allow_negative_balance: true,
+    });
+    expect(pago.status, await pago.clone().text()).toBe(201);
+    const { payment } = (await pago.json()) as { payment: { id: string } };
+    const [asientoPago] = await sql<{ fecha: string }[]>`
+      select posting_date::text as fecha from public.journal_entries
+       where company_id = ${COMPANY} and source_id = ${payment.id}
+         and source_event = 'ap.payment_made'`;
+    expect(asientoPago?.fecha).toBe(HOY);
+
+    // Libro y mayor dicen lo mismo en el período de registro y en el original.
+    for (const [desde, hasta] of [
+      [HOY, HOY],
+      [MES_PASADO, MES_PASADO],
+    ] as const) {
+      const credito = await sql<{ cuadra: boolean }[]>`
+        select cuadra from platform.book_ledger_reconciliation(${COMPANY}, ${desde}::date,
+                                                               ${hasta}::date)
+         where concepto = 'iva_credito_fiscal'`;
+      expect(credito.every((c) => c.cuadra)).toBe(true);
+    }
+    expect(await huecos()).toHaveLength(0);
+  });
+
   it("el cobro genera su asiento y el pago a proveedor desglosa las retenciones", async () => {
     const [factura] = await sql<{ id: string; total: string }[]>`
       select id, total_amount::text as total from public.documents

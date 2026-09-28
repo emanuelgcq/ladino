@@ -29,9 +29,10 @@ import type {
   ClosePurchaseOrderRequest,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
+import { fechaContableDe } from "./fecha-contable.js";
 import { clasificacionPorPrefijo } from "./customers.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
-import { receiveStock, revalueStock, revalorizar } from "./inventory.js";
+import { receiveStockFor, revalueStock, revalorizar } from "./inventory.js";
 import { exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 
@@ -652,22 +653,28 @@ export async function receiveGoods(
     }
     const totalTxn = precio.value.multiply(cantidad.value);
     const totalFunc = totalTxn.amount.times(tasa.value.rate).toDecimalPlaces(8, 4);
-    const mov = await receiveStock(uow, {
-      company_id: input.company_id,
-      warehouse_id: input.warehouse_id,
-      product_id: l.product_id,
-      quantity: l.quantity,
-      amount: totalFunc.toFixed(8),
-      currency: ctx.value.functionalCurrency,
-      ...(l.lot_code !== undefined ? { lot_code: l.lot_code } : {}),
-      ...(l.lot_expires_at !== undefined ? { lot_expires_at: l.lot_expires_at } : {}),
-      // Lo que la persona escribió viaja hasta el kardex (migración 71): el movimiento guarda
-      // en qué moneda lo puso y si dio el de cada uno o el total, no solo lo derivado.
-      ...(l.capture_currency !== undefined ? { capture_currency: l.capture_currency } : {}),
-      ...(l.capture_mode !== undefined ? { capture_mode: l.capture_mode } : {}),
-      sourceDocumentId: recepcion.id,
-      accounting: "document",
-    });
+    // La entrada la autoriza LA RECEPCIÓN (`purchase.receive`, ya exigido arriba con el
+    // alcance del almacén), no `inventory.move` (ADR-0068 §1).
+    const mov = await receiveStockFor(
+      uow,
+      {
+        company_id: input.company_id,
+        warehouse_id: input.warehouse_id,
+        product_id: l.product_id,
+        quantity: l.quantity,
+        amount: totalFunc.toFixed(8),
+        currency: ctx.value.functionalCurrency,
+        ...(l.lot_code !== undefined ? { lot_code: l.lot_code } : {}),
+        ...(l.lot_expires_at !== undefined ? { lot_expires_at: l.lot_expires_at } : {}),
+        // Lo que la persona escribió viaja hasta el kardex (migración 71): el movimiento guarda
+        // en qué moneda lo puso y si dio el de cada uno o el total, no solo lo derivado.
+        ...(l.capture_currency !== undefined ? { capture_currency: l.capture_currency } : {}),
+        ...(l.capture_mode !== undefined ? { capture_mode: l.capture_mode } : {}),
+        sourceDocumentId: recepcion.id,
+        accounting: "document",
+      },
+      "purchase.receive",
+    );
     if (!mov.ok) {
       return err(
         mov.error.code === "PERMISSION_REQUIRED"
@@ -688,7 +695,13 @@ export async function receiveGoods(
       sourceKind: "goods_receipt",
       sourceEvent: "stock.received",
       sourceId: recepcion.id,
-      postingDate: diaNegocio(input.received_at ?? new Date().toISOString()),
+      // K-04: una recepción fechada en un mes cerrado se asienta en el período en curso; el
+      // kardex y la recepción conservan su fecha.
+      postingDate: await fechaContableDe(
+        sql,
+        input.company_id,
+        diaNegocio(input.received_at ?? new Date().toISOString()),
+      ),
       postedBy: actor.userId,
       description: `Recepción de compra ${recepcion.receipt_number ?? ""}`,
       functionalCurrency: ctx.value.functionalCurrency,
@@ -954,6 +967,14 @@ export async function registerSupplierInvoice(
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
+  // ADR-0069 §4 (K-04): si la fecha del documento cae en un período CERRADO (o antes del inicio
+  // de actividades), se registra en el período abierto —hoy en Caracas— y guarda su fecha
+  // original. Lo decide `platform.accounting_date_for`, en un solo sitio. La ventana legal para
+  // deducir el crédito de una factura vieja (LIVA art. 33) NO se aplica: pendiente de fuente (P-35).
+  const [fechaFactura] = await sql<{ d: string }[]>`
+    select platform.accounting_date_for(${input.company_id}, ${input.invoice_date}::date)::text as d`;
+  const fechaContable = fechaFactura!.d;
+
   let facturaId = "";
   let falloRetencion: PurchaseError | null = null;
   try {
@@ -964,7 +985,8 @@ export async function registerSupplierInvoice(
            supplier_control_number, supplier_document_ref, invoice_date, due_date, status,
            posted_at, tax_is_recoverable, fiscal_support, transaction_currency,
            functional_currency, fx_rate,
-           rate_source, rate_timestamp, rounding_policy_id, rules_version, notes)
+           rate_source, rate_timestamp, rounding_policy_id, rules_version, notes,
+           accounting_date)
         values (${ctx.value.tenantId}, ${input.company_id}, ${input.supplier_id},
                 ${input.purchase_order_id ?? null}, ${input.supplier_document_number ?? null},
                 ${input.supplier_control_number ?? null}, ${input.supplier_document_ref ?? null},
@@ -972,7 +994,8 @@ export async function registerSupplierInvoice(
                 ${ivaRecuperable}, ${conSoporte}, ${input.currency},
                 ${ctx.value.functionalCurrency},
                 ${tasa.value.rate.toFixed()}, ${tasa.value.source}, now(), ${POLICY.id},
-                ${RULES_VERSION}, ${input.notes ?? null})
+                ${RULES_VERSION}, ${input.notes ?? null},
+                ${fechaContable === input.invoice_date ? null : fechaContable}::date)
         returning id`;
 
       let n = 0;
@@ -1202,7 +1225,7 @@ export async function registerSupplierInvoice(
     sourceKind: "purchase_invoice",
     sourceEvent: "ap.invoice_posted",
     sourceId: facturaId,
-    postingDate: input.invoice_date,
+    postingDate: fechaContable,
     postedBy: actor.userId,
     description: `Factura de compra ${input.supplier_document_number}`,
     functionalCurrency: ctx.value.functionalCurrency,
@@ -1232,7 +1255,7 @@ export async function registerSupplierInvoice(
     facturaId,
     tasa: tasa.value.rate,
     ivaRecuperable,
-    fecha: input.invoice_date,
+    fecha: fechaContable,
     documento: input.supplier_document_number ?? "sin número",
   });
   if (!revalorizada.ok) return revalorizada;
@@ -1526,7 +1549,8 @@ async function leerFactura(
            tax_amount::text as tax_amount, total_amount::text as total_amount,
            tax_is_recoverable, fiscal_support,
            retention_total::text as retention_total, transaction_currency,
-           functional_currency, fx_rate::text as fx_rate, rate_source
+           functional_currency, fx_rate::text as fx_rate, rate_source,
+           accounting_date::text as accounting_date
       from public.supplier_invoices where id = ${invoiceId} and company_id = ${companyId}`;
   if (!f) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   const retenciones = await sql<Record<string, unknown>[]>`
@@ -1740,13 +1764,19 @@ export async function applyLandedCost(
   // El asiento del landed cost. Las dos partes van por separado —lo que
   // capitaliza y lo que es gasto del período— porque son dos hechos distintos
   // (ADR-0040 §6) y meterlos en una sola línea los volvería indistinguibles.
+  // ADR-0069 §4 (K-04): si la fecha del documento cae en un período CERRADO (o antes del inicio
+  // de actividades), se registra en el período abierto —hoy en Caracas— y guarda su fecha
+  // original. Lo decide `platform.accounting_date_for`, en un solo sitio. La ventana legal para
+  // deducir el crédito de una factura vieja (LIVA art. 33) NO se aplica: pendiente de fuente (P-35).
+  const [fechaGasto] = await sql<{ d: string }[]>`
+    select platform.accounting_date_for(${input.company_id}, ${input.incurred_on}::date)::text as d`;
   const contableLanded = await generateJournalFromDocument(sql, {
     tenantId: ctx.value.tenantId,
     companyId: input.company_id,
     sourceKind: "landed_cost",
     sourceEvent: "purchase.landed_cost_applied",
     sourceId: costo!.id,
-    postingDate: input.incurred_on,
+    postingDate: fechaGasto!.d,
     postedBy: actor.userId,
     description: `Landed cost: ${input.concept}`,
     functionalCurrency: ctx.value.functionalCurrency,
@@ -1786,7 +1816,12 @@ export async function applyLandedCost(
 export async function registerSupplierCreditNote(
   uow: UnitOfWork,
   input: RegisterSupplierCreditNoteRequest,
-): Promise<Result<{ id: string; total_amount: string; balance: string }, PurchaseError>> {
+): Promise<
+  Result<
+    { id: string; total_amount: string; balance: string; accounting_date: string | null },
+    PurchaseError
+  >
+> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Registrar exige un usuario real." });
@@ -1823,6 +1858,13 @@ export async function registerSupplierCreditNote(
   if (!tasa.ok) return tasa;
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  // ADR-0069 §4 (K-04): si la fecha del documento cae en un período CERRADO (o antes del inicio
+  // de actividades), se registra en el período abierto —hoy en Caracas— y guarda su fecha
+  // original. Lo decide `platform.accounting_date_for`, en un solo sitio. La ventana legal para
+  // deducir el crédito de una factura vieja (LIVA art. 33) NO se aplica: pendiente de fuente (P-35).
+  const [fechaNota] = await sql<{ d: string }[]>`
+    select platform.accounting_date_for(${input.company_id}, ${input.note_date}::date)::text as d`;
+  const fechaContableNota = fechaNota!.d;
   try {
     const nota = await sql.savepoint(async (sp) => {
       const [n] = await sp<{ id: string }[]>`
@@ -1830,13 +1872,14 @@ export async function registerSupplierCreditNote(
           (tenant_id, company_id, supplier_id, supplier_invoice_id, supplier_document_number,
            supplier_control_number, supplier_document_ref, note_date, status, posted_at, reason,
            transaction_currency, functional_currency, fx_rate, rate_source, rate_timestamp,
-           rounding_policy_id)
+           rounding_policy_id, accounting_date)
         values (${ctx.value.tenantId}, ${input.company_id}, ${factura.supplier_id},
                 ${input.supplier_invoice_id}, ${input.supplier_document_number},
                 ${input.supplier_control_number ?? null}, ${input.supplier_document_ref ?? null},
                 ${input.note_date}::date, 'draft', null, ${input.reason}, ${input.currency},
                 ${ctx.value.functionalCurrency}, ${tasa.value.rate.toFixed()},
-                ${tasa.value.source}, now(), ${POLICY.id})
+                ${tasa.value.source}, now(), ${POLICY.id},
+                ${fechaContableNota === input.note_date ? null : fechaContableNota}::date)
         returning id`;
 
       const sub = parseDecimal("0");
@@ -1928,7 +1971,7 @@ export async function registerSupplierCreditNote(
       sourceKind: "purchase_credit_note",
       sourceEvent: "ap.credit_note_received",
       sourceId: nota,
-      postingDate: input.note_date,
+      postingDate: fechaContableNota,
       postedBy: actor.userId,
       description: `Nota de crédito del proveedor ${input.supplier_document_number}`,
       functionalCurrency: ctx.value.functionalCurrency,
@@ -1964,7 +2007,13 @@ export async function registerSupplierCreditNote(
         journal_entry_id: contable.value.kind === "posted" ? contable.value.entryId : null,
       },
     );
-    return ok({ id: nota, total_amount: total?.t ?? "0", balance: saldo?.s ?? "0" });
+    return ok({
+      id: nota,
+      total_amount: total?.t ?? "0",
+      balance: saldo?.s ?? "0",
+      // K-04: la fecha en que se registró si la suya cae en un período cerrado; si no, null.
+      accounting_date: fechaContableNota === input.note_date ? null : fechaContableNota,
+    });
   } catch (e) {
     const conocido = traducir(e);
     if (conocido) return err(conocido);
@@ -2251,7 +2300,9 @@ export async function registerSupplierPayment(
     sourceKind: "payment_made",
     sourceEvent: "ap.payment_made",
     sourceId: pago["id"] as string,
-    postingDate: diaNegocio(fecha),
+    // K-04: un pago fechado en un mes cerrado se asienta en el período en curso; el pago
+    // conserva su fecha (paid_at).
+    postingDate: await fechaContableDe(sql, input.company_id, diaNegocio(fecha)),
     postedBy: actor.userId,
     description: "Pago a proveedor",
     functionalCurrency: ctx.value.functionalCurrency,

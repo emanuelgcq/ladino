@@ -488,11 +488,14 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
 - **P-33 · G-01** — Un correlativo de control por emisor (PA 00071 art. 44). **Aplicada:** uno
   por empresa e identificador, compartido por factura, NC y ND. **Alternativa:** tramos por clase,
   si el SENIAT lo admite por escrito.
-- **P-34 · G-10 / L-07** — Anuladas en el libro de ventas. **Aplicada:** número, «ANULADA» e
-  importes en cero. **Alternativa:** omitirlas del libro con relación aparte.
+- **P-34 · G-10 / L-07** — Anuladas en el libro de ventas. **Aplicada** (migración
+  20260928120000): número, estado «annulled» (en pantalla «Anulada») e importes en cero. **Alternativa:** omitirlas del libro con relación aparte.
 - **P-35 · K-04** — Ventana para deducir crédito de facturas recibidas con retraso. **Aplicada:**
   ninguna todavía: el número (12 períodos desde la emisión) está en fuentes secundarias, pero el
-  **artículo no se confirmó** → pendiente de fuente; no se ofrece en pantalla.
+  **artículo no se confirmó** → pendiente de fuente; no se ofrece en pantalla. Estado 2026-09-28
+  (migraciones 20260928130000 y 20260928130100): la factura tardía entra al período de registro,
+  marcada «recibida con retraso», y su crédito se deduce en ese período SIN ventana. Si la ventana
+  existe, hoy se deduce crédito que habría que llevar a costo.
   **Pregunta:** ¿qué artículo de la LIVA (o del Reglamento) la fija, y se cuenta desde la emisión?
 - **P-36 · K-08 / P-03** — Redondeo half-up al céntimo y cuenta «Diferencias por redondeo»;
   códigos de diferencial cambiario, mermas y faltantes, retiros y aportes del dueño.
@@ -523,6 +526,34 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
   por decreto del Ejecutivo (LIVA art. 27; Decreto 4.079, G.O. 41.788), no por la Ley de
   Presupuesto. **Pregunta:** ¿sigue vigente el Decreto 4.079 en 2026? Y confirmar que la reducida
   es el **art. 64** (no el 63).
+- **P-46 · R-2 ampliada (regla del dueño del 2026-09-28)** — Factura de proveedor anulada después
+  de cerrar su período y de generar o declarar su libro. **Aplicada** (migración 20260928120000,
+  `platform.supplier_invoice_late_annulment_day`): la regla al pie de la letra — período contable
+  **cerrado y** libro de compras generado (`fiscal_book_runs`) **o** IVA declarado
+  (`iva_period_results`) antes de la anulación. Entonces ese libro no cambia y el período de la
+  anulación lleva la reversa en negativo, «ajuste de período anterior», y en la planilla la
+  casilla «ajustes a los créditos fiscales de períodos anteriores», **fuera de la prorrata** del
+  período en curso. **Preguntas:** (1) ¿cerrado sin nada presentado, o presentado sin cerrar,
+  también es ajuste? (hoy: R-2 tal cual, en cero en su período); (2) ¿el ajuste se prorratea con la
+  prorrata del período en curso o con la del período de la factura? (hoy: ninguna, se revierte
+  entero lo deducido); (3) si el período se reabre después de anularla, sigue siendo ajuste; pero si
+  además se vuelve a cerrar, el cierre nuevo es posterior y la factura vuelve a R-2 tal cual (la
+  fila del período solo guarda el último cierre): ¿qué debe pasar con el libro ya presentado de un
+  período que se reabre?
+
+- **P-47 · K-03 (decidido por criterio, VALIDAR-CONTABLE)** — Cierre del ejercicio. **Aplicado:** el
+  cierre anual postea en el período de cierre «13», pasa por «Resultado del ejercicio» y de ahí a
+  utilidades acumuladas en el mismo asiento. Reabrir el 13 **revierte** el asiento de cierre, con
+  acta, y el ejercicio se puede volver a cerrar. El cierre exige que la cola de asientos pendientes
+  de la empresa esté vacía, sea cual sea la fecha del pendiente (lectura conservadora: la cola no
+  guarda la fecha del documento en una columna). Alternativa: solo los pendientes del ejercicio. **Preguntas:** ¿reabrir el ejercicio revierte el cierre, o se conserva y
+  se complementa? ¿El cierre debe pasar por «Resultado del ejercicio» en el mismo asiento o en dos?
+- **P-48 · K-05 (decidido por criterio, VALIDAR-CONTABLE)** — Inicio de actividades. **Aplicado:** se
+  pide al alta (por omisión, el día del alta), es el límite inferior de las fechas contables, y el
+  dueño lo puede cambiar con acta, pero nunca después del primer hecho contable. Una compra o un
+  pago con fecha anterior se asienta en el período abierto con su fecha original. **Pregunta:** ¿es
+  correcto asentar en el período abierto lo que ocurrió antes del inicio de actividades, o esos
+  hechos tienen que entrar como saldos iniciales?
 
 ## Resumen para la conversación con el asesor
 
@@ -537,3 +568,24 @@ tarde**:
 6. **P-19** y **P-22** (tasa de la compra en divisa y antigüedad de la tasa): cambian cifras
    de libros y de cada venta mientras sigan abiertos.
 7. El resto puede esperar sin acumular deuda.
+
+## P-45 · La reclasificación de ADR-0070: cajas en divisa y «Por conciliar» — VALIDAR-CONTABLE
+
+**Hallazgo:** J-01 · **ADR:** ADR-0070 · **Dónde:** `platform.treasury_subaccounts_repair_prepare`
+(migración 20260928110000).
+
+**Qué hace Ladino hoy.** Al reparar una empresa, cada caja recibe su subcuenta y el saldo pasa de la
+cuenta de familia a la subcuenta con UN asiento de reclasificación (fecha: el día de la reparación):
+- cajas en la moneda funcional: por el saldo que la tesorería les atribuye;
+- cajas en divisa: el mayor no guarda hoy el importe original (E-11), así que los Bs de 1.1.02 se
+  reparten **en proporción al saldo en divisa** de cada caja (con una sola caja, todos son suyos);
+- lo que ninguna caja explica va a una subcuenta **«Por conciliar (reparación ADR-0070)»**.
+
+**Qué falta decidir.** (1) ¿Es aceptable el reparto proporcional de los Bs históricos entre varias
+cajas en divisa, o el contador prefiere un asiento propio por caja con su costo histórico? (2) ¿Qué
+hace el contador con un saldo en «Por conciliar»: lo investiga y reclasifica, o lo lleva a una cuenta
+de resultado? En el escenario local no hay ni una cosa ni la otra (diferencia cero, una caja en divisa
+por empresa).
+
+**Qué se rompe si la respuesta es otra.** Nada del dinero: el total de la familia no cambia. Cambia
+cómo se reparte entre sus hijas; se corrige con un asiento manual entre subcuentas.

@@ -61,6 +61,11 @@ export const CompanyResponse = z
     taxpayer_type_code: z.string().nullable(),
     status: z.enum(["onboarding", "active", "suspended"]),
     created_at: z.string().datetime({ offset: true }),
+    /**
+     * ADR-0069 §3: inicio de actividades (YYYY-MM-DD), límite inferior de las fechas contables.
+     * Opcional en el contrato: es un campo nuevo, y un cliente o un test anterior no lo trae.
+     */
+    activity_start_date: z.string().nullable().optional(),
   })
   .strict();
 
@@ -81,6 +86,11 @@ export const UpdateCompanyProfileRequest = z
     city: perfilCampos.city.nullable().optional(),
     state: perfilCampos.state.nullable().optional(),
     reason: z.string().trim().min(3).max(300).optional(),
+    /**
+     * ADR-0069 §3 (K-05): inicio de actividades. Ni futura ni posterior al primer asiento de la
+     * empresa; el cambio queda en el acta `company.profile_updated`.
+     */
+    activity_start_date: z.string().date().optional(),
   })
   .strict();
 export type UpdateCompanyProfileRequest = z.infer<typeof UpdateCompanyProfileRequest>;
@@ -163,6 +173,11 @@ export const OnboardBusinessRequest = z
     /** «Ahora tú»: la ficha del responsable (users_profile). */
     owner_full_name: z.string().trim().min(2).max(200).optional(),
     owner_national_id: z.string().trim().min(3).max(30).nullable().optional(),
+    /**
+     * ADR-0069 §3 (K-05): inicio de actividades, límite inferior de las fechas contables.
+     * Opcional: por omisión, el día del alta en Caracas. No puede ser futura.
+     */
+    activity_start_date: z.string().date().optional(),
   })
   .strict();
 export type OnboardBusinessRequest = z.infer<typeof OnboardBusinessRequest>;

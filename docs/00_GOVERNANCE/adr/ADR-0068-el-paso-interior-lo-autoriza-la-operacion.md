@@ -52,7 +52,7 @@ Se elige la opción 2.
    (`sales.void`). No se renombra: un renombre no cierra ningún hallazgo.
 3. **Los roles son por empresa** (N-02).
    - Quien tiene `membership.manage` sobre una empresa gestiona a las personas de ESA empresa:
-     agrega, asigna y quita roles en ella, y la «desactivación» se hace en esa empresa.
+     agrega, asigna y quita roles en ella. Desactivar a una persona es desactivar su membresía en la cuenta, así que un gestor acotado solo puede desactivar (o reactivar al volver a agregarla) a quien tiene al menos un rol en su empresa y ninguno en empresas que él no gestiona.
    - Lo que gobierna la cuenta es del **Titular de la cuenta**, el que tiene la asignación a nivel
      de tenant: crear empresas, dar o quitar la titularidad y la facturación de Ladino.
    - Un Dueño invitado no puede quitar ni desactivar al Titular.
@@ -62,6 +62,13 @@ Se elige la opción 2.
    técnico del permiso.
 5. **La venta de cada oficio es un test** (E2E «una venta por oficio»).
    `040_named_roles_test.sql:55` pasa a observar una venta real de un cajero. La `:61` no cambia.
+
+6. **El alcance de almacén de la venta** lo decide el permiso de vender. Un rol de venta acotado a
+   almacenes (encargado, administrativo) solo vende desde los suyos. Un rol no acotado (cajero, Dueño)
+   vende desde cualquier almacén de su empresa. *Decidido por criterio* (2026-09-28, menor sorpresa:
+   el dueño vende desde todos sus depósitos). La alternativa era exigir también a los roles no
+   acotados un binding por almacén. Antes de este ADR, el dueño recibía 403 al vender desde un
+   depósito sin binding, pero por el permiso anidado `inventory.move`, no por una decisión.
 
 ## Consecuencias
 

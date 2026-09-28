@@ -877,3 +877,74 @@ el PATH por fuera de Claude Code.
 
 **Deja de ser aceptable:** si la latencia empuja a desactivar los hooks. Antes de eso, un único
 lector de campos por hook.
+
+### R-53 · Una empresa sin reparar (ADR-0070) sigue con sus cajas en la cuenta de familia
+
+- **Severidad:** Media · **Disparador:** la reparación `scripts/reparar/adr-0070-subcuentas.mjs`
+  no corre tras el git pull, o salta una empresa (período del día cerrado, hechos en la cola)
+- **Dónde:** `supabase/migrations/20260928110000_each_treasury_account_has_its_own_ledger_subaccount.sql`,
+  `packages/domain/src/treasury.ts` (`repairTreasurySubaccounts`)
+
+La migración cierra el 500 de J-01 en todas las empresas (agrupa por cuenta), pero NO reparte por sí
+sola: el asiento de reclasificación lo postea el dominio, como todo posteo. Hasta que la reparación
+corra, las cajas de una empresa existente comparten 1.1.01 / 1.1.02, una transferencia entre ellas
+deja dos líneas que se anulan en la misma cuenta, y `treasury_ledger_gaps` da `compartida`. Las
+cajas nuevas de esa empresa se siguen mapeando a la familia a propósito: crear una hija la volvería
+agrupadora y LAD62 rechazaría los hechos de las cajas viejas. Aparte, dos huecos conocidos:
+- un mapeo EXPLÍCITO de una caja a una cuenta agrupadora (la familia ya reparada, por ejemplo) se
+  acepta y su primer hecho muere en LAD62; el invariante lo marca `no_es_hoja`, la API no lo impide;
+- las cajas en divisa se comparan solo en estructura: el importe en moneda original espera E-11 /
+  J-04. Con más de una caja en divisa, la reparación reparte los Bs de 1.1.02 en proporción al saldo
+  en divisa (estimación, no historia).
+
+**Deja de ser aceptable:** en cuanto el dueño confirme que la API nueva está arriba — ahí se corre la
+reparación y `treasury_ledger_gaps` tiene que dar 0 en todas las empresas.
+
+### R-54 · El libro de ventas cambia de cifras al desplegar, y la R-2 ampliada lee solo el último cierre del período
+
+- **Severidad:** Media · **Disparador:** desplegar la migración 20260928120000 en una empresa que ya
+  exportó (`fiscal_book_runs`) o declaró un período con notas de crédito o anuladas; o anular una
+  factura de proveedor en un período que se reabre y se vuelve a cerrar después
+- **Dónde:** `supabase/migrations/20260928120000_the_book_signs_what_the_ledger_signs.sql`
+  (`platform.sales_book`, `platform.supplier_invoice_late_annulment_day`)
+
+L-01: el libro de ventas firmaba la NC en positivo y la anulada con sus importes. Tras el despliegue,
+reexportar un período ya exportado da **otro hash** (las cifras correctas), y esa diferencia es la
+corrección, no un documento nuevo. Lo dice el propio rastro: `BOOK_GENERATOR_VERSION` sube de
+`fiscal-books/1.0.0` a `fiscal-books/1.1.0` (`packages/domain/src/fiscal-books.ts:33`), así que dos
+generaciones con distinto hash y distinta versión se explican por el generador, no por los datos. Si se declaró desde
+el libro viejo (débito de más), corresponde sustitutiva (COT art. 102, VALIDAR-TRIBUTARIO de L-01);
+en el escenario del recorrido no hay declaración presentada. Aparte, dos límites de la R-2 ampliada:
+- el «cerrado cuando se anuló» sale de la fila de `fiscal_periods` (último cierre, última
+  reapertura). Si tras la anulación el período se reabre **y** se vuelve a cerrar, la factura vuelve
+  a R-2 tal cual y el libro ya presentado cambia. La historia completa está en
+  `fiscal_period_events` (K-01); leerla es el arreglo, y va con la respuesta a P-46;
+- lo anulado antes de la migración no tiene `annulled_at` y se lee como R-2 tal cual. Hoy ninguna
+  vía del producto anula una factura de proveedor, así que en producción no debería haber casos;
+- el sello no se elige ni se mueve en un UPDATE (migración 20260928120200: `now()` al anular, LAD06
+  al cambiarlo), pero un INSERT que ya nazca anulado (solo por SQL) trae su propio sello.
+
+### R-55 · Con la migración 20260928130000 sin el paso de compras de K-04, un documento de compra fechado antes del inicio de actividades da 422
+
+> **Estado 2026-09-28: RESUELTO para factura, NC y landed cost** (migración 20260928130100 y enrutado
+> en `purchases.ts`): `accounting_date_for` los lleva al período en curso con su fecha original.
+> **Recepción, pago a proveedor y gasto de tesorería** también se enrutan desde la ronda del
+> revisor (2026-09-28); el pago está probado en E2E, la recepción y el gasto no. **Solo da 422
+> (LAD91), a propósito:** el asiento manual antes del inicio. El inicio se corrige desde Mi empresa.
+> **Despliegue:** 130000, 130100 y 130200 van juntas.
+
+- **Severidad:** Media · **Disparador:** registrar una factura, NC o landed cost de proveedor fechado
+  antes de `companies.activity_start_date`. Aplica a toda empresa existente: el backfill toma el día
+  de alta, y cualquier compra anterior a esa fecha queda fuera
+- **Dónde:** `platform.period_for_date` (LAD91) en `supabase/migrations/20260928130000_periods_have_history.sql`;
+  el enrutado vive en `platform.accounting_date_for` (misma migración) y lo llaman la factura, la
+  NC y el landed cost (`packages/domain/src/purchases.ts`, K-04), y la recepción, el pago a
+  proveedor y el gasto de tesorería (`packages/domain/src/fecha-contable.ts`). Sigue dando LAD91
+  a propósito el asiento manual anterior al inicio
+
+ADR-0069 §4 enruta esos documentos al período abierto y conserva su fecha original. El suelo ya
+existe (`accounting_date`, `platform.accounting_date_for`, pgTAP 079). El enrutado está sin hacer: tiene
+que salir junto con `purchases_book` y `recompute_iva_period`, que redefine la migración
+20260928120000. Si sale sin ellas, el asiento cae en un período y el libro en otro. Mientras
+tanto, el 422 se lee bien («anterior al inicio de actividades»), pero **bloquea algo que antes
+entraba**. **Mitigación:** no desplegar 130000 sin el paso de compras de K-04, o avisar al dueño.

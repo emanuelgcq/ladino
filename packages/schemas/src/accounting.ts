@@ -14,7 +14,8 @@ const currency = z.string().regex(/^[A-Z]{3}$/);
 
 export const AccountKind = z.enum(["activo", "pasivo", "patrimonio", "ingreso", "gasto", "orden"]);
 export const AccountNature = z.enum(["deudora", "acreedora"]);
-export const EntryStatus = z.enum(["draft", "posted", "reversed"]);
+/** `discarded`: el borrador descartado (K-06, ADR-0069). Un posteado nunca llega ahí. */
+export const EntryStatus = z.enum(["draft", "posted", "reversed", "discarded"]);
 
 export const CreateAccountRequest = z
   .object({
@@ -99,6 +100,11 @@ export const CreateJournalEntryRequest = z
     description: z.string().trim().min(3).max(500),
     memo: z.string().trim().min(1).max(1000).optional(),
     lines: z.array(JournalLineRequest).min(2).max(500),
+    /**
+     * ADR-0069 §2: el ajuste del contador va al PERÍODO DE CIERRE («13») del ejercicio. Exige
+     * `posting_date` = 31-12. Opcional: sin él, el asiento va al mes de su fecha.
+     */
+    closing_period: z.boolean().optional(),
   })
   .strict();
 export type CreateJournalEntryRequest = z.infer<typeof CreateJournalEntryRequest>;
@@ -115,6 +121,15 @@ export const ReverseJournalEntryRequest = z
   })
   .strict();
 export type ReverseJournalEntryRequest = z.infer<typeof ReverseJournalEntryRequest>;
+
+/** K-06: descartar un BORRADOR, con motivo. Un posteado no se descarta: se reversa. */
+export const DiscardJournalEntryRequest = z
+  .object({
+    company_id: uuid,
+    reason: z.string().trim().min(3).max(500),
+  })
+  .strict();
+export type DiscardJournalEntryRequest = z.infer<typeof DiscardJournalEntryRequest>;
 
 export const JournalLineResponse = z
   .object({

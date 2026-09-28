@@ -116,6 +116,8 @@ export function UsuariosYRoles(): React.JSX.Element {
   });
 
   const soyYo = (m: Miembro) => m.user_id === session.user.id;
+  const esTitular = (m: Miembro) => m.assignments.some((a) => a.company_id === null);
+  const yoTitular = (miembros.data?.members ?? []).some((m) => soyYo(m) && esTitular(m));
 
   return (
     <Card>
@@ -143,59 +145,71 @@ export function UsuariosYRoles(): React.JSX.Element {
           </div>
         ) : (
           <div className="divide-y divide-border rounded-md border border-border">
-            {(miembros.data?.members ?? []).map((m) => (
-              <div key={m.membership_id} className="flex flex-wrap items-center gap-2 px-3 py-2.5">
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[0.92rem] font-medium">
-                    {m.email ?? "(sin correo)"}
-                    {soyYo(m) && (
-                      <span className="ml-1.5 text-[0.78rem] text-faint-foreground">tú</span>
-                    )}
-                  </span>
-                  <span className="mt-0.5 flex flex-wrap gap-1">
-                    {m.assignments.length === 0 && (
-                      <Badge tone="neutral">Sin rol — no puede hacer nada</Badge>
-                    )}
-                    {/* El dueño trabaja los depósitos por una asignación técnica de almacén
+            {(miembros.data?.members ?? []).map((m) => {
+              // El TITULAR de la cuenta es quien tiene la asignación de nivel tenant (company_id
+              // nulo). Un gestor de la empresa no le quita roles ni lo desactiva: el servidor lo
+              // rechaza, y la pantalla no lo ofrece (ADR-0068 §3, N-02).
+              const titular = esTitular(m);
+              const intocable = titular && !yoTitular;
+              return (
+                <div
+                  key={m.membership_id}
+                  className="flex flex-wrap items-center gap-2 px-3 py-2.5"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[0.92rem] font-medium">
+                      {m.email ?? "(sin correo)"}
+                      {soyYo(m) && (
+                        <span className="ml-1.5 text-[0.78rem] text-faint-foreground">tú</span>
+                      )}
+                    </span>
+                    <span className="mt-0.5 flex flex-wrap gap-1">
+                      {m.assignments.length === 0 && (
+                        <Badge tone="neutral">Sin rol — no puede hacer nada</Badge>
+                      )}
+                      {/* El dueño trabaja los depósitos por una asignación técnica de almacén
                         (onboarding): enseñarla como un segundo oficio, con su botón de quitar,
                         confundía y quitarla le cortaba la caja (QA 2026-09-15, h. 41). */}
-                    {m.assignments
-                      .filter(
-                        (a) =>
-                          !(
-                            a.role_key === "warehouse_ops" &&
-                            m.assignments.some((x) => x.role_key === "owner")
-                          ),
-                      )
-                      .map((a) => (
-                        <Badge key={a.id} tone="accent" className="gap-1">
-                          {a.role_name}
-                          {!(soyYo(m) && a.role_key === "owner") && (
-                            <button
-                              aria-label={`Quitar el rol ${a.role_name}`}
-                              className="hover:text-destructive-soft-foreground"
-                              onClick={() => setQuitando({ miembro: m, asignacion: a })}
-                            >
-                              <X className="size-3" />
-                            </button>
-                          )}
-                        </Badge>
-                      ))}
+                      {m.assignments
+                        .filter(
+                          (a) =>
+                            !(
+                              a.role_key === "warehouse_ops" &&
+                              m.assignments.some((x) => x.role_key === "owner")
+                            ),
+                        )
+                        .map((a) => (
+                          <Badge key={a.id} tone="accent" className="gap-1">
+                            {a.role_name}
+                            {a.company_id === null && " · Titular"}
+                            {!(soyYo(m) && a.role_key === "owner") && !intocable && (
+                              <button
+                                aria-label={`Quitar el rol ${a.role_name}`}
+                                className="hover:text-destructive-soft-foreground"
+                                onClick={() => setQuitando({ miembro: m, asignacion: a })}
+                              >
+                                <X className="size-3" />
+                              </button>
+                            )}
+                          </Badge>
+                        ))}
+                    </span>
                   </span>
-                </span>
-                {m.status !== "active" ? (
-                  <Button variant="secondary" size="sm" onClick={() => setReactivando(m)}>
-                    <UserCheck /> Reactivar
-                  </Button>
-                ) : (
-                  !soyYo(m) && (
-                    <Button variant="ghost" size="sm" onClick={() => setApagando(m)}>
-                      <UserX /> Desactivar
-                    </Button>
-                  )
-                )}
-              </div>
-            ))}
+                  {m.status !== "active"
+                    ? !intocable && (
+                        <Button variant="secondary" size="sm" onClick={() => setReactivando(m)}>
+                          <UserCheck /> Reactivar
+                        </Button>
+                      )
+                    : !soyYo(m) &&
+                      !intocable && (
+                        <Button variant="ghost" size="sm" onClick={() => setApagando(m)}>
+                          <UserX /> Desactivar
+                        </Button>
+                      )}
+                </div>
+              );
+            })}
           </div>
         )}
       </CardContent>

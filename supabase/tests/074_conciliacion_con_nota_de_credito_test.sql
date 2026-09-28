@@ -179,12 +179,9 @@ select is(
   0::numeric,
   'el MAYOR ya neta a cero: la NC reversa el IVA débito de la factura, como debe ser');
 
--- ── L-01 / L-02, en rojo permitido ───────────────────────────────────────────
-select todo(
-  'L-01: sales_book suma la NC con el mismo signo que la factura; L-02: ningún '
-  'pgTAP de conciliación tenía una NC. Se cierra cambiando el signo en '
-  'platform.sales_book (criterio R-1 del dueño), sin tocar esta aserción.',
-  3);
+-- ── L-01 / L-02 ──────────────────────────────────────────────────────────────
+-- (El bloque todo() que marcaba L-01/L-02 como rojo permitido se quitó con la
+-- migración 20260928120000: las tres aserciones de abajo son las mismas.)
 
 select is(
   (select cuadra from platform.book_ledger_reconciliation(

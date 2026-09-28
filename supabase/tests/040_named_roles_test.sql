@@ -53,7 +53,7 @@ language sql as $$
 $$;
 
 select ok(pg_temp.rol_tiene('cashier', 'sales.invoice.issue'),
-  'el cajero vende');
+  'el cajero tiene el permiso de vender; la venta real la observa e2e-una-venta-por-oficio');
 select ok(pg_temp.rol_tiene('cashier', 'sales.payment.register') and pg_temp.rol_tiene('cashier', 'ar.read'),
   'el cajero cobra y ve la deuda del cliente (fiar)');
 select ok(not pg_temp.rol_tiene('cashier', 'treasury.read'),

@@ -47,6 +47,7 @@ interface PerfilRow {
   whatsapp: string | null;
   city: string | null;
   state: string | null;
+  activity_start_date: string | null;
 }
 
 const COPY_RIF_BLOQUEADO =
@@ -69,7 +70,8 @@ async function tieneDocumentos(sql: TransactionSql, companyId: string): Promise<
 async function perfilActual(sql: TransactionSql, companyId: string): Promise<PerfilRow> {
   const [fila] = await sql<PerfilRow[]>`
     select legal_name, trade_name, tax_id, fiscal_address,
-           business_type, phone, whatsapp, city, state
+           business_type, phone, whatsapp, city, state,
+           activity_start_date::text as activity_start_date
       from public.companies where id = ${companyId}`;
   return fila!;
 }
@@ -106,6 +108,9 @@ export async function updateCompanyProfile(
     ...(input.whatsapp === undefined ? {} : { whatsapp: input.whatsapp }),
     ...(input.city === undefined ? {} : { city: input.city }),
     ...(input.state === undefined ? {} : { state: input.state }),
+    ...(input.activity_start_date === undefined
+      ? {}
+      : { activity_start_date: input.activity_start_date }),
   };
   const cambios: Record<string, { from: string | null; to: string | null }> = {};
   for (const campo of [
@@ -117,6 +122,7 @@ export async function updateCompanyProfile(
     "whatsapp",
     "city",
     "state",
+    "activity_start_date",
   ] as const) {
     if (destino[campo] !== actual[campo]) {
       cambios[campo] = { from: actual[campo], to: destino[campo] };
@@ -137,6 +143,28 @@ export async function updateCompanyProfile(
     });
   }
 
+  // ADR-0069 §3 (K-05): el inicio de actividades no es futuro ni posterior al primer hecho
+  // contable (el asiento no descartado más antiguo): moverlo por encima dejaría asientos antes
+  // del inicio. `date` contra `date` (fechas ISO; hoy EN CARACAS).
+  if ("activity_start_date" in cambios && destino.activity_start_date !== null) {
+    const [lim] = await sql<{ hoy: string; primero: string | null }[]>`
+      select (now() at time zone 'America/Caracas')::date::text as hoy,
+             (select min(posting_date)::text from public.journal_entries
+               where company_id = ${companyId} and status <> 'discarded') as primero`;
+    if (destino.activity_start_date > lim!.hoy) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "La fecha de inicio de actividades no puede ser futura.",
+      });
+    }
+    if (lim!.primero !== null && destino.activity_start_date > lim!.primero) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `La fecha de inicio de actividades no puede ser posterior al primer asiento de la empresa (${lim!.primero.split("-").reverse().join("/")}).`,
+      });
+    }
+  }
+
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   await sql`
     update public.companies set
@@ -147,7 +175,8 @@ export async function updateCompanyProfile(
       phone = ${destino.phone},
       whatsapp = ${destino.whatsapp},
       city = ${destino.city},
-      state = ${destino.state}
+      state = ${destino.state},
+      activity_start_date = ${destino.activity_start_date}::date
      where id = ${companyId}`;
   await sql`
     insert into public.audit_events

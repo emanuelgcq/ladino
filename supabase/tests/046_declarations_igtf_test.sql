@@ -159,16 +159,16 @@ select is(
  * otro. Si divergen, la declaración presentada contradice al libro que la
  * respalda, y eso es exactamente lo que una fiscalización compara.
  *
- * Las dos mitades del signo importan: el libro trae la nota de crédito con su
- * importe, y la declaración se lo RESTA al débito. La igualdad solo se
- * sostiene si los dos caminos entienden igual el signo de la NC.
+ * El libro trae la nota de crédito YA en negativo (criterio R-1, migración
+ * 20260928120000) y la columna se suma TAL CUAL. Hasta esa migración esta
+ * aserción le aplicaba el signo ella misma («case when kind = 'credit_note'
+ * then -iva_debito») y por eso pasaba con el libro sumando la NC: era un
+ * antitest (RESPUESTA_RECORRIDO L-02, cambio aprobado por el dueño).
  */
 select is(
   (select debitos::text from platform.recompute_iva_period(
      'aaaa0046-0000-4000-8000-0000000000a1', date '2026-02-01', date '2026-02-28', 0)),
-  (select coalesce(sum(
-            case when b.kind = 'credit_note' then -b.iva_debito else b.iva_debito end
-          ), 0)::text
+  (select coalesce(sum(b.iva_debito), 0)::text
      from platform.sales_book('aaaa0046-0000-4000-8000-0000000000a1',
                               date '2026-02-01', date '2026-02-28') b
     where b.status in ('issued', 'paid')),

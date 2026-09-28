@@ -43,11 +43,19 @@
    - Un borrador **no se crea** en un período cerrado: 409 con la salida (reabrir con motivo, o
      fechar en el período abierto).
    - Un borrador se **descarta**, con rastro.
+   - **Reabrir el período 13 revierte su asiento de cierre anual**, con acta: los resultados vuelven a
+     tener saldo para los ajustes, y el ejercicio se puede cerrar otra vez (decidido por criterio el
+     2026-09-28; la alternativa era un evento de cierre por ciclo).
 4. **La factura de proveedor que llega tarde (K-04)** se registra en el **período abierto**, con la
    **fecha original del documento**. Entra al libro de compras del período en que se registra,
    marcada «recibida con retraso» y con su fecha original, y el crédito se deduce en ese período.
-   Pasada la ventana legal para deducir, entra como costo sin crédito, y la pantalla lo dice. La
-   ventana (LIVA art. 33) es data con fuente, y la pregunta sigue abierta en PENDIENTES_ASESOR.
+   La ventana legal para deducir el crédito de una factura vieja (LIVA, «doce períodos») **no se
+   aplica todavía**: el número está en fuentes secundarias, pero el artículo no está confirmado
+   (pendiente de fuente, P-35). Cuando haya fuente, pasada esa ventana la factura entrará como costo
+   sin crédito, y la pantalla lo dirá.
+   Con el mismo criterio se enrutan la recepción, el pago y el gasto con fecha en un período cerrado
+   o anterior al inicio de actividades. La fecha de inicio la puede cambiar el dueño, con acta, pero
+   nunca después del primer hecho contable (decidido por criterio el 2026-09-28).
    Reabrir el período con motivo sigue disponible para el contador.
 5. **Cambiar la aserción de pgTAP 025 está autorizado** (dueño, 2026-09-28): pasa por la razón
    equivocada. El test nuevo recorre cerrar → reabrir → cerrar → reabrir.

@@ -11,6 +11,7 @@ import type {
   CreateJournalEntryRequest,
   PostJournalEntryRequest,
   ReverseJournalEntryRequest,
+  DiscardJournalEntryRequest,
   JournalEntryResponse,
   ClosePeriodRequest,
   ReopenPeriodRequest,
@@ -42,6 +43,7 @@ export type AccountingError =
   | { code: "VALIDATION_FAILED"; message: string }
   | { code: "ENTRY_UNBALANCED"; message: string }
   | { code: "PERIOD_CLOSED"; message: string }
+  | { code: "PERIOD_OUT_OF_RANGE"; message: string }
   | { code: "ACCOUNT_NOT_POSTABLE"; message: string }
   | { code: "ACCOUNT_PURPOSE_MISSING"; message: string }
   | { code: "ENTRY_GENERATED_BY_DOCUMENT"; message: string }
@@ -66,6 +68,10 @@ function traducir(e: unknown): AccountingError | null {
   if (code === "LAD59") return { code: "ENTRY_UNBALANCED", message };
   if (code === "LAD60") return { code: "VALIDATION_FAILED", message };
   if (code === "LAD61") return { code: "PERIOD_CLOSED", message };
+  // ADR-0069 §3: antes del inicio de actividades o más allá del período en curso.
+  if (code === "LAD91") return { code: "PERIOD_OUT_OF_RANGE", message };
+  // ADR-0069 §2: el período de cierre solo admite el cierre y los ajustes del contador.
+  if (code === "LAD92") return { code: "VALIDATION_FAILED", message };
   if (code === "LAD62") return { code: "ACCOUNT_NOT_POSTABLE", message };
   if (code === "LAD06") return { code: "APPEND_ONLY_VIOLATION", message };
   if (code === "23505") {
@@ -457,11 +463,25 @@ export async function createManualJournalEntry(
     });
   }
 
+  // ADR-0069 §2: un ajuste del contador puede ir al período de cierre («13»), que se
+  // fecha el 31-12. Comparación de TEXTO de la fecha ISO: sin reloj ni huso de por medio.
+  const alCierre = input.closing_period === true;
+  if (alCierre && !input.posting_date.endsWith("-12-31")) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Un ajuste del período de cierre se fecha el 31 de diciembre del ejercicio.",
+    });
+  }
+
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   try {
     const entrada = await sql.savepoint(async (sp) => {
-      const [periodo] = await sp<{ id: string }[]>`
-        select platform.period_for_date(${input.company_id}, ${input.posting_date}::date) as id`;
+      const [periodo] = alCierre
+        ? await sp<{ id: string }[]>`
+            select platform.closing_period_for_year(${input.company_id},
+                   ${Number(input.posting_date.slice(0, 4))}::int) as id`
+        : await sp<{ id: string }[]>`
+            select platform.period_for_date(${input.company_id}, ${input.posting_date}::date) as id`;
       const [e] = await sp<Record<string, unknown>[]>`
         insert into public.journal_entries
           (tenant_id, company_id, period_id, posting_date, source_kind, description, memo,
@@ -567,17 +587,44 @@ export async function reverseJournalEntry(
   uow: UnitOfWork,
   entryId: string,
   input: ReverseJournalEntryRequest,
+): Promise<Result<JournalEntryResponse, AccountingError>> {
+  return reversar(uow, entryId, input, "accounting.entry.reverse", {});
+}
+
+/**
+ * LA REVERSA QUE HACE UNA ANULACIÓN (ADR-0068 §1). El paso interior lo autoriza
+ * la operación que lo contiene: quien puede anular la venta (`sales.invoice.annul`)
+ * reversa su asiento sin tener `accounting.entry.reverse`, que abre la reversa
+ * SUELTA de asientos manuales. Solo la llama `annulInvoice`.
+ */
+export async function reverseJournalEntryForAnnulment(
+  uow: UnitOfWork,
+  entryId: string,
+  input: ReverseJournalEntryRequest,
+): Promise<Result<JournalEntryResponse, AccountingError>> {
+  return reversar(uow, entryId, input, "sales.invoice.annul", { desdeDocumento: true });
+}
+
+async function reversar(
+  uow: UnitOfWork,
+  entryId: string,
+  input: ReverseJournalEntryRequest,
+  permiso: "accounting.entry.reverse" | "sales.invoice.annul" | "accounting.period.reopen",
   /**
    * `desdeDocumento`: la reversa la pide el caso de uso DEL DOCUMENTO (anular una venta),
    * que mueve kardex, saldo y asiento a la vez. Sin eso, solo se reversan asientos manuales.
    */
-  opciones: { readonly desdeDocumento?: boolean } = {},
+  opciones: {
+    readonly desdeDocumento?: boolean;
+    /** El contra-asiento va al PERÍODO DE CIERRE de ese ejercicio (reabrir el 13, ADR-0069). */
+    readonly alCierre?: number;
+  },
 ): Promise<Result<JournalEntryResponse, AccountingError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Reversar exige un usuario real." });
   }
-  const ctx = await autorizar(sql, actor.userId, input.company_id, "accounting.entry.reverse");
+  const ctx = await autorizar(sql, actor.userId, input.company_id, permiso);
   if (!ctx.ok) return ctx;
 
   const [original] = await sql<{ status: string; description: string; source_kind: string }[]>`
@@ -631,8 +678,13 @@ export async function reverseJournalEntry(
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   try {
     const contra = await sql.savepoint(async (sp) => {
-      const [periodo] = await sp<{ id: string }[]>`
-        select platform.period_for_date(${input.company_id}, ${fecha}::date) as id`;
+      const [periodo] =
+        opciones.alCierre === undefined
+          ? await sp<{ id: string }[]>`
+              select platform.period_for_date(${input.company_id}, ${fecha}::date) as id`
+          : await sp<{ id: string }[]>`
+              select platform.closing_period_for_year(${input.company_id},
+                     ${opciones.alCierre}::int) as id`;
       const [e] = await sp<Record<string, unknown>[]>`
         insert into public.journal_entries
           (tenant_id, company_id, period_id, posting_date, source_kind, description, memo,
@@ -693,6 +745,82 @@ export async function reverseJournalEntry(
   }
 }
 
+/**
+ * DESCARTA UN BORRADOR (K-06, ADR-0069 §3). El borrador pasa a `discarded` con rastro en
+ * `audit_events` (quién, cuándo, por qué). No se borra: que existió y se descartó es un
+ * hecho. **Un asiento posteado no se descarta nunca** (regla 2): se reversa. El esquema lo
+ * impide también (`assert_entry_immutable`: solo un borrador cambia de estado libremente).
+ */
+export async function discardJournalEntry(
+  uow: UnitOfWork,
+  entryId: string,
+  input: DiscardJournalEntryRequest,
+): Promise<Result<JournalEntryResponse, AccountingError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Descartar exige un usuario real." });
+  }
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "accounting.entry.create");
+  if (!ctx.ok) return ctx;
+
+  const [entrada] = await sql<{ status: string; description: string; posting_date: string }[]>`
+    select status, description, posting_date::text as posting_date
+      from public.journal_entries
+     where id = ${entryId} and company_id = ${input.company_id}
+       for update`;
+  if (!entrada) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (entrada.status !== "draft") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        entrada.status === "discarded"
+          ? "Ese borrador ya está descartado."
+          : `Solo se descarta un borrador; este está en ${entrada.status}. Un asiento posteado no se descarta: se corrige reversándolo.`,
+    });
+  }
+
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  const [e] = await sql<Record<string, unknown>[]>`
+    update public.journal_entries set status = 'discarded'
+     where id = ${entryId} and company_id = ${input.company_id} and status = 'draft'
+    returning ${sql.unsafe(ENTRY_COLUMNS)}`;
+  const conTot = await conTotales(sql, e!);
+  await auditar(sql, ctx.value.tenantId, input.company_id, entryId, "journal.discarded", {
+    reason: input.reason,
+    description: entrada.description,
+    posting_date: entrada.posting_date,
+  });
+  return ok(conTot);
+}
+
+/**
+ * Los borradores de un alcance, dichos: «n.º corto, fecha, descripción». `null` si no hay.
+ * El cierre los NOMBRA para que la persona sepa cuáles descartar o postear (K-06).
+ */
+async function borradoresDe(
+  sql: TransactionSql,
+  companyId: string,
+  alcance: { readonly periodId: string } | { readonly desde: string; readonly hasta: string },
+): Promise<string | null> {
+  // `date` contra `date`: el rango del ejercicio son dos fechas ISO, sin reloj.
+  const filas = await sql<{ id: string; posting_date: string; description: string }[]>`
+    select id, to_char(posting_date, 'DD/MM/YYYY') as posting_date, description
+      from public.journal_entries
+     where company_id = ${companyId} and status = 'draft'
+       and ${
+         "periodId" in alcance
+           ? sql`period_id = ${alcance.periodId}`
+           : sql`posting_date between ${alcance.desde}::date and ${alcance.hasta}::date`
+       }
+     order by posting_date, id`;
+  if (filas.length === 0) return null;
+  const nombrados = filas
+    .slice(0, 5)
+    .map((f) => `«${f.description}» del ${f.posting_date} (${f.id.slice(0, 8)})`)
+    .join("; ");
+  return filas.length > 5 ? `${nombrados} y ${filas.length - 5} más` : nombrados;
+}
+
 // ── Períodos ────────────────────────────────────────────────────────────────
 
 /**
@@ -721,13 +849,11 @@ export async function closeFiscalPeriod(
     return err({ code: "VALIDATION_FAILED", message: "El período ya está cerrado." });
   }
 
-  const [borradores] = await sql<{ n: number }[]>`
-    select count(*)::int as n from public.journal_entries
-     where company_id = ${input.company_id} and period_id = ${periodId} and status = 'draft'`;
-  if ((borradores?.n ?? 0) > 0) {
+  const borradores = await borradoresDe(sql, input.company_id, { periodId });
+  if (borradores !== null) {
     return err({
       code: "VALIDATION_FAILED",
-      message: `Quedan ${borradores!.n} asiento(s) en borrador en el período. Postéalos o descártalos: cerrar por encima los descartaría en silencio.`,
+      message: `Quedan asientos en borrador en el período: ${borradores}. Postéalos o descártalos desde el diario (botón «Descartar»): cerrar por encima los descartaría en silencio.`,
     });
   }
   const [pendientes] = await sql<{ n: number }[]>`
@@ -766,8 +892,8 @@ export async function reopenFiscalPeriod(
   const ctx = await autorizar(sql, actor.userId, input.company_id, "accounting.period.reopen");
   if (!ctx.ok) return ctx;
 
-  const [periodo] = await sql<{ status: string; year: number; month: number }[]>`
-    select status, year, month from public.fiscal_periods
+  const [periodo] = await sql<{ status: string; year: number; month: number; kind: string }[]>`
+    select status, year, month, kind from public.fiscal_periods
      where id = ${periodId} and company_id = ${input.company_id}`;
   if (!periodo) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   if (periodo.status !== "closed") {
@@ -799,6 +925,37 @@ export async function reopenFiscalPeriod(
         reason: input.reason,
       },
     );
+
+    // REABRIR EL EJERCICIO (el 13) REVIERTE SU ASIENTO DE CIERRE (decisión de la sesión
+    // principal, 2026-09-28, sobre ADR-0069 §2). Sin esto, los resultados quedaban en cero y
+    // el cierre no se podía rehacer: `journal_entries_source_event_key` daba 23505. Revertido,
+    // los resultados vuelven a tener saldo para los ajustes, y el índice —que excluye los
+    // `reversed`— deja cerrar otra vez. La reversa la autoriza el permiso de REABRIR (entrada
+    // interna de `reversar`, como la anulación de ADR-0068 §1), va al 13 fechada el 31-12 y
+    // deja su acta (`journal.reversed`, con el motivo de la reapertura).
+    if (periodo.kind === "closing") {
+      const [cierre] = await sql<{ id: string }[]>`
+        select id from public.journal_entries
+         where company_id = ${input.company_id} and period_id = ${periodId}
+           and source_kind = 'year_end_close' and status = 'posted'`;
+      if (cierre) {
+        const rev = await reversar(
+          uow,
+          cierre.id,
+          {
+            company_id: input.company_id,
+            reason: `Reapertura del ejercicio ${periodo.year}: ${input.reason}`,
+            posting_date: `${periodo.year}-12-31`,
+          },
+          "accounting.period.reopen",
+          { desdeDocumento: true, alCierre: periodo.year },
+        );
+        // withTransaction revierte la transacción entera ante un err (RollbackPorError,
+        // packages/db/src/transaction.ts): devolverlo deshace también la reapertura del 13, y la
+        // persona recibe un error legible en vez de un 500.
+        if (!rev.ok) return rev;
+      }
+    }
     return ok(reabierto!);
   } catch (e) {
     const conocido = traducir(e);
@@ -810,6 +967,11 @@ export async function reopenFiscalPeriod(
 /**
  * Cierre anual: lleva ingresos y gastos a Resultado del ejercicio, y el
  * resultado a Utilidades o pérdidas acumuladas.
+ *
+ * ADR-0069 §2 (K-03): el asiento vive en el PERÍODO DE CIERRE («13») del ejercicio,
+ * fechado el 31-12, así que diciembre puede estar cerrado —el orden normal—. Al postear
+ * el cierre, el 13 se cierra; «reabrir el ejercicio» es reabrir el 13. Antes de cerrar,
+ * no puede quedar nada a medias: los borradores del ejercicio se NOMBRAN.
  *
  * Exige que `year_result` y `retained_earnings` estén configuradas. Sin ellas
  * no cierra, y lo dice: adivinar qué cuenta es el resultado del ejercicio sería
@@ -845,6 +1007,23 @@ export async function executeYearEndClose(
 
   const desde = `${input.year}-01-01`;
   const hasta = `${input.year}-12-31`;
+
+  const borradores = await borradoresDe(sql, input.company_id, { desde, hasta });
+  if (borradores !== null) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `Quedan asientos en borrador en ${input.year}: ${borradores}. Postéalos o descártalos desde el diario antes de cerrar el ejercicio.`,
+    });
+  }
+  const [pendientes] = await sql<{ n: number }[]>`
+    select count(*)::int as n from public.journal_generation_queue
+     where company_id = ${input.company_id} and status = 'pending'`;
+  if ((pendientes?.n ?? 0) > 0) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `Hay ${pendientes!.n} documento(s) pendientes de contabilizar. Cerrar el ejercicio con la cola llena dejaría resultados fuera del cierre.`,
+    });
+  }
   const saldos = await sql<{ account_id: string; kind: string; saldo: string }[]>`
     select a.id as account_id, a.kind,
            (coalesce(sum(jl.functional_debit), 0)
@@ -889,14 +1068,23 @@ export async function executeYearEndClose(
   }
   // `neto` = débitos − créditos de resultado. Positivo = pérdida (gastos
   // mayores); negativo = utilidad. La contrapartida invierte el signo.
+  //
+  // DOS PASOS, en el mismo asiento, como dice la cabecera (antes `year_result` se leía y
+  // no se usaba: el resultado iba directo a acumuladas, K-03):
+  //   1. cada cuenta de resultado a cero CONTRA «Resultado del ejercicio»;
+  //   2. «Resultado del ejercicio» a «Utilidades o pérdidas acumuladas».
+  // La cuenta del ejercicio recibe y entrega el mismo importe: queda en cero, y el rastro
+  // dice por dónde pasó el resultado.
   if (neto.isNegative()) {
-    lineas.push({
-      account_id: acumuladas.account_id,
-      debit: "0",
-      credit: neto.negated().toFixed(8),
-    });
+    const utilidad = neto.negated().toFixed(8);
+    lineas.push({ account_id: resultado.account_id, debit: "0", credit: utilidad });
+    lineas.push({ account_id: resultado.account_id, debit: utilidad, credit: "0" });
+    lineas.push({ account_id: acumuladas.account_id, debit: "0", credit: utilidad });
   } else if (!neto.isZero()) {
-    lineas.push({ account_id: acumuladas.account_id, debit: neto.toFixed(8), credit: "0" });
+    const perdida = neto.toFixed(8);
+    lineas.push({ account_id: resultado.account_id, debit: perdida, credit: "0" });
+    lineas.push({ account_id: resultado.account_id, debit: "0", credit: perdida });
+    lineas.push({ account_id: acumuladas.account_id, debit: perdida, credit: "0" });
   } else {
     return err({
       code: "VALIDATION_FAILED",
@@ -907,8 +1095,9 @@ export async function executeYearEndClose(
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   try {
     const asiento = await sql.savepoint(async (sp) => {
+      // El período de CIERRE del ejercicio, no diciembre (ADR-0069 §2).
       const [periodo] = await sp<{ id: string }[]>`
-        select platform.period_for_date(${input.company_id}, ${hasta}::date) as id`;
+        select platform.closing_period_for_year(${input.company_id}, ${input.year}::int) as id`;
       const [e] = await sp<Record<string, unknown>[]>`
         insert into public.journal_entries
           (tenant_id, company_id, period_id, posting_date, source_kind, source_id, source_event,
@@ -941,6 +1130,12 @@ export async function executeYearEndClose(
                entry_number = ${num!.n}::bigint
          where id = ${e!["id"] as string}
         returning ${sp.unsafe(ENTRY_COLUMNS)}`;
+      // El 13 se cierra con su asiento: un ajuste posterior exige reabrir el ejercicio (el
+      // 13) con motivo. El evento de la historia lo escribe el trigger del esquema.
+      await sp`
+        update public.fiscal_periods
+           set status = 'closed', closed_at = now(), closed_by = ${actor.userId}
+         where id = ${periodo!.id} and status <> 'closed'`;
       return posteado!;
     });
     const conTot = await conTotales(sql, asiento);

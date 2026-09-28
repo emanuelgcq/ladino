@@ -8,6 +8,7 @@ import {
   CreateJournalEntryRequest,
   PostJournalEntryRequest,
   ReverseJournalEntryRequest,
+  DiscardJournalEntryRequest,
   ClosePeriodRequest,
   ReopenPeriodRequest,
   YearEndCloseRequest,
@@ -23,6 +24,7 @@ import {
   createManualJournalEntry,
   postJournalEntry,
   reverseJournalEntry,
+  discardJournalEntry,
   closeFiscalPeriod,
   reopenFiscalPeriod,
   executeYearEndClose,
@@ -358,6 +360,19 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
     const r = await withTransaction(sql, actor, (uow) => reverseJournalEntry(uow, id, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
+  });
+
+  // K-06 (ADR-0069): descartar un borrador. Un posteado no se descarta nunca.
+  app.post("/v1/journal-entries/:id/discard", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const id = idValido(c.req.param("id"));
+    const parsed = DiscardJournalEntryRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => discardJournalEntry(uow, id, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
   });
 
   // ── Mayor y balance ───────────────────────────────────────────────────────

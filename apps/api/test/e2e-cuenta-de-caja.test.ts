@@ -46,6 +46,8 @@ let BANCO_USD = "";
 let CAJA_USD = "";
 let CASH_BS = "";
 let CASH_USD = "";
+// La subcuenta propia de CAJA_USD (ADR-0070): hija de cash_usd, con el nombre de la caja.
+let SUB_CAJA_USD = "";
 
 const tokenDe = (sub: string) =>
   new SignJWT({ role: "authenticated" })
@@ -221,7 +223,17 @@ describe("la cuenta de efectivo sale de la caja real del movimiento", () => {
     expect(caja.status).toBe(201);
     const c = (await caja.json()) as { id: string; ledger_account_id: string | null };
     CAJA_USD = c.id;
-    expect(c.ledger_account_id).toBe(CASH_USD);
+    // ADR-0070 (J-01): nace con su SUBCUENTA, no mapeada a la cuenta de familia compartida (esa
+    // era la causa del 500 de «Mover plata»). Aserción cambiada por RESPUESTA §5.2.4.
+    const [sub] = await sql<{ id: string; parent_id: string; name: string; is_leaf: boolean }[]>`
+      select id, parent_id, name, is_leaf from public.accounts where id = ${c.ledger_account_id}`;
+    expect(sub).toEqual({
+      id: c.ledger_account_id,
+      parent_id: CASH_USD,
+      name: `Caja USD ${RUN}`,
+      is_leaf: true,
+    });
+    SUB_CAJA_USD = sub!.id;
 
     const banco = await pedir("POST", "/v1/treasury/accounts", {
       company_id: COMPANY,
@@ -359,16 +371,19 @@ describe("la cuenta de efectivo sale de la caja real del movimiento", () => {
     expect(cola!.reason.startsWith("treasury_account_unmapped")).toBe(true);
     expect(cola!.reason).toContain(`Caja USD ${RUN}`);
 
-    // Se vuelve a mapear y «contabilizar pendientes» lo asienta en ESA caja.
+    // Se vuelve a mapear A SU SUBCUENTA y «contabilizar pendientes» lo asienta en ESA caja. Tras
+    // ADR-0070, cash_usd agrupa y no recibe asientos (LAD62). Cambiado por RESPUESTA §5.2.4.
     const poner = await pedir("PATCH", `/v1/treasury/accounts/${CAJA_USD}`, {
       company_id: COMPANY,
-      ledger_account_id: CASH_USD,
+      ledger_account_id: SUB_CAJA_USD,
     });
     expect(poner.status).toBe(200);
     const proceso = await pedir("POST", "/v1/accounting/pending/process", {});
     expect(proceso.status).toBe(200);
     const lineas = await lineasDe("expense", g.id);
-    expect(lineas.filter((l) => l.lado === "haber").map((l) => l.account_id)).toEqual([CASH_USD]);
+    expect(lineas.filter((l) => l.lado === "haber").map((l) => l.account_id)).toEqual([
+      SUB_CAJA_USD,
+    ]);
   });
 
   it("y el invariante de cobertura sigue en cero", async () => {

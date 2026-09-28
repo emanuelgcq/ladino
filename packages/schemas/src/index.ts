@@ -176,6 +176,7 @@ export {
   CreateJournalEntryRequest,
   PostJournalEntryRequest,
   ReverseJournalEntryRequest,
+  DiscardJournalEntryRequest,
   JournalLineResponse,
   JournalEntryResponse,
   JournalEntryDetailResponse,

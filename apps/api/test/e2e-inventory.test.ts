@@ -98,6 +98,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // La tasa de 100 que planta el caso «entrada en USD sin tasa» es GLOBAL: si se queda, rige el
+  // día entero para los ficheros que corren después (_tasa-oficial.ts: cada fichero borra la suya).
+  await sql`delete from public.exchange_rates
+             where company_id is null and source = 'BCV e2e-inventario'`;
   await sql.end();
   await sqlApi.end();
 });

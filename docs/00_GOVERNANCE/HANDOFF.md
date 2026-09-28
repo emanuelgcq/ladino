@@ -1,3 +1,86 @@
+# Handoff — 2026-09-28 (32ª entrega) — Ola 1 de la respuesta del dueño: el cajero vende, el dinero se mueve, el libro firma y los períodos tienen historia
+
+Hallazgos cerrados: **N-01, N-02, N-04 (G-08), B-16, C-08, K-11 · J-01 · L-01, L-02, L-06, L-07 (G-10) y la R-2 ampliada · K-01, K-02, K-03, K-04, K-05, K-06**. Un solo commit para la ola: las cuatro familias comparten ficheros (`errors.ts`, openapi, CLAUDE.md, ERROR_CATALOG, RISK_REGISTER, PENDIENTES_ASESOR), y partirlas dejaba commits intermedios que no compilan. Decidido por criterio.
+
+## Familia «permiso anidado» (ADR-0068)
+- **Qué pasaba:** la venta, la anulación y el alta simple volvían a autorizar su paso interior con un permiso que solo tiene el fundador. Ningún cajero pudo vender mercancía nunca (N-01). El administrativo no anulaba (N-04). El encargado no daba de alta con precio (B-16, C-08). El Dueño invitado no era dueño (N-02).
+- **Qué se cambió:**
+  - El paso interior lo autoriza la operación que lo contiene: `issueStockBatchForSale`, `reverseJournalEntryForAnnulment`, `setPriceForProduct` y `receiveStockFor(…, permiso)` para devolución, recepción y existencia inicial.
+  - Los roles son por empresa y hay un Titular de la cuenta. `guardaDeAcceso` protege al Titular y a quien trabaja en otra empresa, también al reactivar. MEMBER_PROTECTED es 403.
+  - Los 403 se dicen en palabras de persona.
+  - Los Dueños invitados reciben `warehouse_ops` (migración 100000).
+  - Un rol no acotado vende desde cualquier almacén de su empresa (ADR-0068 §6, decidido por criterio).
+- **Aserciones cambiadas (clase autorizada):**
+  - `040_named_roles_test.sql:55`: solo la descripción;
+  - `e2e-depositos.test.ts:167-208`: el 403 lo ejerce un rol acotado sin binding;
+  - `e2e-una-venta-por-oficio` N-04: el asiento se lee de la base (era un antitest de la ola 0).
+
+## J-01 (ADR-0070)
+- **Qué pasaba:** «Mover plata» entre dos cuentas de la misma moneda daba 500. Todas las cajas en Bs compartían la cuenta 1.1.01.
+- **Qué se cambió:**
+  - `apply_ledger_balance` agrupa por cuenta.
+  - Cada caja nace con su subcuenta.
+  - La reparación de las existentes se hace con asiento de reclasificación posteado por el dominio, idempotente y con acta (`journal.posted`). La corre `scripts/reparar/adr-0070-subcuentas.mjs` **después del pull**.
+  - Invariante nuevo `treasury_ledger_gaps()`.
+  - Migraciones 110000, 110100 y 110200.
+- **Aserciones cambiadas (clase autorizada, fijaban el mapeo a la cuenta de familia):** `056_cash_account_from_treasury_account_test.sql` ×3, `e2e-cuenta-de-caja.test.ts:224` y su variante rota, y `e2e-ola0-verificaciones.test.ts` V2.
+
+## Familia «libros» (L)
+- **Qué pasaba:** el libro de ventas sumaba las NC (L-01). La conciliación no se probaba con una NC y nadie la corría (L-02). Culpaba a un asiento inexistente (L-06). La anulada iba con importes (L-07).
+- **Qué se cambió:**
+  - NC en negativo en el libro, el CSV y la pantalla; la anulada, con su número y en cero.
+  - La conciliación enlaza documentos y asientos.
+  - R-2 ampliada: la anulación tardía entra al período en curso como ajuste negativo, y la planilla la lleva en `ajuste_creditos_anteriores`, fuera de `creditos_deducibles`.
+  - El sello `annulled_at` no se elige ni se mueve.
+  - `BOOK_GENERATOR_VERSION` pasa a 1.1.0.
+  - Migraciones 120000 a 120300. ADR-0065 enmendado.
+  - La conciliación libro–mayor es invariante en los pgTAP 074 y 078 (gate) y en `pnpm recorrido` sobre toda la historia.
+- **Aserción cambiada (autorizada, antitest de L-02):** `046_declarations_igtf_test.sql:162-170`. Además, a 074 se le quitó el `todo`.
+
+## Familia «períodos» (ADR-0069)
+- **Qué pasaba:**
+  - K-01: reabrir era imposible.
+  - K-02: el modelo solo admitía un ciclo.
+  - K-03: el cierre anual no funcionaba con diciembre cerrado.
+  - K-04: la factura tardía no entraba.
+  - K-05: se creaban períodos en cualquier fecha.
+  - K-06: los borradores quedaban zombis.
+- **Qué se cambió:**
+  - `fiscal_period_events` es append-only, y cerrar → reabrir → cerrar funciona n veces.
+  - El período 13 cierra el ejercicio; reabrirlo revierte el cierre, y se puede cerrar otra vez.
+  - El inicio de actividades se pide al alta y es editable, con acta.
+  - LAD91 marca las fechas fuera de rango, y el borrador no nace en un período cerrado.
+  - «Descartar» un borrador.
+  - La factura, la NC, la recepción, el pago y el gasto con fecha en un período cerrado (o anterior al inicio) se asientan en el período abierto con su fecha original. En el libro salen marcadas «recibida con retraso».
+  - La ventana LIVA art. 33 no se aplica (P-35, pendiente de fuente).
+  - Migraciones 130000 a 130200.
+- **Aserción cambiada (autorizada por el dueño, ADR-0069 §5):** `025_accounting_test.sql:110-121`.
+
+## Despliegue (para la sección 7)
+- Migraciones nuevas: `20260928100000`, `110000`, `110100`, `110200`, `120000` a `120300` y `130000` a `130200`.
+- **Aplicar después del pull** (no son «expand» para la API vieja): `20260928120000`–`120300` (cambian el libro de ventas, el de compras y la planilla: con la API vieja, una planilla guardada en la ventana llevaría el ajuste en la cuota sin su casilla) y `20260928130000`–`130200` (la API vieja no conoce LAD91/LAD92 ni el período 13: su cierre anual y cualquier fecha anterior al inicio de actividades darían 500). Se pueden aplicar ANTES del pull, porque son «expand»: `20260928100000` y `20260928110000`–`110200`.
+- **Reparaciones tras el pull:**
+  - `node scripts/reparar/adr-0070-subcuentas.mjs`, empresa por empresa;
+  - `select platform.grant_invited_owner_warehouse_ops();`, idempotente.
+
+## Pruebas
+- Gate: VERIFY EXIT=0 · 790 pasos · vitest 841 en 19 paquetes · pgTAP 1380 en 76 ficheros (línea base 815 / 1270 / 72).
+- `pnpm recorrido` de B, J, K, L y N: VERDE en los cinco sobre el escenario restaurado (la cadena de migraciones 100000–130200 aplicada encima de los datos del recorrido, más las reparaciones posteriores al pull), invariantes en 0 en E1, E2 y E3.
+
+## Lo que queda abierto
+- **R-53:** el importe en divisa de las cajas espera a J-04 y E-11.
+- **R-54:** reexportar un período ya exportado da otro hash; la versión 1.1.0 lo dice.
+- **R-55:** la recepción y el gasto enrutados no tienen E2E propio; el pago, sí.
+- **P-45:** reparto de los Bs de 1.1.02 entre cajas en divisa.
+- **P-46:** la lectura «cerrado y presentado», el ajuste fuera de la prorrata y el ciclo de reapertura.
+- **P-35:** la ventana legal para deducir crédito.
+- No hay pantalla para anular una factura de proveedor: la R-2 ampliada vive en la base y la prueba el pgTAP.
+- Los ajustes del contador en el 13 no tienen campo en pantalla (`closing_period`).
+- Bajo carga, algunos E2E rozan los 5 s en el alta del negocio. El gate pasa; vigilarlo.
+- HOMOLOGATION_IMPACT = YES: el libro de ventas, el de compras y la planilla cambian cifras y períodos, no la emisión.
+
+---
+
 # Handoff — 2026-09-28 (31ª entrega) — La respuesta del dueño al recorrido, ola 0: preparar
 
 ## Qué pasaba

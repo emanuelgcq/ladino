@@ -1,0 +1,12 @@
+-- =============================================================================
+-- Ladino — EL SELLO DE LA ANULACIÓN NO LO INVOCA NADIE
+-- Módulo: compras / libros fiscales. Spec: docs/02_COMPLIANCE/REPORTING_AND_FISCAL_BOOKS.md
+-- Reversible: SÍ (un grant; sin datos). HOMOLOGATION_IMPACT: NO.
+--
+-- La migración 20260928120000 creó `platform.stamp_supplier_invoice_annulled_at()`
+-- (función del trigger `supplier_invoices_02_annulled_at`) sin quitarle el EXECUTE
+-- que Postgres da a PUBLIC por omisión: `anon` podía ejecutarla. El pgTAP 005
+-- («ninguna función de platform es ejecutable por anon») lo cazó. Un trigger no
+-- necesita que nadie tenga EXECUTE sobre su función: se dispara igual.
+-- =============================================================================
+revoke execute on function platform.stamp_supplier_invoice_annulled_at() from public;

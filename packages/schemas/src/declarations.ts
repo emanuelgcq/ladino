@@ -135,6 +135,14 @@ export const IvaPeriodResultResponse = z
     excedente_siguiente: z.string(),
     detalle: z.array(IvaPeriodDetalleAlicuota),
     /**
+     * Casilla de AJUSTES A LOS CRÉDITOS FISCALES DE PERÍODOS ANTERIORES: la reversa del crédito
+     * de las facturas de proveedor anuladas después de cerrar y presentar su período (R-2
+     * ampliada, 2026-09-28). Cero o negativa; NO está sumada en `creditos_deducibles`: entra en la
+     * cuota y en el excedente (migración 20260928120300). Opcional
+     * en el contrato: campo nuevo y aditivo.
+     */
+    ajuste_creditos_anteriores: amountSigned.optional(),
+    /**
      * La moneda de TODAS las cifras de arriba. No se persiste en la fila —es
      * la funcional de la empresa— pero viaja en el contrato: un importe sin
      * su moneda está incompleto, y la pantalla no debe adivinarla.

@@ -229,13 +229,15 @@ export async function generateIvaPeriod(
       cuota_a_pagar: string;
       excedente_siguiente: string;
       detalle: unknown;
+      ajuste_creditos_anteriores: string;
     }[]
   >`select debitos::text as debitos, creditos::text as creditos,
            creditos_deducibles::text as creditos_deducibles,
            prorrata_pct::text as prorrata_pct,
            retenciones_soportadas::text as retenciones_soportadas,
            cuota_a_pagar::text as cuota_a_pagar,
-           excedente_siguiente::text as excedente_siguiente, detalle
+           excedente_siguiente::text as excedente_siguiente, detalle,
+           ajuste_creditos_anteriores::text as ajuste_creditos_anteriores
       from platform.recompute_iva_period(
              ${input.company_id}, ${input.period_from}::date, ${input.period_to}::date,
              ${excedenteAnterior})`;
@@ -258,6 +260,13 @@ export async function generateIvaPeriod(
     cuota_a_pagar: r.cuota_a_pagar,
     excedente_siguiente: r.excedente_siguiente,
     detalle: r.detalle,
+    // La casilla de ajustes de créditos de períodos anteriores (R-2 ampliada, migración
+    // 20260928120000) entra en el hash SOLO cuando no es cero: toda planilla generada antes
+    // —y toda la que no tiene ajuste— sigue reproduciendo su mismo hash, y la que lo tiene lo
+    // firma. Se compara el STRING, no un número (regla 7).
+    ...(/^-?0*(?:\.0*)?$/.test(r.ajuste_creditos_anteriores)
+      ? {}
+      : { ajuste_creditos_anteriores: r.ajuste_creditos_anteriores }),
     generator_version: IVA_PERIOD_GENERATOR_VERSION,
   });
   const [h] = await sql<{ hash: string }[]>`
@@ -267,13 +276,14 @@ export async function generateIvaPeriod(
     insert into public.iva_period_results
       (tenant_id, company_id, period_from, period_to, debitos, creditos, creditos_deducibles,
        prorrata_pct, retenciones_soportadas, excedente_anterior, cuota_a_pagar,
-       excedente_siguiente, detalle, generator_version, dataset_hash)
+       excedente_siguiente, detalle, generator_version, dataset_hash,
+       ajuste_creditos_anteriores)
     values (${scope.value.tenantId}, ${input.company_id}, ${input.period_from}::date,
             ${input.period_to}::date, ${r.debitos}, ${r.creditos}, ${r.creditos_deducibles},
             ${r.prorrata_pct}, ${r.retenciones_soportadas}, ${excedenteAnterior},
             ${r.cuota_a_pagar}, ${r.excedente_siguiente},
             ${sql.json(r.detalle as JSONValue)}, ${IVA_PERIOD_GENERATOR_VERSION},
-            ${h!.hash})
+            ${h!.hash}, ${r.ajuste_creditos_anteriores})
     returning id, period_from::text as period_from, period_to::text as period_to,
               debitos::text as debitos, creditos::text as creditos,
               creditos_deducibles::text as creditos_deducibles,
@@ -283,6 +293,7 @@ export async function generateIvaPeriod(
               cuota_a_pagar::text as cuota_a_pagar,
               excedente_siguiente::text as excedente_siguiente,
               detalle,
+              ajuste_creditos_anteriores::text as ajuste_creditos_anteriores,
               (select c.functional_currency_code from public.companies c
                 where c.id = ${input.company_id}) as functional_currency,
               generator_version, dataset_hash, created_by,

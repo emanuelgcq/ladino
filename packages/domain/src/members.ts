@@ -10,9 +10,13 @@ import { RULES_VERSION } from "./create-company.js";
  * reciben bindings a TODOS los almacenes de la empresa (el recorte fino por
  * almacén queda para cuando haga falta).
  *
- * La autorización es de NIVEL TENANT (mismo patrón que createCompany): un rol
- * PLANO con membership.manage/membership.read. Un rol acotado no gobierna
- * personas — gobierna almacenes.
+ * La autorización es POR EMPRESA (ADR-0068 §3, N-02): quien tiene
+ * membership.manage/membership.read sobre la empresa de la cabecera —por una
+ * asignación de esa empresa o de nivel tenant— gestiona a las personas de ESA
+ * empresa. Lo que gobierna la cuenta es del TITULAR (la asignación de nivel
+ * tenant, la del fundador): un gestor acotado a la empresa ve y toca solo las
+ * asignaciones de su empresa, no quita roles ni desactiva al Titular, y solo
+ * desactiva a quien no trabaja en empresas que él no gestiona.
  */
 export interface MembersError {
   readonly code: string;
@@ -39,6 +43,80 @@ async function nivelTenant(
   return r?.autorizado === true;
 }
 
+/** ¿Tiene `permiso` sobre ESTA empresa? (asignación de la empresa o de nivel tenant) */
+async function enEmpresa(
+  sql: TransactionSql,
+  userId: string,
+  companyId: string,
+  permiso: string,
+): Promise<boolean> {
+  const [r] = await sql<{ autorizado: boolean }[]>`
+    select platform.ladino_user_has_permission(${userId}, ${permiso}, ${companyId}) as autorizado`;
+  return r?.autorizado === true;
+}
+
+/** El TITULAR de la cuenta: quien tiene una asignación de nivel tenant (ADR-0068 §3). */
+async function esTitular(sql: TransactionSql, tenantId: string, userId: string): Promise<boolean> {
+  const [r] = await sql<{ titular: boolean }[]>`
+    select exists (
+      select 1
+        from public.memberships m
+        join public.user_role_assignments ura
+          on ura.membership_id = m.id and ura.company_id is null
+       where m.tenant_id = ${tenantId} and m.user_id = ${userId}
+    ) as titular`;
+  return r?.titular === true;
+}
+
+const NO_AL_TITULAR = {
+  code: "MEMBER_PROTECTED",
+  message:
+    "Esa persona es el Titular de la cuenta: sus roles y su acceso solo los cambia el propio Titular.",
+} as const;
+
+/**
+ * La guarda de un gestor ACOTADO sobre el ACCESO de una persona (la membresía es de la cuenta:
+ * apagarla o encenderla vale para todas sus empresas). Devuelve el error, o null si puede:
+ *   · al Titular no lo toca (MEMBER_PROTECTED);
+ *   · con `exigirRolEn`, la persona tiene que trabajar en ESA empresa (404 si no: para el
+ *     gestor de A, quien no está en A no existe — tampoco sale en su lista);
+ *   · no tiene roles en empresas que el gestor no gestiona (MEMBER_PROTECTED).
+ * La usan setMemberStatus y la REACTIVACIÓN dentro de addMember: si solo la tuviera la primera,
+ * agregar a alguien desactivado sería la puerta de atrás.
+ */
+async function guardaDeAcceso(
+  sql: TransactionSql,
+  actorId: string,
+  tenantId: string,
+  miembro: { id: string; user_id: string },
+  exigirRolEn: string | null,
+): Promise<MembersError | null> {
+  if (await esTitular(sql, tenantId, miembro.user_id)) return NO_AL_TITULAR;
+  if (exigirRolEn !== null) {
+    const [en] = await sql<{ hay: boolean }[]>`
+      select exists (
+        select 1 from public.user_role_assignments u
+         where u.membership_id = ${miembro.id} and u.company_id = ${exigirRolEn}
+      ) as hay`;
+    if (en?.hay !== true) return { code: "NOT_FOUND", message: "Recurso no encontrado." };
+  }
+  const [fuera] = await sql<{ hay: boolean }[]>`
+    select exists (
+      select 1 from public.user_role_assignments u
+       where u.membership_id = ${miembro.id}
+         and not platform.ladino_user_has_permission(${actorId}, 'membership.manage',
+                                                     u.company_id)
+    ) as hay`;
+  if (fuera?.hay === true) {
+    return {
+      code: "MEMBER_PROTECTED",
+      message:
+        "Esa persona también trabaja en otra empresa de la cuenta. Quítale el rol en esta empresa; desactivarla del todo lo hace quien administra todas sus empresas.",
+    };
+  }
+  return null;
+}
+
 async function tenantDe(sql: TransactionSql, companyId: string): Promise<string | null> {
   const [c] = await sql<{ tenant_id: string }[]>`
     select tenant_id from public.companies where id = ${companyId}`;
@@ -55,12 +133,15 @@ export async function listMembers(
   }
   const tenantId = await tenantDe(sql, companyId);
   if (tenantId === null) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-  if (!(await nivelTenant(sql, actor.userId, tenantId, "membership.read"))) {
+  if (!(await enEmpresa(sql, actor.userId, companyId, "membership.read"))) {
     return err({
       code: "PERMISSION_REQUIRED",
-      message: "Ver los miembros exige membership.read a nivel de negocio.",
+      message: "Ver los miembros exige membership.read sobre esta empresa.",
     });
   }
+  // El Titular ve la cuenta entera, como siempre. Un gestor acotado ve a las personas de SU
+  // empresa (y al Titular), y de cada una solo las asignaciones de esta empresa o de la cuenta.
+  const todo = await nivelTenant(sql, actor.userId, tenantId, "membership.read");
   const filas = await sql<
     {
       membership_id: string;
@@ -78,9 +159,15 @@ export async function listMembers(
            ura.id as assignment_id, r.key as role_key, r.name as role_name,
            ura.company_id as assignment_company_id
       from public.memberships m
-      left join public.user_role_assignments ura on ura.membership_id = m.id
+      left join public.user_role_assignments ura
+        on ura.membership_id = m.id
+       and (${todo} or ura.company_id is null or ura.company_id = ${companyId})
       left join public.roles r on r.id = ura.role_id
      where m.tenant_id = ${tenantId}
+       and (${todo} or exists (
+             select 1 from public.user_role_assignments u2
+              where u2.membership_id = m.id
+                and (u2.company_id is null or u2.company_id = ${companyId})))
      order by m.created_at, m.id, r.key`;
 
   const porMiembro = new Map<string, MemberResponse>();
@@ -127,10 +214,10 @@ export async function addMember(
   }
   const tenantId = await tenantDe(sql, input.company_id);
   if (tenantId === null) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-  if (!(await nivelTenant(sql, actor.userId, tenantId, "membership.manage"))) {
+  if (!(await enEmpresa(sql, actor.userId, input.company_id, "membership.manage"))) {
     return err({
       code: "PERMISSION_REQUIRED",
-      message: "Agregar miembros exige membership.manage a nivel de negocio.",
+      message: "Agregar miembros exige membership.manage sobre esta empresa.",
     });
   }
   if (!ROLES_ASIGNABLES.has(input.role_key)) {
@@ -162,6 +249,18 @@ export async function addMember(
   if (previa !== undefined) {
     membershipId = previa.id;
     if (previa.status !== "active") {
+      // REACTIVAR es cambiar el acceso a la cuenta entera: un gestor acotado pasa la MISMA
+      // guarda que en setMemberStatus (sin exigir rol en su empresa: lo está agregando ahora).
+      if (!(await nivelTenant(sql, actor.userId, tenantId, "membership.manage"))) {
+        const negado = await guardaDeAcceso(
+          sql,
+          actor.userId,
+          tenantId,
+          { id: previa.id, user_id: userId },
+          null,
+        );
+        if (negado !== null) return err(negado);
+      }
       await sql`update public.memberships set status = 'active' where id = ${previa.id}`;
     }
   } else {
@@ -199,6 +298,28 @@ export async function addMember(
     }
   }
 
+  // Un Dueño de la empresa opera también su almacén, como el fundador (ADR-0049, ADR-0068 §3):
+  // warehouse_ops ACOTADO a la empresa, con bindings a sus almacenes. Si ya lo tenía, no se
+  // duplica; sin almacenes no hay binding (los ata el caso de uso al crear el almacén).
+  if (input.role_key === "owner") {
+    await sql`
+      with wo as (
+        insert into public.user_role_assignments (tenant_id, membership_id, role_id, company_id)
+        select ${tenantId}, ${membershipId}, r.id, ${input.company_id}
+          from public.roles r
+         where r.key = 'warehouse_ops' and r.tenant_id is null
+           and not exists (
+                 select 1 from public.user_role_assignments u
+                  where u.membership_id = ${membershipId} and u.role_id = r.id
+                    and u.company_id = ${input.company_id})
+        returning id
+      )
+      insert into public.scope_bindings (tenant_id, company_id, assignment_id, scope_type, scope_id)
+      select ${tenantId}, ${input.company_id}, wo.id, 'warehouse', w.id
+        from wo cross join public.warehouses w
+       where w.company_id = ${input.company_id}`;
+  }
+
   await sql`
     insert into public.audit_events
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
@@ -225,20 +346,32 @@ export async function removeAssignment(
   }
   const tenantId = await tenantDe(sql, input.company_id);
   if (tenantId === null) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-  if (!(await nivelTenant(sql, actor.userId, tenantId, "membership.manage"))) {
+  if (!(await enEmpresa(sql, actor.userId, input.company_id, "membership.manage"))) {
     return err({
       code: "PERMISSION_REQUIRED",
-      message: "Quitar roles exige membership.manage a nivel de negocio.",
+      message: "Quitar roles exige membership.manage sobre esta empresa.",
     });
   }
-  const [asignacion] = await sql<{ id: string; user_id: string; role_key: string }[]>`
-    select ura.id, m.user_id, r.key as role_key
+  const [asignacion] = await sql<
+    { id: string; user_id: string; role_key: string; company_id: string | null }[]
+  >`
+    select ura.id, m.user_id, r.key as role_key, ura.company_id
       from public.user_role_assignments ura
       join public.memberships m on m.id = ura.membership_id
       join public.roles r on r.id = ura.role_id
      where ura.id = ${input.assignment_id} and ura.tenant_id = ${tenantId}`;
   if (asignacion === undefined) {
     return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  }
+  // Un gestor ACOTADO a la empresa toca solo las asignaciones de su empresa, y al Titular de
+  // la cuenta no le quita nada (ADR-0068 §3). El Titular sigue gobernando la cuenta entera.
+  if (!(await nivelTenant(sql, actor.userId, tenantId, "membership.manage"))) {
+    // Primero el 404: una asignación de OTRA empresa no existe para este gestor, sea de quien
+    // sea. La de nivel tenant (company_id nulo) es del Titular y cae en la guarda siguiente.
+    if (asignacion.company_id !== null && asignacion.company_id !== input.company_id) {
+      return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    }
+    if (await esTitular(sql, tenantId, asignacion.user_id)) return err(NO_AL_TITULAR);
   }
   // El dueño no se quita a sí mismo el timón: evita el negocio sin dueño.
   if (asignacion.user_id === actor.userId && asignacion.role_key === "owner") {
@@ -273,10 +406,10 @@ export async function setMemberStatus(
   }
   const tenantId = await tenantDe(sql, input.company_id);
   if (tenantId === null) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-  if (!(await nivelTenant(sql, actor.userId, tenantId, "membership.manage"))) {
+  if (!(await enEmpresa(sql, actor.userId, input.company_id, "membership.manage"))) {
     return err({
       code: "PERMISSION_REQUIRED",
-      message: "Cambiar el acceso exige membership.manage a nivel de negocio.",
+      message: "Cambiar el acceso exige membership.manage sobre esta empresa.",
     });
   }
   const [miembro] = await sql<{ id: string; user_id: string }[]>`
@@ -288,6 +421,13 @@ export async function setMemberStatus(
       code: "VALIDATION_FAILED",
       message: "No puedes desactivarte a ti mismo: pídeselo a otro dueño.",
     });
+  }
+  // La membresía es de la CUENTA: desactivarla corta el acceso a todas sus empresas. Un gestor
+  // acotado solo la apaga si la persona no trabaja en ninguna empresa que él no gestione, y
+  // nunca al Titular (ADR-0068 §3).
+  if (!(await nivelTenant(sql, actor.userId, tenantId, "membership.manage"))) {
+    const negado = await guardaDeAcceso(sql, actor.userId, tenantId, miembro, input.company_id);
+    if (negado !== null) return err(negado);
   }
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   await sql`update public.memberships set status = ${input.status}

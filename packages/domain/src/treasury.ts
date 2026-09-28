@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@ladino/core";
+import { fechaContableDe } from "./fecha-contable.js";
 import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
 import { Money, minorUnitsOf, parseDecimal } from "@ladino/money";
@@ -572,7 +573,9 @@ export async function registerExpense(
   // el UTC ya va por mañana (la familia de bugs de CLAUDE.md §3).
   let fechaContable: string;
   if (input.paid_at !== undefined) {
-    fechaContable = diaNegocio(input.paid_at);
+    // K-04: fechado en un mes cerrado (o antes del inicio de actividades), el asiento va al
+    // período en curso; el gasto conserva su paid_at.
+    fechaContable = await fechaContableDe(sql, input.company_id, diaNegocio(input.paid_at));
   } else {
     const [hoy] = await sql<{ d: string }[]>`
       select (now() at time zone 'America/Caracas')::date::text as d`;
@@ -1118,4 +1121,89 @@ export async function listMoneyLandingGaps(
            currency, account_id, account_name, problem
       from platform.money_landing_gaps(${companyId})`;
   return ok(filas);
+}
+
+/**
+ * El actor de un asiento que postea el SISTEMA, no una persona (la reparación de ADR-0070).
+ * `journal_entries.posted_by` es obligatorio en un asiento posteado y no tiene FK: el uuid nulo
+ * dice «nadie», y el acta en `audit_events` (actor_type = 'system') dice qué lo posteó.
+ */
+export const SYSTEM_POSTER_ID = "00000000-0000-0000-0000-000000000000";
+
+export type TreasurySubaccountsRepair = {
+  readonly company_id: string;
+  readonly repaired: number;
+  readonly skipped?: string;
+  readonly entry_id?: string | null;
+  readonly accounts?: JSONValue;
+};
+
+/**
+ * REPARACIÓN ADR-0070 (J-01): cada caja que todavía apunta a la cuenta de su familia (1.1.01 /
+ * 1.1.02) recibe su subcuenta, y su saldo se reclasifica con UN asiento por empresa.
+ *
+ * La base prepara (subcuentas + asiento en BORRADOR) y cierra (comprobación + acta); el POSTEO
+ * vive aquí, en el dominio, como todo posteo de Ladino: ninguna función SQL postea asientos.
+ * Las tres piezas van en la transacción de quien llama — una reparación a medias no existe.
+ * Idempotente: una segunda llamada no encuentra nada que reparar y no escribe nada.
+ *
+ * No es un caso de uso de la API: lo corre el dueño de la base con
+ * `node scripts/reparar/adr-0070-subcuentas.mjs`, después del git pull (RESPUESTA §7).
+ */
+export async function repairTreasurySubaccounts(
+  sql: TransactionSql,
+  companyId: string,
+): Promise<TreasurySubaccountsRepair> {
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  const [p] = await sql<{ r: TreasurySubaccountsRepair & { posting_date?: string } }[]>`
+    select platform.treasury_subaccounts_repair_prepare(${companyId}) as r`;
+  const preparado = p!.r;
+  if (preparado.entry_id) {
+    const [num] = await sql<{ n: string }[]>`
+      select platform.claim_entry_number(${companyId},
+             extract(year from ${preparado.posting_date!}::date)::int)::text as n`;
+    await sql`
+      update public.journal_entries
+         set status = 'posted', posted_at = now(), posted_by = ${SYSTEM_POSTER_ID},
+             entry_number = ${num!.n}::bigint
+       where id = ${preparado.entry_id} and company_id = ${companyId} and status = 'draft'`;
+    // El mismo rastro que el posteo manual (`postJournalEntry`, accounting.ts): `journal.posted`
+    // en auditoría y en el outbox, con los mismos campos. Lo postea el sistema, no una persona.
+    const [e] = await sql<
+      {
+        tenant_id: string;
+        entry_number: number;
+        posting_date: string;
+        total_debit: string;
+        description: string;
+      }[]
+    >`
+      select e.tenant_id, e.entry_number::int as entry_number,
+             e.posting_date::text as posting_date, e.description,
+             (select sum(l.functional_debit) from public.journal_lines l
+               where l.entry_id = e.id)::text as total_debit
+        from public.journal_entries e
+       where e.id = ${preparado.entry_id}`;
+    const payload = {
+      entry_number: e!.entry_number,
+      posting_date: e!.posting_date,
+      total_debit: e!.total_debit,
+      description: e!.description,
+    };
+    await sql`
+      insert into public.audit_events
+        (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+         actor_type, occurred_at, rules_version, payload)
+      values (${e!.tenant_id}, ${companyId}, 'journal_entry', ${preparado.entry_id},
+              'journal.posted', 'system', now(), ${RULES_VERSION}, ${sql.json(payload)})`;
+    await sql`
+      insert into public.outbox
+        (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
+      values (${e!.tenant_id}, ${companyId}, 'journal_entry', ${preparado.entry_id},
+              'journal.posted', 1, ${sql.json({ id: preparado.entry_id, ...payload })})`;
+  }
+  const [f] = await sql<{ r: TreasurySubaccountsRepair }[]>`
+    select platform.treasury_subaccounts_repair_finish(${sql.json(preparado)},
+                                                       ${RULES_VERSION}) as r`;
+  return f!.r;
 }

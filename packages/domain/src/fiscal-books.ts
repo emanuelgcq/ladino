@@ -29,8 +29,15 @@ export type FiscalBookError =
   | { code: "VALIDATION_FAILED"; message: string }
   | { code: "BOOK_FORMAT_UNAVAILABLE"; message: string };
 
-/** La versión del generador, persistida en cada exportación. */
-export const BOOK_GENERATOR_VERSION = "fiscal-books/1.0.0";
+/**
+ * La versión del generador, persistida en cada exportación.
+ *
+ * 1.1.0 (migración 20260928120000, L-01/L-07/R-2 ampliada): la NC de venta va en negativo, la
+ * anulada en cero y el libro de compras trae el «ajuste de período anterior». El libro cambió
+ * de significado: una reexportación de un período ya exportado da otro hash, y la versión dice
+ * por qué (R-54).
+ */
+export const BOOK_GENERATOR_VERSION = "fiscal-books/1.1.0";
 
 /**
  * Los adaptadores que este release SABE serializar.
@@ -82,7 +89,8 @@ const PROYECCION: Record<BookKind, { fn: string; cols: string }> = {
            base_no_sujeta::text as base_no_sujeta,
            base_sin_clasificar::text as base_sin_clasificar,
            retenido_iva::text as retenido_iva, retenido_islr::text as retenido_islr,
-           total_amount::text as total_amount, journal_entry_id`,
+           total_amount::text as total_amount, journal_entry_id,
+           booked_on::text as booked_on, received_late`,
   },
   retenciones_iva: {
     fn: "platform.iva_retention_book",

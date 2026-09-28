@@ -5,46 +5,23 @@ import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
 
 /**
- * UNA VENTA POR CADA OFICIO (RESPUESTA_RECORRIDO_2026-09-24.md, ola 0, punto
- * 6(a); hallazgos N-01, N-02, N-04, B-16).
+ * UNA VENTA POR CADA OFICIO (ADR-0068; hallazgos N-01, N-02, N-04, B-16).
  *
- * Una sola empresa, fundada por un dueño real, con un producto con existencia
- * y CUATRO personas agregadas con su rol de sistema: cajero, encargado,
- * administrativo y un «Dueño» invitado por el fundador (asignación ACOTADA a
- * la empresa, no de negocio). Cada `it` asevera la conducta FINAL que decide
- * el dueño el 2026-09-28, no la de hoy: donde hoy falla va con `it.fails`
- * (pasa MIENTRAS el defecto exista); donde hoy ya pasa, con `it` normal. El
- * fiado con límite de crédito (E-09) queda fuera de este fichero.
- *
- * Lo que cada caso asevera y por qué NINGÚN otro camino lo produce:
- *   · el cajero (N-01) y el Dueño invitado (N-02) comparten la MISMA causa —
- *     el permiso anidado `inventory.move` que `sales.invoice.issue` no
- *     cubre— pero cada uno por su propio `role_key`, y el mensaje
- *     («La operación exige el permiso inventory.move sobre esta empresa.»)
- *     es el que SOLO produce ese camino: un 403 por falta de
- *     `sales.invoice.issue` (rol sin oficio) o un 409 fiscal (sin talonario)
- *     dirían otra cosa;
- *   · el encargado y el administrativo SÍ venden hoy: ambos llevan
- *     `inventory.move` con su binding de almacén (ADR-0025 §4), así que esos
- *     dos van en `it` normal — son la prueba negativa de que el defecto es el
- *     permiso, no el flujo de venta;
- *   · el administrativo anula (N-04): hoy el 422 trae el mensaje de
- *     `accounting.entry.reverse`, no un 403 — es la firma exacta de que la
- *     reversa vuelve a autorizar por su cuenta (CLAUDE.md §3, «asevera el
- *     mensaje»); la conducta final es 200 con el asiento REVERSADO;
- *   · el encargado da de alta un producto con precio (B-16): el 403 de hoy es
- *     de `price_list.manage`, no de `product.manage` — el alta en sí se
- *     autoriza, el precio dentro de ella no;
- *   · el Dueño invitado lista los miembros (N-02): el 403 de hoy dice
- *     «a nivel de negocio», que es justo la exigencia que N-02 dice que sobra
- *     para una asignación por empresa.
- *
- * OJO: `it.fails` pasa ante CUALQUIER fallo del cuerpo, no solo el del defecto. La razón de
- * cada uno se confirmó A MANO al escribirlo (2026-09-28, con LADINO_E2E_DEBUG=1): 403 de
- * `inventory.move` (cajero y Dueño invitado), 403 «a nivel de negocio» (miembros), 403 de
- * `price_list.manage` (alta del encargado) y 422 de `accounting.entry.reverse` (anulación del
- * administrativo). El test no la fija: lo que fija es la conducta final, que es lo que queda
- * al cambiar `it.fails` por `it` en la ola que cierra cada hallazgo.
+ * Una sola empresa, fundada por un dueño real, con un producto con existencia y CUATRO personas
+ * agregadas con su rol de sistema: cajero, encargado, administrativo y un «Dueño» invitado por
+ * el fundador (asignación ACOTADA a la empresa, no de negocio). Cada oficio hace su trabajo por
+ * el camino real de la API, y cada caso asevera lo que SOLO ese camino produce:
+ *   · el cajero y el Dueño invitado venden de contado: 201, factura pagada y un movimiento de
+ *     kardex con el documento como origen. La salida la autoriza la venta
+ *     (`sales.invoice.issue`), no `inventory.move`, que ninguno de los dos tiene;
+ *   · el cajero NO saca mercancía por la ruta suelta: 403 con el mensaje de `inventory.move`
+ *     (la venta abre el paso interior, no la ruta suelta);
+ *   · el encargado y el administrativo venden igual, con su binding de almacén (ADR-0025 §4);
+ *   · el Dueño invitado lista a las personas de su empresa, fundador incluido;
+ *   · el encargado da de alta un producto CON precio (el precio lo autoriza `product.manage`);
+ *   · el administrativo anula una factura sin cobro: 200 y el asiento original REVERSADO, leído
+ *     de la base (la reversa la autoriza `sales.invoice.annul`).
+ * El fiado con límite de crédito (E-09) queda fuera de este fichero.
  */
 const URL_LOCAL = "postgres://postgres:postgres@127.0.0.1:54322/postgres";
 const URL_API = "postgres://ladino_api:ladino_api@127.0.0.1:54322/postgres";
@@ -178,6 +155,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // La tasa sembrada es GLOBAL: se borra al terminar, como manda _tasa-oficial.ts.
+  if (sql) {
+    await sql`delete from public.exchange_rates where company_id is null and source = ${FUENTE_TASA}`;
+  }
   await sql?.end();
   await sqlApi?.end();
 });
@@ -268,25 +249,40 @@ describe("una venta por cada oficio", () => {
     expect(dueno.status).toBe(201);
   });
 
-  // ── N-01: el cajero no puede vender ningún producto con existencia ────────
-  it.fails(
-    "N-01 — el cajero vende de contado como cualquier otro oficio: 201, documento y kardex",
-    async () => {
-      const r = await venderContado(CAJERO);
-      expect(r.status).toBe(201);
-      const cuerpo = (await r.json()) as {
-        document: { id: string; kind: string; status: string };
-        document_status: string;
-      };
-      expect(cuerpo.document_status).toBe("paid");
-      const [mov] = await sql<{ n: number }[]>`
+  // ── N-01: el cajero vende mercancía ───────────────────────────────────────
+  it("N-01 — el cajero vende de contado como cualquier otro oficio: 201, documento y kardex", async () => {
+    const r = await venderContado(CAJERO);
+    expect(r.status).toBe(201);
+    const cuerpo = (await r.json()) as {
+      document: { id: string; kind: string; status: string };
+      document_status: string;
+    };
+    expect(cuerpo.document_status).toBe("paid");
+    const [mov] = await sql<{ n: number }[]>`
         select count(*)::int as n from public.inventory_moves
          where company_id = ${COMPANY} and source_document_id = ${cuerpo.document.id}`;
-      expect(mov?.n).toBeGreaterThan(0);
-    },
-  );
+    expect(mov?.n).toBeGreaterThan(0);
+  });
 
-  // ── el encargado SÍ vende hoy: tiene inventory.move con su binding ───────
+  // ── N-01, el negativo: la ruta SUELTA sigue cerrada al cajero ───────────────
+  it("el cajero NO saca mercancía por la ruta suelta: 403 de inventory.move", async () => {
+    const r = await pedir("POST", "/v1/inventory/issues", CAJERO, {
+      company_id: COMPANY,
+      warehouse_id: DEPOSITO,
+      product_id: PRODUCTO,
+      quantity: "1",
+      reference: `suelta-cajero-${RUN}`,
+    });
+    expect(r.status).toBe(403);
+    const cuerpo = (await r.json()) as { message: string; person_message: string };
+    // Lo que SOLO produce la ruta suelta: el permiso que falta es inventory.move, no el de vender.
+    expect(cuerpo.message).toBe("La operación exige el permiso inventory.move sobre esta empresa.");
+    expect(cuerpo.person_message).toBe(
+      "Necesitas el permiso para mover mercancía en el almacén. Pídeselo a quien administra el negocio.",
+    );
+  });
+
+  // ── el encargado vende: tiene sales.invoice.issue con su binding ─────────
   it("el encargado vende de contado: 201, documento emitido y kardex con su source_document_id", async () => {
     const r = await venderContado(ENCARGADO);
     expect(r.status).toBe(201);
@@ -302,7 +298,7 @@ describe("una venta por cada oficio", () => {
     expect(mov?.n).toBeGreaterThan(0);
   });
 
-  // ── el administrativo SÍ vende hoy: misma razón que el encargado ─────────
+  // ── el administrativo vende: misma razón que el encargado ────────────────
   it("el administrativo vende de contado: 201, documento emitido y kardex con su source_document_id", async () => {
     const r = await venderContado(ADMINISTRATIVO);
     expect(r.status).toBe(201);
@@ -318,91 +314,81 @@ describe("una venta por cada oficio", () => {
     expect(mov?.n).toBeGreaterThan(0);
   });
 
-  // ── N-02: el Dueño invitado tampoco puede vender ─────────────────────────
-  it.fails(
-    "N-02 — el Dueño invitado vende de contado como el fundador: 201, documento y kardex",
-    async () => {
-      const r = await venderContado(DUENO_INVITADO);
-      expect(r.status).toBe(201);
-      const cuerpo = (await r.json()) as {
-        document: { id: string; kind: string; status: string };
-        document_status: string;
-      };
-      expect(cuerpo.document_status).toBe("paid");
-      const [mov] = await sql<{ n: number }[]>`
+  // ── N-02: el Dueño invitado vende ─────────────────────────────────────────
+  it("N-02 — el Dueño invitado vende de contado como el fundador: 201, documento y kardex", async () => {
+    const r = await venderContado(DUENO_INVITADO);
+    expect(r.status).toBe(201);
+    const cuerpo = (await r.json()) as {
+      document: { id: string; kind: string; status: string };
+      document_status: string;
+    };
+    expect(cuerpo.document_status).toBe("paid");
+    const [mov] = await sql<{ n: number }[]>`
         select count(*)::int as n from public.inventory_moves
          where company_id = ${COMPANY} and source_document_id = ${cuerpo.document.id}`;
-      expect(mov?.n).toBeGreaterThan(0);
-    },
-  );
+    expect(mov?.n).toBeGreaterThan(0);
+  });
 
   // ── N-02: el Dueño invitado lista los miembros de SU empresa ─────────────
-  it.fails(
-    "N-02 — el Dueño invitado ve la lista de miembros de la empresa a la que lo invitaron",
-    async () => {
-      const r = await pedir("GET", "/v1/members", DUENO_INVITADO);
-      expect(r.status).toBe(200);
-      // No basta un 200: la lista trae al fundador y a los cuatro que agregó, que es lo que
-      // SOLO produce un listado con el alcance correcto (un filtro mal puesto daría 200 vacío).
-      const { members } = (await r.json()) as { members: { user_id: string }[] };
-      const ids = new Set(members.map((m) => m.user_id));
-      for (const esperado of [FUNDADOR, CAJERO, ENCARGADO, ADMINISTRATIVO, DUENO_INVITADO]) {
-        expect(ids.has(esperado)).toBe(true);
-      }
-    },
-  );
+  it("N-02 — el Dueño invitado ve la lista de miembros de la empresa a la que lo invitaron", async () => {
+    const r = await pedir("GET", "/v1/members", DUENO_INVITADO);
+    expect(r.status).toBe(200);
+    // No basta un 200: la lista trae al fundador y a los cuatro que agregó, que es lo que
+    // SOLO produce un listado con el alcance correcto (un filtro mal puesto daría 200 vacío).
+    const { members } = (await r.json()) as { members: { user_id: string }[] };
+    const ids = new Set(members.map((m) => m.user_id));
+    for (const esperado of [FUNDADOR, CAJERO, ENCARGADO, ADMINISTRATIVO, DUENO_INVITADO]) {
+      expect(ids.has(esperado)).toBe(true);
+    }
+  });
 
   // ── B-16: el encargado da de alta un producto CON precio ─────────────────
-  it.fails(
-    "B-16 — el encargado da de alta un producto con precio por el alta simple: 201 y el precio en la lista",
-    async () => {
-      const alta = await pedir("POST", "/v1/products/simple", ENCARGADO, {
-        company_id: COMPANY,
-        name: `Producto del encargado ${RUN}`,
-        price: { amount: "3", currency: "USD" },
-      });
-      expect(alta.status).toBe(201);
-      const producto = ((await alta.json()) as { product: { id: string } }).product;
+  it("B-16 — el encargado da de alta un producto con precio por el alta simple: 201 y el precio en la lista", async () => {
+    const alta = await pedir("POST", "/v1/products/simple", ENCARGADO, {
+      company_id: COMPANY,
+      name: `Producto del encargado ${RUN}`,
+      price: { amount: "3", currency: "USD" },
+    });
+    expect(alta.status).toBe(201);
+    const producto = ((await alta.json()) as { product: { id: string } }).product;
 
-      const lista = await pedir(
-        "GET",
-        `/v1/products?only_active=1&with_price=1&search=${encodeURIComponent(`Producto del encargado ${RUN}`)}`,
-        ENCARGADO,
-      );
-      expect(lista.status).toBe(200);
-      const items = ((await lista.json()) as { items: Record<string, unknown>[] }).items;
-      const fila = items.find((i) => i["id"] === producto.id);
-      expect(fila?.["price_amount"]).toBe("3.00000000");
-    },
-  );
+    const lista = await pedir(
+      "GET",
+      `/v1/products?only_active=1&with_price=1&search=${encodeURIComponent(`Producto del encargado ${RUN}`)}`,
+      ENCARGADO,
+    );
+    expect(lista.status).toBe(200);
+    const items = ((await lista.json()) as { items: Record<string, unknown>[] }).items;
+    const fila = items.find((i) => i["id"] === producto.id);
+    expect(fila?.["price_amount"]).toBe("3.00000000");
+  });
 
   // ── N-04: el administrativo anula una factura sin cobro ──────────────────
-  it.fails(
-    "N-04 — el administrativo anula una factura sin cobro: 200 y el asiento original queda REVERSADO",
-    async () => {
-      const emitida = await pedir("POST", "/v1/pos/sales", ADMINISTRATIVO, {
-        company_id: COMPANY,
-        customer_id: CLIENTE,
-        warehouse_id: DEPOSITO,
-        lines: [{ product_id: PRODUCTO, quantity: "1" }],
-        // SIN payments: factura emitida, sin cobro — la única que se anula
-        // (ADR-0061 §8, «una venta cobrada no se anula, se devuelve»).
-      });
-      expect(emitida.status).toBe(201);
-      const doc = (await emitida.json()) as {
-        document: { id: string; journal_entry_id: string | null };
-      };
-      expect(doc.document.journal_entry_id).not.toBeNull();
+  it("N-04 — el administrativo anula una factura sin cobro: 200 y el asiento original queda REVERSADO", async () => {
+    const emitida = await pedir("POST", "/v1/pos/sales", ADMINISTRATIVO, {
+      company_id: COMPANY,
+      customer_id: CLIENTE,
+      warehouse_id: DEPOSITO,
+      lines: [{ product_id: PRODUCTO, quantity: "1" }],
+      // SIN payments: factura emitida, sin cobro — la única que se anula
+      // (ADR-0061 §8, «una venta cobrada no se anula, se devuelve»).
+    });
+    expect(emitida.status).toBe(201);
+    const doc = (await emitida.json()) as { document: { id: string } };
+    // El asiento se lee de la BASE: la respuesta de la caja no trae `journal_entry_id`, y leerlo
+    // de ahí daba `undefined` — `not.toBeNull()` pasaba sin mirar nada (antitest de la ola 0).
+    const [emitido] = await sql<{ journal_entry_id: string | null }[]>`
+        select journal_entry_id from public.documents where id = ${doc.document.id}`;
+    expect(emitido?.journal_entry_id ?? null).not.toBeNull();
 
-      const anular = await pedir("POST", `/v1/invoices/${doc.document.id}/annul`, ADMINISTRATIVO, {
-        company_id: COMPANY,
-        reason: "N-04 — venta de prueba, se anula sin cobro",
-      });
-      expect(anular.status).toBe(200);
+    const anular = await pedir("POST", `/v1/invoices/${doc.document.id}/annul`, ADMINISTRATIVO, {
+      company_id: COMPANY,
+      reason: "N-04 — venta de prueba, se anula sin cobro",
+    });
+    expect(anular.status).toBe(200);
 
-      const [entry] = await sql<{ status: string }[]>`
-        select status from public.journal_entries where id = ${doc.document.journal_entry_id}`;
-      expect(entry?.status).toBe("reversed");
-    },
-  );
+    const [entry] = await sql<{ status: string }[]>`
+        select status from public.journal_entries where id = ${emitido!.journal_entry_id}`;
+    expect(entry?.status).toBe("reversed");
+  });
 });

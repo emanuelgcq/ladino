@@ -44,8 +44,13 @@ const tokenDe = (sub: string) =>
     .setExpirationTime("1h")
     .sign(JWT_SECRET);
 
-async function pedir(metodo: string, path: string, body?: unknown): Promise<Response> {
-  const headers: Record<string, string> = { Authorization: `Bearer ${await tokenDe(DUENO)}` };
+async function pedir(
+  metodo: string,
+  path: string,
+  body?: unknown,
+  sub: string = DUENO,
+): Promise<Response> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${await tokenDe(sub)}` };
   if (COMPANY !== "") headers["X-Company-Id"] = COMPANY;
   if (metodo !== "GET" && path !== "/v1/onboarding") {
     headers["Idempotency-Key"] = crypto.randomUUID();
@@ -160,18 +165,47 @@ describe("un segundo depósito no le quita la caja al dueño", () => {
   });
 
   it("vender desde un depósito sin alcance responde 403, no 422 «dato inválido»", async () => {
+    // Un rol ACOTADO (el encargado) sin binding en ese depósito. Antes vendía el dueño y el 403
+    // salía del permiso anidado `inventory.move`; desde ADR-0068 la venta autoriza con
+    // `sales.invoice.issue`, y un rol NO acotado (el dueño) vende desde cualquier almacén de su
+    // empresa. El alcance por almacén solo lo tiene un rol acotado.
+    const ENCARGADO = crypto.randomUUID();
+    const correo = `depositos-encargado-${RUN}@e2e.ladino`;
+    await sql`insert into auth.users (id, email) values (${ENCARGADO}, ${correo})
+              on conflict (id) do nothing`;
+    const alta = await pedir("POST", "/v1/members", {
+      company_id: COMPANY,
+      email: correo,
+      role_key: "store_manager",
+    });
+    expect(alta.status).toBe(201);
     // Un depósito insertado por fuera del caso de uso (sin binding): el camino que antes daba 422.
     const [suelto] = await sql<{ id: string }[]>`
       insert into public.warehouses (tenant_id, company_id, code, name)
       select tenant_id, id, 'SUELTO', 'Sin binding' from public.companies where id = ${COMPANY}
       returning id`;
-    const v = await pedir("POST", "/v1/pos/sales", {
-      company_id: COMPANY,
-      warehouse_id: suelto!.id,
-      lines: [{ product_id: PRODUCTO, quantity: "1" }],
-      payments: [{ instrument: "efectivo_bs", amount: "80", currency: "VES" }],
-    });
+    const v = await pedir(
+      "POST",
+      "/v1/pos/sales",
+      {
+        company_id: COMPANY,
+        warehouse_id: suelto!.id,
+        lines: [{ product_id: PRODUCTO, quantity: "1" }],
+        payments: [{ instrument: "efectivo_bs", amount: "80", currency: "VES" }],
+      },
+      ENCARGADO,
+    );
     expect(v.status).toBe(403);
+    // Lo que SOLO produce el alcance del almacén en la venta (no un rol sin oficio, no el stock).
+    const cuerpo = (await v.json()) as { message: string; person_message: string };
+    expect(cuerpo.message).toBe(
+      "La operación exige el permiso sales.invoice.issue sobre ese almacén concreto.",
+    );
+    // A la persona, en sus palabras y sin la clave técnica (ADR-0068 §4).
+    expect(cuerpo.person_message).toBe(
+      "Necesitas el permiso para vender. Pídeselo a quien administra el negocio.",
+    );
+    expect(cuerpo.person_message).not.toContain("sales.invoice.issue");
     await sql`update public.warehouses set status = 'inactive' where id = ${suelto!.id}`;
   });
 

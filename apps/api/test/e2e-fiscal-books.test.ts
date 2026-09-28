@@ -117,6 +117,7 @@ beforeAll(async () => {
              values (${ROL}, null, ${`e2elibros_${RUN}`}, 'Contador libros e2e', true)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
              (${ROL}, 'sales.invoice.issue'), (${ROL}, 'sales.invoice.annul'),
+             (${ROL}, 'sales.return.manage'),
              (${ROL}, 'ar.read'), (${ROL}, 'supplier.manage'),
              (${ROL}, 'purchase.invoice.register'), (${ROL}, 'ap.read'),
              (${ROL}, 'inventory.move'), (${ROL}, 'fiscal.range.manage'),
@@ -526,5 +527,104 @@ describe("libros fiscales — la exportación y su rastro", () => {
     expect(runs.length).toBeGreaterThanOrEqual(3);
     expect(runs.every((x) => x.book_kind === "ventas")).toBe(true);
     expect(runs.every((x) => /^[0-9a-f]{64}$/.test(x.dataset_hash))).toBe(true);
+  });
+});
+
+/**
+ * L-01 / L-07 (RESPUESTA_RECORRIDO_2026-09-24): lo que se ENTREGA al contador.
+ *
+ * El recorrido encontró las NC en positivo y la anulada con todos sus importes
+ * en el CSV exportado: sumando la columna, el débito fiscal salía inflado. Este
+ * test lee el FICHERO, no la pantalla: una NC por la API, una factura anulada
+ * por la API, exportar, y mirar las celdas.
+ */
+describe("libros fiscales — el CSV que se entrega: la NC resta y la anulada no suma", () => {
+  it("la NC sale en NEGATIVO y la anulada con su número e importes en CERO, y la conciliación cuadra", async () => {
+    const rangoNc = await pedir("POST", "/v1/fiscal-number-ranges", {
+      company_id: COMPANY,
+      kind: "credit_note",
+      series: "A",
+      range_from: "700",
+      range_to: "799",
+      printer_source: "Imprenta E2E libros, notas de crédito",
+    });
+    expect(rangoNc.status).toBe(201);
+
+    const fact = await pedir("POST", "/v1/invoices", {
+      company_id: COMPANY,
+      customer_id: CLIENTE,
+      warehouse_id: W1,
+      lines: [{ product_id: PROD_GRAVADO, quantity: "1" }],
+    });
+    expect(fact.status).toBe(201);
+    const factura = (await fact.json()) as Record<string, string>;
+    const det = (await (await pedir("GET", `/v1/documents/${factura["id"]}`)).json()) as {
+      lines: { id: string }[];
+    };
+    const ncR = await pedir("POST", "/v1/credit-notes", {
+      company_id: COMPANY,
+      source_document_id: factura["id"],
+      reason: "Descuento acordado después de la venta",
+      lines: [{ source_line_id: det.lines[0]!.id, quantity: "1" }],
+    });
+    expect(ncR.status).toBe(201);
+    const nc = ((await ncR.json()) as { document: { id: string } }).document;
+
+    const otra = await pedir("POST", "/v1/invoices", {
+      company_id: COMPANY,
+      customer_id: CLIENTE,
+      warehouse_id: W1,
+      lines: [{ product_id: PROD_GRAVADO, quantity: "1" }],
+    });
+    expect(otra.status).toBe(201);
+    const anulada = (await otra.json()) as Record<string, string>;
+    const anul = await pedir("POST", `/v1/invoices/${anulada["id"]}/annul`, {
+      company_id: COMPANY,
+      reason: "No salió del establecimiento",
+    });
+    expect(anul.status).toBe(200);
+
+    const exp = await pedir("POST", "/v1/fiscal-books/export", {
+      company_id: COMPANY,
+      book_kind: "ventas",
+      period_from: DESDE,
+      period_to: HASTA,
+      format_code: "csv_columnas_legales",
+      timezone: "America/Caracas",
+    });
+    expect(exp.status).toBe(201);
+    const { content } = (await exp.json()) as { content: string };
+    const [cab, ...lineas] = content.split("\r\n");
+    const cols = cab!.split(",");
+    const celda = (id: string, col: string): string => {
+      const l = lineas.find((x) => x.split(",")[cols.indexOf("document_id")] === id);
+      expect(l, `el CSV trae el renglón ${id}`).toBeDefined();
+      return l!.split(",")[cols.indexOf(col)]!;
+    };
+
+    // La NC: base, IVA y total en negativo — y es la MISMA cifra que la factura, con signo.
+    expect(celda(nc.id, "kind")).toBe("credit_note");
+    expect(celda(nc.id, "iva_debito")).toBe(`-${celda(factura["id"]!, "iva_debito")}`);
+    expect(celda(nc.id, "base_gravada")).toBe(`-${celda(factura["id"]!, "base_gravada")}`);
+    expect(celda(nc.id, "total_amount")).toMatch(/^-\d/);
+
+    // La anulada: está, con su número y su estado, y no suma.
+    expect(celda(anulada["id"]!, "status")).toBe("annulled");
+    expect(celda(anulada["id"]!, "document_number")).toBe(String(anulada["document_number"]));
+    for (const col of ["base_gravada", "iva_debito", "base_exenta", "total_amount"]) {
+      expect(celda(anulada["id"]!, col), `anulada · ${col}`).toMatch(/^0(\.0+)?$/);
+    }
+
+    // Y la conciliación cuadra con la NC de por medio, sin discrepancias que enseñar (L-06).
+    const rec = (await (
+      await pedir("GET", `/v1/fiscal-books/reports/reconciliation?from=${DESDE}&to=${HASTA}`)
+    ).json()) as {
+      balanced: boolean;
+      discrepancies?: unknown[];
+      coverage_gaps?: unknown[];
+    };
+    expect(rec.balanced).toBe(true);
+    expect(rec.discrepancies).toEqual([]);
+    expect(Array.isArray(rec.coverage_gaps)).toBe(true);
   });
 });

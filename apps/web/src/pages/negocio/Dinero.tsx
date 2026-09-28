@@ -625,22 +625,32 @@ function MoverPlata({
 
   const mover = useMutation({
     mutationFn: (forzar: boolean) =>
-      llamar("/v1/treasury/transfers", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          from_account_id: origen.id,
-          to_account_id: destino,
-          amount: limpio,
-          reason: motivo.trim(),
-          ...(forzar ? { allow_negative_balance: true } : {}),
-        }),
-      }),
-    onSuccess: () => {
+      llamar<{ amount: string; currency: string; accounting: "posted" | "queued" }>(
+        "/v1/treasury/transfers",
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": crypto.randomUUID() },
+          body: JSON.stringify({
+            company_id: empresa.id,
+            from_account_id: origen.id,
+            to_account_id: destino,
+            amount: limpio,
+            reason: motivo.trim(),
+            ...(forzar ? { allow_negative_balance: true } : {}),
+          }),
+        },
+      ),
+    onSuccess: (r) => {
+      // Lo que el servidor registró, no lo que se tecleó. Cada cuenta tiene su subcuenta en los
+      // libros (ADR-0070): el traslado se ve también en el mayor, o espera en la cola del contador.
+      const hacia = destinos.find((d) => d.id === destino)?.name ?? "la otra cuenta";
+      const libros =
+        r.accounting === "posted"
+          ? "Ya está en los libros."
+          : "Los libros lo registran cuando el contador termine de configurarlos.";
       toast.success(
         "Plata movida",
-        `Salió de ${origen.name} y entró a ${destinos.find((d) => d.id === destino)?.name ?? "la otra cuenta"}.`,
+        `${mostrarImporte({ amount: r.amount, currency: r.currency })} salieron de ${origen.name} y entraron a ${hacia}. ${libros}`,
       );
       onCerrar(true);
     },

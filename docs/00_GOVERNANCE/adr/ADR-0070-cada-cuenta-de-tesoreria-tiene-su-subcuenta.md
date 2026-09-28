@@ -36,6 +36,12 @@ mayor: el mayor no puede decir cuánto hay en Banesco y cuánto en Mercantil.
    reparación: de la cuenta de familia a cada subcuenta, por el saldo que la tesorería atribuye a esa
    cuenta. Nada se actualiza sobre `journal_lines` (append-only). Es idempotente: una cuenta que ya
    tiene subcuenta no se toca.
+   **Cómo corre (2026-09-28):** la migración trae las funciones `treasury_subaccounts_repair_prepare`
+   y `_finish`. El asiento de reclasificación lo postea el dominio (`repairTreasurySubaccounts`,
+   `packages/domain/src/treasury.ts`), porque ninguna función SQL de Ladino postea asientos y el
+   guardián de inmutabilidad bloquea el paso draft → posted dentro de una migración. La corre
+   `scripts/reparar/adr-0070-subcuentas.mjs`, empresa por empresa, **después** del `git pull` que sube
+   la API nueva (respuesta del dueño, §7).
 4. **Invariante nuevo** (se completa en la ola de moneda, J-04): el saldo de cada cuenta de tesorería
    es igual al de su subcuenta contable, por moneda.
 

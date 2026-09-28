@@ -17,6 +17,7 @@ import { API_URL } from "../../lib.js";
 import { LogoLadino } from "../../components/LogoLadino.js";
 import { Button } from "../../ui/button.js";
 import { formatearDocumento } from "../negocio/comunes.js";
+import { hoyLocal } from "../../fechas.js";
 
 /**
  * EL REGISTRO PREMIUM (orden del dueño, 2026-09-06): fundar el negocio con la
@@ -134,6 +135,8 @@ interface Datos {
   ciudad: string;
   duenoNombre: string;
   duenoCedula: string;
+  /** ADR-0069 §3 (K-05): inicio de actividades, YYYY-MM-DD. Vacío = hoy. */
+  inicioActividades: string;
 }
 
 const DATOS_VACIOS: Datos = {
@@ -150,6 +153,7 @@ const DATOS_VACIOS: Datos = {
   estado: null,
   ciudad: "",
   duenoNombre: "",
+  inicioActividades: "",
   duenoCedula: "",
 };
 
@@ -362,6 +366,7 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
           ...(d.estado === null ? {} : { state: d.estado }),
           owner_full_name: d.duenoNombre.trim(),
           ...(d.duenoCedula.trim() === "" ? {} : { owner_national_id: d.duenoCedula.trim() }),
+          activity_start_date: d.inicioActividades === "" ? hoyLocal() : d.inicioActividades,
         }),
       });
       if (r.status === 409) {
@@ -787,6 +792,18 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
                 etiqueta="Cédula"
                 sinFoco
               />
+              {/* K-05: antes de esta fecha no hay períodos contables. Por omisión, hoy. */}
+              <label className="block text-center text-[0.9rem] text-muted-foreground">
+                ¿Desde cuándo opera el negocio?
+                <input
+                  type="date"
+                  className="mx-auto mt-1 block rounded-md border border-border bg-background px-3 py-2 text-foreground"
+                  aria-label="Inicio de actividades"
+                  value={d.inicioActividades === "" ? hoyLocal() : d.inicioActividades}
+                  max={hoyLocal()}
+                  onChange={(e) => pon("inicioActividades", e.target.value)}
+                />
+              </label>
               <p className="text-center text-[0.9rem] text-faint-foreground">{correo}</p>
             </div>
           </Pregunta>

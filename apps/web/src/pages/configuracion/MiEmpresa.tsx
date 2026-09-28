@@ -52,6 +52,7 @@ interface EmpresaFila {
   state: string | null;
   logo_url: string | null;
   taxpayer_type_code: string | null;
+  activity_start_date: string | null;
 }
 
 const RUBROS: { value: string; label: string }[] = [
@@ -337,6 +338,7 @@ function EditarEmpresa({
     whatsapp: e.whatsapp ?? "",
     city: e.city ?? "",
     state: e.state ?? "",
+    activity_start_date: e.activity_start_date ?? "",
     legal_name: e.legal_name,
     fiscal_address: e.fiscal_address ?? "",
   });
@@ -365,6 +367,10 @@ function EditarEmpresa({
           ...(form.fiscal_address.trim() === ""
             ? {}
             : { fiscal_address: form.fiscal_address.trim() }),
+          ...(form.activity_start_date === "" ||
+          form.activity_start_date === (e.activity_start_date ?? "")
+            ? {}
+            : { activity_start_date: form.activity_start_date }),
           ...(reason === undefined || reason.trim() === "" ? {} : { reason: reason.trim() }),
         }),
       });
@@ -432,6 +438,18 @@ function EditarEmpresa({
                 {...p}
                 value={form.whatsapp}
                 onChange={(ev) => setForm({ ...form, whatsapp: ev.target.value })}
+              />
+            )}
+          </FormField>
+          {/* ADR-0069 §3: antes de esta fecha no hay períodos contables. La API rechaza una
+              posterior al primer asiento. */}
+          <FormField label="Inicio de actividades">
+            {(p) => (
+              <Input
+                {...p}
+                type="date"
+                value={form.activity_start_date}
+                onChange={(ev) => setForm({ ...form, activity_start_date: ev.target.value })}
               />
             )}
           </FormField>

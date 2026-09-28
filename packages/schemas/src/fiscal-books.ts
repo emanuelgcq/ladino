@@ -87,6 +87,12 @@ export const PurchasesBookRow = z
     retenido_islr: z.string(),
     total_amount: z.string(),
     journal_entry_id: uuid.nullable(),
+    /**
+     * ADR-0069 §4 (K-04): fecha en que se REGISTRÓ (la del período del libro). Si difiere de
+     * `invoice_date` (la original del documento), la factura se recibió con retraso.
+     */
+    booked_on: z.string(),
+    received_late: z.boolean(),
   })
   .strict();
 export type PurchasesBookRow = z.infer<typeof PurchasesBookRow>;
@@ -186,6 +192,34 @@ export const BookReconciliationResponse = z
         .strict(),
     ),
     balanced: z.boolean(),
+    /**
+     * L-06: los documentos y asientos concretos donde libro y mayor no dicen lo mismo
+     * (`platform.book_ledger_discrepancies`). `document_id` nulo = un asiento de la cuenta de
+     * IVA que ningún renglón del libro respalda. Opcional: campo nuevo y aditivo.
+     */
+    discrepancies: z
+      .array(
+        z
+          .object({
+            concepto: z.string(),
+            document_id: uuid.nullable(),
+            document_kind: z.string().nullable(),
+            journal_entry_id: uuid.nullable(),
+            entry_number: z.number().int().nullable(),
+            libro: z.string(),
+            mayor: z.string(),
+          })
+          .strict(),
+      )
+      .optional(),
+    /**
+     * Los huecos de `accounting_coverage_gaps()` de la empresa: un documento posteado sin
+     * asiento ni fila en cola. Es lo único que autoriza a la pantalla a decir que falta un
+     * asiento. Opcional: campo nuevo y aditivo.
+     */
+    coverage_gaps: z
+      .array(z.object({ source_kind: z.string(), source_id: uuid, problem: z.string() }).strict())
+      .optional(),
   })
   .strict();
 export type BookReconciliationResponse = z.infer<typeof BookReconciliationResponse>;

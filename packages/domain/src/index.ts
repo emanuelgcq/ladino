@@ -101,6 +101,7 @@ export {
   createManualJournalEntry,
   postJournalEntry,
   reverseJournalEntry,
+  discardJournalEntry,
   closeFiscalPeriod,
   reopenFiscalPeriod,
   executeYearEndClose,
@@ -143,6 +144,9 @@ export {
   exigeSaldo,
   closeCashRegister,
   resolverCuentaEfectivo,
+  repairTreasurySubaccounts,
+  SYSTEM_POSTER_ID,
+  type TreasurySubaccountsRepair,
   type TreasuryError,
 } from "./treasury.js";
 export {

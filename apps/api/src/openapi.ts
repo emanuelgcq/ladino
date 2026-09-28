@@ -125,6 +125,7 @@ import {
   CreateJournalEntryRequest,
   PostJournalEntryRequest,
   ReverseJournalEntryRequest,
+  DiscardJournalEntryRequest,
   JournalEntryResponse,
   JournalEntryDetailResponse,
   ListJournalEntriesResponse,
@@ -268,15 +269,18 @@ export function buildOpenApiDocument(): object {
     path: "/v1/members",
     summary: "Los miembros del negocio y sus roles",
     description:
-      "ADR-0049: membresías del tenant de la empresa activa, con correo y asignaciones. " +
-      "Exige membership.read a nivel de negocio (rol plano).",
+      "ADR-0049/ADR-0068 §3: membresías de la empresa activa, con correo y asignaciones. " +
+      "Exige membership.read sobre la empresa de la cabecera (asignación de esa empresa o de " +
+      "nivel tenant). El Titular de la cuenta (asignación de nivel tenant) ve la cuenta entera; " +
+      "un gestor acotado a la empresa ve a las personas con rol en ella (y al Titular), con solo " +
+      "las asignaciones de esa empresa o de la cuenta.",
     security: [{ bearerAuth: [] }],
     responses: {
       200: {
         description: "La lista de miembros.",
         content: { "application/json": { schema: miembros } },
       },
-      403: errorRef("Sin membership.read a nivel de negocio."),
+      403: errorRef("Sin membership.read sobre esta empresa."),
       401: errorRef("Token ausente, inválido o expirado."),
     },
   });
@@ -288,7 +292,9 @@ export function buildOpenApiDocument(): object {
     description:
       "La persona se registra sola en Ladino y el dueño la agrega por correo con uno de los " +
       "seis roles de sistema. Un rol acotado recibe bindings a TODOS los almacenes de la " +
-      "empresa. Exige membership.manage a nivel de negocio.",
+      "empresa; un owner recibe además warehouse_ops acotado a la empresa. Exige " +
+      "membership.manage sobre la empresa de la cabecera. Si la persona estaba desactivada, " +
+      "agregarla la reactiva, y un gestor acotado pasa la misma guarda que al cambiar el acceso.",
     security: [{ bearerAuth: [] }],
     request: { body: { content: { "application/json": { schema: agregarMiembro } } } },
     responses: {
@@ -297,7 +303,11 @@ export function buildOpenApiDocument(): object {
         content: { "application/json": { schema: miembro } },
       },
       404: errorRef("Ese correo no tiene cuenta en Ladino todavía."),
-      403: errorRef("Sin membership.manage a nivel de negocio."),
+      403: errorRef(
+        "Sin membership.manage sobre esta empresa (PERMISSION_REQUIRED); o, al reactivar a un " +
+          "desactivado, es el Titular o trabaja en otra empresa que el gestor no gestiona " +
+          "(MEMBER_PROTECTED).",
+      ),
       401: errorRef("Token ausente, inválido o expirado."),
     },
   });
@@ -308,12 +318,18 @@ export function buildOpenApiDocument(): object {
     summary: "Quitar un rol asignado",
     description:
       "Elimina la asignación y sus bindings. El dueño no puede quitarse a sí mismo el rol de " +
-      "dueño. Exige membership.manage a nivel de negocio.",
+      "dueño. Exige membership.manage sobre la empresa de la cabecera; un gestor acotado solo " +
+      "quita asignaciones de esa empresa y ninguna del Titular de la cuenta.",
     security: [{ bearerAuth: [] }],
     responses: {
       200: { description: "Asignación eliminada." },
-      403: errorRef("Sin membership.manage a nivel de negocio."),
-      404: errorRef("La asignación no existe en este negocio."),
+      403: errorRef(
+        "Sin membership.manage sobre esta empresa (PERMISSION_REQUIRED), o la asignación es del " +
+          "Titular de la cuenta y quien pide es un gestor acotado (MEMBER_PROTECTED).",
+      ),
+      404: errorRef(
+        "La asignación no existe en este negocio o, para un gestor acotado, es de otra empresa.",
+      ),
       401: errorRef("Token ausente, inválido o expirado."),
     },
   });
@@ -324,13 +340,20 @@ export function buildOpenApiDocument(): object {
     summary: "Activar o desactivar el acceso de un miembro",
     description:
       "Desactivar la membresía corta el acceso ENTERO en la consulta siguiente (ADR-0014). " +
-      "Nadie puede desactivarse a sí mismo. Exige membership.manage a nivel de negocio.",
+      "Nadie puede desactivarse a sí mismo. Exige membership.manage sobre la empresa de la " +
+      "cabecera. Un gestor acotado solo cambia el acceso de quien tiene rol en esa empresa, no " +
+      "tiene roles en empresas que él no gestiona y no es el Titular de la cuenta.",
     security: [{ bearerAuth: [] }],
     request: { body: { content: { "application/json": { schema: estadoMiembro } } } },
     responses: {
       200: { description: "Estado cambiado." },
-      403: errorRef("Sin membership.manage a nivel de negocio."),
-      404: errorRef("La membresía no existe en este negocio."),
+      403: errorRef(
+        "Sin membership.manage sobre esta empresa (PERMISSION_REQUIRED), o la persona es el " +
+          "Titular o trabaja en otra empresa que el gestor no gestiona (MEMBER_PROTECTED).",
+      ),
+      404: errorRef(
+        "La membresía no existe en este negocio o, para un gestor acotado, no tiene rol en esta empresa.",
+      ),
       401: errorRef("Token ausente, inválido o expirado."),
     },
   });
@@ -2900,6 +2923,27 @@ export function buildOpenApiDocument(): object {
       body: { content: { "application/json": { schema: reversarAsiento } } },
     },
     responses: { 201: okJson(asiento, "Contra-asiento posteado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/journal-entries/{id}/discard",
+    summary: "Descartar un BORRADOR (permiso accounting.entry.create)",
+    description:
+      "K-06, ADR-0069: el borrador pasa a `discarded` con rastro en audit_events. No se borra. " +
+      "Un asiento posteado NO se descarta nunca (regla 2): se reversa.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: {
+        content: {
+          "application/json": {
+            schema: registry.register("DiscardJournalEntryRequest", DiscardJournalEntryRequest),
+          },
+        },
+      },
+    },
+    responses: { 200: okJson(asiento, "Borrador descartado."), ...erroresComunes },
   });
   registry.registerPath({
     method: "get",

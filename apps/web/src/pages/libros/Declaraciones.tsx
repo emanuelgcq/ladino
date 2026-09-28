@@ -206,6 +206,16 @@ function descargarPlanilla(p: IvaPeriodResult, desde: string, hasta: string): vo
             aDosDecimalesTexto(p.creditos_deducibles),
           ],
         ]),
+    // R-2 ampliada: la casilla solo aparece cuando trae algo (texto, sin aritmética).
+    ...(p.ajuste_creditos_anteriores === undefined ||
+    /^-?0*(?:\.0*)?$/.test(p.ajuste_creditos_anteriores)
+      ? []
+      : [
+          [
+            "Ajustes a los créditos fiscales de períodos anteriores",
+            aDosDecimalesTexto(p.ajuste_creditos_anteriores),
+          ],
+        ]),
     ["Retenciones de IVA soportadas", aDosDecimalesTexto(p.retenciones_soportadas)],
     ["Excedente del período anterior", aDosDecimalesTexto(p.excedente_anterior)],
     ["Cuota a pagar", aDosDecimalesTexto(p.cuota_a_pagar)],
@@ -387,6 +397,15 @@ function Periodo({ desde, hasta }: { desde: string; hasta: string }): React.JSX.
                       moneda={moneda}
                     />
                   )}
+                  {ultima.ajuste_creditos_anteriores !== undefined &&
+                    !/^-?0*(?:\.0*)?$/.test(ultima.ajuste_creditos_anteriores) && (
+                      <Renglon
+                        concepto="Ajustes a los créditos fiscales de períodos anteriores"
+                        nota="Facturas de proveedor anuladas después de cerrar y presentar su período: se revierte su crédito aquí"
+                        importe={ultima.ajuste_creditos_anteriores}
+                        moneda={moneda}
+                      />
+                    )}
                   <Renglon
                     concepto="Retenciones de IVA que nos practicaron"
                     nota="Comprobantes cargados con fecha dentro del período"

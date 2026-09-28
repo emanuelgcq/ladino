@@ -52,25 +52,34 @@ insert into public.company_accounts (id, tenant_id, company_id, name, currency, 
 select ok(exists (select 1 from public.account_purposes where code = 'treasury_account'),
   'El papel treasury_account existe');
 
-select is((select ledger_account_id from public.company_accounts
-            where id = 'aaaa0056-0000-4000-8000-0000000000c1'),
-  'aaaa0056-0000-4000-8000-0000000000b1'::uuid,
-  'Una caja en la moneda funcional nace mapeada a cash_bs');
+-- ADR-0070 (J-01): la caja nace con su SUBCUENTA propia, no mapeada a la cuenta de familia
+-- compartida (esa era la causa del 500 de «Mover plata»). Aserción cambiada por RESPUESTA §5.2.4.
+select is((select a.parent_id::text || ' | ' || a.name || ' | ' || a.is_leaf::text
+             from public.company_accounts ca join public.accounts a on a.id = ca.ledger_account_id
+            where ca.id = 'aaaa0056-0000-4000-8000-0000000000c1'),
+  'aaaa0056-0000-4000-8000-0000000000b1 | Caja Bs 56 | true',
+  'Una caja en la moneda funcional nace con su subcuenta: hija de cash_bs, con su nombre, hoja');
 
-select is((select ledger_account_id from public.company_accounts
-            where id = 'aaaa0056-0000-4000-8000-0000000000c2'),
-  'aaaa0056-0000-4000-8000-0000000000b2'::uuid,
-  'Una caja en otra moneda nace mapeada a cash_usd');
+-- ADR-0070 (J-01): la caja nace con su SUBCUENTA propia, no mapeada a la cuenta de familia
+-- compartida (esa era la causa del 500 de «Mover plata»). Aserción cambiada por RESPUESTA §5.2.4.
+select is((select a.parent_id::text || ' | ' || a.name || ' | ' || a.is_leaf::text
+             from public.company_accounts ca join public.accounts a on a.id = ca.ledger_account_id
+            where ca.id = 'aaaa0056-0000-4000-8000-0000000000c2'),
+  'aaaa0056-0000-4000-8000-0000000000b2 | Caja USD 56 | true',
+  'Una caja en otra moneda nace con su subcuenta: hija de cash_usd, con su nombre, hoja');
 
 select is((select ledger_account_id from public.company_accounts
             where id = 'aaaa0056-0000-4000-8000-0000000000c3'),
   'aaaa0056-0000-4000-8000-0000000000b3'::uuid,
   'Un mapeo explícito no se pisa');
 
-select is((select ledger_account_id from public.company_accounts
-            where id = 'aaaa0056-0000-4000-8000-0000000000c0'),
-  'aaaa0056-0000-4000-8000-0000000000b2'::uuid,
-  'La caja que nació antes del papel se mapea cuando se asigna cash_usd');
+-- ADR-0070 (J-01): la caja nace con su SUBCUENTA propia, no mapeada a la cuenta de familia
+-- compartida (esa era la causa del 500 de «Mover plata»). Aserción cambiada por RESPUESTA §5.2.4.
+select is((select a.parent_id::text || ' | ' || a.name || ' | ' || a.is_leaf::text
+             from public.company_accounts ca join public.accounts a on a.id = ca.ledger_account_id
+            where ca.id = 'aaaa0056-0000-4000-8000-0000000000c0'),
+  'aaaa0056-0000-4000-8000-0000000000b2 | Zelle temprano 56 | true',
+  'La caja que nació antes del papel recibe su subcuenta (hija de cash_usd, con su nombre, hoja) cuando se asigna cash_usd');
 
 select is((select count(*)::int from public.audit_events
             where aggregate_id = 'aaaa0056-0000-4000-8000-0000000000c0'

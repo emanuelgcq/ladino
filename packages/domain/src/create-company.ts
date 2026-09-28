@@ -47,6 +47,7 @@ interface CompanyRow {
   status: "onboarding" | "active" | "suspended";
   taxpayer_type_code: string | null;
   created_at: string;
+  activity_start_date: string | null;
 }
 
 export async function createCompany(
@@ -179,6 +180,7 @@ export async function createCompany(
                 ${input.whatsapp ?? null}, ${input.city ?? null}, ${input.state ?? null})
         returning id, tenant_id, legal_name, trade_name, tax_id, fiscal_address,
                   business_type, phone, whatsapp, city, state, status, taxpayer_type_code,
+                  activity_start_date::text as activity_start_date,
                   -- ISO 8601 explícito: el texto por defecto de timestamptz usa
                   -- espacio y offset corto, y depender del parseo laxo de Date
                   -- es depender de un detalle del motor.
@@ -297,6 +299,7 @@ export async function createCompany(
     logo_url: null,
     status: fila.status,
     created_at: fila.created_at,
+    activity_start_date: fila.activity_start_date,
   });
 }
 

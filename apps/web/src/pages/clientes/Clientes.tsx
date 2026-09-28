@@ -76,7 +76,10 @@ const ESTADO: Record<string, { etiqueta: string; tone: BadgeTone }> = {
 const PER_PAGE = 25;
 
 export function Clientes(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
+  // K-11 (ADR-0068 §4): crear e importar exigen customer.manage en el servidor; sin él, la
+  // pantalla no los ofrece.
+  const gestiona = puede("customer.manage");
   const [busqueda, setBusqueda] = useState("");
   const [pagina, setPagina] = useState(1);
   const [creando, setCreando] = useState(false);
@@ -185,14 +188,16 @@ export function Clientes(): React.JSX.Element {
             : "Quién te compra, cómo contactarlo y quién te debe."
         }
         actions={
-          <>
-            <Button variant="secondary" onClick={() => setImportando(true)}>
-              <Upload /> Importar
-            </Button>
-            <Button variant="primary" onClick={() => setCreando(true)}>
-              <UserPlus /> Nuevo cliente
-            </Button>
-          </>
+          gestiona ? (
+            <>
+              <Button variant="secondary" onClick={() => setImportando(true)}>
+                <Upload /> Importar
+              </Button>
+              <Button variant="primary" onClick={() => setCreando(true)}>
+                <UserPlus /> Nuevo cliente
+              </Button>
+            </>
+          ) : undefined
         }
       />
 
@@ -242,7 +247,7 @@ export function Clientes(): React.JSX.Element {
                 ? "La búsqueda es del servidor: prueba con parte del RIF o del nombre."
                 : "Prueba con parte de la cédula o del nombre.",
           action:
-            busqueda === "" ? (
+            busqueda === "" && gestiona ? (
               <Button variant="primary" size="sm" onClick={() => setCreando(true)}>
                 Crear el primero
               </Button>

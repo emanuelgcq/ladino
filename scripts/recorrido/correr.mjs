@@ -5,6 +5,7 @@
  *   pnpm recorrido <B>              restaura y corre las comprobaciones del bloque B (A…P)
  *   pnpm recorrido todos            restaura y corre las comprobaciones de los 16 bloques
  *   pnpm recorrido <B> --sin-restaurar   corre sobre la base tal como está
+ *   pnpm recorrido <B> --sin-build       no reconstruye la API antes de comprobar
  *   pnpm recorrido <B> --guion      además vuelve a correr los guiones de exploración del bloque
  *
  * Restaurar, en este orden (el volcado es de la migración 73; las nuevas se aplican encima, que es
@@ -25,7 +26,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -40,7 +41,7 @@ const EMPRESAS = {
 };
 const BLOQUES = "ABCDEFGHIJKLMNOP".split("");
 /** Filas de invariante (no INFORME) que `invariantes.sql` devuelve por empresa: súbela al añadir una. */
-const INVARIANTES_ESPERADOS = 10;
+const INVARIANTES_ESPERADOS = 12;
 const ESQUEMAS = ["public", "platform", "auth", "storage", "supabase_migrations"];
 
 function correr(cmd, args, { entrada, silencioso = false } = {}) {
@@ -151,6 +152,19 @@ export function restaurar() {
     psql(fs.readFileSync(path.join(RAIZ, "supabase", "seed.sql"), "utf8"), "supabase_admin"),
     "seed.sql",
   );
+  // Las reparaciones que en producción corren DESPUÉS del git pull (HANDOFF, despliegue): el
+  // escenario es una empresa real de hace días y tiene que quedar como quedará la de producción.
+  console.log("· reparaciones posteriores al pull");
+  obligatorio(
+    psql("select platform.grant_invited_owner_warehouse_ops();", "supabase_admin"),
+    "grant_invited_owner_warehouse_ops",
+  );
+  obligatorio(
+    correr(process.execPath, [path.join(RAIZ, "scripts", "reparar", "adr-0070-subcuentas.mjs")], {
+      silencioso: true,
+    }),
+    "reparación ADR-0070 (subcuentas de tesorería)",
+  );
   const docs = psql("select count(*) from public.documents").stdout.trim();
   console.log(`✓ escenario restaurado (${docs} documentos)`);
 }
@@ -217,6 +231,37 @@ export function invariantes() {
   return fallos;
 }
 
+/**
+ * Las comprobaciones escriben de verdad y dejan eventos en el outbox; sin worker quedarían
+ * «pending» y el invariante del outbox daría rojo por eso. Se levanta el worker LOCAL (el mismo de
+ * producción, con su rol ladino_worker) hasta que no quede nada pendiente o pase un minuto: un
+ * evento que el worker no puede despachar sigue dando rojo, que es lo que el invariante mide.
+ */
+function drenarOutbox() {
+  const pendientes = () =>
+    Number(
+      psql(
+        "select count(*) from public.outbox where status in ('pending', 'in_flight')",
+      ).stdout.trim() || "0",
+    );
+  if (pendientes() === 0) return;
+  console.log("· vaciando el outbox con el worker local");
+  const worker = spawn(process.execPath, [path.join(RAIZ, "apps", "worker", "dist", "main.js")], {
+    cwd: RAIZ,
+    env: {
+      ...process.env,
+      DATABASE_URL: "postgres://ladino_worker:ladino_worker@127.0.0.1:54322/postgres",
+      WORKER_INTERVAL_MS: "300",
+    },
+    stdio: "ignore",
+  });
+  const limite = Date.now() + 60_000;
+  while (pendientes() > 0 && Date.now() < limite) {
+    spawnSync(process.execPath, ["-e", "setTimeout(() => {}, 1000)"]);
+  }
+  worker.kill();
+}
+
 async function bloque(b, { guion }) {
   let fallos = 0;
   if (guion) {
@@ -241,7 +286,9 @@ async function bloque(b, { guion }) {
 
 const [orden, ...resto] = process.argv.slice(2);
 if (!orden) {
-  console.log("uso: pnpm recorrido restaurar | <A…P> | todos  [--sin-restaurar] [--guion]");
+  console.log(
+    "uso: pnpm recorrido restaurar | <A…P> | todos  [--sin-restaurar] [--sin-build] [--guion]",
+  );
   process.exit(2);
 }
 process.env.RECORRIDO_FECHA = FECHA;
@@ -255,8 +302,24 @@ if (!lista.every((b) => BLOQUES.includes(b))) {
   process.exit(2);
 }
 if (!resto.includes("--sin-restaurar")) restaurar();
+// Las comprobaciones montan la API EN PROCESO desde apps/api/dist (verificar/_app.mjs): se
+// construye antes, para no comprobar un build viejo.
+if (!resto.includes("--sin-build")) {
+  console.log("· construyendo la API (apps/api/dist)");
+  obligatorio(
+    correr(
+      "npx",
+      ["pnpm", "--filter", "@ladino/api...", "--filter", "@ladino/worker...", "build"],
+      {
+        silencioso: true,
+      },
+    ),
+    "build de la API",
+  );
+}
 let fallos = 0;
 for (const b of lista) fallos += await bloque(b, { guion: resto.includes("--guion") });
+drenarOutbox();
 fallos += invariantes();
 console.log(
   fallos === 0 ? `\nRECORRIDO ${orden}: VERDE` : `\nRECORRIDO ${orden}: ROJO (${fallos})`,

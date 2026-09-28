@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router";
 import type { ColumnDef } from "@tanstack/react-table";
 import { BookOpenCheck, Download } from "lucide-react";
 import { useSesion } from "../../app/session.js";
@@ -95,6 +96,9 @@ const COLUMNAS_OCULTAS: ReadonlySet<string> = new Set([
   "invoice_id",
   "retention_id",
   "journal_entry_id",
+  // K-04: se enseñan DENTRO de la fecha de factura, como marca, no como columnas sueltas.
+  "booked_on",
+  "received_late",
 ]);
 
 /** Los códigos que el libro trae crudos, dichos en llano. */
@@ -105,7 +109,13 @@ const VALOR_LEGIBLE: Record<string, Record<string, string>> = {
     debit_note: "Nota de débito",
     receipt: "Recibo",
   },
-  status: { issued: "Emitida", paid: "Pagada", annulled: "Anulada", posted: "Registrada" },
+  status: {
+    issued: "Emitida",
+    paid: "Pagada",
+    annulled: "Anulada",
+    posted: "Registrada",
+    ajuste_periodo_anterior: "Ajuste de período anterior",
+  },
   receipt_status: { issued: "Emitido", annulled: "Anulado", draft: "Borrador" },
   customer_taxpayer_type: {
     ordinario: "Ordinario",
@@ -334,6 +344,18 @@ function Libro({
             );
           }
           if (typeof v === "string" && COLUMNAS_FECHA.has(clave)) {
+            // ADR-0069 §4: la factura de un mes cerrado entra en el período en que se registró,
+            // con su fecha original. El libro lo dice en la fila.
+            if (clave === "invoice_date" && c.row.original["received_late"] === true) {
+              return (
+                <span className="text-[0.84rem]">
+                  {fechaLocal(v)}
+                  <span className="block text-[0.76rem] text-warning">
+                    Recibida con retraso · fecha original {fechaLocal(v)}
+                  </span>
+                </span>
+              );
+            }
             return <span className="text-[0.84rem]">{fechaLocal(v)}</span>;
           }
           // Solo primitivos: las filas del libro traen strings y números, y un
@@ -436,6 +458,60 @@ function Libro({
   );
 }
 
+/** El concepto de la conciliación, en palabras de persona (L-06). */
+const CONCEPTO_LEGIBLE: Record<string, string> = {
+  iva_debito_fiscal: "IVA débito fiscal (ventas)",
+  iva_credito_fiscal: "IVA crédito fiscal (compras)",
+};
+
+/**
+ * A dónde lleva un documento de la conciliación. Las ventas tienen detalle propio; las compras,
+ * por ahora, solo su lista. Un tipo que no se reconoce no lleva a ninguna parte: mejor sin enlace
+ * que con uno que abre otra cosa.
+ */
+const ABRE_EL_DETALLE_DE_VENTAS = new Set([
+  // Las clases de `documents` que DetalleFactura (/admin/ventas/:id) abre: la lista de ventas
+  // enruta a esa pantalla toda fila de documents (Ventas.tsx, onRowClick), recibos y
+  // devoluciones incluidos. Lo que no es un documento de venta (`sales_cost`, cobros, gastos,
+  // cierres de caja…) no está aquí y va sin enlace.
+  "invoice",
+  "credit_note",
+  "debit_note",
+  "sales_invoice",
+  "sales_credit_note",
+  "sales_debit_note",
+  "sales_receipt",
+  "sales_receipt_return",
+]);
+
+function rutaDeDocumento(clase: string | null, id: string | null): string | null {
+  if (id === null || clase === null) return null;
+  if (ABRE_EL_DETALLE_DE_VENTAS.has(clase)) return `/admin/ventas/${id}`;
+  if (
+    ["purchase", "purchase_invoice", "purchase_credit_note", "ajuste_periodo_anterior"].includes(
+      clase,
+    )
+  ) {
+    return "/admin/compras";
+  }
+  return null;
+}
+
+const CLASE_LEGIBLE: Record<string, string> = {
+  invoice: "Factura",
+  credit_note: "Nota de crédito",
+  debit_note: "Nota de débito",
+  purchase: "Compra",
+  ajuste_periodo_anterior: "Ajuste de período anterior",
+  sales_invoice: "Factura",
+  sales_credit_note: "Nota de crédito",
+  sales_debit_note: "Nota de débito",
+  sales_receipt: "Recibo",
+  sales_receipt_return: "Recibo de devolución",
+  purchase_invoice: "Factura de proveedor",
+  purchase_credit_note: "Nota de crédito de proveedor",
+};
+
 function Conciliacion({ desde, hasta }: { desde: string; hasta: string }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const rec = useQuery({
@@ -480,11 +556,69 @@ function Conciliacion({ desde, hasta }: { desde: string; hasta: string }): React
           una diferencia no es un error — es la cola. Lo que sí es un error es que no cuadre{" "}
           <em>ni contando la cola</em>.
         </CardDescription>
-        {!r.balanced && (
-          <p role="alert" className="text-[0.9rem] text-destructive-soft-foreground">
-            Hay un asiento que ningún documento respalda (o al revés). La diferencia de abajo dice
-            cuánto y en qué concepto.
-          </p>
+        {/* L-06: «falta un asiento» solo se dice cuando la cobertura contable lo CONFIRMA, y
+            con el documento a la vista. Antes se decía ante cualquier diferencia, y era falso. */}
+        {!r.balanced && (r.coverage_gaps ?? []).length > 0 && (
+          <div role="alert" className="space-y-1 text-[0.9rem] text-destructive-soft-foreground">
+            <p>
+              En toda la empresa —no solo en este período— hay documentos registrados sin asiento
+              contable ni pendiente en cola:
+            </p>
+            <ul className="list-disc pl-5">
+              {(r.coverage_gaps ?? []).map((g) => {
+                const ruta = rutaDeDocumento(g.source_kind, g.source_id);
+                const nombre = CLASE_LEGIBLE[g.source_kind] ?? "Documento";
+                return (
+                  <li key={`${g.source_kind}-${g.source_id}`}>
+                    {ruta === null ? (
+                      nombre
+                    ) : (
+                      <Link to={ruta} className="underline">
+                        {nombre}
+                      </Link>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+        {!r.balanced && (r.discrepancies ?? []).length > 0 && (
+          <div role="alert" className="space-y-1 text-[0.9rem] text-destructive-soft-foreground">
+            <p>El libro y el mayor no dicen lo mismo en estos documentos y asientos:</p>
+            <ul className="list-disc pl-5">
+              {(r.discrepancies ?? []).map((d) => {
+                const ruta = rutaDeDocumento(d.document_kind, d.document_id);
+                const doc =
+                  d.document_id === null
+                    ? "Asiento que ningún documento del libro respalda"
+                    : (CLASE_LEGIBLE[d.document_kind ?? ""] ?? "Documento");
+                return (
+                  <li key={`${d.concepto}-${d.document_id ?? ""}-${d.journal_entry_id ?? ""}`}>
+                    {ruta === null ? (
+                      doc
+                    ) : (
+                      <Link to={ruta} className="underline">
+                        {doc}
+                      </Link>
+                    )}
+                    {d.entry_number !== null && (
+                      <>
+                        {" · "}
+                        <Link to="/admin/contabilidad" className="underline">
+                          asiento N.º {d.entry_number}
+                        </Link>
+                      </>
+                    )}
+                    {" — "}
+                    {CONCEPTO_LEGIBLE[d.concepto] ?? d.concepto}: libro{" "}
+                    {mostrarImporte({ amount: d.libro, currency: r.currency })}, mayor{" "}
+                    {mostrarImporte({ amount: d.mayor, currency: r.currency })}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         )}
         <Table>
           <THead>
@@ -499,7 +633,7 @@ function Conciliacion({ desde, hasta }: { desde: string; hasta: string }): React
           <TBody>
             {r.rows.map((f) => (
               <TR key={f.concepto}>
-                <TD>{f.concepto}</TD>
+                <TD>{CONCEPTO_LEGIBLE[f.concepto] ?? f.concepto}</TD>
                 <TDNum>{mostrarImporte({ amount: f.libro, currency: r.currency })}</TDNum>
                 <TDNum>{mostrarImporte({ amount: f.mayor, currency: r.currency })}</TDNum>
                 <TDNum>{mostrarImporte({ amount: f.en_cola, currency: r.currency })}</TDNum>
