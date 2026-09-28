@@ -1,0 +1,2 @@
+cajero 200 ["Abastos El Sol, C.A.: 17894.28","Alcaldía de Iribarren: 86934.03","John Smith: 1988.26"] 
+almacenista 200 ["Abastos El Sol, C.A.: 17894.28","Alcaldía de Iribarren: 86934.03","John Smith: 1988.26"] 
