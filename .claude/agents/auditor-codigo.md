@@ -4,7 +4,7 @@ description: Busca errores de lógica, dinero, datos, permisos y rendimiento en 
 model: opus
 permissionMode: auto
 effort: high
-maxTurns: 60
+maxTurns: 120
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit
 skills:

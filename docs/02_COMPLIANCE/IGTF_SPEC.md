@@ -19,6 +19,19 @@ La cuenta contable del impuesto se obtiene de `accounting_mappings`.
 
 `VALIDAR-TRIBUTARIO` antes de habilitar en producción.
 
+## Marco verificado el 2026-09-28 (respuesta del dueño al recorrido)
+
+| Norma | Qué fija | Fuente · verificada | Estado |
+|---|---|---|---|
+| LIGTF (G.O. 6.687 Ext., 25-02-2022; rige desde el 27-03-2022) + Decreto 4.972 + PA SNAT/2022/000013 (G.O. 42.339, 17-03-2022) | 3 % transitorio sobre pagos en divisas o cripto (art. 4 num. 5 y 6); 0 % en Bs para SPE (Decreto 4.972); percepción el mismo día (PA art. 2); entero quincenal según el calendario SPE (art. 3); percepción indebida → restituir al cliente y pedir reintegro (art. 4); la factura muestra alícuota y monto del IGTF percibido (art. 6) | gerenciaytributos, ivecofi · 2026-09-25/28 | verificado; **Decreto 4.924 pendiente de fuente** |
+
+Decisiones del dueño que aplican esta norma (respuesta §2.6):
+- el SPE percibe el 3 % sobre lo pagado en divisas contra **cualquier** documento;
+- la caja lo suma al total;
+- el cobro posterior se documenta con una Nota de Débito por IGTF;
+- la devolución deja el IGTF percibido, y solo la anulación lo hace indebido;
+- la quincena la calcula el servidor con el calendario.
+
 ## Fuentes normativas (verificadas 2026-09-12)
 
 - **Ley de IGTF** (reforma 2022): 3 % sobre pagos en divisas o criptoactivos distintos de los

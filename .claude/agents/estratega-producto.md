@@ -4,7 +4,7 @@ description: Analiza Ladino como product manager, diseñador e investigador UX, 
 model: sonnet
 permissionMode: auto
 effort: high
-maxTurns: 60
+maxTurns: 120
 memory: project
 tools: Read, Grep, Glob, Write, Edit, WebSearch, WebFetch
 color: purple

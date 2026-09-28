@@ -17,7 +17,7 @@
 - estado.
 
 ## Comprobante digital
-PA102 define requisitos específicos y una numeración de 14 caracteres para comprobantes de retención digitales. Implementar la máscara mediante generador versionado y validación.
+PA SNAT/2025/000054 art. 16: el comprobante lleva número `AAAAMM` + 8 dígitos (14 en total), con los datos del agente, del proveedor, de la factura (número y control) y los montos (total, base, IVA causado, IVA retenido). Se entrega dentro de los 2 primeros días hábiles del período siguiente. Puede ser uno por operación o uno por período y proveedor. Agente y proveedor lo registran en el período de emisión. La máscara se genera y valida con un generador versionado.
 
 ## Estados
 draft → calculated → issued → applied → reported.
@@ -36,9 +36,10 @@ La retención se practica **al pago o al abono en cuenta, lo que ocurra primero*
   neto, y lo retenido se le debe al fisco;
 - el **pago** cancela ese neto y **no retiene nada**: la retención ya está practicada.
 
-El **comprobante** se emite y numera al pagar, con el permiso `retention.receipt.issue`. Su plazo
-de entrega —y si debería emitirse ya en el abono en cuenta— es consulta abierta con el asesor
-(`PENDIENTES_ASESOR.md`, P-26).
+El **comprobante** se emite y numera **al practicar la retención**, es decir, en el abono en cuenta
+(al registrar la factura, criterio R-3), y se entrega dentro de los 2 días hábiles del período
+siguiente (P-26, cerrada el 2026-09-28; H-04). Hoy se emite al pagar, con el permiso
+`retention.receipt.issue`; eso cambia en H-04.
 
 ## Reglas
 - evitar doble retención sobre misma base/documento/concepto;

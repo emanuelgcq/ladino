@@ -4,7 +4,7 @@ description: Contrasta Ladino con la normativa venezolana vigente y emite HOMOLO
 model: opus
 permissionMode: auto
 effort: high
-maxTurns: 60
+maxTurns: 150
 memory: project
 tools: Read, Grep, Glob, Write, Edit, WebSearch, WebFetch
 color: yellow

@@ -1,3 +1,68 @@
+# Handoff — 2026-09-28 (31ª entrega) — La respuesta del dueño al recorrido, ola 0: preparar
+
+## Qué pasaba
+
+El recorrido del 2026-09-24 dejó 235 hallazgos (13 críticos). El dueño respondió con
+`RESPUESTA_RECORRIDO_2026-09-24.md`, en la raíz. Esa respuesta es la fuente de verdad para
+`/arreglar` desde hoy: una decisión por cada hallazgo que la pedía, la lectura normativa que se
+aplica y un plan en olas (0 preparar · 1 producción · 2 papel fiscal · 3 bloqueos y dinero · 4 el
+resto por bloque · 5 lo no construido · 6 bajas · Z entrega). También autoriza, solo para esta
+entrega, aplicar al Supabase remoto las migraciones «expand» al final (sección 7).
+
+Antes de escribir código se le preguntó lo que chocaba con reglas suyas anteriores, y respondió:
+- **retención al registrar la factura** (R-3 manda sobre H-01);
+- **compra anulada en el libro con cero** (R-2), con una regla nueva para el período ya declarado;
+- **todo el mayor al céntimo**, incluido el inventario: el valor de cada movimiento se redondea al
+  escribirlo, el costo unitario sigue a 8 decimales, y el residuo va a «Diferencias por redondeo»;
+- **tipo de contribuyente obligatorio antes de facturar**, sin transición: **en producción no hay
+  clientes reales**.
+
+## Qué se cambió (ola 0, sin código de producto)
+
+- **Equipo:** `maxTurns` más altos donde los agentes se quedaban a medias. La skill `/recorrido`
+  dice que el gate real corre una vez, en Z.
+- **Edición no pedida revertida:** la del estratega a `INFORMATION_ARCHITECTURE.md`. La copia está
+  en `.recorrido/2026-09-24/ediciones-no-pedidas/`, para reproponerla en la ola 4.
+- **Memoria de agentes:** entran en git solo los registros estructurados. Las notas narrativas del
+  recorrido quedan fuera.
+- **`pnpm recorrido`** (`scripts/recorrido/correr.mjs`): restaura el escenario del recorrido en la
+  base LOCAL, corre `verificar/<B>.mjs` de cada bloque y exige los invariantes en 0.
+  - Un bloque sin comprobaciones, una empresa que no existe o un `invariantes.sql` que no corre dan
+    ROJO, nunca verde.
+  - La restauración resetea al esquema del volcado (migración 73), carga los datos con
+    `session_replication_role = replica` (vacía también las tablas append-only, solo en local),
+    corrige el escenario, aplica las migraciones nuevas y la semilla local.
+  - Playwright 1.63.0 pasa a ser devDependency.
+- **Tests en rojo permitido** (`it.fails` / pgTAP `todo`):
+  - `e2e-una-venta-por-oficio` (N-01, N-02, N-04, B-16);
+  - pgTAP 074, conciliación con una nota de crédito (L-01, L-02);
+  - pgTAP 075, un correlativo de control por emisor (G-01).
+- **Marco normativo** en `docs/02_COMPLIANCE/`:
+  - `CALENDARIO_SPE_2026.md` y `FACTURA_CHECKLIST.md` (nuevos);
+  - las fuentes de `IVA_SPEC`, `IGTF_SPEC` y `RETENTIONS_SPEC`;
+  - `EMISION_FACTURAS` (el PDF es copia de cortesía; no hay WhatsApp);
+  - `REGULATORY_STATUS` §2-bis;
+  - `PENDIENTES_ASESOR` (P-30..P-44, las P-xx decididas y R-2 ampliada).
+  Manda la norma sobre el documento del dueño en tres puntos: el 16 % lo fija el Decreto 4.079, la
+  reducida es el art. 64 y el campo 11 del TXT es el IVA retenido.
+- **ADR-0068, 0069 y 0070**, marcados «aplicado según la respuesta del dueño del 2026-09-28».
+- **El bloque «Estado»** al final del informe del recorrido: una línea por ID, las 235 abiertas.
+
+## Lo que queda abierto (y se dice)
+
+- **Punto 6(b) de la ola 0, a medias.** Falta el test de la checklist del art. 13 sobre el PDF real
+  (base e IVA por alícuota, (E), RIF, referencia de NC y ND, IGTF). Se escribe en la ola 2 con el
+  modelo del PDF nuevo. Hoy solo está el control único (pgTAP 075).
+- **Punto 7, sin sembrar.** Nada del marco normativo se sembró todavía como data (alícuotas,
+  calendario, exclusiones). El calendario SPE sigue pendiente de cotejo con la G.O. 43.283, y varias
+  filas están «pendiente de fuente». La siembra va en la ola 2. ADR-0052 («calendario sin fechas de
+  fábrica») se enmienda con el ADR del contribuyente especial.
+- **Fuentes no oficiales.** Varias citas normativas salen de reproducciones no oficiales
+  (tributos.ivecofi.net, readkong); el texto primario en Gaceta sigue pendiente (VALIDAR-TRIBUTARIO).
+- **Del HANDOFF 30 siguen abiertas:** la decisión F7 y el ADR del cambio de gobierno.
+
+---
+
 # Handoff — 2026-09-24 (30ª entrega) — El equipo de diez agentes, y los guardianes que no guardaban
 
 ## Qué pasaba

@@ -1,7 +1,9 @@
 # Emisión de facturas — las tres vías y qué cumple Ladino
 
-> **Estado: VIGENTE.** Verificado al **2026-09-02** con fuentes primarias por el responsable del
-> proyecto (procedencia y advertencia en `REGULATORY_STATUS.md`, que es el punto de entrada).
+> **Estado: VIGENTE.** Revisado el **2026-09-28** contra la PA 00071 (G.O. 39.795) y la PA 102
+> (procedencia en `REGULATORY_STATUS.md`, que es el punto de entrada). La homologación de
+> software (PA 121) está **derogada** por la PA SNAT/2026/00084 (G.O. 43.435, 12-08-2026), sin
+> sustituta: ningún documento de Ladino lleva leyenda de homologación.
 > Este documento es la vista OPERATIVA: qué vía le corresponde a quién, qué exige cada una, y
 > dónde —en código, esquema o pantalla— lo cumple Ladino. Cada afirmación normativa lleva su
 > providencia y artículo.
@@ -15,9 +17,11 @@ obligue a máquina fiscal:
 
 | Vía | Quién asigna el N° de control | Estado en Ladino |
 |---|---|---|
-| **Formatos libres** (imprenta autorizada) | La imprenta, por **rango preasignado** impreso en el papel | **Construida** — `numbering_mode = 'range'` (ADR-0037), `fiscal_number_ranges`, PDF de forma libre |
+| **Formas libres** (imprenta autorizada, PA 00071 arts. 6.2 y 31) | La imprenta, por **rango preasignado** impreso en el papel | **Construida** — `numbering_mode = 'range'` (ADR-0037), `fiscal_number_ranges`, PDF de forma libre |
 | **Imprenta digital** (PA 102) | La imprenta digital, **documento a documento** | **Contrato definido** — `per_document` (ADR-0037) + `DigitalPrintShopAdapter` (ADR-0045); implementación = dependencia externa |
 | **Máquina fiscal** (PA 0141) | La máquina | **No construida** — R-25; Ladino opera como administrativo sin emisión para este segmento |
+
+«Formatos» (art. 6.1 y 30) es otro medio: en él la imprenta preimprime la denominación, el número y los datos del emisor. Ladino no emite sobre formatos. En forma libre **nunca** se emite a mano (art. 6).
 
 Y la **tercera modalidad del producto**, que no es una vía de emisión sino un modo válido de
 usar Ladino: **administrativo completo SIN emisión** (`regime_code = 'sin_emision'`). La
@@ -71,13 +75,21 @@ califica la actividad — eso es del contador (VALIDAR-TRIBUTARIO).
 | 13.1-13.3 | Denominación «Factura», numeración consecutiva, N° de control | `KIND_TITULO` en el PDF; `document_number` gapless y `control_number` de rango (ADR-0037, LAD49) |
 | 13.5 | Nombre/razón social, **domicilio fiscal** y RIF del emisor | **Snapshot congelado al crear el documento** (migración 34, `issuer_*_snapshot`, LAD68); `companies.fiscal_address` lo pide `/empezar`; sucursal aparte si aplica |
 | 13.6 | Fecha de emisión en **ocho dígitos** | `fechaLegible()` — DD/MM/AAAA |
-| 13.7-13.8 | Identificación del adquirente | Snapshot del cliente (migración 33, `customer_*_snapshot`); jurídica/gobierno exigen domicilio al crearse |
-| 13.9 | Marcador **«(E)»** en operaciones exentas/exoneradas/no sujetas | El PDF lo imprime junto a la descripción, leído del `tax_treatment` **congelado** (migración 27); una línea pre-27 sin tratamiento no se marca — no se adivina |
+| 13.7 | Adquirente: nombre o razón social y RIF, o cédula o pasaporte si es persona natural sin uso tributario | Snapshot del cliente (migración 33, `customer_*_snapshot`); jurídica/gobierno exigen domicilio al crearse |
+| 13.8 | Descripción con cantidad y monto, y marcador **«(E)»** junto a lo exento, exonerado o no sujeto | El PDF lo imprime junto a la descripción, leído del `tax_treatment` **congelado** (migración 27); una línea pre-27 sin tratamiento no se marca — no se adivina |
 | 13.13 | **«SIN DERECHO A CRÉDITO FISCAL»** en toda copia | `GET /v1/documents/:id/pdf?copia=1` — el generador distingue original de copia |
 | 13.14 | Ambas monedas y **tipo de cambio** si la operación se expresó en moneda extranjera | ADR-0047: la operación se expresa en la moneda de la lista (ancla USD) y la deuda queda anclada ahí. El PDF **habla en Bs** — líneas y totales del lado funcional congelado al emitir — y añade base imponible, IVA y total en la divisa (LIVA art. 69) y la tasa, limpia: «Tasa BCV: 842,2067» (ADR-0064; «Tipo de cambio» si el documento viejo se emitió con una tasa tecleada). Ambas monedas presentes, el Bs se lee grande. La fecha de la tasa no se imprime: P-21 |
 
-El **layout sigue siendo provisional** (VALIDAR-SENIAT, abajo): estos elementos son de la
-00071 y van ya; lo pendiente es contrastar el conjunto contra un ejemplar real aprobado.
+La tabla se completa con «13.9 · recargos, descuentos, bonificaciones y anulaciones, con descripción y valor», y el resto de los 16 numerales, en `FACTURA_CHECKLIST.md` (FC-01…FC-33). El contenido del documento se prueba contra esa checklist.
+
+## 3-bis. El PDF no es la factura
+
+La factura válida es la impresa sobre la **forma libre**, con el control preimpreso por la imprenta (arts. 13.3 y 31).
+
+- **Lo preimpreso no se imprime encima.** Lo que la imprenta preimprime aparece en la vista previa sombreado como «preimpreso en la forma libre», y en el papel queda en blanco. El número de control, por omisión, se imprime también en el cuerpo del documento como referencia («Control N° 00-00001234»), nunca sobre la casilla preimpresa.
+- **El PDF es una copia de cortesía.** El PDF que se descarga o comparte lo dice: «Copia de cortesía · La factura válida es la impresa en forma libre con control N° …».
+- **La factura digital solo existe por la PA 102**, emitida a través de una imprenta digital autorizada. El adaptador está pendiente, fuera de esta entrega.
+- **Leyendas legales.** Las copias impresas llevan «SIN DERECHO A CRÉDITO FISCAL» (13.13), y ninguna otra leyenda legal.
 
 ## 4. Los requisitos de la PA 102 y su estado
 
@@ -88,17 +100,17 @@ El **layout sigue siendo provisional** (VALIDAR-SENIAT, abajo): estos elementos 
 | Formato del control, art. 30 (dos dígitos + hasta ocho, desde 00-1) | **Construido** — `CONTROL_NUMBER_RE` en `packages/fiscal`, probado |
 | Talonarios de contingencia con la palabra «contingencia» | **Construido** — migración 35: `contingency_ranges` (LAD69 exige la palabra en la serie), `registerContingencyInvoice` registra a posteriori con los números del papel, entrando a libros y contabilidad como cualquier documento |
 | Conservación 10 años | **Construido de facto** — documentos inmutables y append-only (regla 1, LAD06/LAD68); la política de retención explícita queda anotada en `FISCAL_DOCUMENTS_SPEC.md` |
-| Entrega por medio digital | **Construido** — PDF por descarga y WhatsApp desde el POS |
+| Entrega por medio digital | **Solo aplica a la vía PA 102, no construida.** En forma libre, el PDF es copia de cortesía (§3-bis). La pantalla «Venta lista» ofrece «Descargar PDF» y «Compartir» del navegador (share sheet nativo). **No hay botón de WhatsApp**: se quitó a propósito en `8756c91` y no se repone (E-06). |
 | Elegir imprenta digital autorizada | **Dependencia externa** — decisión del operador con la lista vigente en la mano (VALIDAR-SENIAT) |
 
 ## 5. VALIDAR-SENIAT abiertos de emisión
 
 | # | Qué falta validar | Sostenido por |
 |---|---|---|
-| 1 | **Layout oficial de forma libre** contra un ejemplar real aprobado (el PDF lo dice en su pie) | PA 00071 art. 13 completo |
+| 1 | ~~Layout oficial de forma libre~~ — **cerrada** (2026-09-28): el contenido se rige por el art. 13 (`FACTURA_CHECKLIST.md`); E-04 cierra la base e IVA por alícuota | PA 00071 art. 13 completo |
 | 2 | **Lista de imprentas digitales autorizadas vigente** — no está en el repo y no se inventa | PA 102; ADR-0045 |
-| 3 | **Regex y dígito verificador del RIF** — hasta la respuesta, ningún regex de formato (solo normalización) | OPEN_QUESTIONS 9; PA SNAT/2026/00080 |
-| 4 | **Máscara del comprobante de retención** | ADR-0039; `RETENTIONS_SPEC.md` |
+| 3 | ~~Regex y dígito verificador del RIF~~ — **cerrada con M-05 / A-08** (2026-09-28): se guarda normalizado (`V123456789`) y se imprime `V-12345678-9` / `J-12345678-9`. La norma exige el número (13.5 y 13.7); la grafía es la del certificado del SENIAT. La estructura (V, E, J, G, P o C + 8 dígitos + 1 verificador) bloquea. El dígito verificador (módulo 11) solo avisa y queda VALIDAR-SENIAT: ninguna providencia lo fija (la PA SNAT/2026/00080 no define la estructura) | OPEN_QUESTIONS 9; PA SNAT/2026/00080 |
+| 4 | ~~Máscara del comprobante de retención~~ — **cerrada** (2026-09-28): PA SNAT/2025/000054 art. 16, `AAAAMM` + 8 dígitos | ADR-0039; `RETENTIONS_SPEC.md` |
 
 ## 6. Riesgos relacionados
 

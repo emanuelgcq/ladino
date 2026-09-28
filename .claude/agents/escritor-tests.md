@@ -4,7 +4,7 @@ description: Escribe el test que demuestra un hallazgo ANTES de arreglarlo, y co
 model: sonnet
 permissionMode: auto
 effort: high
-maxTurns: 50
+maxTurns: 100
 tools: Read, Grep, Glob, Edit, Write, Bash
 color: blue
 ---

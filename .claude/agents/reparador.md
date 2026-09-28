@@ -4,7 +4,7 @@ description: Arregla UN hallazgo que ya tiene su test en rojo, con el cambio mí
 model: opus
 permissionMode: auto
 effort: high
-maxTurns: 80
+maxTurns: 150
 tools: Read, Grep, Glob, Edit, Write, Bash
 skills:
   - adr

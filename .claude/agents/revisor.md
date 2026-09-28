@@ -4,7 +4,7 @@ description: Revisa un cambio en contexto limpio antes de commitearlo: recibe so
 model: opus
 permissionMode: auto
 effort: high
-maxTurns: 40
+maxTurns: 80
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit
 skills:

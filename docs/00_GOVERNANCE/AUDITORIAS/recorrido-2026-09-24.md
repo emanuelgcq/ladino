@@ -1,4 +1,4 @@
-Bloques cerrados: A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P y Z · Recorrido terminado el 2026-09-28 · El informe final está al principio
+Bloques cerrados: A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P y Z · Recorrido terminado el 2026-09-28 · El informe final está al principio · El estado de los arreglos (respuesta del dueño) está al final, en «Estado»
 
 # Recorrido de Ladino de la A a la Z — 2026-09-24
 
@@ -3298,3 +3298,256 @@ HACE: `platform.low_stock_products` une `stock_balances` con `lot_id is null`. U
 
 ### Cierre del bloque P (validador)
 GATE verde (el del último gate sobre el mismo código: 736 pasos, vitest 805 y pgTAP 1264, iguales a la línea base) · invariantes en 0 para E1, E2, E3; cola de asientos y outbox vacíos · informe «conciliación libro-mayor de septiembre»: 0 en E1, 1 en E2 y 1 en E3 (L-01) · 240 peticiones, ninguna por encima de 3 s (la más lenta, `GET /v1/products?search=Cemen`, 0,88 s) · documento con P-01..P-10 y sus capturas.
+
+---
+
+## Estado
+
+El libro de estado de la respuesta del dueño (`RESPUESTA_RECORRIDO_2026-09-24.md`, 2026-09-28). Los hallazgos de arriba no se reescriben: aquí va una línea por ID, que cambia en el mismo commit que la cierra.
+
+Estados posibles:
+- `cerrado (<commit>)`;
+- `no reproducido (<razón>)`;
+- `construido (<commit>)`;
+- `dejado de prometer (<commit>, ADR-xxxx)`;
+- `decidido por criterio (<decisión>, alternativa: <cuál>)`.
+
+Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes · pgTAP 1264 en 70 ficheros (gate del cierre Z, commit `804862b`).
+
+| ID | Severidad | Estado | Nota |
+|---|---|---|---|
+| A-01 | alta | abierto | — |
+| A-02 | alta | abierto | — |
+| A-03 | alta | abierto | — |
+| A-04 | alta | abierto | — |
+| A-05 | alta | abierto | — |
+| A-06 | alta | abierto | — |
+| A-07 | media | abierto | — |
+| A-08 | media | abierto | — |
+| A-09 | media | abierto | — |
+| A-10 | media | abierto | — |
+| A-11 | media | abierto | — |
+| A-12 | media | abierto | — |
+| A-13 | media | abierto | — |
+| A-14 | baja | abierto | — |
+| A-15 | baja | abierto | — |
+| A-16 | baja | abierto | — |
+| A-17 | baja | abierto | — |
+| A-18 | baja | abierto | — |
+| A-19 | baja | abierto | — |
+| B-01 | alta | abierto | — |
+| B-02 | alta | abierto | — |
+| B-03 | alta | abierto | — |
+| B-04 | media | abierto | — |
+| B-05 | media | abierto | — |
+| B-06 | media | abierto | — |
+| B-07 | media | abierto | — |
+| B-08 | media | abierto | — |
+| B-09 | media | abierto | — |
+| B-10 | media | abierto | — |
+| B-11 | media | abierto | — |
+| B-12 | media | abierto | — |
+| B-13 | baja | abierto | — |
+| B-14 | baja | abierto | — |
+| B-15 | baja | abierto | — |
+| B-16 | baja | abierto | — |
+| B-17 | baja | abierto | — |
+| B-18 | baja | abierto | — |
+| B-19 | baja | abierto | — |
+| C-01 | crítica | abierto | — |
+| C-02 | alta | abierto | — |
+| C-03 | alta | abierto | — |
+| C-04 | alta | abierto | — |
+| C-05 | media | abierto | — |
+| C-06 | media | abierto | — |
+| C-07 | media | abierto | — |
+| C-08 | media | abierto | — |
+| C-09 | media | abierto | — |
+| C-10 | media | abierto | — |
+| C-11 | media | abierto | — |
+| C-12 | baja | abierto | — |
+| C-13 | baja | abierto | — |
+| C-14 | baja | abierto | — |
+| D-01 | crítica | abierto | — |
+| D-02 | alta | abierto | — |
+| D-03 | alta | abierto | — |
+| D-04 | alta | abierto | — |
+| D-05 | alta | abierto | — |
+| D-06 | alta | abierto | — |
+| D-07 | alta | abierto | — |
+| D-08 | alta | abierto | — |
+| D-09 | alta | abierto | — |
+| D-10 | media | abierto | — |
+| D-11 | media | abierto | — |
+| D-12 | media | abierto | — |
+| D-13 | media | abierto | — |
+| D-14 | media | abierto | — |
+| D-15 | baja | abierto | — |
+| D-16 | baja | abierto | — |
+| D-17 | baja | abierto | — |
+| D-18 | baja | abierto | — |
+| E-01 | crítica | abierto | — |
+| E-02 | crítica | abierto | — |
+| E-03 | crítica | abierto | — |
+| E-04 | alta | abierto | — |
+| E-05 | alta | abierto | — |
+| E-06 | alta | abierto | — |
+| E-07 | alta | abierto | — |
+| E-08 | alta | abierto | — |
+| E-09 | media | abierto | — |
+| E-10 | media | abierto | — |
+| E-11 | media | abierto | — |
+| E-12 | media | abierto | — |
+| E-13 | media | abierto | — |
+| E-14 | media | abierto | — |
+| E-15 | media | abierto | — |
+| E-16 | media | abierto | — |
+| E-17 | media | abierto | — |
+| E-18 | media | abierto | — |
+| E-19 | baja | abierto | — |
+| E-20 | baja | abierto | — |
+| E-21 | baja | abierto | — |
+| E-22 | baja | abierto | — |
+| E-23 | baja | abierto | — |
+| E-24 | baja | abierto | — |
+| F-01 | crítica | abierto | — |
+| F-02 | alta | abierto | — |
+| F-03 | alta | abierto | — |
+| F-04 | alta | abierto | — |
+| F-05 | alta | abierto | — |
+| F-06 | alta | abierto | — |
+| F-07 | alta | abierto | — |
+| F-08 | alta | abierto | — |
+| F-09 | media | abierto | — |
+| F-10 | media | abierto | — |
+| F-11 | media | abierto | — |
+| F-12 | media | abierto | — |
+| F-13 | media | abierto | — |
+| F-14 | baja | abierto | — |
+| F-15 | baja | abierto | — |
+| F-16 | baja | abierto | — |
+| F-17 | baja | abierto | — |
+| G-01 | crítica | abierto | — |
+| G-02 | alta | abierto | — |
+| G-03 | alta | abierto | — |
+| G-04 | alta | abierto | — |
+| G-05 | alta | abierto | — |
+| G-06 | alta | abierto | — |
+| G-07 | alta | abierto | — |
+| G-08 | alta | abierto | — |
+| G-09 | media | abierto | — |
+| G-10 | media | abierto | — |
+| G-11 | media | abierto | — |
+| G-12 | media | abierto | — |
+| G-13 | media | abierto | — |
+| G-14 | media | abierto | — |
+| G-15 | media | abierto | — |
+| G-16 | media | abierto | — |
+| G-17 | baja | abierto | — |
+| G-18 | baja | abierto | — |
+| G-19 | baja | abierto | — |
+| G-20 | baja | abierto | — |
+| G-21 | baja | abierto | — |
+| H-01 | crítica | abierto | — |
+| H-02 | alta | abierto | — |
+| H-03 | alta | abierto | — |
+| H-04 | alta | abierto | — |
+| H-05 | alta | abierto | — |
+| H-06 | alta | abierto | — |
+| H-07 | alta | abierto | — |
+| H-08 | media | abierto | — |
+| H-09 | media | abierto | — |
+| H-10 | media | abierto | — |
+| H-11 | media | abierto | — |
+| H-12 | media | abierto | — |
+| H-13 | baja | abierto | — |
+| H-14 | baja | abierto | — |
+| H-15 | media | abierto | — |
+| I-01 | alta | abierto | — |
+| I-02 | alta | abierto | — |
+| I-03 | alta | abierto | — |
+| I-04 | alta | abierto | — |
+| I-05 | media | abierto | — |
+| I-06 | media | abierto | — |
+| I-07 | media | abierto | — |
+| I-08 | media | abierto | — |
+| I-09 | media | abierto | — |
+| I-10 | baja | abierto | — |
+| I-11 | baja | abierto | — |
+| I-12 | baja | abierto | — |
+| J-01 | crítica | abierto | — |
+| J-02 | alta | abierto | — |
+| J-03 | alta | abierto | — |
+| J-04 | media | abierto | — |
+| J-05 | baja | abierto | — |
+| K-01 | crítica | abierto | — |
+| K-02 | alta | abierto | — |
+| K-03 | alta | abierto | — |
+| K-04 | alta | abierto | — |
+| K-05 | media | abierto | — |
+| K-06 | media | abierto | — |
+| K-07 | alta | abierto | — |
+| K-08 | media | abierto | — |
+| K-09 | media | abierto | — |
+| K-10 | media | abierto | — |
+| K-11 | media | abierto | — |
+| K-12 | baja | abierto | — |
+| K-13 | baja | abierto | — |
+| K-14 | baja | abierto | — |
+| K-15 | baja | abierto | — |
+| L-01 | crítica | abierto | — |
+| L-02 | alta | abierto | — |
+| L-03 | alta | abierto | — |
+| L-04 | alta | abierto | — |
+| L-05 | alta | abierto | — |
+| L-06 | media | abierto | — |
+| L-07 | media | abierto | — |
+| L-08 | media | abierto | — |
+| L-09 | media | abierto | — |
+| L-10 | media | abierto | — |
+| L-11 | baja | abierto | — |
+| L-12 | baja | abierto | — |
+| L-13 | baja | abierto | — |
+| L-14 | baja | abierto | — |
+| L-15 | baja | abierto | — |
+| M-01 | crítica | abierto | — |
+| M-02 | alta | abierto | — |
+| M-03 | media | abierto | — |
+| M-04 | media | abierto | — |
+| M-05 | alta | abierto | — |
+| M-06 | alta | abierto | — |
+| M-07 | media | abierto | — |
+| M-08 | baja | abierto | — |
+| M-09 | media | abierto | — |
+| M-10 | media | abierto | — |
+| M-11 | media | abierto | — |
+| M-12 | media | abierto | — |
+| M-13 | baja | abierto | — |
+| N-01 | crítica | abierto | — |
+| N-02 | alta | abierto | — |
+| N-03 | alta | abierto | — |
+| N-04 | alta | abierto | — |
+| N-05 | media | abierto | — |
+| N-06 | media | abierto | — |
+| N-07 | media | abierto | — |
+| N-08 | media | abierto | — |
+| N-09 | baja | abierto | — |
+| N-10 | baja | abierto | — |
+| N-11 | baja | abierto | — |
+| O-01 | alta | abierto | — |
+| O-02 | media | abierto | — |
+| O-03 | media | abierto | — |
+| O-04 | baja | abierto | — |
+| O-05 | media | abierto | — |
+| O-06 | baja | abierto | — |
+| O-07 | baja | abierto | — |
+| P-01 | alta | abierto | — |
+| P-02 | media | abierto | — |
+| P-03 | media | abierto | — |
+| P-04 | media | abierto | — |
+| P-05 | media | abierto | — |
+| P-06 | media | abierto | — |
+| P-07 | media | abierto | — |
+| P-08 | baja | abierto | — |
+| P-09 | baja | abierto | — |
+| P-10 | baja | abierto | — |

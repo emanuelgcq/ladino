@@ -81,6 +81,12 @@ cubre todo lo que el menú de cada rol ofrece.
    - `auditor-fiscal` → solo en A, B, E, G, H, L y M: MODO y DOCUMENTOS.
 3. `spec-explorer` cuando haga falta saber qué promete una spec.
 4. **`validador` al cerrar cada bloque**, sobre todas las empresas tocadas.
+   **El gate real corre una sola vez, en el bloque Z** (`pnpm gate`, que hace `db:reset` y borraría
+   el escenario). El validador de cada bloque juzga el **último gate verde sobre el mismo código**
+   (`git diff --stat HEAD -- apps packages supabase` vacío + `gate-verdict.sh judge` de ese log contra
+   la línea base), corre los invariantes de cada empresa y mide los tiempos. Antes del gate de Z se
+   vuelca el escenario (`pg_dump -Fc` dentro del contenedor + `docker cp`) y se cierran la API, la web
+   y el worker locales.
 5. `escritor-tests`, `reparador`, `revisor` y `migration-author` **no se usan** en un recorrido.
 6. **Suplentes.** Si el runtime no cargó los agentes del equipo al abrir la sesión, cada papel lo hace
    un `general-purpose` que lee su definición y abre su informe con `ROL: <agente>`. La sesión

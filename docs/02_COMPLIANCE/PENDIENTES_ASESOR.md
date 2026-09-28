@@ -53,26 +53,12 @@ pantalla.
 
 ---
 
-## P-3 · Arrastre COMBINADO vs. separado (excedente de crédito y retenciones)
+## P-3 · Arrastre COMBINADO vs. separado — DECIDIDO (2026-09-28, L-05)
 
-**Hoy:** `iva_period_results.excedente_siguiente` arrastra **una sola cifra
-combinada**: el excedente de crédito fiscal y las retenciones soportadas no
-absorbidas van juntos.
-
-**Falta:** confirmar que el portal los separa. La impresión de la investigación es
-que **sí los pide por separado** (el excedente de crédito y las retenciones
-acumuladas tienen renglones distintos).
-
-**Si la respuesta es «separados»:** hay que **partir la columna en dos**. Es una
-migración nueva sobre una tabla insert-only con historia: las filas viejas quedan con
-la cifra combinada y las nuevas con el desglose, o se regeneran todos los períodos.
-**Este es el pendiente de mayor coste si se resuelve tarde** — conviene resolverlo
-antes de que haya muchos períodos generados.
-
-**Dónde se toca:** migración nueva (columnas), `platform.recompute_iva_period`,
-`packages/domain/src/declarations.ts`, la pantalla.
-
----
+**Decisión del dueño:** dos arrastres separados, como en la Forma 00030:
+`excedente_credito_fiscal` y `retenciones_acumuladas_por_descontar`. Nunca una sola cifra.
+Se implementa con migración nueva; las filas viejas conservan la cifra combinada (insert-only).
+**Queda para el asesor:** confirmar la lectura → P-37.
 
 ## P-4 · Prorrata del artículo 34: global v1
 
@@ -94,23 +80,14 @@ insert-only: se **regenera** el período, no se edita.
 
 ---
 
-## P-5 · Créditos fiscales de gastos sin factura de proveedor
+## P-5 · Créditos fiscales de gastos — CERRADA (2026-09-28, H-09)
 
-**Hoy:** el crédito fiscal del período sale **solo** de `supplier_invoices` en estado
-`posted` o `paid` con `tax_is_recoverable`. Los **gastos** registrados por tesorería
-(`expenses`) NO suman crédito fiscal, aunque lleven IVA.
-
-**Falta:** decidir si un gasto con factura debe generar crédito. Hoy la vía correcta
-es registrarlo como factura de proveedor; el registro de gasto es para lo que no la
-tiene.
-
-**Si la respuesta es «sí suman»:** hay que ampliar la CTE `cred` y, sobre todo,
-**evitar el doble conteo** con las facturas de proveedor.
-
-**Dónde se toca:** `platform.recompute_iva_period`; posiblemente una columna de IVA
-recuperable en `expenses`.
-
----
+Un gasto con factura fiscal (luz, teléfono, alquiler, servicios) **es una compra de servicio**:
+entra al libro de compras y da crédito (LIVA art. 33), capturando RIF, razón social, número,
+control, fecha, base por alícuota, IVA y exento. Si la empresa es SPE, retiene salvo la exclusión
+de servicios públicos domiciliados del art. 3 de la PA SNAT/2025/000054. La pantalla ofrece «con
+factura fiscal» / «sin factura». El doble conteo con `supplier_invoices` se evita porque es un
+solo registro.
 
 ## P-6 · Notas de débito: ¿suman al débito del período de emisión?
 
@@ -127,31 +104,21 @@ las notas a otro período, y los períodos ya cerrados cambiarían.
 
 ---
 
-## P-7 · Layout del TXT de retenciones de IVA practicadas
+## P-7 · Layout del TXT de retenciones — LAYOUT LEÍDO en reproducción no oficial del instructivo (2026-09-28, L-03)
 
-**Hoy:** el adaptador `txt_retenciones_iva` está **implementado** y produce un fichero
-de campos separados por TABULADOR siguiendo la guía pública del archivo de carga.
-Está marcado `is_official = false` en el catálogo.
-
-Tres campos son **derivados**, no leídos del libro, y uno descansa en un supuesto:
-
-| Campo | Cómo se obtiene | Riesgo |
-|---|---|---|
-| IVA de la factura | `retenido ÷ porción` (el libro guarda la porción, 0,75 o 1,00) | si la porción no fuera exacta, el IVA sale desviado |
-| Alícuota | `IVA ÷ base × 100` | idem |
-| Monto total | `base + IVA` | **supone monto exento = 0**: el libro no separa la porción exenta de la factura del proveedor |
-| Exento | se emite `0.00` | consecuencia del supuesto anterior |
-
-**Falta:** validar el fichero contra **una carga real del portal** (una declaración de
-prueba) y confirmar el orden y el ancho de los campos, y qué hacer con proveedores con
-operaciones exentas dentro de la misma factura.
-
-**Si la respuesta es otra:** cambia el serializador, no el esquema.
-
-**Dónde se toca:** `aTxtRetencionesIva` en `packages/domain/src/fiscal-books.ts`, y la
-fila del catálogo (`is_official` pasaría a `true` cuando esté validado).
-
----
+**Fuente:** Instructivo SENIAT «Declaración retenciones de IVA», versión 3_0_0 (septiembre 2020),
+leído en https://es.readkong.com/page/instructivo-declaracion-retenciones-de-iva-seniat-4300855
+(2026-09-28). 16 campos por tabulador: 1 RIF del agente (10 caracteres, sin guiones) · 2 período
+`AAAAMM` · 3 fecha del documento `AAAA-MM-DD` · 4 C/V · 5 tipo (01 factura, 02 ND, 03 NC, 04
+certificación, 05 importación, 06 exportación) · 6 RIF de la contraparte · 7 número del documento
+· 8 número de control · 9 monto del documento · 10 base imponible · **11 IVA retenido** · 12
+documento afectado («0» si no aplica) · 13 comprobante (14 dígitos) · 14 monto exento · 15
+alícuota · 16 expediente («0»). Decimales con punto.
+**Brecha detectada en el código (2026-09-28):** `aTxtRetencionesIva` produce 17 campos (un
+número de documento de más en la 4.ª posición), fecha `DD/MM/AAAA` y tipo «01» fijo
+(`packages/domain/src/fiscal-books.ts:260-302`). Se arregla en L-03 con un fixture aprobado.
+**Sigue abierto:** validar con una carga real en el portal antes de `is_official = true`, y el
+monto exento de facturas mixtas.
 
 ## P-8 · Exenciones del IGTF
 
@@ -175,24 +142,13 @@ porque el error grave es distinto en cada caso.
 
 ---
 
-## P-9 · Flujo de reintegro del IGTF percibido sobre una factura anulada
+## P-9 · IGTF de una factura anulada o devuelta — DECIDIDO (2026-09-28, G-06)
 
-**Hoy:** anular una factura después de percibir deja la percepción en estado
-`pendiente_reintegro` con el motivo. **La percepción nunca se resta sola**, y el total
-a enterar de la quincena deja de contarla.
-
-**Falta:** qué hacer después. Tres caminos posibles, y **no se eligió ninguno**:
-1. devolver el 3 % al cliente y registrar la devolución;
-2. compensarlo contra la percepción de otra operación del mismo cliente;
-3. enterarlo igualmente y que el cliente lo reclame al fisco.
-
-**Si la respuesta es (1) o (2):** hace falta un caso de uso nuevo con su asiento
-(hoy la reversión del asiento de la percepción **no** se genera al anular: el asiento
-de la factura sí se reversa, el de la percepción no, porque el dinero sigue en caja).
-
-**Dónde se toca:** un caso de uso nuevo en `packages/domain/src/igtf.ts` y su pantalla.
-
----
+- **Anulación** (la venta nunca existió): la percepción es indebida → se restituye al cliente y
+  se pide el reintegro (PA SNAT/2022/000013 art. 4; COT arts. 205-210). Es el camino (1).
+- **Devolución** (NC): el pago ocurrió y la percepción fue debida → **queda percibida y se
+  entera**. La NC no lleva IGTF; el reembolso lo excluye y la pantalla lo dice.
+**Queda para el asesor:** P-31.
 
 ## P-10 · Calendario de vencimientos por dígito de RIF
 
@@ -295,38 +251,24 @@ IVA: mayor y kardex divergen y ningún invariante lo mira.
 
 ---
 
-## P-16 · Textos del modo recibos (VALIDAR-LEGAL)
+## P-16 · Textos del modo recibos — LEYENDA APLICADA (2026-09-28, A-06)
 
-**Hoy:**
+Se aplica ya: «Recibo de devolución · Documento no fiscal: no es factura ni nota de crédito y no
+otorga derecho a crédito fiscal». Sin RIF, sin IVA, sin providencia.
+**Queda para el asesor:** la redacción definitiva → P-42.
 
-- el recibo dice que no es factura;
-- la cita «(art. 13.14, PA 00071)» sale solo en facturas;
-- la API ya no sirve «copia fiscal» de un recibo (422).
+## P-17 · ¿El sujeto pasivo especial recupera el IVA de sus compras? (reescrita 2026-09-28, M-13)
 
-**Falta:**
-
-- validar la leyenda del recibo no fiscal;
-- validar el aviso a quien vende sin estar inscrito (R-27);
-- confirmar si la tasa BCV es obligatoria para quien no factura.
-
-**Dónde se toca:** `apps/api/src/routes/documents-pdf.ts`, textos de Empezar.
-
----
-
-## P-17 · ¿El sujeto pasivo especial recupera el IVA de sus compras?
-
-**Hoy:** `registerSupplierInvoice` trata como recuperable SOLO al contribuyente `ordinario`; el
-`especial` lleva el IVA de compra al costo (R-34).
-
-**Falta:** confirmar que el especial es también contribuyente ordinario de IVA y recupera el
-crédito fiscal (la lectura habitual), y con qué artículo.
-
-**Si la respuesta es la habitual:** una línea de código y el costo de las compras de las empresas
-especiales cambia hacia adelante; lo ya registrado se corrige con nota del contador.
-
-**Dónde se toca:** `packages/domain/src/purchases.ts` (`ivaRecuperable`).
-
----
+**Hoy:** `registerSupplierInvoice` trata como recuperable el IVA de la compra con soporte fiscal
+**tanto del `ordinario` como del `especial`** (`packages/domain/src/purchases.ts:862-871`): el
+especial es un contribuyente ordinario de IVA designado agente de retención. Sin documento no hay
+crédito para nadie (ADR-0066 §2). El `formal` y el no contribuyente llevan el IVA al costo. La
+redacción anterior («el especial lleva el IVA al costo») describía un comportamiento que ya no
+existe.
+**Falta:** que el asesor confirme la lectura con su artículo (LIVA art. 33 exige contribuyente
+ordinario; PA SNAT/2025/000054 art. 6 dice que el impuesto retenido no pierde su carácter de
+crédito fiscal para el agente).
+**Si la respuesta es otra:** una línea en `ivaRecuperable` y nota del contador sobre lo registrado.
 
 ## P-18 · Regularización del histórico: la contrapartida (VALIDAR-CONTADOR)
 
@@ -361,45 +303,19 @@ Migración nueva y campo en la compra.
 
 ---
 
-## P-20 · El fiado cobrado a otra tasa: ¿nota de débito o crédito? (VALIDAR-TRIBUTARIO)
+## P-20 · El fiado cobrado a otra tasa — DECIDIDO (2026-09-28, D-07/G-11)
 
-**Hoy:**
-- Una deuda anclada en divisa que se cobra a otra tasa asienta un **diferencial cambiario**,
-  sin documento (ADR-0047).
+El diferencial entre la tasa del documento y la del pago se reconoce **al pagar**, en «Ganancia /
+Pérdida en diferencial cambiario», **sin nota de débito ni de crédito**. Las NC y ND que corrigen
+una factura van a la tasa de la factura.
+**Aviso de norma:** el art. 51 del Reglamento de la LIVA, leído solo en reproducción no oficial,
+diría que esa diferencia es corrección de precio documentable con ND o NC. Si el asesor confirma
+su vigencia y alcance, **manda la norma** sobre esta decisión (VALIDAR-TRIBUTARIO).
 
-**Falta:**
-- **La norma.** El art. 51 del Reglamento de la LIVA (Decreto 206) diría que esa diferencia
-  «constituye una corrección del precio» y se documenta con nota de débito o de crédito. Se leyó
-  en una **reproducción no oficial**: confirmar su vigencia y su alcance.
-- **El período.** ¿En qué período entra la nota (P-6)?
-- **La retención.** ¿El agente de retención retiene sobre la nota de débito?
+## P-21 · La fecha de la tasa en la factura — CERRADA (2026-09-28, G-11/2.7)
 
-**Si se confirma:** el cobro emite la nota en la misma transacción y deja de asentar el
-diferencial (ADR-0064 §3, diseñado y sin implementar). Exige rango de notas en la puesta a
-punto.
-
-**Dónde se toca:** `packages/domain/src/sales.ts` (`registerPayment`), ADR-0064 §3.
-
----
-
-## P-21 · La fecha de la tasa en la factura (VALIDAR-SENIAT)
-
-**Hoy:**
-- El PDF imprime **«Tasa BCV: 842,2067»**, sin la fecha de publicación ni el servicio por el
-  que llegó (decisión del dueño, 2026-09-16).
-- El documento guarda la fuente completa, con la marca de tiempo de la publicación, pero no una
-  columna con la fecha de la tasa.
-
-**Falta:** ¿el «tipo de cambio aplicable» de la PA 00071 art. 13.14 exige la fecha de la
-publicación del BCV? Un fin de semana, o con la fuente caída, la tasa puede ser de otro día que
-la factura.
-
-**Si la respuesta es sí:** migración con `rate_date` en `documents` y la línea
-«Tasa BCV del 15/09/2026: 842,2067».
-
-**Dónde se toca:** `apps/api/src/routes/documents-pdf.ts`, `documents`.
-
----
+La factura va a la tasa BCV del día de emisión, congelada: la fecha de la tasa es la de emisión.
+Las NC y ND que corrigen imprimen «Tasa BCV de la factura N° … del dd/mm/aaaa: Bs …».
 
 ## P-22 · Vender con la última tasa publicada (VALIDAR-TRIBUTARIO)
 
@@ -471,24 +387,15 @@ ventas mixtas — cifras ya generadas. Va junto con **P-4**.
 
 ---
 
-## P-26 · Entrega del comprobante de retención, ahora que se retiene antes (VALIDAR-SENIAT)
+## P-26 · Comprobante de retención — CERRADA (2026-09-28, H-04)
 
-**Hoy:** desde la migración 68, la retención de IVA se **practica al registrar** la factura del
-proveedor (el abono en cuenta, PA SNAT/2025/000054) y su pasivo con el fisco nace ahí. El
-**comprobante** se sigue emitiendo y numerando **al pagar**, con su permiso propio.
-
-**Falta:** confirmar el plazo de **entrega** del comprobante al proveedor bajo la 000054 (fuentes
-secundarias: los dos primeros días hábiles del período siguiente) y si el momento correcto de
-emitirlo es el del abono en cuenta, no el del pago. Texto primario de la Gaceta pendiente de
-archivar en `EXPEDIENTE_TECNICO.md`.
-
-**Qué se rompe si la respuesta es otra:** el comprobante se emitiría en el registro de la
-factura, no en el pago — cambia el momento de numerar, no el cálculo ni el asiento.
-
-**Dónde se toca:** `packages/domain/src/purchases.ts` (`registerSupplierPayment`),
-`docs/02_COMPLIANCE/RETENTIONS_SPEC.md`.
-
----
+PA SNAT/2025/000054 art. 16 (verificado el 2026-09-25 en una reproducción no oficial,
+https://tributos.ivecofi.net/informacion/legislacion/providencias/pa-2025-54): número `AAAAMM` +
+8 dígitos; entrega dentro de los **2 primeros días hábiles del período siguiente**; uno por
+operación o uno por período y proveedor; agente y proveedor lo registran en el período de emisión.
+El comprobante se emite **al practicar la retención** (pago o abono en cuenta, lo primero, art. 13).
+Con R-3, eso es **al registrar la factura**, no al pagar: el código actual (emisión al pagar) cambia
+en H-04.
 
 ## P-27 · La compra pagada SIN factura: qué la respalda y qué se puede deducir (VALIDAR-TRIBUTARIO)
 
@@ -556,12 +463,66 @@ Quedan escritas aquí porque el código las cita como fuente de una regla.
 - **R-2 · Factura de proveedor anulada.** Va en el libro **con importes en cero**: se conserva la
   traza cronológica (Reglamento art. 70) sin crédito fiscal (LIVA art. 37). Mismo criterio para
   una nota anulada. Migración 67.
+  **Regla añadida por el dueño (2026-09-28):** si la compra se anula cuando su período ya está
+  cerrado y el libro ya se generó o declaró, ese libro no cambia; la anulación entra en el libro
+  del período en curso como reversa del crédito fiscal (línea en negativo, marcada «ajuste de
+  período anterior»), y la declaración la lleva en su casilla de ajustes de créditos de períodos
+  anteriores.
 - **R-3 · Oportunidad de la retención de IVA.** Nace **al pago o al abono en cuenta, lo que
   ocurra primero**, y registrar la factura como cuenta por pagar **es** el abono en cuenta: el
-  pasivo con el fisco nace al registrar (PA SNAT/2025/000054). Migración 68. Lo que queda abierto
-  de este punto es **P-26**.
+  pasivo con el fisco nace al registrar (PA SNAT/2025/000054). Migración 68. P-26 se cerró el 2026-09-28 (H-04: el comprobante se emite al practicar la retención).
 
 ---
+
+## Preguntas de la respuesta del dueño al recorrido 2026-09-24 (2026-09-28)
+
+Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es dato.
+
+- **P-30 · F-01** — Retención soportada sobre factura en USD. **Aplicada:** abona la CxC a la
+  tasa de la factura. **Alternativa:** tasa del día del comprobante (parámetro).
+- **P-31 · G-06** — IGTF de una venta devuelta. **Aplicada:** queda percibido; solo la anulación
+  lo hace indebido. **Alternativa:** tratar la devolución total del mismo día como anulación.
+- **P-32 · E-02 / H-01** — Procedimiento para regularizar IGTF no percibido y retenciones no
+  practicadas en períodos vencidos. **Aplicada:** enterar en la quincena en que se debió, con los
+  recargos del COT; comprobante con la fecha real. **Alternativa:** la que indique el asesor.
+- **P-33 · G-01** — Un correlativo de control por emisor (PA 00071 art. 44). **Aplicada:** uno
+  por empresa e identificador, compartido por factura, NC y ND. **Alternativa:** tramos por clase,
+  si el SENIAT lo admite por escrito.
+- **P-34 · G-10 / L-07** — Anuladas en el libro de ventas. **Aplicada:** número, «ANULADA» e
+  importes en cero. **Alternativa:** omitirlas del libro con relación aparte.
+- **P-35 · K-04** — Ventana para deducir crédito de facturas recibidas con retraso. **Aplicada:**
+  ninguna todavía: el número (12 períodos desde la emisión) está en fuentes secundarias, pero el
+  **artículo no se confirmó** → pendiente de fuente; no se ofrece en pantalla.
+  **Pregunta:** ¿qué artículo de la LIVA (o del Reglamento) la fija, y se cuenta desde la emisión?
+- **P-36 · K-08 / P-03** — Redondeo half-up al céntimo y cuenta «Diferencias por redondeo»;
+  códigos de diferencial cambiario, mermas y faltantes, retiros y aportes del dueño.
+  **Aplicada:** half-up; cuentas de resultado propias. **Alternativa:** half-even; códigos del
+  contador.
+- **P-37 · L-05** — Dos arrastres separados en la declaración del especial. **Aplicada:**
+  separados. **Alternativa:** una sola cifra (lo de antes).
+- **P-38 · M-10** — Contribuyente formal: artículos vigentes de la PA SNAT/2003/1677 (G.O.
+  37.677, 25-04-2003). Verificados los arts. 3 (documento con leyenda «contribuyente formal») y 4.
+  **Pendiente de fuente:** periodicidad de la declaración informativa (¿trimestral, o semestral
+  con ingresos ≤ 1.500 UT?) y contenido y periodicidad de las relaciones. **Aplicada:** la opción
+  «Formal» **se oculta** hasta tenerlo.
+- **P-39 · M-11** — Regularización de lo vendido con recibo antes del RIF. **Aplicada:** los
+  recibos quedan como historia, fuera de libros. **Alternativa:** la que indique el asesor (es del
+  negocio, no del sistema).
+- **P-40 · E-03** — Cobro en divisas posterior a la factura de un SPE. **Aplicada:** Nota de
+  Débito por IGTF que referencia la factura (PA 00071 art. 22), sin IVA, base 0 en el libro.
+  **Alternativa:** comprobante de percepción no fiscal.
+- **P-41 · B-19** — Ejercicio y UT de referencia para las 1.500 UT del art. 8 de la PA 00071.
+  **Aplicada:** ingresos brutos del ejercicio anterior a la UT vigente en ese ejercicio (hoy Bs 43
+  → Bs 64.500). **Alternativa:** UT vigente al evaluar.
+- **P-42 · A-06 / P-16** — Redacción definitiva de la leyenda del recibo no fiscal. **Aplicada:**
+  la de P-16.
+- **P-43 · I-11** — Retiros (LIVA art. 4.3): base imponible (valor de mercado) y documento.
+  **Aplicada:** débito sobre el valor de mercado y «Nota de retiro» numerada al libro de ventas.
+  **Alternativa:** base al costo; documento que indique el asesor.
+- **P-44 · B-11** — La alícuota general: **manda la norma sobre el documento del dueño**. Se fija
+  por decreto del Ejecutivo (LIVA art. 27; Decreto 4.079, G.O. 41.788), no por la Ley de
+  Presupuesto. **Pregunta:** ¿sigue vigente el Decreto 4.079 en 2026? Y confirmar que la reducida
+  es el **art. 64** (no el 63).
 
 ## Resumen para la conversación con el asesor
 

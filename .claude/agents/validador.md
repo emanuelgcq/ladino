@@ -4,7 +4,7 @@ description: Corre el gate completo de Ladino y los invariantes cruzados, y mide
 model: haiku
 permissionMode: auto
 effort: medium
-maxTurns: 40
+maxTurns: 80
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit
 color: green

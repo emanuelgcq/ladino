@@ -1,6 +1,6 @@
 # Estado regulatorio — Venezuela
 
-> **Corte: 2026-09-02.** Este documento es el **punto de entrada** de `docs/02_COMPLIANCE/`.
+> **Corte: 2026-09-28** (marco cargado desde la respuesta del dueño al recorrido; cada fila con su fecha de verificación). Este documento es el **punto de entrada** de `docs/02_COMPLIANCE/`.
 > Antes de leer cualquier otro fichero de esta carpeta, mira aquí si la norma que lo sostiene
 > sigue vigente. Varios documentos describen obligaciones **derogadas** y se conservan a
 > propósito; sin este índice, se leen como si estuvieran en vigor.
@@ -65,7 +65,7 @@ que gobiernan la emisión fiscal hoy.
 | **PA SNAT/2026/00080** | Reforma del RIF | ver §4 |
 | **PA SNAT/2025/000054** (vigente 01/08/2025; deroga PA SNAT/2015/0049) | Agentes de retención de IVA: designación, porcentajes 75 % / 100 %, oportunidad y comprobante | `RETENTIONS_SPEC.md` — las reglas se cargan por empresa con esta fuente (ADR-0057) |
 | **PA SNAT/2025/000048** (G.O. 43.140, 02/06/2025) | Unidad Tributaria = Bs. 43 | `IVA_SPEC.md` (umbral de máquina fiscal del art. 8 de la 00071, R-25) |
-| **PA SNAT/2025/000091** (G.O. 43.273 / 43.283) | Calendario de sujetos pasivos especiales 2026 | `PENDIENTES_ASESOR.md` — el calendario de declaraciones NO viene de fábrica (ADR-0052) |
+| **PA SNAT/2025/000091** (G.O. 43.273 / 43.283) | Calendario de sujetos pasivos especiales 2026 | `CALENDARIO_SPE_2026.md` — pendiente de cotejo con la Gaceta antes de sembrarlo |
 | **Decreto 4.972** (G.O. Ext. 6.821, publicada el 12/07/2024, vigente desde el 15/07/2024) | IGTF 3 % en divisas · 0 % en bolívares para sujetos pasivos especiales | `IGTF_SPEC.md` · ADR-0052/0053 |
 | **Convenio Cambiario N° 1** (G.O. Ext. 6.405, 07/09/2018), art. 9, Parágrafo Primero | El tipo de cambio que publica el BCV es «el de referencia de mercado a todos los efectos» | ADR-0064 §1: solo existe la tasa del BCV (migración 66) |
 | **Ley del IVA** (G.O. Ext. 6.507, 29/01/2020), arts. 25 y 69 | Art. 25: operaciones en divisa al tipo de cambio corriente del día del hecho imponible. Art. 69: la factura en divisa lleva base imponible, impuesto y total también en bolívares | ADR-0064 §1-§2 · `documents-pdf.ts` · P-21, P-23 |
@@ -78,18 +78,40 @@ Verificadas el 2026-09-12 con fuentes secundarias (Forvis Mazars, Baker McKenzie
 Efecto Cocuyo); el texto primario en Gaceta queda por archivar en `EXPEDIENTE_TECNICO.md`
 (**VALIDAR-TRIBUTARIO**).
 
+### 2-bis. Marco cargado el 2026-09-28 (respuesta del dueño al recorrido)
+
+Verificado por auditor-fiscal. Lo marcado **pendiente de fuente** no se ofrece en pantalla hasta tener su fuente. Cuando la norma verificada contradice la respuesta del dueño, manda la norma: la alícuota general la fija el Decreto 4.079 (no la Ley de Presupuesto), la reducida es el art. 64 (no el 63) y el campo 11 del TXT de retenciones es el IVA retenido (P-44).
+
+| Norma | Qué fija | Fuente · verificada | Estado |
+|---|---|---|---|
+| PA 00071 arts. 22-24, 29-31, 36 y 44 | NC y ND: requisitos del art. 13 salvo el num. 1, más fecha, número y monto de la factura; control de la factura en NC y ND por máquina fiscal (art. 24); mismo control en original y copias (29); qué preimprime la imprenta en formatos (30) y en formas libres (31); conservar lo anulado hasta la prescripción (36); control único por emisor, 2 + hasta 8 dígitos (44) | ivecofi · 2026-09-28 | verificado |
+| PA 00071 art. 8 | Máquina fiscal si concurren: ingresos brutos > 1.500 UT, mayor número de operaciones con quien no usa la factura como soporte, y actividad listada | tugacetaoficial · 2026-09-24 | verificado |
+| Decreto 4.079 (G.O. 41.788, 26-12-2019) | Alícuota general 16 % (LIVA art. 27: la fija el Ejecutivo, 8–16,5 %) | Acceso a la Justicia · 2026-09-28 | verificado |
+| LIVA (G.O. 6.507 Ext., 29-01-2020; rige desde el 28-05-2020 según la AN) | art. 4.3 retiros; art. 8 formales (solo exentas o exoneradas); arts. 17-19 exenciones; art. 61 suntuario +15 %; art. 62 divisas 5–25 % (**no activado**); art. 64 reducida 8 %; art. 33 requisitos del crédito | secundarias · 2026-09-28 | texto primario pendiente |
+| Decreto 5.196 (G.O. 6.952 Ext., 31-12-2025) | Suspende la exención de importación del art. 17.1 y exonera la importación de 1.445 subpartidas, hasta el 31-12-2026 | Acceso a la Justicia · 2026-09-28 | verificado |
+| PA SNAT/2025/000054 (G.O. 43.171, 16-07-2025; rige desde el 01-08-2025; deroga la 2015/0049) | Agentes: SPE, incluidas firmas personales (arts. 1-2). Art. 3, exclusiones: exentas, exoneradas o no sujetas; proveedor formal (num. 2); percepción previa (licores); retención previa en importación; viáticos; gastos reembolsables ≤ 20 UT; caja chica ≤ 20 UT; servicios públicos domiciliados (num. 8); exportadores con solicitud de recuperación; proveedor con > 50 % exentas; entes públicos; art. 146 COT. **Numeral exacto de cada una salvo 2 y 8, y la 13.ª exclusión: pendiente de fuente.** 75 % general (art. 4); 100 % si el IVA no está discriminado, la factura no cumple requisitos, el portal lo indica o el proveedor no está en el RIF (art. 5); oportunidad: pago o abono en cuenta, lo primero (art. 13); entero quincenal (arts. 14-15); comprobante (art. 16) | ivecofi · 2026-09-25/28 | verificado (reproducción) |
+| Instructivo TXT retenciones IVA v3_0_0 | 16 campos (ver P-7) | readkong · 2026-09-28 | verificado (reproducción) |
+| LIGTF (G.O. 6.687 Ext., 25-02-2022; rige desde el 27-03-2022) + Decreto 4.972 + PA 000013 (G.O. 42.339, 17-03-2022) | 3 % transitorio sobre pagos en divisas o cripto (art. 4 num. 5 y 6); 0 % en Bs para SPE (Decreto 4.972); percepción el mismo día (PA art. 2); entero quincenal según calendario SPE (art. 3); indebida → restituir y pedir reintegro (art. 4); alícuota y monto en la factura (art. 6). **Decreto 4.924: pendiente de fuente** | gerenciaytributos, ivecofi · 2026-09-25/28 | verificado salvo 4.924 |
+| PA SNAT/2003/1677 (G.O. 37.677, 25-04-2003) | Formales: documento con leyenda (art. 3), excepción para adquirente persona natural (art. 4). **Periodicidad de la informativa y de las relaciones: pendiente de fuente** | gerenciaytributos · 2026-09-28 | parcial |
+| PA SNAT/2026/00080 (G.O. 43.435, 12-08-2026) | RIF sin vencimiento; actualizar ante cambios en el plazo del COT | Acceso a la Justicia · 2026-09-28 | verificado |
+| COT art. 35 (1 mes para informar cambios) · arts. 99-108 (ilícitos formales) | — | — | **pendiente de fuente** |
+| RLIVA (Decreto 206) arts. 13-14 (retiros, faltantes) y 70-78 (libros; 72 resumen por alícuota) | — | reproducción no oficial ya citada en §2 | **pendiente de fuente** primaria |
+| LIVA: plazo de 12 períodos para deducir crédito | Número en fuentes secundarias | gerenciaytributos · 2026-09-28 | **pendiente de fuente (artículo)** |
+| VEN-NIF PYME sección 30 | Diferencia en cambio y tasa de cierre | — | **pendiente de fuente** (VALIDAR-CONTABLE) |
+| UT = Bs 43 (PA SNAT/2025/000048, G.O. 43.140) | 1.500 UT = Bs 64.500; 20 UT = Bs 860 | Acceso a la Justicia · 2026-09-24 | verificado |
+
 **Los artículos que gobiernan el trabajo de Ladino, verificados al 2026-09-02 con fuentes
 primarias** (cada punto con su providencia y artículo):
 
-- **PA 00071 art. 6** — tres medios de emisión a **libre elección** del contribuyente (formatos
-  libres elaborados por imprenta autorizada, formas libres, máquina fiscal), **salvo** los
-  obligados del art. 8.
+- **PA 00071 art. 6** — tres medios de emisión a **libre elección** del contribuyente: (1)
+  formatos, (2) **formas libres**, (3) máquina fiscal, **salvo** los obligados del art. 8. En forma
+  libre nunca se emite a mano. Ladino emite sobre formas libres (arts. 6.2 y 31).
 - **PA 00071 art. 13** — los requisitos de la factura en forma libre. Los que Ladino imprime y
   dónde: numeral 5 (nombre/razón social, **domicilio fiscal** y RIF del emisor — snapshot
-  congelado, migración 34), 6 (fecha en ocho dígitos), 9 (marcador «(E)» en operaciones
-  exentas/exoneradas/no sujetas), 13 (leyenda «SIN DERECHO A CRÉDITO FISCAL» en toda copia),
+  congelado, migración 34), 6 (fecha en ocho dígitos), 8 (marcador «(E)» en operaciones
+  exentas/exoneradas/no sujetas; es el numeral **8**, no el 9: E-24), 13 (leyenda «SIN DERECHO A CRÉDITO FISCAL» en toda copia),
   14 (ambas monedas y tipo de cambio cuando la operación se expresó en moneda extranjera).
-  Mapeo completo en `EMISION_FACTURAS.md`.
+  Mapeo completo en `EMISION_FACTURAS.md` y checklist en `FACTURA_CHECKLIST.md` (FC-01…FC-33).
 - **PA 00071 art. 8** — obligados a **máquina fiscal** cuando concurren las TRES condiciones:
   ingresos del año anterior superiores a **1.500 UT**, operaciones **mayoritarias** con
   consumidor final, y actividad **listada** en el artículo. El **literal j** obliga sin
