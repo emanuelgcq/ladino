@@ -91,13 +91,3 @@ export function mesLocalAnterior(desde: Date = new Date()): { desde: string; has
   const [a, m] = diaCaracas.format(desde).split("-").map(Number) as [number, number];
   return m === 1 ? rangoMes(a - 1, 12) : rangoMes(a, m - 1);
 }
-
-/** La quincena de Caracas en curso: 1–15 o 16–fin de mes (IGTF se entera por quincena). */
-export function quincenaLocal(desde: Date = new Date()): { desde: string; hasta: string } {
-  const [a, m, d] = diaCaracas.format(desde).split("-").map(Number) as [number, number, number];
-  const mes = rangoMes(a, m);
-  const mm = String(m).padStart(2, "0");
-  return d <= 15
-    ? { desde: `${a}-${mm}-01`, hasta: `${a}-${mm}-15` }
-    : { desde: `${a}-${mm}-16`, hasta: mes.hasta };
-}

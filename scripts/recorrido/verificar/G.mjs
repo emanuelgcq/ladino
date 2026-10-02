@@ -9,6 +9,8 @@
  */
 import { comprobaciones, pedir, afirmar, sql, EMPRESAS, PERSONAS } from "./_app.mjs";
 import { textoDe, tiene, idDocumento } from "./_pdf.mjs";
+import { pedir as pedirIgtf, EMPRESAS as EMP_IGTF, PERSONAS as PER_IGTF } from "./_app.mjs";
+import { textoDe as textoIgtf, tiene as tieneIgtf } from "./_pdf.mjs";
 
 const c = comprobaciones("G");
 const E2 = EMPRESAS.E2;
@@ -159,6 +161,76 @@ c.caso(
       copia.status === 422,
       `la copia fiscal de un recibo de devolución debía ser 422: ${copia.status}`,
     );
+  },
+);
+
+// ── IGTF del especial (ADR-0072 §2; RESPUESTA §2.6) ─────────────────────────────────────────
+/** Una venta de caja de E3 con 1,03 USD por Zelle (1 a la venta, 0,03 de IGTF) y el resto fiado. */
+async function ventaZelleIgtfE3() {
+  const E3i = EMP_IGTF.E3;
+  await sql`
+    insert into public.exchange_rates
+      (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+    select 'USD', 'VES', 854.46, 'BCV', (now() at time zone 'America/Caracas')::date, now()
+     where not exists (
+       select 1 from public.exchange_rates
+        where from_currency = 'USD' and to_currency = 'VES'
+          and rate_date = (now() at time zone 'America/Caracas')::date)`;
+  const [w] = await sql`select id from public.warehouses where company_id = ${E3i} limit 1`;
+  const [p] = await sql`
+    select sb.product_id from public.stock_balances sb
+      join public.products pr on pr.id = sb.product_id
+     where sb.company_id = ${E3i} and sb.quantity > 1 and pr.status = 'active'
+       and pr.name ilike 'tornillo%'
+     limit 1`;
+  const [cl] = await sql`
+    select id from public.customers where company_id = ${E3i} and not is_system
+       and status <> 'blocked' order by legal_name limit 1`;
+  afirmar(w && p && cl, "E3 no trae depósito, tornillos con existencia o un cliente");
+  const r = await pedirIgtf(PER_IGTF.duenoE2E3, "E3", "POST", "/v1/pos/sales", {
+    company_id: E3i,
+    customer_id: cl.id,
+    warehouse_id: w.id,
+    lines: [{ product_id: p.product_id, quantity: "1" }],
+    payments: [{ instrument: "zelle", currency: "USD", amount: "1.03" }],
+  });
+  afirmar(r.status === 201, `venta de caja de E3: ${r.status} ${r.texto}`);
+  return r.json;
+}
+
+c.caso(
+  "G-06",
+  "la devolución de una venta de E3 cobrada con IGTF deja el IGTF percibido y lo avisa",
+  async () => {
+    const v = await ventaZelleIgtfE3();
+    const [l] =
+      await sql`select id from public.document_lines where document_id = ${v.document.id}`;
+    const [w] =
+      await sql`select id from public.warehouses where company_id = ${EMP_IGTF.E3} limit 1`;
+    const b = await pedirIgtf(PER_IGTF.duenoE2E3, "E3", "POST", "/v1/returns", {
+      company_id: EMP_IGTF.E3,
+      source_document_id: v.document.id,
+      warehouse_id: w.id,
+      reason: "Devolución de la comprobación G-06",
+      lines: [{ source_line_id: l.id, quantity: "1" }],
+    });
+    afirmar(b.status === 201, `devolución: ${b.status} ${b.texto}`);
+    const c2 = await pedirIgtf(
+      PER_IGTF.duenoE2E3,
+      "E3",
+      "POST",
+      `/v1/returns/${b.json.id}/confirm`,
+      {},
+    );
+    afirmar(c2.status === 200, `confirmar: ${c2.status} ${c2.texto}`);
+    afirmar(
+      c2.json.igtf_not_refunded?.notice ===
+        "El IGTF de 0,03 $ ya fue enterado al SENIAT y no se devuelve.",
+      `aviso: ${JSON.stringify(c2.json.igtf_not_refunded)}`,
+    );
+    const [p] =
+      await sql`select status from public.igtf_perceptions where document_id = ${v.document.id}`;
+    afirmar(p.status === "percibido", "la percepción dejó de estar percibida");
   },
 );
 

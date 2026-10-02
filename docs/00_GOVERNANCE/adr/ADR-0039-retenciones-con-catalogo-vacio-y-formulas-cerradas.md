@@ -134,3 +134,20 @@ misma puerta.
   tabla de configuración, dentro del motor tributario.
 - **Retener siempre cero mientras no haya catálogo.** Es el modo de fallo silencioso: la empresa
   cree estar cumpliendo y acumula una deuda que nadie ve hasta la fiscalización.
+
+## Nota de enmienda — ADR-0072 §3, §4 y §6 (2026-10-02, H-01, H-04, H-12, L-03)
+
+Esta nota no reescribe la historia de arriba: dice qué cambió y dónde está la decisión vigente.
+
+- **La retención de IVA ya no depende de que el cuerpo la pida.** Si la empresa es contribuyente
+  especial en la fecha de la factura, se practica sola al registrarla (criterio R-3 de ADR-0065 §3).
+  §2 se mantiene entero: el 75 % (`iva_compras`) y el 100 % (`iva_compras_total`, art. 5) son filas
+  de `retention_rules` con su fuente, y sin regla vigente la factura se detiene con LAD53.
+- **El comprobante (§5) es un documento propio**, `retention_vouchers`, emitido al practicar la
+  retención (al registrar), no al pagar. **Corrección de atribución:** la máscara de 14 dígitos
+  (`AAAAMM` + 8) es de la **PA SNAT/2025/000054, art. 16**, no de la PA 102 como decía §5 y el
+  comentario de `retention_receipts` (migración 22). `retention_receipts` queda para el ISLR.
+- **Las exclusiones del art. 3 son data** (`retention_exclusions`), con el mismo principio de §2:
+  lo que no tiene fuente no se siembra.
+- Decisión vigente y su detalle: ADR-0072 §3-§6 y su nota de aplicación de la parte 3;
+  `RETENTIONS_SPEC.md` §«Retención de IVA que practicamos».

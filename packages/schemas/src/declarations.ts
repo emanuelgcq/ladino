@@ -54,6 +54,8 @@ export const RegisterSupportedRetentionRequest = z
       ),
     /** Cuándo nos retuvieron: la fecha que asigna la retención a su período. */
     retained_on: fecha,
+    /** H4 (PA SNAT/2025/000054 art. 7): el día en que el agente ENTREGÓ el comprobante. Sin él, el de la retención. */
+    received_on: fecha.optional(),
     base: amount.refine((v) => /[1-9]/.test(v), "la base debe ser mayor que cero"),
     /** La porción retenida como fracción: 0.75 o 1.00, transcrita. */
     rate: fraction.refine((v) => /[1-9]/.test(v), "la porción retenida debe ser mayor que cero"),
@@ -69,6 +71,8 @@ export const SupportedRetentionResponse = z
     document_id: uuid,
     receipt_number: z.string(),
     retained_on: fecha,
+    /** H4: el día de la entrega; null = el de la retención. */
+    received_on: fecha.nullable(),
     base: z.string(),
     rate: z.string(),
     amount: z.string(),
@@ -138,9 +142,22 @@ export const IvaPeriodResultResponse = z
     /** Solo cuando hubo ventas sin impuesto en el período (prorrata global v1). */
     prorrata_pct: z.string().nullable(),
     retenciones_soportadas: z.string(),
+    /** El excedente de CRÉDITO FISCAL que llega del período anterior. */
     excedente_anterior: z.string(),
     cuota_a_pagar: z.string(),
+    /**
+     * El excedente de CRÉDITO FISCAL que pasa al período siguiente. Desde el generador
+     * `iva-declarations/1.1.0` (L-05) ya NO incluye las retenciones no descontadas: van en
+     * `retenciones_acumuladas_por_descontar`. En las generaciones 1.0.0 es la cifra combinada.
+     */
     excedente_siguiente: z.string(),
+    /** Retenciones soportadas acumuladas por descontar que llegan del período anterior (L-05). */
+    retenciones_acumuladas_anteriores: z.string(),
+    /**
+     * Retenciones soportadas (anteriores + del período) que la cuota no absorbió y pasan al
+     * período siguiente APARTE del excedente de crédito fiscal, como en la Forma 00030 (L-05).
+     */
+    retenciones_acumuladas_por_descontar: z.string(),
     detalle: z.array(IvaPeriodDetalleAlicuota),
     /**
      * Casilla de AJUSTES A LOS CRÉDITOS FISCALES DE PERÍODOS ANTERIORES: la reversa del crédito
@@ -171,6 +188,70 @@ export const ListIvaPeriodResultsResponse = z
   })
   .strict();
 export type ListIvaPeriodResultsResponse = z.infer<typeof ListIvaPeriodResultsResponse>;
+
+/**
+ * L-04: el período que el servidor PROPONE según el tipo vigente y el calendario: la última
+ * quincena cerrada para el especial, el último mes cerrado para el ordinario. La pantalla lo
+ * muestra; no calcula la quincena.
+ */
+export const IvaPeriodProposalResponse = z
+  .object({
+    /** El tipo vigente; null si la empresa tiene RIF y no lo ha declarado. */
+    taxpayer_type: z.string().nullable(),
+    /** null cuando no hay tipo que la decida (sin declarar o no_contribuyente). */
+    periodicity: z.enum(["quincenal", "mensual"]).nullable(),
+    period_from: fecha,
+    period_to: fecha,
+    /** El vencimiento por terminal del RIF (PA SNAT/2025/000091); null si no aplica o está pendiente de cotejo. */
+    due_date: fecha.nullable(),
+    /** secondary_source | pending_review | null (sin celda). */
+    due_date_status: z.string().nullable(),
+    legal_source: z.string().nullable(),
+  })
+  .strict();
+export type IvaPeriodProposalResponse = z.infer<typeof IvaPeriodProposalResponse>;
+
+// ── Calendario de la providencia (sembrado, ADR-0072 §8) ────────────────────
+
+export const TaxCalendarObligation = z.enum([
+  "iva",
+  "ret_iva",
+  "igtf",
+  "islr_anticipo",
+  "islr_definitiva",
+  "islr_retenciones",
+]);
+export type TaxCalendarObligation = z.infer<typeof TaxCalendarObligation>;
+
+/**
+ * Las fechas de la providencia de especiales para el terminal del RIF de la empresa. Solo las
+ * celdas OFRECIDAS: las pendientes de cotejo con la Gaceta se cuentan en `pending_review` y no
+ * se listan. Vacío si la empresa no es especial o su RIF no tiene terminal.
+ */
+export const TaxCalendarResponse = z
+  .object({
+    rif_terminal: z.number().int().min(0).max(9).nullable(),
+    /**
+     * Si la providencia de especiales aplica a la empresa (especial hoy y RIF con terminal). Con
+     * `applies` y sin filas, el año pedido no tiene calendario sembrado. Campo aditivo (H6).
+     */
+    applies: z.boolean(),
+    items: z.array(
+      z
+        .object({
+          obligation: TaxCalendarObligation,
+          period_from: fecha,
+          period_to: fecha,
+          due_date: fecha,
+          legal_source: z.string(),
+        })
+        .strict(),
+    ),
+    total: z.number().int().nonnegative(),
+    pending_review: z.number().int().nonnegative(),
+  })
+  .strict();
+export type TaxCalendarResponse = z.infer<typeof TaxCalendarResponse>;
 
 // ── Calendario de vencimientos (cargable como DATO) ─────────────────────────
 

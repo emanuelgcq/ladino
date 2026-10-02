@@ -103,7 +103,7 @@ insumos.
   con acta en la puesta a punto (B-02, ADR-0038 y ADR-0057: la regla aceptada es suya). La adicional
   del art. 62 (pagos en divisas) **no se siembra** hasta que exista el decreto que la active.
 - **PA SNAT/2025/000091**: calendario 2026 de sujetos pasivos especiales → `CALENDARIO_SPE_2026.md`
-  (pendiente de cotejo con la G.O. 43.283 antes de sembrarlo).
+  (sembrado el 2026-10-02 con la reimpresión de la G.O. 43.283; las celdas ⚠ quedan pendientes de cotejo y no se ofrecen).
 - **Retención de IVA**: PA SNAT/2025/000054 — ver `RETENTIONS_SPEC.md`.
 - Texto primario en Gaceta pendiente de archivar en `EXPEDIENTE_TECNICO.md`
   (**VALIDAR-TRIBUTARIO**).
@@ -147,3 +147,57 @@ insumos.
 - **La general** pasa a «fuente secundaria» hasta que P-44 se cierre con la Gaceta archivada; se
   sigue ofreciendo (nada filtra por «verificada»).
 - **El libro de compras** trae base e IVA por alícuota y su resumen (P-59, lectura conservadora).
+
+## La declaración del período (L-04, L-05; ADR-0072 §7, migración 20261002120000)
+
+La planilla demostrativa (`platform.recompute_iva_period`, generada por `generateIvaPeriod`) sigue
+siendo **no oficial** (P-1). Lo que cambia:
+
+- **Periodicidad por tipo**: el **especial** declara por **quincena** — del 1 al 15 y del 16 al
+  último día — (PA SNAT/2025/000091); el **ordinario** por **mes**, por la LIVA (artículo del
+  período mensual, VALIDAR-TRIBUTARIO P-73): la PA 000091 es de los especiales y no fija el mes del
+  ordinario (auditoría fiscal 2.ª ronda, H13). El tipo es el vigente en las dos
+  puntas del rango (`platform.taxpayer_type_at`). Un especial que pide otro rango recibe 422 con sus
+  dos quincenas del mes; un ordinario que pide cualquier rango que no sea el mes calendario
+  completo (del 1 al último día), 422 con su mes (H5, revisión). Si el tipo
+  cambia dentro del rango, 422 y consulta al asesor (VALIDAR-TRIBUTARIO).
+- **Imputación** (respuesta del dueño, L-04): débitos por la **fecha de emisión** de la factura (día
+  de Caracas); créditos por la **fecha de la factura de compra**, o la de registro si llegó tarde
+  (`coalesce(accounting_date, invoice_date)`, K-04); retenciones soportadas por la **fecha del
+  comprobante** (`retained_on`, P-12). Las tres son comparaciones `date` contra `date`.
+- **La quincena la calcula el servidor**: `platform.fiscal_fortnight(día)` → `(period_from,
+  period_to)`; recibe el día de Caracas. La usa también el IGTF (L-15).
+- **La propuesta**: `GET /v1/fiscal-declarations/iva-periods/proposal` (`platform.iva_period_proposal`)
+  devuelve la última quincena cerrada (especial) o el último mes cerrado (ordinario), evaluando
+  el tipo en el CIERRE del período candidato (en la transición especial→ordinaria, la última
+  quincena que tocaba), y su vencimiento por terminal del RIF si la celda está ofrecida (la tabla
+  de la 2.ª quincena no lo está hasta el cotejo, P-10). La pantalla arranca en ese período.
+- **Dos arrastres, como en la Forma 00030** (L-05, P-3/P-37):
+
+  ```
+  impuesto        = débitos − (créditos deducibles + ajuste) − excedente de crédito anterior
+  cuota tributaria = max(0, impuesto)
+  excedente_siguiente (crédito fiscal)        = max(0, −impuesto)
+  retenciones disponibles                    = retenciones acumuladas anteriores + del período
+  cuota_a_pagar                               = max(0, cuota tributaria − retenciones disponibles)
+  retenciones_acumuladas_por_descontar        = max(0, retenciones disponibles − cuota tributaria)
+  ```
+
+  Una retención nunca se convierte en crédito fiscal (PA SNAT/2025/000054 arts. 7 y 8, según el
+  hallazgo L-05; VALIDAR-TRIBUTARIO P-37). Persistido en `iva_period_results` con
+  `retenciones_acumuladas_anteriores` y `retenciones_acumuladas_por_descontar`; firmado en el hash
+  (generador `iva-declarations/1.1.0`, las dos claves solo cuando no son cero).
+- **Filas viejas**: las del generador 1.0.0 conservan su cifra combinada y su hash. Una con excedente
+  o con retenciones del período no se encadena: el dominio pide regenerarla.
+
+### Auditoría fiscal, 2.ª ronda (migración 20261002120200)
+
+- **La ND por IGTF no es venta (H1; PA SNAT/2022/000013 arts. 5-6, LIVA art. 34).** Su línea
+  (producto de sistema `LADINO-IGTF`) sale de `ventas`, `bases_venta` y `por_alicuota`: no aporta
+  débito ni base y **no activa la prorrata**. VALIDAR-TRIBUTARIO P-70.
+- **La retención entregada tarde (H4; PA SNAT/2025/000054 art. 7).** El comprobante soportado
+  guarda su fecha de entrega (`received_on`; sin ella, la de la retención). Cuenta en el período de
+  su retención, salvo que ese período ya estuviera **declarado** al entregarse (una generación que lo
+  cubre, hecha después de cerrar el período —una vista previa no cuenta, B-1, migración
+  20261002120400— y del día de la entrega o anterior): entonces en el de la entrega. La fecha de
+  entrega no puede ser posterior a hoy (B-2). VALIDAR-TRIBUTARIO P-68.

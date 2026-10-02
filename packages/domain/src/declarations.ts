@@ -37,7 +37,98 @@ export type DeclarationsError =
   | { code: "DUPLICATE"; message: string };
 
 /** La versión del generador, persistida en cada fila del período. */
-export const IVA_PERIOD_GENERATOR_VERSION = "iva-declarations/1.0.0";
+export const IVA_PERIOD_GENERATOR_VERSION = "iva-declarations/1.1.0";
+
+/**
+ * La versión que MEZCLABA los dos arrastres (L-05): su `excedente_siguiente` puede llevar
+ * retenciones no absorbidas sumadas al crédito fiscal. Una fila suya con excedente no se encadena:
+ * hay que regenerar ese período con la versión actual.
+ */
+const GENERADOR_ARRASTRE_MEZCLADO = "iva-declarations/1.0.0";
+
+const MESES = [
+  "enero",
+  "febrero",
+  "marzo",
+  "abril",
+  "mayo",
+  "junio",
+  "julio",
+  "agosto",
+  "septiembre",
+  "octubre",
+  "noviembre",
+  "diciembre",
+];
+/** `AAAA-MM-DD` → `DD-MM-AAAA`, para los mensajes de persona. Solo formato, sin aritmética. */
+const dmy = (f: string): string => f.split("-").reverse().join("-");
+const nombreMes = (f: string): string =>
+  `${MESES[Number(f.slice(5, 7)) - 1] ?? f.slice(5, 7)} de ${f.slice(0, 4)}`;
+const esCero = (v: string): boolean => /^-?0*(?:\.0*)?$/.test(v);
+
+/**
+ * L-04 (ADR-0072 §7; PA SNAT/2025/000091): el especial declara por QUINCENA (1–15 y 16–último) y
+ * el ordinario por MES. La quincena la da el servidor (`platform.fiscal_fortnight`), nunca la
+ * pantalla. Devuelve el mensaje de persona si el período no es el que corresponde, o null.
+ *
+ * Periodicidad mensual del ordinario: LIVA (artículo del período mensual, VALIDAR-TRIBUTARIO P-73);
+ * NO viene de la PA SNAT/2025/000091, que es de los especiales (auditoría fiscal 2.ª ronda, H13).
+ * Decisión por criterio (H5, texto del dueño §2.6: «el ordinario declara por mes»): el ordinario
+ * declara el MES calendario completo, del 1 al último día; todo otro rango da 422. Un tipo sin
+ * declarar o no_contribuyente no se valida aquí.
+ */
+async function periodoNoCorresponde(
+  sql: UnitOfWork["sql"],
+  companyId: string,
+  desde: string,
+  hasta: string,
+): Promise<string | null> {
+  const [f] = await sql<
+    {
+      tipo_desde: string | null;
+      tipo_hasta: string | null;
+      q1_desde: string;
+      q1_hasta: string;
+      q2_desde: string;
+      q2_hasta: string;
+    }[]
+  >`
+    with m as (
+      select make_date(extract(year from ${desde}::date)::int,
+                       extract(month from ${desde}::date)::int, 1) as d)
+    select platform.taxpayer_type_at(${companyId}, ${desde}::date) as tipo_desde,
+           platform.taxpayer_type_at(${companyId}, ${hasta}::date) as tipo_hasta,
+           q1.period_from::text as q1_desde, q1.period_to::text as q1_hasta,
+           q2.period_from::text as q2_desde, q2.period_to::text as q2_hasta
+      from m, platform.fiscal_fortnight(m.d) q1, platform.fiscal_fortnight(m.d + 15) q2`;
+  if (!f) return null;
+  if (f.tipo_desde !== f.tipo_hasta) {
+    return (
+      `Tu tipo de contribuyente cambia dentro de ese rango (${f.tipo_desde ?? "sin declarar"} el ` +
+      `${dmy(desde)}, ${f.tipo_hasta ?? "sin declarar"} el ${dmy(hasta)}): genera por separado el ` +
+      `período de cada tipo y consulta a tu asesor cómo se declara el de la transición.`
+    );
+  }
+  const esQuincena =
+    (desde === f.q1_desde && hasta === f.q1_hasta) ||
+    (desde === f.q2_desde && hasta === f.q2_hasta);
+  if (f.tipo_desde === "especial" && !esQuincena) {
+    return (
+      `Eres contribuyente especial: declaras el IVA por quincena (PA SNAT/2025/000091). En ` +
+      `${nombreMes(f.q1_desde)} tus dos períodos van del ${dmy(f.q1_desde)} al ${dmy(f.q1_hasta)} ` +
+      `y del ${dmy(f.q2_desde)} al ${dmy(f.q2_hasta)}.`
+    );
+  }
+  const esMes = desde === f.q1_desde && hasta === f.q2_hasta;
+  if (f.tipo_desde === "ordinario" && !esMes) {
+    return (
+      `Declaras el IVA por mes (eres contribuyente ordinario): el período de ` +
+      `${nombreMes(f.q1_desde)} va del ${dmy(f.q1_desde)} al ${dmy(f.q2_hasta)}, completo.` +
+      (esQuincena ? " La quincena es de los contribuyentes especiales." : "")
+    );
+  }
+  return null;
+}
 
 /**
  * Registra el comprobante de retención soportada Y abona la factura afectada
@@ -82,6 +173,27 @@ export async function registerSupportedRetention(
       code: "VALIDATION_FAILED",
       message: "El agente del comprobante no es el cliente de esa factura.",
     });
+  }
+  // H4 (PA SNAT/2025/000054 art. 7): el comprobante se entrega el día de la retención o después.
+  if (input.received_on !== undefined && input.received_on < input.retained_on) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        `La fecha de entrega del comprobante (${dmy(input.received_on)}) no puede ser anterior a ` +
+        `la de la retención (${dmy(input.retained_on)}).`,
+    });
+  }
+  // B-2: y no después de hoy (día de Caracas): un comprobante que aún no llegó no se carga.
+  if (input.received_on !== undefined) {
+    const [hoy] = await sql<{ dia: string }[]>`select platform.caracas_day(now())::text as dia`;
+    if (hoy !== undefined && input.received_on > hoy.dia) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          `La fecha de entrega del comprobante (${dmy(input.received_on)}) no puede ser posterior a ` +
+          `hoy (${dmy(hoy.dia)}): se carga cuando el agente lo entrega.`,
+      });
+    }
   }
   if (doc.kind !== "invoice" && doc.kind !== "debit_note") {
     return err({
@@ -161,12 +273,13 @@ export async function registerSupportedRetention(
       const [fila] = await sp<Record<string, unknown>[]>`
         insert into public.supported_retention_receipts
           (tenant_id, company_id, customer_id, document_id, receipt_number, retained_on,
-           base, rate, amount, functional_currency, ar_valuation)
+           received_on, base, rate, amount, functional_currency, ar_valuation)
         values (${scope.value.tenantId}, ${input.company_id}, ${input.customer_id},
                 ${input.document_id}, ${input.receipt_number}, ${input.retained_on}::date,
-                ${input.base}, ${input.rate}, ${input.amount}, ${doc.functional_currency},
+                ${input.received_on ?? null}::date, ${input.base}, ${input.rate}, ${input.amount}, ${doc.functional_currency},
                 ${valoracion})
         returning id, customer_id, document_id, receipt_number, retained_on::text as retained_on,
+                  received_on::text as received_on,
                   base::text as base, rate::text as rate, amount::text as amount,
                   functional_currency, status, annul_reason,
                   to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
@@ -246,17 +359,47 @@ export async function generateIvaPeriod(
   if (input.period_to < input.period_from) {
     return err({ code: "VALIDATION_FAILED", message: "El período termina antes de empezar." });
   }
+  const noCorresponde = await periodoNoCorresponde(
+    sql,
+    input.company_id,
+    input.period_from,
+    input.period_to,
+  );
+  if (noCorresponde !== null) return err({ code: "VALIDATION_FAILED", message: noCorresponde });
 
-  // El eslabón anterior de la cadena.
-  const [anterior] = await sql<{ excedente: string }[]>`
-    select excedente_siguiente::text as excedente
+  // El eslabón anterior de la cadena: DOS arrastres, cada uno por su lado (L-05).
+  const [anterior] = await sql<
+    { excedente: string; retenciones: string; soportadas: string; version: string }[]
+  >`
+    select excedente_siguiente::text as excedente,
+           retenciones_acumuladas_por_descontar::text as retenciones,
+           retenciones_soportadas::text as soportadas,
+           generator_version as version
       from public.iva_period_results
      where company_id = ${input.company_id}
        and period_to = (${input.period_from}::date - 1)
      order by created_at desc, id desc limit 1`;
   let excedenteAnterior = "0";
+  let retencionesAnteriores = "0";
   if (anterior) {
+    // Una fila 1.0.0 con excedente lo trae mezclado; y una con retenciones del período puede
+    // haberse generado con la API vieja contra la función nueva (ventana de deploy), que no
+    // guardaba el arrastre de retenciones: en los dos casos, regenerar. Ruidoso a propósito.
+    if (
+      anterior.version === GENERADOR_ARRASTRE_MEZCLADO &&
+      (!esCero(anterior.excedente) || !esCero(anterior.soportadas))
+    ) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          `El período que termina el día antes del ${dmy(input.period_from)} se generó con la ` +
+          `versión que sumaba en una sola cifra el excedente de crédito fiscal y las retenciones ` +
+          `no descontadas. Vuelve a generarlo (y los anteriores que tengan excedente) para que ` +
+          `cada arrastre pase por su lado.`,
+      });
+    }
     excedenteAnterior = anterior.excedente;
+    retencionesAnteriores = anterior.retenciones;
   } else {
     // ¿Hay historia ANTES de este período? Ventas, compras, retenciones o un
     // resultado ya generado que no empalma: cualquiera de las cuatro obliga a
@@ -304,6 +447,7 @@ export async function generateIvaPeriod(
       excedente_siguiente: string;
       detalle: unknown;
       ajuste_creditos_anteriores: string;
+      retenciones_acumuladas_por_descontar: string;
     }[]
   >`select debitos::text as debitos, creditos::text as creditos,
            creditos_deducibles::text as creditos_deducibles,
@@ -311,10 +455,11 @@ export async function generateIvaPeriod(
            retenciones_soportadas::text as retenciones_soportadas,
            cuota_a_pagar::text as cuota_a_pagar,
            excedente_siguiente::text as excedente_siguiente, detalle,
-           ajuste_creditos_anteriores::text as ajuste_creditos_anteriores
+           ajuste_creditos_anteriores::text as ajuste_creditos_anteriores,
+           retenciones_acumuladas_por_descontar::text as retenciones_acumuladas_por_descontar
       from platform.recompute_iva_period(
              ${input.company_id}, ${input.period_from}::date, ${input.period_to}::date,
-             ${excedenteAnterior})`;
+             ${excedenteAnterior}, ${retencionesAnteriores})`;
   if (!r) {
     return err({ code: "VALIDATION_FAILED", message: "El cálculo del período no devolvió filas." });
   }
@@ -341,6 +486,14 @@ export async function generateIvaPeriod(
     ...(/^-?0*(?:\.0*)?$/.test(r.ajuste_creditos_anteriores)
       ? {}
       : { ajuste_creditos_anteriores: r.ajuste_creditos_anteriores }),
+    // L-05 (generador 1.1.0): los dos arrastres de retenciones, con el mismo criterio — solo
+    // cuando no son cero. El de crédito fiscal es `excedente_siguiente`, que ya no las incluye.
+    ...(esCero(retencionesAnteriores)
+      ? {}
+      : { retenciones_acumuladas_anteriores: retencionesAnteriores }),
+    ...(esCero(r.retenciones_acumuladas_por_descontar)
+      ? {}
+      : { retenciones_acumuladas_por_descontar: r.retenciones_acumuladas_por_descontar }),
     generator_version: IVA_PERIOD_GENERATOR_VERSION,
   });
   const [h] = await sql<{ hash: string }[]>`
@@ -351,13 +504,15 @@ export async function generateIvaPeriod(
       (tenant_id, company_id, period_from, period_to, debitos, creditos, creditos_deducibles,
        prorrata_pct, retenciones_soportadas, excedente_anterior, cuota_a_pagar,
        excedente_siguiente, detalle, generator_version, dataset_hash,
-       ajuste_creditos_anteriores)
+       ajuste_creditos_anteriores, retenciones_acumuladas_anteriores,
+       retenciones_acumuladas_por_descontar)
     values (${scope.value.tenantId}, ${input.company_id}, ${input.period_from}::date,
             ${input.period_to}::date, ${r.debitos}, ${r.creditos}, ${r.creditos_deducibles},
             ${r.prorrata_pct}, ${r.retenciones_soportadas}, ${excedenteAnterior},
             ${r.cuota_a_pagar}, ${r.excedente_siguiente},
             ${sql.json(r.detalle as JSONValue)}, ${IVA_PERIOD_GENERATOR_VERSION},
-            ${h!.hash}, ${r.ajuste_creditos_anteriores})
+            ${h!.hash}, ${r.ajuste_creditos_anteriores}, ${retencionesAnteriores},
+            ${r.retenciones_acumuladas_por_descontar})
     returning id, period_from::text as period_from, period_to::text as period_to,
               debitos::text as debitos, creditos::text as creditos,
               creditos_deducibles::text as creditos_deducibles,
@@ -368,6 +523,9 @@ export async function generateIvaPeriod(
               excedente_siguiente::text as excedente_siguiente,
               detalle,
               ajuste_creditos_anteriores::text as ajuste_creditos_anteriores,
+              retenciones_acumuladas_anteriores::text as retenciones_acumuladas_anteriores,
+              retenciones_acumuladas_por_descontar::text
+                as retenciones_acumuladas_por_descontar,
               (select c.functional_currency_code from public.companies c
                 where c.id = ${input.company_id}) as functional_currency,
               generator_version, dataset_hash, created_by,
@@ -380,6 +538,8 @@ export async function generateIvaPeriod(
     excedente_anterior: excedenteAnterior,
     cuota_a_pagar: r.cuota_a_pagar,
     excedente_siguiente: r.excedente_siguiente,
+    retenciones_acumuladas_anteriores: retencionesAnteriores,
+    retenciones_acumuladas_por_descontar: r.retenciones_acumuladas_por_descontar,
     dataset_hash: h!.hash,
   };
   await sql`
@@ -449,4 +609,89 @@ export async function loadFiscalDeadlines(
   // `total` es lo que se acaba de cargar: aquí no hay paginación que valga,
   // pero el contrato de la lista es uno solo y esta respuesta lo cumple.
   return ok({ items, total: items.length });
+}
+
+/** La periodicidad del IVA que el servidor propone (L-04). */
+export interface IvaPeriodProposal {
+  taxpayer_type: string | null;
+  periodicity: "quincenal" | "mensual" | null;
+  period_from: string;
+  period_to: string;
+  due_date: string | null;
+  due_date_status: string | null;
+  legal_source: string | null;
+}
+
+/**
+ * L-04: el período que la pantalla PROPONE, según el tipo vigente y el calendario — la última
+ * quincena cerrada para el especial, el último mes cerrado para el ordinario —, con su vencimiento
+ * por terminal del RIF si la celda de la providencia está ofrecida. El «hoy» es el día de Caracas
+ * del servidor. La web lo muestra y no calcula ninguna quincena.
+ */
+export async function proposeIvaPeriod(
+  sql: UnitOfWork["sql"],
+  companyId: string,
+): Promise<IvaPeriodProposal> {
+  const [p] = await sql<IvaPeriodProposal[]>`
+    select taxpayer_type, periodicity, period_from::text as period_from,
+           period_to::text as period_to, due_date::text as due_date,
+           due_date_status, legal_source
+      from platform.iva_period_proposal(${companyId}, platform.caracas_day(now()))`;
+  return p!;
+}
+
+/** Una fecha del calendario de la providencia, para el terminal de la empresa. */
+export interface TaxCalendarEntry {
+  obligation: string;
+  period_from: string;
+  period_to: string;
+  due_date: string;
+  legal_source: string;
+}
+
+/**
+ * L-09 (ADR-0072 §8): el calendario sembrado de la providencia para el terminal del RIF de la
+ * empresa, entre dos fechas de VENCIMIENTO. Solo las celdas ofrecidas: las pendientes de cotejo
+ * se cuentan pero no se muestran. Solo para el especial (la providencia es de los SPE).
+ */
+export async function listTaxCalendar(
+  sql: UnitOfWork["sql"],
+  companyId: string,
+  desde: string,
+  hasta: string,
+): Promise<{
+  rif_terminal: number | null;
+  /** H6: si la providencia de especiales aplica a la empresa (especial hoy y con terminal). */
+  applies: boolean;
+  items: TaxCalendarEntry[];
+  total: number;
+  pending_review: number;
+}> {
+  const [cab] = await sql<{ terminal: number | null; especial: boolean }[]>`
+    select platform.rif_terminal(c.tax_id)::int as terminal,
+           coalesce(platform.taxpayer_type_at(c.id, platform.caracas_day(now())) = 'especial',
+                    false) as especial
+      from public.companies c where c.id = ${companyId}`;
+  const terminal = cab?.terminal ?? null;
+  if (terminal === null || cab?.especial !== true) {
+    return { rif_terminal: terminal, applies: false, items: [], total: 0, pending_review: 0 };
+  }
+  const filas = await sql<(TaxCalendarEntry & { review_status: string })[]>`
+    select obligation, period_from::text as period_from, period_to::text as period_to,
+           due_date::text as due_date, review_status,
+           legal_norm || ', ' || gazette || '. Transcrita de: ' || secondary_source as legal_source
+      from public.tax_calendar_entries
+     where rif_terminal = ${terminal}
+       and due_date between ${desde}::date and ${hasta}::date
+     order by due_date, obligation`;
+  const items = filas
+    .filter((f) => f.review_status === "secondary_source")
+    .map(({ review_status: _r, ...f }) => f);
+  return {
+    rif_terminal: terminal,
+    applies: true,
+    items,
+    total: items.length,
+    pending_review: filas.length - items.length,
+  };
 }

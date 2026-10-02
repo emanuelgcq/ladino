@@ -1,5 +1,5 @@
 import { err, ok, type Result } from "@ladino/core";
-import type { UnitOfWork } from "@ladino/db";
+import type { UnitOfWork, TransactionSql } from "@ladino/db";
 import type { CreateCompanyRequest, CompanyResponse } from "@ladino/schemas";
 import { tenantVisible } from "./tenant-visibility.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
@@ -271,6 +271,10 @@ export async function createCompany(
      where not exists (select 1 from public.customers
                         where company_id = ${fila.id} and is_system)`;
 
+  // Y el producto de SISTEMA de la ND por IGTF (E-03; 20261002100100): fuera del catálogo y de la
+  // caja, para que la primera ND por IGTF no tenga que crearlo.
+  await sembrarProductoIgtf(sql, fila.tenant_id, fila.id);
+
   // ── 8. AUDITAR ────────────────────────────────────────────────────────────
   // El caso de uso escribe el HECHO DE NEGOCIO: company.created. El trigger M4
   // escribe además company.tax_id_established — NO es un duplicado: son dos
@@ -383,4 +387,25 @@ export async function setCompanyFiscalAddress(
             'company.fiscal_address_set', 'user', now(), ${RULES_VERSION},
             ${sql.json({ from: anterior?.fiscal_address ?? null, to: fiscalAddress })})`;
   return ok(fila!);
+}
+
+/**
+ * El producto de SISTEMA de la línea de la ND por IGTF (`system_code = 'igtf'`): uno por empresa,
+ * inactivo, no sujeto, fuera del catálogo y de la caja. Idempotente (`on conflict do nothing`);
+ * el sku lleva un sufijo propio, así que nunca se reutiliza un producto de la empresa.
+ */
+export async function sembrarProductoIgtf(
+  sql: TransactionSql,
+  tenantId: string,
+  companyId: string,
+): Promise<void> {
+  await sql`
+    insert into public.products (id, tenant_id, company_id, sku, name, kind, status, unit_code,
+                                 tax_category_code, system_code)
+    select x.id, ${tenantId}, ${companyId}, 'SIS-IGTF-' || substr(x.id::text, 1, 8),
+           'IGTF sobre pagos en divisas', 'service', 'inactive', 'unidad', 'no_sujeto', 'igtf'
+      from (select gen_random_uuid() as id) x
+     where not exists (select 1 from public.products p
+                        where p.company_id = ${companyId} and p.system_code = 'igtf')
+    on conflict do nothing`;
 }

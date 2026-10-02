@@ -42,6 +42,11 @@ describe("cabeceras de los cuatro libros", () => {
       "alicuota_reducida",
       "base_gravada_sin_alicuota",
       "iva_sin_clasificar",
+      // H1 y H5 (auditoría fiscal 2.ª ronda, 2026-10-02): el IGTF aparte y el comprobante soportado.
+      "igtf_percibido",
+      "retention_receipt_number",
+      "retention_received_on",
+      "retention_iva",
     ]);
   });
 
@@ -83,26 +88,47 @@ describe("cabeceras de los cuatro libros", () => {
       "alicuota_reducida",
       "base_gravada_sin_alicuota",
       "iva_sin_clasificar",
+      // H-12 (ADR-0072 §4, 2026-10-02): el comprobante de retención emitido en el período.
+      "retention_voucher_number",
+      "retention_voucher_date",
+      "retention_voucher_iva",
     ]);
   });
 
+  // ADR-0072 §4 y §6 (2026-10-02): el libro lee del comprobante-documento.
   it("retenciones de IVA", () => {
     expect(cabecerasDe("retenciones_iva")).toEqual([
       "retention_id",
+      "voucher_id",
+      "voucher_number",
+      "version_no",
       "receipt_number",
       "receipt_series",
       "fiscal_period",
       "issued_on",
+      "delivered_on",
+      "delivery_due_on",
       "supplier_tax_id",
       "supplier_name",
+      "supplier_address",
+      "document_type",
       "supplier_document_number",
       "supplier_control_number",
+      "affected_document",
       "invoice_date",
+      "total_amount",
       "base_amount",
+      "exempt_amount",
+      "iva_amount",
+      "tax_rate",
       "rate",
       "retained_amount",
       "legal_source",
       "receipt_status",
+      // H4 (migración 20261002110200): la emisión de la versión 1 de la cadena.
+      "original_issued_on",
+      // A-1 (migración 20261002110500): ya declarada, por renglón.
+      "declared_before",
     ]);
   });
 

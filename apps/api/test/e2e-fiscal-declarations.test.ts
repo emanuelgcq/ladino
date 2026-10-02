@@ -41,6 +41,21 @@ const COMPROBANTE = `202609${String(Date.now()).slice(-8)}`;
 const HOY = diaCaracas();
 const AYER = diaCaracas(-1);
 const MANANA = diaCaracas(1);
+/**
+ * H5 (2026-10-02): el ordinario declara un MES calendario completo. Los períodos de la cadena son
+ * el mes anterior (la retención), el mes en curso (las facturas de HOY) y el siguiente (vacío):
+ * las mismas tres generaciones y las mismas cifras que con AYER, HOY y MAÑANA.
+ */
+function mesDesplazado(n: number): [string, string] {
+  const [a, m] = HOY.split("-").map(Number) as [number, number];
+  const d = new Date(Date.UTC(a, m - 1 + n, 1));
+  const ultimo = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+  return [`${ym}-01`, `${ym}-${String(ultimo).padStart(2, "0")}`];
+}
+const [MES_ANT_DESDE, MES_ANT_HASTA] = mesDesplazado(-1);
+const [MES_DESDE, MES_HASTA] = mesDesplazado(0);
+const [MES_SIG_DESDE, MES_SIG_HASTA] = mesDesplazado(1);
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -225,7 +240,7 @@ describe("retenciones soportadas — el comprobante abona la factura", () => {
       customer_id: AGENTE,
       document_id: FACTURA1,
       receipt_number: COMPROBANTE,
-      retained_on: AYER,
+      retained_on: MES_ANT_HASTA,
       base: "320.00",
       rate: "0.75",
       amount: "240.00",
@@ -263,7 +278,7 @@ describe("retenciones soportadas — el comprobante abona la factura", () => {
       customer_id: AGENTE,
       document_id: FACTURA1,
       receipt_number: COMPROBANTE,
-      retained_on: AYER,
+      retained_on: MES_ANT_HASTA,
       base: "320.00",
       rate: "0.75",
       amount: "240.00",
@@ -320,11 +335,11 @@ describe("retenciones soportadas — el comprobante abona la factura", () => {
 
 describe("el período de IVA — la cadena de excedentes", () => {
   it("saltarse el eslabón anterior responde 422, no un cero en silencio", async () => {
-    // Hay una retención de AYER sin período generado: HOY no puede ir primero.
+    // Hay una retención del mes anterior sin período generado: este mes no puede ir primero.
     const r = await pedir("POST", "/v1/fiscal-declarations/iva-periods", {
       company_id: COMPANY,
-      period_from: HOY,
-      period_to: HOY,
+      period_from: MES_DESDE,
+      period_to: MES_HASTA,
     });
     expect(r.status).toBe(422);
     const cuerpo = (await r.json()) as { message: string };
@@ -332,30 +347,35 @@ describe("el período de IVA — la cadena de excedentes", () => {
   });
 
   it("el período de la retención deja excedente, y el siguiente lo recibe", async () => {
-    // AYER: sin ventas, con la retención de 240 → excedente 240, cuota 0.
+    // El mes anterior: sin ventas, con la retención de 240 → retenciones por descontar 240, cuota 0.
     const r1 = await pedir("POST", "/v1/fiscal-declarations/iva-periods", {
       company_id: COMPANY,
-      period_from: AYER,
-      period_to: AYER,
+      period_from: MES_ANT_DESDE,
+      period_to: MES_ANT_HASTA,
     });
     expect(r1.status).toBe(201);
     const p1 = (await r1.json()) as Record<string, string>;
     expect(p1["retenciones_soportadas"]).toBe("240.00000000");
     // La fila PERSISTIDA: numeric(24,8), así que el cero vuelve con escala.
     expect(p1["cuota_a_pagar"]).toBe("0.00000000");
-    expect(p1["excedente_siguiente"]).toBe("240.00000000");
+    // L-05 (2026-10-02): la retención no absorbida ya no es excedente de CRÉDITO FISCAL; pasa
+    // aparte. Antes esta línea esperaba "240.00000000" — la cifra mezclada, que era el defecto.
+    expect(p1["excedente_siguiente"]).toBe("0.00000000");
+    expect(p1["retenciones_acumuladas_por_descontar"]).toBe("240.00000000");
     expect(p1["dataset_hash"]).toMatch(/^[0-9a-f]{64}$/);
 
-    // HOY: débitos 320 + 160 = 480, y el excedente de AYER se descuenta.
+    // Este mes: débitos 320 + 160 = 480, y la retención del mes anterior se descuenta.
     const r2 = await pedir("POST", "/v1/fiscal-declarations/iva-periods", {
       company_id: COMPANY,
-      period_from: HOY,
-      period_to: HOY,
+      period_from: MES_DESDE,
+      period_to: MES_HASTA,
     });
     expect(r2.status).toBe(201);
     const p2 = (await r2.json()) as Record<string, string | { alicuota: string }[]>;
     expect(p2["debitos"]).toBe("480.00000000");
-    expect(p2["excedente_anterior"]).toBe("240.00000000");
+    // L-05: llega por su lado. Antes: excedente_anterior "240.00000000" (la cifra mezclada).
+    expect(p2["excedente_anterior"]).toBe("0.00000000");
+    expect(p2["retenciones_acumuladas_anteriores"]).toBe("240.00000000");
     expect(p2["cuota_a_pagar"]).toBe("240.00000000");
     expect(p2["excedente_siguiente"]).toBe("0.00000000");
     const detalle = p2["detalle"] as { alicuota: string }[];
@@ -365,8 +385,8 @@ describe("el período de IVA — la cadena de excedentes", () => {
   it("un período SIN actividad se genera en cero — la cadena no se rompe", async () => {
     const r = await pedir("POST", "/v1/fiscal-declarations/iva-periods", {
       company_id: COMPANY,
-      period_from: MANANA,
-      period_to: MANANA,
+      period_from: MES_SIG_DESDE,
+      period_to: MES_SIG_HASTA,
     });
     expect(r.status).toBe(201);
     const p = (await r.json()) as Record<string, string>;
@@ -381,7 +401,7 @@ describe("el período de IVA — la cadena de excedentes", () => {
     expect(r.status).toBe(200);
     const { items } = (await r.json()) as { items: Record<string, string>[] };
     expect(items.length).toBe(3);
-    expect(items[0]!["period_from"]).toBe(MANANA);
+    expect(items[0]!["period_from"]).toBe(MES_SIG_DESDE);
   });
 });
 

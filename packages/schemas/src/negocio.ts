@@ -102,6 +102,8 @@ export const CompanySettingsResponse = z
     print_control_number: z.boolean(),
     /** PA 00071 art. 33: tope de FILAS IMPRESAS de una factura, NC o ND sobre forma libre (A-2). */
     rows_per_free_form: z.number().int(),
+    /** F-05 (RESPUESTA §2.6): la empresa asume el IGTF como gasto; el cliente paga el documento justo. */
+    absorb_igtf: z.boolean(),
   })
   .strict();
 export type CompanySettingsResponse = z.infer<typeof CompanySettingsResponse>;
@@ -113,6 +115,7 @@ export const UpdateCompanySettingsRequest = z
     allow_unidentified_sales: z.boolean().optional(),
     print_control_number: z.boolean().optional(),
     rows_per_free_form: z.number().int().min(1).max(18).optional(),
+    absorb_igtf: z.boolean().optional(),
     default_price_list_id: uuid.nullable().optional(),
     default_tax_category_code: z
       .string()

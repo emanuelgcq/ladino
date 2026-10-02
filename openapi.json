@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Ladino API",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "API administrativa, contable y fiscal. Errores: docs/04_PLATFORM/ERROR_CATALOG.md."
   },
   "servers": [
@@ -5165,6 +5165,9 @@
           "account_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "igtf_included": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -5349,6 +5352,9 @@
               },
               "functional_amount": {
                 "type": "string"
+              },
+              "absorbed": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -5357,7 +5363,36 @@
               "currency",
               "rate",
               "amount",
-              "functional_amount"
+              "functional_amount",
+              "absorbed"
+            ],
+            "additionalProperties": false
+          },
+          "igtf_debit_note": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "series": {
+                "type": "string"
+              },
+              "document_number": {
+                "type": "integer",
+                "nullable": true
+              },
+              "control_display": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "id",
+              "series",
+              "document_number",
+              "control_display"
             ],
             "additionalProperties": false
           }
@@ -5578,6 +5613,31 @@
             "type": "string",
             "nullable": true,
             "format": "uuid"
+          },
+          "igtf_not_refunded": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "amount": {
+                "type": "string"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "functional_amount": {
+                "type": "string"
+              },
+              "notice": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "amount",
+              "currency",
+              "functional_amount",
+              "notice"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -6347,6 +6407,9 @@
           },
           "rows_per_free_form": {
             "type": "integer"
+          },
+          "absorb_igtf": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -6357,7 +6420,8 @@
           "default_warehouse_id",
           "default_price_list_id",
           "print_control_number",
-          "rows_per_free_form"
+          "rows_per_free_form",
+          "absorb_igtf"
         ],
         "additionalProperties": false
       },
@@ -6380,6 +6444,9 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 18
+          },
+          "absorb_igtf": {
+            "type": "boolean"
           },
           "default_price_list_id": {
             "type": "string",
@@ -7607,6 +7674,9 @@
                     },
                     "functional_amount": {
                       "type": "string"
+                    },
+                    "absorbed": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -7615,7 +7685,36 @@
                     "currency",
                     "rate",
                     "amount",
-                    "functional_amount"
+                    "functional_amount",
+                    "absorbed"
+                  ],
+                  "additionalProperties": false
+                },
+                "igtf_debit_note": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "series": {
+                      "type": "string"
+                    },
+                    "document_number": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "control_display": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "series",
+                    "document_number",
+                    "control_display"
                   ],
                   "additionalProperties": false
                 }
@@ -8942,6 +9041,35 @@
           },
           "fiscal_support": {
             "type": "boolean"
+          },
+          "retention_exclusion": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,39}$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "code",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "iva_retention_full_reason": {
+            "type": "string",
+            "enum": [
+              "iva_no_discriminado",
+              "factura_sin_requisitos",
+              "indicado_por_portal",
+              "proveedor_sin_rif",
+              "operaciones_art_2"
+            ]
           }
         },
         "required": [
@@ -9081,6 +9209,27 @@
               ],
               "additionalProperties": false
             }
+          },
+          "retention_voucher_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "retention_voucher_number": {
+            "type": "string",
+            "nullable": true
+          },
+          "retention_exclusion_code": {
+            "type": "string",
+            "nullable": true
+          },
+          "retention_exclusion_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "iva_retention_full_reason": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -9105,7 +9254,12 @@
           "fx_rate",
           "rate_source",
           "accounting_date",
-          "retentions"
+          "retentions",
+          "retention_voucher_id",
+          "retention_voucher_number",
+          "retention_exclusion_code",
+          "retention_exclusion_reason",
+          "iva_retention_full_reason"
         ],
         "additionalProperties": false
       },
@@ -9956,6 +10110,199 @@
         ],
         "additionalProperties": false
       },
+      "RetentionVoucherResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "supplier_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "voucher_number": {
+            "type": "string"
+          },
+          "version_no": {
+            "type": "integer"
+          },
+          "replaces_voucher_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "replaced_by_voucher_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "correction_reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "per_operation",
+              "per_fortnight"
+            ]
+          },
+          "issued_on": {
+            "type": "string"
+          },
+          "fortnight_start": {
+            "type": "string"
+          },
+          "fortnight_end": {
+            "type": "string"
+          },
+          "delivery_due_on": {
+            "type": "string"
+          },
+          "delivered_on": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "issued",
+              "annulled"
+            ]
+          },
+          "agent_tax_id": {
+            "type": "string"
+          },
+          "agent_name": {
+            "type": "string"
+          },
+          "agent_address": {
+            "type": "string",
+            "nullable": true
+          },
+          "supplier_tax_id": {
+            "type": "string"
+          },
+          "supplier_name": {
+            "type": "string"
+          },
+          "supplier_address": {
+            "type": "string",
+            "nullable": true
+          },
+          "functional_currency": {
+            "type": "string"
+          },
+          "total_retained": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "supplier_invoice_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "supplier_retention_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "document_type": {
+                  "type": "string"
+                },
+                "document_number": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "control_number": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "document_date": {
+                  "type": "string"
+                },
+                "affected_document": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "total_amount": {
+                  "type": "string"
+                },
+                "taxable_base": {
+                  "type": "string"
+                },
+                "exempt_amount": {
+                  "type": "string"
+                },
+                "iva_amount": {
+                  "type": "string"
+                },
+                "tax_rate": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "portion": {
+                  "type": "string"
+                },
+                "retained_amount": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "supplier_invoice_id",
+                "supplier_retention_id",
+                "document_type",
+                "document_number",
+                "control_number",
+                "document_date",
+                "affected_document",
+                "total_amount",
+                "taxable_base",
+                "exempt_amount",
+                "iva_amount",
+                "tax_rate",
+                "portion",
+                "retained_amount"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "company_id",
+          "supplier_id",
+          "voucher_number",
+          "version_no",
+          "replaces_voucher_id",
+          "replaced_by_voucher_id",
+          "correction_reason",
+          "mode",
+          "issued_on",
+          "fortnight_start",
+          "fortnight_end",
+          "delivery_due_on",
+          "delivered_on",
+          "status",
+          "agent_tax_id",
+          "agent_name",
+          "agent_address",
+          "supplier_tax_id",
+          "supplier_name",
+          "supplier_address",
+          "functional_currency",
+          "total_retained",
+          "lines"
+        ],
+        "additionalProperties": false
+      },
       "RegisterArrivalRequest": {
         "type": "object",
         "properties": {
@@ -10019,6 +10366,35 @@
               "maxLength": 40
             },
             "maxItems": 10
+          },
+          "retention_exclusion": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,39}$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "code",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "iva_retention_full_reason": {
+            "type": "string",
+            "enum": [
+              "iva_no_discriminado",
+              "factura_sin_requisitos",
+              "indicado_por_portal",
+              "proveedor_sin_rif",
+              "operaciones_art_2"
+            ]
           },
           "payment": {
             "type": "object",
@@ -10350,6 +10726,27 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "retention_voucher_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "retention_voucher_number": {
+                "type": "string",
+                "nullable": true
+              },
+              "retention_exclusion_code": {
+                "type": "string",
+                "nullable": true
+              },
+              "retention_exclusion_reason": {
+                "type": "string",
+                "nullable": true
+              },
+              "iva_retention_full_reason": {
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [
@@ -10374,7 +10771,12 @@
               "fx_rate",
               "rate_source",
               "accounting_date",
-              "retentions"
+              "retentions",
+              "retention_voucher_id",
+              "retention_voucher_number",
+              "retention_exclusion_code",
+              "retention_exclusion_reason",
+              "iva_retention_full_reason"
             ],
             "additionalProperties": false
           },
@@ -10775,6 +11177,35 @@
               "instrument"
             ],
             "additionalProperties": false
+          },
+          "retention_exclusion": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,39}$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 10,
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "code",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "iva_retention_full_reason": {
+            "type": "string",
+            "enum": [
+              "iva_no_discriminado",
+              "factura_sin_requisitos",
+              "indicado_por_portal",
+              "proveedor_sin_rif",
+              "operaciones_art_2"
+            ]
           }
         },
         "required": [
@@ -11064,6 +11495,27 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "retention_voucher_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "retention_voucher_number": {
+                "type": "string",
+                "nullable": true
+              },
+              "retention_exclusion_code": {
+                "type": "string",
+                "nullable": true
+              },
+              "retention_exclusion_reason": {
+                "type": "string",
+                "nullable": true
+              },
+              "iva_retention_full_reason": {
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [
@@ -11088,7 +11540,12 @@
               "fx_rate",
               "rate_source",
               "accounting_date",
-              "retentions"
+              "retentions",
+              "retention_voucher_id",
+              "retention_voucher_number",
+              "retention_exclusion_code",
+              "retention_exclusion_reason",
+              "iva_retention_full_reason"
             ],
             "additionalProperties": false
           },
@@ -13911,6 +14368,12 @@
           },
           "summary_filename": {
             "type": "string"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -14073,6 +14536,10 @@
             "type": "string",
             "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
           },
+          "received_on": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
           "base": {
             "type": "string",
             "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
@@ -14123,6 +14590,11 @@
                 "type": "string",
                 "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
               },
+              "received_on": {
+                "type": "string",
+                "nullable": true,
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
               "base": {
                 "type": "string"
               },
@@ -14156,6 +14628,7 @@
               "document_id",
               "receipt_number",
               "retained_on",
+              "received_on",
               "base",
               "rate",
               "amount",
@@ -14339,6 +14812,9 @@
                   },
                   "functional_amount": {
                     "type": "string"
+                  },
+                  "absorbed": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -14347,7 +14823,36 @@
                   "currency",
                   "rate",
                   "amount",
-                  "functional_amount"
+                  "functional_amount",
+                  "absorbed"
+                ],
+                "additionalProperties": false
+              },
+              "igtf_debit_note": {
+                "type": "object",
+                "nullable": true,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "series": {
+                    "type": "string"
+                  },
+                  "document_number": {
+                    "type": "integer",
+                    "nullable": true
+                  },
+                  "control_display": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                },
+                "required": [
+                  "id",
+                  "series",
+                  "document_number",
+                  "control_display"
                 ],
                 "additionalProperties": false
               }
@@ -14395,6 +14900,11 @@
                   "type": "string",
                   "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                 },
+                "received_on": {
+                  "type": "string",
+                  "nullable": true,
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
                 "base": {
                   "type": "string"
                 },
@@ -14428,6 +14938,7 @@
                 "document_id",
                 "receipt_number",
                 "retained_on",
+                "received_on",
                 "base",
                 "rate",
                 "amount",
@@ -14514,6 +15025,12 @@
           "excedente_siguiente": {
             "type": "string"
           },
+          "retenciones_acumuladas_anteriores": {
+            "type": "string"
+          },
+          "retenciones_acumuladas_por_descontar": {
+            "type": "string"
+          },
           "detalle": {
             "type": "array",
             "items": {
@@ -14572,6 +15089,8 @@
           "excedente_anterior",
           "cuota_a_pagar",
           "excedente_siguiente",
+          "retenciones_acumuladas_anteriores",
+          "retenciones_acumuladas_por_descontar",
           "detalle",
           "functional_currency",
           "generator_version",
@@ -14625,6 +15144,12 @@
                   "type": "string"
                 },
                 "excedente_siguiente": {
+                  "type": "string"
+                },
+                "retenciones_acumuladas_anteriores": {
+                  "type": "string"
+                },
+                "retenciones_acumuladas_por_descontar": {
                   "type": "string"
                 },
                 "detalle": {
@@ -14685,6 +15210,8 @@
                 "excedente_anterior",
                 "cuota_a_pagar",
                 "excedente_siguiente",
+                "retenciones_acumuladas_anteriores",
+                "retenciones_acumuladas_por_descontar",
                 "detalle",
                 "functional_currency",
                 "generator_version",
@@ -14823,6 +15350,126 @@
         ],
         "additionalProperties": false
       },
+      "IvaPeriodProposalResponse": {
+        "type": "object",
+        "properties": {
+          "taxpayer_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "periodicity": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "quincenal",
+              "mensual"
+            ]
+          },
+          "period_from": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "period_to": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "due_date": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "due_date_status": {
+            "type": "string",
+            "nullable": true
+          },
+          "legal_source": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "taxpayer_type",
+          "periodicity",
+          "period_from",
+          "period_to",
+          "due_date",
+          "due_date_status",
+          "legal_source"
+        ],
+        "additionalProperties": false
+      },
+      "TaxCalendarResponse": {
+        "type": "object",
+        "properties": {
+          "rif_terminal": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 9
+          },
+          "applies": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "obligation": {
+                  "type": "string",
+                  "enum": [
+                    "iva",
+                    "ret_iva",
+                    "igtf",
+                    "islr_anticipo",
+                    "islr_definitiva",
+                    "islr_retenciones"
+                  ]
+                },
+                "period_from": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "period_to": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "due_date": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "legal_source": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "obligation",
+                "period_from",
+                "period_to",
+                "due_date",
+                "legal_source"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pending_review": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "rif_terminal",
+          "applies",
+          "items",
+          "total",
+          "pending_review"
+        ],
+        "additionalProperties": false
+      },
       "EnableIgtfRequest": {
         "type": "object",
         "properties": {
@@ -14895,6 +15542,10 @@
           },
           "causes": {
             "type": "boolean"
+          },
+          "legal_source": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -14912,6 +15563,59 @@
           "enabled_at": {
             "type": "string",
             "nullable": true
+          },
+          "perceiving": {
+            "type": "boolean"
+          },
+          "absorbs": {
+            "type": "boolean"
+          },
+          "fortnight": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date"
+              },
+              "to": {
+                "type": "string",
+                "format": "date"
+              },
+              "due": {
+                "type": "object",
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "date"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "secondary_source",
+                      "pending_review",
+                      "not_available"
+                    ]
+                  },
+                  "legal_source": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                },
+                "required": [
+                  "date",
+                  "status",
+                  "legal_source"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "due"
+            ],
+            "additionalProperties": false
           },
           "rate": {
             "type": "string",
@@ -14943,6 +15647,10 @@
                 },
                 "causes": {
                   "type": "boolean"
+                },
+                "legal_source": {
+                  "type": "string",
+                  "nullable": true
                 }
               },
               "required": [
@@ -14956,6 +15664,9 @@
         "required": [
           "enabled",
           "enabled_at",
+          "perceiving",
+          "absorbs",
+          "fortnight",
           "rate",
           "legal_source",
           "instruments"
@@ -15053,6 +15764,14 @@
                 },
                 "occurred_at": {
                   "type": "string"
+                },
+                "absorbed": {
+                  "type": "boolean"
+                },
+                "debit_note_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
                 }
               },
               "required": [
@@ -15068,7 +15787,9 @@
                 "rate_source",
                 "status",
                 "status_reason",
-                "occurred_at"
+                "occurred_at",
+                "absorbed",
+                "debit_note_id"
               ],
               "additionalProperties": false
             }
@@ -27286,7 +28007,7 @@
       },
       "post": {
         "summary": "Registrar factura del proveedor y calcular retenciones (purchase.invoice.register)",
-        "description": "Registra el correlativo y el número de control DEL PROVEEDOR tal como él los emitió; el extranjero aporta referencia de documento origen en su lugar. Cruza orden-recepción-factura: el precio tolera hasta el umbral de la empresa, la cantidad no tolera nada. Las retenciones se calculan aquí con la regla vigente y se aplican al pagar.",
+        "description": "Registra el correlativo y el número de control DEL PROVEEDOR tal como él los emitió; el extranjero aporta referencia de documento origen en su lugar. Cruza orden-recepción-factura: el precio tolera hasta el umbral de la empresa, la cantidad no tolera nada. CONTRATO 2026-10-02 (ADR-0072 §3, API 0.2.0): si la empresa es contribuyente especial en la fecha de la factura, la retención de IVA se practica SOLA al registrar (75 % con «iva_compras»; 100 % con «iva_retention_full_reason», art. 5), salvo proveedor formal, factura sin IVA o «retention_exclusion» marcada con motivo; y se emite el comprobante («retention_voucher_number», AAAAMM + 8). Sin regla vigente, 409 RETENTION_RULE_MISSING. «retention_concepts» sigue valiendo para los demás conceptos (N-1).",
         "security": [
           {
             "bearerAuth": []
@@ -27364,6 +28085,724 @@
           },
           "409": {
             "description": "Sin regla de retención (LAD53); precio fuera del umbral sin aprobación; documento del proveedor ya cargado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/retention-exclusions": {
+      "get": {
+        "summary": "Exclusiones del art. 3 de la PA SNAT/2025/000054 que se pueden marcar (ADR-0072 §3)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Catálogo de plataforma con norma y artículo.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "nullable": true
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/retention-vouchers": {
+      "get": {
+        "summary": "Comprobantes de retención de IVA emitidos (ap.read, purchase.invoice.register o retention.receipt.issue)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "supplier_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comprobantes con su estado (issued/annulled), vencimiento y entrega.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "nullable": true
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/retention-vouchers/{id}": {
+      "get": {
+        "summary": "Un comprobanteRetencion de retención con sus renglones (ADR-0072 §4)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El comprobanteRetencion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionVoucherResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/retention-vouchers/{id}/pdf": {
+      "get": {
+        "summary": "PDF del comprobanteRetencion de retención (PA SNAT/2025/000054 art. 16)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "application/pdf",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/retention-vouchers/{id}/delivery": {
+      "post": {
+        "summary": "Anotar la entrega del comprobanteRetencion, una vez (retention.receipt.issue)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "company_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "delivered_on": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                },
+                "required": [
+                  "company_id",
+                  "delivered_on"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "El comprobanteRetencion entregado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionVoucherResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/retention-vouchers/{id}/corrections": {
+      "post": {
+        "summary": "Corregir: emite una versión nueva que reemplaza (y anula) a la anterior (retention.receipt.issue)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "company_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "company_id",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "La versión nueva.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionVoucherResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/retention-vouchers/settings": {
+      "put": {
+        "summary": "Uno por operación (omisión) o uno por quincena y proveedor (company.settings.manage)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "company_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "per_operation",
+                      "per_fortnight"
+                    ]
+                  }
+                },
+                "required": [
+                  "company_id",
+                  "mode"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "El modo.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "company_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "mode": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "company_id",
+                    "mode"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
             "content": {
               "application/json": {
                 "schema": {
@@ -32201,6 +33640,170 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ListIvaPeriodResultsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-declarations/iva-periods/proposal": {
+      "get": {
+        "summary": "El período de IVA que corresponde declarar (permiso fiscal_book.read)",
+        "description": "L-04 (ADR-0072 §7): según el tipo vigente, la última QUINCENA cerrada para el contribuyente especial (PA SNAT/2025/000091) o el último MES cerrado para el ordinario, con el vencimiento por terminal del RIF cuando la celda del calendario está ofrecida. La pantalla lo muestra; no calcula la quincena.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "La propuesta.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IvaPeriodProposalResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-declarations/calendar": {
+      "get": {
+        "summary": "El calendario de la providencia de especiales para mi terminal (permiso fiscal_book.read)",
+        "description": "L-09 (ADR-0072 §8): las fechas sembradas de la PA SNAT/2025/000091 para el terminal del RIF de la empresa, filtradas por fecha de VENCIMIENTO (sin from/to: el año en curso). Solo las celdas ofrecidas; las pendientes de cotejo con la Gaceta se cuentan en pending_review. Vacío si la empresa no es especial.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": false,
+            "name": "to",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El calendario.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaxCalendarResponse"
                 }
               }
             }

@@ -148,6 +148,20 @@ export async function reprocessPendingJournals(
       continue;
     }
     const tabla = TABLA_DE[f.source_kind];
+    /**
+     * Revisión 3, decidido por criterio (opción a, sin excepción en el invariante): el asiento de
+     * una percepción documentada con ND por IGTF ES el asiento de esa ND (20261002100000). Si se
+     * encoló, al importarlo el enlace va a `documents` de la ND; sin él la ND quedaría sin
+     * `journal_entry_id` y `accounting_coverage_gaps()` la contaría como hueco para siempre.
+     */
+    let enlace: { table: string; id: string } | undefined =
+      tabla === undefined ? undefined : { table: tabla, id: f.source_id };
+    if (f.source_kind === "igtf_perception") {
+      const [nd] = await sql<{ debit_note_id: string | null }[]>`
+        select debit_note_id from public.igtf_perceptions
+         where company_id = ${input.company_id} and id = ${f.source_id}`;
+      if (nd?.debit_note_id) enlace = { table: "documents", id: nd.debit_note_id };
+    }
     const r = await generateJournalFromDocument(sql, {
       tenantId: scope.value.tenantId,
       companyId: input.company_id,
@@ -161,7 +175,7 @@ export async function reprocessPendingJournals(
       functionalCurrency: moneda,
       amounts: importesDe(ctx),
       ...(condicionesDe(ctx) === undefined ? {} : { conditions: condicionesDe(ctx)! }),
-      ...(tabla === undefined ? {} : { backlink: { table: tabla, id: f.source_id } }),
+      ...(enlace === undefined ? {} : { backlink: enlace }),
     });
     if (!r.ok) {
       return err({ code: "VALIDATION_FAILED", message: r.error.message });

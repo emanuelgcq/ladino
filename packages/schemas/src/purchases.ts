@@ -164,6 +164,29 @@ export const RegisterSupplierInvoiceLineRequest = z
   })
   .strict();
 
+/** ADR-0072 §3: los supuestos del 100 % (PA SNAT/2025/000054 art. 5). */
+export const IvaRetentionFullReason = z.enum([
+  "iva_no_discriminado",
+  "factura_sin_requisitos",
+  "indicado_por_portal",
+  "proveedor_sin_rif",
+  // Supuesto 4.º del art. 5: operaciones del art. 2 (metales y piedras preciosas).
+  "operaciones_art_2",
+]);
+export type IvaRetentionFullReason = z.infer<typeof IvaRetentionFullReason>;
+
+/** ADR-0072 §3: una exclusión del art. 3 marcada por la persona, con su motivo auditado. */
+export const RetentionExclusionMark = z
+  .object({
+    code: z
+      .string()
+      .trim()
+      .regex(/^[a-z][a-z0-9_]{0,39}$/),
+    reason: z.string().trim().min(10).max(500),
+  })
+  .strict();
+export type RetentionExclusionMark = z.infer<typeof RetentionExclusionMark>;
+
 export const RegisterSupplierInvoiceRequest = z
   .object({
     company_id: uuid,
@@ -199,6 +222,17 @@ export const RegisterSupplierInvoiceRequest = z
      * VALIDAR-TRIBUTARIO: P-27 y P-28 de PENDIENTES_ASESOR.
      */
     fiscal_support: z.boolean().optional(),
+    /**
+     * ADR-0072 §3 (contrato 2026-10-02): una exclusión del art. 3 de la PA SNAT/2025/000054
+     * (catálogo `retention_exclusions`, solo las `marked`) con su motivo, que queda auditado.
+     * Solo la marca una empresa AGENTE: con ella la factura no retiene IVA.
+     */
+    retention_exclusion: RetentionExclusionMark.optional(),
+    /**
+     * ADR-0072 §3: el supuesto del art. 5 por el que se retiene el 100 % del IVA (concepto
+     * `iva_compras_total`, con su regla en `retention_rules`). Sin él, el 75 % (`iva_compras`).
+     */
+    iva_retention_full_reason: IvaRetentionFullReason.optional(),
   })
   .strict();
 export type RegisterSupplierInvoiceRequest = z.infer<typeof RegisterSupplierInvoiceRequest>;
@@ -306,6 +340,9 @@ export const SimplePurchaseRequest = z
       })
       .strict()
       .optional(),
+    /** ADR-0072 §3: como en la factura de proveedor (H7: «Ya llegó la factura» los reenvía). */
+    retention_exclusion: RetentionExclusionMark.optional(),
+    iva_retention_full_reason: IvaRetentionFullReason.optional(),
   })
   .strict();
 export type SimplePurchaseRequest = z.infer<typeof SimplePurchaseRequest>;
@@ -430,6 +467,13 @@ export const SupplierInvoiceResponse = z
      */
     accounting_date: z.string().nullable(),
     retentions: z.array(SupplierRetentionResponse),
+    /** ADR-0072 §4: el comprobante de retención de IVA emitido al registrar; null si no hubo. */
+    retention_voucher_id: uuid.nullable(),
+    retention_voucher_number: z.string().nullable(),
+    /** ADR-0072 §3: la exclusión marcada y su motivo, o el supuesto del 100 %. */
+    retention_exclusion_code: z.string().nullable(),
+    retention_exclusion_reason: z.string().nullable(),
+    iva_retention_full_reason: z.string().nullable(),
   })
   .strict();
 export type SupplierInvoiceResponse = z.infer<typeof SupplierInvoiceResponse>;
@@ -661,6 +705,9 @@ export const RegisterArrivalRequest = z
     /** El pedido del que viene, si viene de uno. */
     purchase_order_id: uuid.optional(),
     retention_concepts: z.array(z.string().trim().min(1).max(40)).max(10).optional(),
+    /** ADR-0072 §3: como en la factura de proveedor. */
+    retention_exclusion: RetentionExclusionMark.optional(),
+    iva_retention_full_reason: IvaRetentionFullReason.optional(),
     /** Pagada en el acto. Ausente = queda debiendo. */
     payment: z
       .object({
@@ -734,3 +781,75 @@ export const ArrivalImpactResponse = z
   })
   .strict();
 export type ArrivalImpactResponse = z.infer<typeof ArrivalImpactResponse>;
+
+// ── Comprobante de retención de IVA (ADR-0072 §4; PA SNAT/2025/000054 art. 16) ──────────
+
+export const RetentionVoucherLineResponse = z
+  .object({
+    supplier_invoice_id: uuid,
+    supplier_retention_id: uuid,
+    /** Tipo del instructivo del TXT: 01 factura, 02 ND, 03 NC. */
+    document_type: z.string(),
+    document_number: z.string().nullable(),
+    control_number: z.string().nullable(),
+    document_date: z.string(),
+    affected_document: z.string().nullable(),
+    total_amount: z.string(),
+    taxable_base: z.string(),
+    exempt_amount: z.string(),
+    /** IVA causado. */
+    iva_amount: z.string(),
+    /** Alícuota en porcentaje; null si el documento mezcla alícuotas (VALIDAR-SENIAT P-7). */
+    tax_rate: z.string().nullable(),
+    portion: z.string(),
+    retained_amount: z.string(),
+  })
+  .strict();
+
+export const RetentionVoucherResponse = z
+  .object({
+    id: uuid,
+    company_id: uuid,
+    supplier_id: uuid,
+    /** AAAAMM + 8 dígitos (14). */
+    voucher_number: z.string(),
+    version_no: z.number().int(),
+    replaces_voucher_id: uuid.nullable(),
+    replaced_by_voucher_id: uuid.nullable(),
+    correction_reason: z.string().nullable(),
+    mode: z.enum(["per_operation", "per_fortnight"]),
+    issued_on: z.string(),
+    fortnight_start: z.string(),
+    fortnight_end: z.string(),
+    /** 2 días hábiles después de la quincena (lunes a viernes; feriados: VALIDAR-TRIBUTARIO). */
+    delivery_due_on: z.string(),
+    delivered_on: z.string().nullable(),
+    /** issued = vigente; annulled = reemplazado por una versión nueva. */
+    status: z.enum(["issued", "annulled"]),
+    agent_tax_id: z.string(),
+    agent_name: z.string(),
+    agent_address: z.string().nullable(),
+    supplier_tax_id: z.string(),
+    supplier_name: z.string(),
+    supplier_address: z.string().nullable(),
+    functional_currency: z.string(),
+    total_retained: z.string(),
+    lines: z.array(RetentionVoucherLineResponse),
+  })
+  .strict();
+export type RetentionVoucherResponse = z.infer<typeof RetentionVoucherResponse>;
+
+export const CorrectRetentionVoucherRequest = z
+  .object({ company_id: uuid, reason: z.string().trim().min(10).max(500) })
+  .strict();
+export type CorrectRetentionVoucherRequest = z.infer<typeof CorrectRetentionVoucherRequest>;
+
+export const DeliverRetentionVoucherRequest = z
+  .object({ company_id: uuid, delivered_on: z.string().date() })
+  .strict();
+export type DeliverRetentionVoucherRequest = z.infer<typeof DeliverRetentionVoucherRequest>;
+
+export const SetRetentionVoucherModeRequest = z
+  .object({ company_id: uuid, mode: z.enum(["per_operation", "per_fortnight"]) })
+  .strict();
+export type SetRetentionVoucherModeRequest = z.infer<typeof SetRetentionVoucherModeRequest>;

@@ -128,6 +128,29 @@ de 2 dígitos y un secuencial de hasta 8. Art. 31: la imprenta no preimprime la 
   talonario se anula con motivo solo si no emitió nada (`POST …/{id}/cancel`). El identificador
   cambia solo mientras el talonario no haya emitido. Cada paso deja su acta en `audit_events`.
 
+## 3-bis. La Nota de Débito por IGTF (E-03, 2026-10-02)
+
+Cuando un sujeto pasivo especial cobra en divisas una factura ya emitida (fiado o abono, desde la
+ficha), `registerPayment` emite en la misma transacción una **Nota de Débito por IGTF** (PA 00071
+art. 22, «cualquier causa»; PA SNAT/2022/000013 art. 6):
+
+- referencia la factura (si el abono es a una ND, la factura de esa ND) e identifica al adquirente
+  como ella;
+- **una sola línea** «IGTF 3 % sobre pago en divisas» —el porcentaje sale de `igtf_rules`—, con un
+  producto de sistema por empresa (`LADINO-IGTF`, inactivo, no sujeto), tratamiento `no_sujeto`,
+  sin IVA;
+- en bolívares, por el monto de la percepción a la tasa del día del cobro (`rate_basis = own_day`);
+- **consume control** como cualquier ND y respeta el tope de filas de la forma libre;
+- va al **libro de ventas con base 0 e IVA 0** (columna de lo no sujeto);
+- **nace pagada**: `platform.document_balance` le descuenta su percepción
+  (`igtf_perceptions.debit_note_id`), y su asiento es el de la percepción (Dr caja / Cr 2.1.91,
+  backlink a la ND);
+- su motivo cita base, monto y norma; el PDF imprime además alícuota y monto en divisa y en Bs.
+
+No se emite en el cobro de la propia venta (la caja: el IGTF va en la factura) ni si la empresa
+absorbe el IGTF. Contrato: `RegisterPaymentResponse.igtf_debit_note` (aditivo). VALIDAR-TRIBUTARIO
+P-40. Riesgo: R-66.
+
 ## 4. Los requisitos de la PA 102 y su estado
 
 | Requisito (PA 102) | Estado en Ladino |

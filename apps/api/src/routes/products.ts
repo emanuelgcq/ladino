@@ -200,6 +200,8 @@ export function productsRoutes(
           ${precioJoin}
           ${stockJoin}
          where p.company_id = ${companyId} ${filtro} ${activos}
+           -- Los productos de SISTEMA (la línea de la ND por IGTF) no son catálogo (20261002100100).
+           and p.system_code is null
          order by ${orden}
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
     });

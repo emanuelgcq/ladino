@@ -40,6 +40,7 @@ import {
   createDirectCreditNote,
   createDebitNote,
   avisoIgtf,
+  igtfQueSePide,
   minorUnitsOf,
   previsualizarCobro,
   exigeEmpresaQueFactura,
@@ -509,28 +510,16 @@ export function salesRoutes(
           message: "El aviso de IGTF exige el permiso sales.payment.register.",
         });
       }
-      // Las mismas condiciones que registerPayment, en una consulta: activa,
-      // en divisa, instrumento que causa, regla vigente.
-      const [gate] = await tx<
-        { enabled: boolean; causes: boolean; rate: string | null; moneda: string }[]
-      >`select (c.igtf_enabled_at is not null and c.igtf_enabled_at <= now()) as enabled,
-               coalesce(i.causes, false) as causes,
-               r.rate::text as rate,
-               c.functional_currency_code as moneda
-          from public.companies c
-          left join public.igtf_company_instruments i
-            on i.company_id = c.id and i.instrument = ${instrument}
-          left join lateral (
-            select rate from public.igtf_rules
-             where effective_from <= current_date
-             order by effective_from desc limit 1
-          ) r on true
-         where c.id = ${companyId}`;
-      const aplica =
-        gate?.enabled === true && gate.causes && gate.rate !== null && currency !== gate.moneda;
-      if (!aplica || gate.rate === null) {
+      // LA MISMA regla que registerPayment, por la MISMA función (E-02): antes esta ruta tenía su
+      // propia consulta con el interruptor `igtf_enabled_at`, y el aviso habría dicho «no
+      // causa» a un especial que el cobro ya percibe.
+      const regla = await igtfQueSePide(tx, companyId, instrument, currency);
+      if (!regla.ok) throw new DominioError(regla.error);
+      const tasa = regla.value;
+      if (tasa === null) {
         return { applies: false, rate: null, base: amount, currency, amount: null };
       }
+      const gate = { rate: tasa };
       // El MISMO redondeo que escribe el cobro (ADR-0053). Antes se calculaba
       // aquí con un `round(..., 8)` en SQL: dos sitios que redondean por su
       // cuenta es la manera segura de que la caja enseñe un número y el cobro
@@ -624,7 +613,7 @@ export function salesRoutes(
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigeArRead(tx, actor, companyId);
       const [ref] = await tx<{ d: string }[]>`
-        select coalesce(${referencia}::date, current_date)::text as d`;
+        select coalesce(${referencia}::date, platform.caracas_day(now()))::text as d`;
       // La deuda mostrada viaja a 2 decimales (2026-09-08): presentación, no
       // recálculo — la base sigue a 8.
       const buckets = await tx<Record<string, unknown>[]>`
@@ -655,10 +644,16 @@ export function salesRoutes(
         select d.id, d.kind, d.series, d.document_number::int as document_number,
                to_char(d.issued_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as issued_at,
                d.status, d.total_amount::text as total_amount,
-               round(coalesce((select sum(p.functional_amount) from public.payments p
-                          where p.document_id = d.id), 0), 2)::text as paid_amount,
+               -- Lo pagado = total − el saldo ÚNICO (platform.document_balance, 20261002100000):
+               -- la ND por IGTF la paga su percepción, no un cobro. La copia en línea «Σ cobros» la
+               -- enseñaba como no pagada. Una anulada no tiene saldo: se enseñan sus cobros.
+               round(coalesce(d.total_amount - platform.document_balance(${companyId}, d.id),
+                              (select sum(p.functional_amount) from public.payments p
+                                where p.document_id = d.id), 0), 2)::text as paid_amount,
                round(platform.document_debt_today(${companyId}, d.id), 2)::text as balance,
-               greatest(0, (current_date - d.issued_at::date))::int as days_outstanding
+               -- El día de CARACAS, no el UTC (CLAUDE.md §3: una fecha contra un reloj).
+               greatest(0, platform.caracas_day(now()) - platform.caracas_day(d.issued_at))::int
+                 as days_outstanding
           from public.documents d
          where d.company_id = ${companyId} and d.customer_id = ${id}
            and d.status in ('issued', 'paid', 'annulled')
@@ -682,11 +677,11 @@ export function salesRoutes(
       const buckets = await tx<Record<string, unknown>[]>`
         select customer_id, bucket, document_count::int as document_count,
                round(amount, 2)::text as amount
-          from platform.ar_aging(${companyId}, ${id}, current_date)`;
-      const [ref] = await tx<{ d: string }[]>`select current_date::text as d`;
+          from platform.ar_aging(${companyId}, ${id}, platform.caracas_day(now()))`;
+      const [ref] = await tx<{ d: string }[]>`select platform.caracas_day(now())::text as d`;
       const [totalAging] = await tx<{ t: string }[]>`
         select round(coalesce(sum(amount), 0), 2)::text as t
-          from platform.ar_aging(${companyId}, ${id}, current_date)`;
+          from platform.ar_aging(${companyId}, ${id}, platform.caracas_day(now()))`;
       return {
         customer_id: id,
         currency: empresa.moneda,

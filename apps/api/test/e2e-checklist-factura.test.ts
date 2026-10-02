@@ -323,7 +323,14 @@ async function emitirFiscales(e: Empresa): Promise<Emitidos> {
 beforeAll(async () => {
   sql = createClient(URL_LOCAL);
   sqlApi = createClient(URL_API);
-  app = buildApp({ sql: sqlApi, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
+  // Un solo usuario hace todas las peticiones del fichero, y con el FC-27 real (E-03) pasa de las
+  // 300 por minuto del límite por omisión: el fichero prueba el papel, no el límite (que tiene su
+  // propio test), así que se le da holgura explícita.
+  app = buildApp({
+    sql: sqlApi,
+    auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER },
+    rateLimitPorMinuto: 1000,
+  });
   await sql`insert into auth.users (id) values (${USUARIO}) on conflict (id) do nothing`;
   await sql.begin(async (tx) => {
     await tx`select set_config('ladino.actor_id', ${USUARIO}, true)`;
@@ -737,9 +744,42 @@ for (const clave of ["ESP", "ORD"] as const) {
       // se miran en el PDF: los prueban el append-only de `documents` y el pgTAP 080.
       // FC-22 (la nota cumple el art. 13 salvo el numeral 1): es este mismo bloque, corrido sobre
       // la NC y la ND. FC-33 (anulación como ajuste): familia G-10, no esta entrega.
-      it.todo(
-        "FC-27 · el IGTF percibido por un SPE, con alícuota y monto (PA 000013 art. 6) — lo cierra E-03",
-      );
+      it("FC-27 · el IGTF percibido por un SPE, con alícuota y monto (PA 000013 art. 6) — lo cierra E-03", async () => {
+        if (clave === "ESP" && clase === "factura") {
+          // La factura del cobro en la caja: 1 × 100 USD exento, cobrado por Zelle con su IGTF
+          // dentro (103 USD). Imprime alícuota y monto, en divisa y en Bs a la tasa del cobro.
+          const v = await pedir(e, "POST", "/v1/pos/sales", {
+            company_id: e.company,
+            customer_id: e.cliente,
+            warehouse_id: e.warehouse,
+            lines: [{ product_id: e.prod.exento, quantity: "1" }],
+            payments: [{ instrument: "zelle", currency: "USD", amount: "103" }],
+          });
+          expect(v.status, await v.clone().text()).toBe(201);
+          const id = ((await v.json()) as { document: { id: string } }).document.id;
+          // Los tres destinos, sin la copia: este fichero vive cerca del límite de peticiones por
+          // minuto (RATE_LIMIT_PER_MINUTE) y cada PDF cuenta.
+          const destinos = await Promise.all(
+            ["", "?destino=papel", "?destino=vista"].map(
+              async (q) => await textoDelPdf(await pedir(e, "GET", `/v1/documents/${id}/pdf${q}`)),
+            ),
+          );
+          for (const t of destinos) {
+            expect(tiene(t, "IGTF 3 % sobre USD 100,00 pagados en divisas: USD 3,00")).toBe(true);
+            expect(tiene(t, `Bs. 120,00 a la tasa del ${HOY_IMPRESO}`)).toBe(true);
+          }
+        } else {
+          // No aplica: ORD no es agente de percepción, la NC no lleva IGTF (G-06) y la ND del
+          // fixture es por diferencia de precio, no por IGTF (la ND por IGTF y su PDF los prueba
+          // e2e-igtf-especial). Sin percepción no hay nada que imprimir: se mira el dato, no un
+          // PDF más (el límite de peticiones por minuto de este fichero).
+          const id = DOCS[clave]![clase];
+          const [n] = await sql<{ n: number }[]>`
+            select count(*)::int as n from public.igtf_perceptions
+             where document_id = ${id} or debit_note_id = ${id}`;
+          expect(n!.n).toBe(0);
+        }
+      });
     });
   }
 }

@@ -1040,6 +1040,11 @@ y mostrado como hasta hoy (`P-AB1234567`). Alternativa: un selector explícito d
   la migración de la reversa no lo prevé (p. ej. excluyendo `annulled` del CHECK).
 - **Estado:** abierto · decisión del dueño.
 
+**Ampliación (2026-10-02, ola 2 C2):** la ola 3 construye juntas la reversa de cobros y la
+restitución de un IGTF percibido indebidamente con la venta viva (PA SNAT/2022/000013 art. 4;
+P-67): hoy `annulInvoice` rechaza todo documento con cobros, así que la rama `pendiente_reintegro`
+no se alcanza con IGTF percibido.
+
 ### R-59 · Al desplegar ADR-0071, la migración se para si producción tiene controles repetidos, y los talonarios viejos dejan de emitir hasta completar la imprenta
 
 - **Severidad:** Alta · **Disparador:** aplicar 20260928160000 y 20260928160100 en producción
@@ -1106,3 +1111,56 @@ la ND ya no siguen el 13.7, sino «el mismo cliente y la identificación congela
 corrigen» (dominio y base, migración 20260928190500). La NC de una factura al «Consumidor final» se
 emite (e2e-checklist-factura, A-4; pgTAP 089).
 
+
+### R-64 · La planilla de IVA en la ventana de despliegue de 20261002120000: API vieja con función nueva, o al revés
+
+> **Estado 2026-10-02: ABIERTO hasta el despliegue** (L-04, L-05, L-09; ADR-0072 §7 y §8).
+
+- **Severidad:** Media durante la ventana · **Disparador:** aplicar la migración sin desplegar la API,
+  o desplegar la API sin la migración.
+- **API nueva sin la migración:** `generateIvaPeriod` lee `retenciones_acumuladas_por_descontar` y
+  llama a `recompute_iva_period` con cinco argumentos → `42703`/`42883` → 500 al generar o listar
+  períodos de IVA. La propuesta y el calendario, también 500. Nada se escribe mal: falla ruidoso.
+- **Migración sin la API nueva:** la API vieja llama con cuatro argumentos (resuelve por el
+  `default 0`), recibe `excedente_siguiente` ya SIN retenciones y no lee la columna nueva: guarda una
+  fila `iva-declarations/1.0.0` que **pierde el arrastre de retenciones**. **Mitigación activa:** la
+  API nueva se niega a encadenar sobre una fila 1.0.0 con excedente **o con retenciones del período**
+  y pide regenerarla (mensaje en ERROR_CATALOG), así que la pérdida no se propaga en silencio.
+- **Mitigación:** migración y API en la misma ventana del despliegue del dueño, con la migración
+  aplicada antes. En producción no hay clientes reales (2026-09-28).
+
+### R-65 · La retención automática del agente en la ventana de despliegue de 20261002110000, y las compras de un especial sin regla cargada
+
+> **Estado 2026-10-02: ABIERTO hasta el despliegue** (H-01, H-04, H-12, L-03; ADR-0072 §3-§6).
+
+- **Severidad:** Alta (fiscal) · **Disparador:** desplegar la API nueva sin la migración, o una
+  empresa especial sin regla vigente de `iva_compras` en `retention_rules`.
+- **API nueva sin la migración:** el registro de facturas lee `retention_exclusions`,
+  `retention_vouchers` y `claim_retention_voucher_sequence` → `42P01`/`42883` → 500 en TODO registro
+  de factura de proveedor y llegada con factura. Falla ruidoso, no escribe nada. **Migración sin la
+  API nueva:** la API vieja sigue sin retener (H-01 tal cual) y el libro de retenciones de IVA cambia
+  de forma (columnas nuevas): la pantalla de Libros vieja las muestra con su nombre técnico.
+- **Especial sin regla:** desde esta entrega, toda compra con IVA de un especial a un proveedor
+  ordinario **se detiene** con `RETENTION_RULE_MISSING` hasta que se cargue la regla del 75 % (y la
+  del 100 % si se marca el art. 5). Es el modo de fallo elegido (ADR-0039 §2: nunca cero en
+  silencio), pero en producción una empresa especial que hoy registra compras sin regla dejaría de
+  poder hacerlo. En producción no hay clientes reales (2026-09-28); E3 del escenario tiene su regla.
+- **Mitigación:** migración y API en la misma ventana, migración antes; antes de habilitar a un
+  especial real, cargar sus reglas `iva_compras` (0,75, PA SNAT/2025/000054 art. 4) e
+  `iva_compras_total` (1,00, art. 5) con su fuente.
+
+### R-66 · La ND por IGTF hereda la cola de su percepción
+
+**Qué:** el asiento de la ND por IGTF es el de su percepción (backlink). Si ese asiento va a la cola
+(la caja del cobro sin cuenta contable mapeada), la ND queda sin `journal_entry_id` y la cola
+tiene la fila por la percepción, no por la ND: `accounting_coverage_gaps()` la reporta como hueco
+hasta que se importe el pendiente. Es ruidoso a propósito (sin lista de perdones), pero conviene
+saberlo antes de leerlo como un defecto nuevo. **Mitigación:** mapear la cuenta contable de las
+cajas en divisa antes de cobrar; si aparece, importar el pendiente de la percepción. **Origen:**
+migración 20261002100000 (ola 2 C2, E-03). **Corrección (revisión 3, 2026-10-02):** el backfill de la cola (`journal-backfill.ts`) ya
+escribe el enlace de una percepción con `debit_note_id` en `documents` de la ND: al importar el
+pendiente, la ND recupera su asiento y la cobertura vuelve a cero (E2E `e2e-igtf-especial`,
+«revisión 3»). Queda el hueco VISIBLE mientras el pendiente no se importe, que es lo buscado.
+**Re-revisión (20261002100200):** `accounting_coverage_gaps()` cambia su enunciado: la ND por
+IGTF queda cubierta por el asiento O la fila en cola de su percepción, así que ya no aparece
+como hueco mientras el pendiente espera. **Estado:** cerrado.

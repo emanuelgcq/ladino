@@ -26,6 +26,8 @@ export interface CompanySettings {
   readonly print_control_number: boolean;
   /** PA 00071 art. 33: tope de FILAS IMPRESAS por documento sobre forma libre (A-2). */
   readonly rows_per_free_form: number;
+  /** F-05: la empresa asume el IGTF (por omisión, no). */
+  readonly absorb_igtf: boolean;
 }
 
 export type SettingsError = CompanyScopeError | { code: "VALIDATION_FAILED"; message: string };
@@ -39,6 +41,7 @@ const DEFAULTS: CompanySettings = {
   default_warehouse_id: null,
   print_control_number: true,
   rows_per_free_form: 15,
+  absorb_igtf: false,
 };
 
 export async function getCompanySettings(
@@ -55,7 +58,7 @@ export async function getCompanySettings(
   const [fila] = await sql<CompanySettings[]>`
     select sells_wholesale, block_sale_without_stock, allow_unidentified_sales,
            default_tax_category_code, default_warehouse_id, default_price_list_id,
-           print_control_number, rows_per_free_form
+           print_control_number, rows_per_free_form, absorb_igtf
       from public.company_settings where company_id = ${companyId}`;
   return ok(fila ?? DEFAULTS);
 }
@@ -95,7 +98,7 @@ export async function setCompanySettings(
     insert into public.company_settings
       (company_id, tenant_id, sells_wholesale, block_sale_without_stock,
        allow_unidentified_sales, default_tax_category_code, default_warehouse_id,
-       default_price_list_id, print_control_number, rows_per_free_form)
+       default_price_list_id, print_control_number, rows_per_free_form, absorb_igtf)
     values (${companyId}, ${scope.value.tenantId},
             ${cambios.sells_wholesale ?? DEFAULTS.sells_wholesale},
             ${cambios.block_sale_without_stock ?? DEFAULTS.block_sale_without_stock},
@@ -104,7 +107,8 @@ export async function setCompanySettings(
             ${cambios.default_warehouse_id ?? null},
             ${cambios.default_price_list_id ?? null},
             ${cambios.print_control_number ?? DEFAULTS.print_control_number},
-            ${cambios.rows_per_free_form ?? DEFAULTS.rows_per_free_form})
+            ${cambios.rows_per_free_form ?? DEFAULTS.rows_per_free_form},
+            ${cambios.absorb_igtf ?? DEFAULTS.absorb_igtf})
     on conflict (company_id) do update set
       sells_wholesale = case when ${cambios.sells_wholesale === undefined}
         then public.company_settings.sells_wholesale else excluded.sells_wholesale end,
@@ -127,10 +131,13 @@ export async function setCompanySettings(
         else excluded.print_control_number end,
       rows_per_free_form = case when ${cambios.rows_per_free_form === undefined}
         then public.company_settings.rows_per_free_form
-        else excluded.rows_per_free_form end
+        else excluded.rows_per_free_form end,
+      absorb_igtf = case when ${cambios.absorb_igtf === undefined}
+        then public.company_settings.absorb_igtf
+        else excluded.absorb_igtf end
     returning sells_wholesale, block_sale_without_stock, allow_unidentified_sales,
               default_tax_category_code, default_warehouse_id, default_price_list_id,
-           print_control_number, rows_per_free_form`;
+           print_control_number, rows_per_free_form, absorb_igtf`;
   await sql`
     insert into public.audit_events
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type,

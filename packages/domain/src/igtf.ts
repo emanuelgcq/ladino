@@ -26,23 +26,6 @@ export type IgtfError =
   | { code: "VALIDATION_FAILED"; message: string }
   | { code: "REGIME_KIND_NOT_ALLOWED"; message: string };
 
-/** El default conservador que se siembra al ACTIVAR (H-8): las divisas
- *  obvias causan; el resto no, y `otro` tampoco — puede ser un pago en
- *  bolívares con otro nombre, y percibir de más ahí sería cobrarle al
- *  cliente un impuesto que no causó. */
-const DEFAULT_CAUSA: ReadonlyArray<readonly [string, boolean]> = [
-  ["efectivo_bs", false],
-  ["efectivo_usd", true],
-  ["zelle", true],
-  ["usdt", true],
-  ["transferencia", false],
-  ["punto_venta", false],
-  ["pago_movil", false],
-  ["tarjeta", false],
-  ["cashea", false],
-  ["otro", false],
-];
-
 async function auditarConfig(
   sql: TransactionSql,
   tenantId: string,
@@ -63,20 +46,68 @@ export async function readIgtfStatus(
   sql: TransactionSql,
   companyId: string,
 ): Promise<IgtfStatusResponse> {
-  const [empresa] = await sql<{ enabled_at: string | null }[]>`
-    select to_char(igtf_enabled_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
-             as enabled_at
-      from public.companies where id = ${companyId}`;
+  // E-02: percibe quien ES especial hoy (ADR-0072 §1-2), sin interruptor. L-15: la quincena en
+  // curso la calcula el servidor con el día de Caracas — 1–15 y 16–último del mes calendario.
+  const [empresa] = await sql<
+    {
+      enabled_at: string | null;
+      perceiving: boolean;
+      absorbs: boolean;
+      fortnight_from: string;
+      fortnight_to: string;
+    }[]
+  >`
+    with hoy as (select platform.caracas_day(now()) as d)
+    select to_char(c.igtf_enabled_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+             as enabled_at,
+           platform.taxpayer_type_at(c.id, hoy.d) is not distinct from 'especial' as perceiving,
+           coalesce((select cs.absorb_igtf from public.company_settings cs
+                      where cs.company_id = c.id), false) as absorbs,
+           -- La quincena es la ÚNICA definición del servidor (revisión 6): la de la declaración
+           -- (platform.fiscal_fortnight, migración 20261002120000, que va en el mismo commit).
+           q.period_from::text as fortnight_from, q.period_to::text as fortnight_to
+      from public.companies c, hoy, lateral platform.fiscal_fortnight(hoy.d) q
+     where c.id = ${companyId}`;
+  // L-15: el VENCIMIENTO de la quincena es del calendario de la PA SNAT/2025/000091 (familia de la
+  // declaración, `platform.tax_due_date`). Sin fila: no hay calendario para esa quincena; con la
+  // celda pendiente de cotejo, la fecha va en null — nunca se inventa (ADR-0072 §8).
+  let vence: IgtfStatusResponse["fortnight"]["due"] = {
+    date: null,
+    status: "not_available",
+    legal_source: null,
+  };
+  if (empresa !== undefined) {
+    const [v] = await sql<
+      { due_date: string | null; review_status: string; legal_source: string | null }[]
+    >`
+      select due_date::text as due_date, review_status, legal_source
+        from platform.tax_due_date(${companyId}, 'igtf', ${empresa.fortnight_from}::date,
+                                   ${empresa.fortnight_to}::date)`;
+    if (v) {
+      vence = {
+        date: v.due_date,
+        status: v.review_status === "secondary_source" ? "secondary_source" : "pending_review",
+        legal_source: v.legal_source,
+      };
+    }
+  }
   const [regla] = await sql<{ rate: string; legal_source: string }[]>`
     select rate::text as rate, legal_source from public.igtf_rules
-     where effective_from <= current_date
+     where effective_from <= platform.caracas_day(now())
      order by effective_from desc limit 1`;
   const instrumentos = await sql<IgtfInstrumentResponse[]>`
-    select instrument, causes from public.igtf_company_instruments
-     where company_id = ${companyId} order by instrument`;
+    select instrument, causes, legal_source from public.igtf_instrument_classes
+     order by instrument`;
   return {
     enabled: empresa?.enabled_at != null,
     enabled_at: empresa?.enabled_at ?? null,
+    perceiving: empresa?.perceiving ?? false,
+    absorbs: empresa?.absorbs ?? false,
+    fortnight: {
+      from: empresa?.fortnight_from ?? "",
+      to: empresa?.fortnight_to ?? "",
+      due: vence,
+    },
     rate: regla?.rate ?? null,
     legal_source: regla?.legal_source ?? null,
     instruments: instrumentos,
@@ -124,14 +155,6 @@ export async function enableIgtf(
 
   await sql`update public.companies set igtf_enabled_at = now()
              where id = ${input.company_id}`;
-  // La siembra NO pisa una configuración previa: si el dueño ya editó qué
-  // causa (activó, desactivó, volvió a activar), sus decisiones quedan.
-  for (const [instrumento, causa] of DEFAULT_CAUSA) {
-    await sql`
-      insert into public.igtf_company_instruments (tenant_id, company_id, instrument, causes)
-      values (${scope.value.tenantId}, ${input.company_id}, ${instrumento}, ${causa})
-      on conflict (company_id, instrument) do nothing`;
-  }
   await auditarConfig(sql, scope.value.tenantId, input.company_id, "igtf.enabled", {
     reason: input.reason,
     legal_source: "PA SNAT/2022/000013 (G.O. 42.339): SPE como agentes de percepción del IGTF.",
@@ -139,7 +162,13 @@ export async function enableIgtf(
   return ok(await readIgtfStatus(sql, input.company_id));
 }
 
-/** Edita qué instrumento causa. Es DATO, con permiso de settings (H-8). */
+/**
+ * Auditoría fiscal (PA SNAT/2022/000013 art. 1; ola 2 C2): qué instrumento causa IGTF es DATA de
+ * plataforma con su fuente (`igtf_instrument_classes`, migración 20261002100100), no un
+ * interruptor de la empresa. El endpoint se conserva para que un cliente viejo reciba un 422 que
+ * explica el porqué —en LOS DOS sentidos: encender una transferencia bancaria cobraría un impuesto
+ * que no causa; apagar el efectivo en divisas dejaría de percibir— en vez de un 404 mudo.
+ */
 export async function setIgtfInstrument(
   uow: UnitOfWork,
   input: SetIgtfInstrumentRequest,
@@ -153,19 +182,14 @@ export async function setIgtfInstrument(
   }
   const scope = await companyScope(sql, actor.userId, input.company_id, "company.settings.manage");
   if (!scope.ok) return scope;
-  if (scope.value.companyStatus === "suspended") {
-    return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
-  }
-  const [fila] = await sql<IgtfInstrumentResponse[]>`
-    insert into public.igtf_company_instruments (tenant_id, company_id, instrument, causes)
-    values (${scope.value.tenantId}, ${input.company_id}, ${input.instrument}, ${input.causes})
-    on conflict (company_id, instrument) do update set causes = ${input.causes}
-    returning instrument, causes`;
-  await auditarConfig(sql, scope.value.tenantId, input.company_id, "igtf.instrument_set", {
-    instrument: input.instrument,
-    causes: input.causes,
+  return err({
+    code: "VALIDATION_FAILED",
+    message:
+      "Qué forma de pago causa IGTF no la decide la empresa: la fija la PA SNAT/2022/000013 art. 1 " +
+      "(pagos en divisas o criptoactivos sin mediación de instituciones financieras). El efectivo " +
+      "en divisas, USDT y Zelle causan; la transferencia, la tarjeta y el punto de venta bancarios " +
+      "no. Si un caso no encaja, consúltalo con tu asesor.",
   });
-  return ok(fila!);
 }
 
 /**

@@ -67,7 +67,15 @@ interface Registrado {
   } | null;
   balance: string;
   document_status: string;
-  igtf: { amount: string; currency: string; functional_amount: string; rate: string } | null;
+  igtf: {
+    amount: string;
+    currency: string;
+    functional_amount: string;
+    rate: string;
+    absorbed: boolean;
+  } | null;
+  /** E-03: la Nota de Débito por IGTF que documentó la percepción de este cobro posterior. */
+  igtf_debit_note?: { id: string; series: string; document_number: number | null } | null;
 }
 
 const CLAVE_CREDITO = "credito";
@@ -169,6 +177,36 @@ export function CobrarDocumento({
     queryFn: () => llamar<TasaHoy>(`/v1/exchange-rates/preview?amount=1&currency=${monedaCobro}`),
   });
 
+  /**
+   * F-05: el TOTAL A PAGAR con IGTF y el reparto de lo tecleado, calculados por el SERVIDOR con el
+   * mismo cálculo que la caja (`/v1/pos/tender`, ADR-0059). La pantalla no multiplica nada: lo
+   * muestra. `saldo` viene en moneda funcional, que es lo que la vista previa espera.
+   */
+  const importeLimpio = importe.trim().replace(",", ".");
+  const previa = useQuery({
+    queryKey: ["previa-cobro", empresa.id, documentId, saldo.amount, elegida?.clave, importeLimpio],
+    enabled: elegida !== null && !esCredito && monedaCobro !== saldo.currency,
+    staleTime: 15_000,
+    retry: false,
+    queryFn: () =>
+      llamar<{
+        rows: { applied: string | null; igtf: string | null; error: string | null }[];
+        suggestions: { instrument: string; amount: string | null; igtf: string | null }[];
+      }>("/v1/pos/tender", {
+        method: "POST",
+        body: JSON.stringify({
+          company_id: empresa.id,
+          total: saldo.amount,
+          payments: importeValido(importeLimpio)
+            ? [{ instrument: elegida!.instrument, currency: monedaCobro, amount: importeLimpio }]
+            : [],
+          offer: [{ instrument: elegida!.instrument, currency: monedaCobro }],
+        }),
+      }),
+  });
+  const sugerida = previa.data?.suggestions[0] ?? null;
+  const fila = previa.data?.rows[0] ?? null;
+
   function elegirForma(clave: string): void {
     const nueva = opciones.find((o) => o.clave === clave);
     if (nueva === undefined) return;
@@ -198,6 +236,8 @@ export function CobrarDocumento({
           currency: monedaCobro,
           amount: importe.trim().replace(",", "."),
           instrument: elegida?.instrument,
+          // F-05: lo tecleado es lo ENTREGADO; si la forma causa IGTF, el servidor lo separa.
+          ...(esCredito ? {} : { igtf_included: true }),
           ...(referencia.trim() === "" || esEfectivo || esCredito
             ? {}
             : { reference: referencia.trim() }),
@@ -350,6 +390,48 @@ export function CobrarDocumento({
                 </p>
               )}
 
+              {sugerida?.amount != null && (
+                <div className="rounded-md border border-border bg-surface-muted px-3 py-2 text-[0.85rem]">
+                  <p>
+                    Total a pagar en {monedaCobro}:{" "}
+                    <strong className="font-mono">
+                      {mostrarImporte({ amount: sugerida.amount, currency: monedaCobro })}
+                    </strong>
+                    {sugerida.igtf !== null && (
+                      <>
+                        {" "}
+                        (incluye IGTF{" "}
+                        <span className="font-mono">
+                          {mostrarImporte({ amount: sugerida.igtf, currency: monedaCobro })}
+                        </span>
+                        )
+                      </>
+                    )}
+                  </p>
+                  {fila !== null && fila.error === null && fila.applied !== null && (
+                    <p className="mt-1 text-muted-foreground">
+                      De lo que escribiste, abona{" "}
+                      <span className="font-mono">
+                        {mostrarImporte({ amount: fila.applied, currency: monedaCobro })}
+                      </span>
+                      {fila.igtf !== null && (
+                        <>
+                          {" "}
+                          y{" "}
+                          <span className="font-mono">
+                            {mostrarImporte({ amount: fila.igtf, currency: monedaCobro })}
+                          </span>{" "}
+                          es IGTF
+                        </>
+                      )}
+                      . Lo que falte queda pendiente.
+                    </p>
+                  )}
+                  {fila?.error != null && (
+                    <p className="mt-1 text-warning-soft-foreground">{fila.error}</p>
+                  )}
+                </div>
+              )}
               {cobrar.isError && <ErrorDeCobro error={cobrar.error} />}
             </div>
             <DialogFooter>
@@ -390,19 +472,21 @@ export function CobrarDocumento({
               </Fila>
               {resultado.igtf !== null && (
                 <p className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-[0.85rem] text-warning-soft-foreground">
-                  Se cobró además{" "}
+                  {resultado.igtf.absorbed ? "La empresa asume " : "De lo recibido, "}
                   <span className="font-mono">
                     {mostrarImporte({
                       amount: resultado.igtf.amount,
                       currency: resultado.igtf.currency,
                     })}
                   </span>{" "}
-                  de IGTF (
+                  {resultado.igtf.absorbed ? "de IGTF (" : "son IGTF ("}
                   {mostrarImporte({
                     amount: resultado.igtf.functional_amount,
                     currency: saldo.currency,
                   })}
                   ).
+                  {resultado.igtf_debit_note != null &&
+                    ` Se emitió la nota de débito por IGTF ${resultado.igtf_debit_note.series}-${resultado.igtf_debit_note.document_number ?? ""}.`}
                 </p>
               )}
               {resultado.exchange_difference !== null ? (

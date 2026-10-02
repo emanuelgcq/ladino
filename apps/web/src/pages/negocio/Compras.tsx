@@ -31,6 +31,12 @@ import {
 import { HacerPedido } from "../../components/HacerPedido.js";
 import { fechaRelativa } from "./comunes.js";
 import { fechaLocal } from "../../fechas.js";
+import {
+  RetencionIvaCampos,
+  cuerpoRetencionIva,
+  eleccionCompleta,
+  type EleccionRetencion,
+} from "../../components/RetencionIva.js";
 
 /**
  * COMPRAS Y GASTOS (Fase C, PARTE 10): lo que el negocio paga. Dos mundos en
@@ -959,6 +965,8 @@ function EngancharFactura({
   const toast = useToast();
   const [numero, setNumero] = useState("");
   const [control, setControl] = useState("");
+  // ADR-0072 §3 (H7): la exclusión o el 100 %, solo si la empresa es agente.
+  const [retencion, setRetencion] = useState<EleccionRetencion>({ tipo: "normal" });
   const detalle = useQuery({
     queryKey: ["recepcion", recepcion.id],
     queryFn: () =>
@@ -985,6 +993,7 @@ function EngancharFactura({
           ...(control.trim() === "" ? {} : { supplier_control_number: control.trim() }),
           invoice_date: recepcion.received_on,
           currency: detalle.data?.receipt.transaction_currency ?? "VES",
+          ...cuerpoRetencionIva(retencion),
           lines: (detalle.data?.lines ?? []).map((l) => ({
             goods_receipt_line_id: l.id,
             product_id: l.product_id,
@@ -1015,6 +1024,7 @@ function EngancharFactura({
           <FormField label="N° de control" hint="El que trae impreso, si lo trae.">
             {(p) => <Input {...p} value={control} onChange={(e) => setControl(e.target.value)} />}
           </FormField>
+          <RetencionIvaCampos valor={retencion} onCambio={setRetencion} />
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={onCerrar}>
@@ -1022,7 +1032,12 @@ function EngancharFactura({
           </Button>
           <Button
             variant="primary"
-            disabled={numero.trim() === "" || detalle.isPending || enganchar.isPending}
+            disabled={
+              numero.trim() === "" ||
+              !eleccionCompleta(retencion) ||
+              detalle.isPending ||
+              enganchar.isPending
+            }
             onClick={() => enganchar.mutate()}
           >
             {enganchar.isPending ? "Registrando…" : "Registrar la factura"}

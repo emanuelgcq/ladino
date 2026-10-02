@@ -49,7 +49,17 @@ export type FiscalBookError =
 // por alícuota y el resumen del art. 72 del RLIVA, firmado en el hash; ventas trae además el
 // identificador del control; y los dos hashes firman solo lo legal (B1: sin asiento ni estado de
 // pago). Un libro de ventas o de compras regenerado de un período ya exportado cambia de hash.
-export const BOOK_GENERATOR_VERSION = "fiscal-books/1.3.0";
+// 1.4.0 (ADR-0072 §4 y §6, migración 20261002110000; H-04, H-12, L-03): el libro de compras trae el
+// comprobante de retención emitido en el período (número, fecha, IVA retenido) y, si se emitió en
+// otro período que su factura, un renglón propio «comprobante_retencion»; el libro de retenciones
+// de IVA lee del comprobante-documento (identidad congelada, número de 14 dígitos, importes del
+// documento) y el TXT sigue los 16 campos del instructivo (P-7). Cambian los dos hashes.
+// 1.5.0 (auditoría fiscal 2.ª ronda, migración 20261002120200; H1 y H5): el libro de ventas saca
+// la ND por IGTF de las bases y del resumen del art. 72 y la lleva aparte en `igtf_percibido`
+// (PA SNAT/2022/000013 arts. 5-6, P-70), y registra el comprobante de retención SOPORTADO en el
+// período de su entrega (número, fecha de entrega, IVA retenido; PA SNAT/2025/000054 art. 16 in
+// fine), con renglón propio si la factura es de otro período. Cambia el hash del libro de ventas.
+export const BOOK_GENERATOR_VERSION = "fiscal-books/1.5.0";
 
 /**
  * Los adaptadores que este release SABE serializar.
@@ -87,7 +97,8 @@ const rifNormalizado = (col: string): string =>
 const PROYECCION_CRUDA: Record<BookKind, { fn: string; cols: string }> = {
   ventas: {
     // L-08 (RLIVA arts. 72 y 76): el renglón de sales_book más la base y el IVA POR ALÍCUOTA.
-    fn: "platform.sales_book_by_rate",
+    // H1/H5 (1.5.0): más el IGTF percibido aparte y el comprobante soportado del período.
+    fn: "platform.sales_book_with_receipts",
     cols: `document_id, issued_on::text as issued_on, kind, series,
            document_number::int as document_number, control_identifier,
            control_number::int as control_number,
@@ -108,11 +119,15 @@ const PROYECCION_CRUDA: Record<BookKind, { fn: string; cols: string }> = {
            iva_alicuota_reducida::text as iva_alicuota_reducida,
            alicuota_reducida::text as alicuota_reducida,
            base_gravada_sin_alicuota::text as base_gravada_sin_alicuota,
-           iva_sin_clasificar::text as iva_sin_clasificar`,
+           iva_sin_clasificar::text as iva_sin_clasificar,
+           igtf_percibido::text as igtf_percibido,
+           retention_receipt_number, retention_received_on::text as retention_received_on,
+           retention_iva::text as retention_iva`,
   },
   compras: {
     // H6 (RLIVA arts. 72 y 75, P-59): el renglón de purchases_book más su base e IVA por alícuota.
-    fn: "platform.purchases_book_by_rate",
+    // H-12 (ADR-0072 §4): el renglón de purchases_book_by_rate más el comprobante de retención.
+    fn: "platform.purchases_book_with_vouchers",
     cols: `invoice_id, invoice_date::text as invoice_date, @@RIF(supplier_tax_id)@@, supplier_name,
            supplier_kind, supplier_document_number, supplier_control_number,
            supplier_document_ref, status,
@@ -135,16 +150,24 @@ const PROYECCION_CRUDA: Record<BookKind, { fn: string; cols: string }> = {
            iva_alicuota_reducida::text as iva_alicuota_reducida,
            alicuota_reducida::text as alicuota_reducida,
            base_gravada_sin_alicuota::text as base_gravada_sin_alicuota,
-           iva_sin_clasificar::text as iva_sin_clasificar`,
+           iva_sin_clasificar::text as iva_sin_clasificar,
+           retention_voucher_number, retention_voucher_date::text as retention_voucher_date,
+           retention_voucher_iva::text as retention_voucher_iva`,
   },
   retenciones_iva: {
+    // ADR-0072 §4 y §6: del comprobante-documento, con la identidad congelada al emitir.
     fn: "platform.iva_retention_book",
-    cols: `retention_id, receipt_number::int as receipt_number, receipt_series, fiscal_period,
-           issued_on::text as issued_on, @@RIF(supplier_tax_id)@@, supplier_name,
-           supplier_document_number, supplier_control_number,
-           invoice_date::text as invoice_date, base_amount::text as base_amount,
-           rate::text as rate, retained_amount::text as retained_amount,
-           legal_source, receipt_status`,
+    cols: `retention_id, voucher_id, voucher_number, version_no,
+           receipt_number::int as receipt_number, receipt_series, fiscal_period,
+           issued_on::text as issued_on, delivered_on::text as delivered_on,
+           delivery_due_on::text as delivery_due_on, @@RIF(supplier_tax_id)@@, supplier_name,
+           supplier_address, document_type, supplier_document_number, supplier_control_number,
+           affected_document, invoice_date::text as invoice_date,
+           total_amount::text as total_amount, base_amount::text as base_amount,
+           exempt_amount::text as exempt_amount, iva_amount::text as iva_amount,
+           tax_rate::text as tax_rate, rate::text as rate,
+           retained_amount::text as retained_amount, legal_source, receipt_status,
+           original_issued_on::text as original_issued_on, declared_before`,
   },
   retenciones_islr: {
     fn: "platform.islr_retention_book",
@@ -310,6 +333,7 @@ async function hashDelDataset(
               || jsonb_build_object('estado_legal',
                    case f.status when 'annulled' then 'anulada'
                                  when 'ajuste_periodo_anterior' then 'ajuste_periodo_anterior'
+                                 when 'comprobante_retencion' then 'comprobante_retencion'
                                  else 'vigente' end)`
         : sql`to_jsonb(f)`;
   const [r] = await sql<{ h: string; n: number }[]>`
@@ -375,79 +399,144 @@ function aCsv(rows: Record<string, unknown>[], cabeceras: string[]): string {
 
 /**
  * Serializa el TXT de retenciones de IVA PRACTICADAS para la carga del agente
- * (adaptador `txt_retenciones_iva`, migración 46 — is_official = FALSE).
+ * (adaptador `txt_retenciones_iva` — is_official = FALSE).
  *
- * El layout sigue la guía pública del archivo TXT del SENIAT: una línea por
- * retención, campos separados por TABULADOR, sin cabecera. VALIDAR-SENIAT:
- * no está validado contra una carga real del portal, y lo dice el catálogo.
+ * EL LAYOUT ES EL DE P-7 (PENDIENTES_ASESOR.md, L-03; ADR-0072 §6), leído del instructivo SENIAT
+ * «Declaración retenciones de IVA», versión 3_0_0 (septiembre 2020): 16 campos separados por
+ * TABULADOR, una línea por renglón de comprobante, sin cabecera, decimales con punto:
  *
- * TRES campos son DERIVADOS, no leídos, y uno es un supuesto declarado:
- *   · IVA de la factura = retenido ÷ porción (el libro guarda la porción
- *     retenida, 0.75 o 1.00, no el IVA entero);
- *   · alícuota = IVA ÷ base × 100, a 2 decimales;
- *   · monto total = base + IVA — SUPONE monto exento cero, porque el libro
- *     no separa la porción exenta de la factura del proveedor. Está en
- *     PENDIENTES_ASESOR.md; hasta validarlo, el campo «exento» va en 0.
- * Si la aritmética no es interpretable (porción cero, base cero), la línea
- * sale con los derivados VACÍOS en vez de con un número inventado.
+ *    1 RIF del agente, sin guiones      9 monto del documento
+ *    2 período AAAAMM                  10 base imponible
+ *    3 fecha del documento AAAA-MM-DD  11 IVA retenido
+ *    4 C (compra)                      12 documento afectado («0» si no aplica)
+ *    5 tipo: 01 factura, 02 ND, 03 NC  13 comprobante (14 dígitos, PA SNAT/2025/000054 art. 16)
+ *    6 RIF de la contraparte           14 monto exento
+ *    7 número del documento            15 alícuota
+ *    8 número de control               16 expediente («0»)
+ *
+ * Hasta el 2026-10-02 salían 17 campos (un número de documento de más en la 4.ª posición), la
+ * fecha en DD/MM/AAAA, el RIF con guiones, el tipo «01» fijo y tres importes DERIVADOS de la
+ * porción. Ahora todo se LEE del comprobante (migración 20261002110000): nada se deriva.
+ *
+ * El período es el MES del parámetro: la quincena la elige la declaración, no el archivo
+ * (respuesta del dueño, L-03); el libro ya trae solo los comprobantes emitidos en el rango pedido.
+ * Una versión ANULADA (reemplazada por una corrección) no se declara. Un dato que falta sale
+ * VACÍO, nunca inventado. VALIDAR-SENIAT (P-7): carga real en el portal; los importes y la
+ * alícuota salen con 2 decimales, que P-7 no fija.
  */
+/**
+ * H4 (decidido por criterio, evitar el doble enteramiento): una versión >= 2 de un comprobante cuya
+ * versión 1 se emitió ANTES del período ya se declaró en el suyo. No vuelve a salir en el TXT; la
+ * exportación lo avisa. VALIDAR-SENIAT P-65 (¿se declara la línea corregida en la quincena
+ * siguiente, y cómo se trata la errónea para no enterar dos veces?). Alternativa: declararla en la
+ * quincena siguiente.
+ */
+function yaDeclarada(r: Record<string, unknown>, _periodoDesde: string): boolean {
+  // A-1 (re-revisión): por RENGLÓN, no por versión. `declared_before` lo calcula el libro con su
+  // `p_from`: la misma retención ya figuraba en otra versión de su cadena emitida antes del período.
+  // Una retención nueva en una corrección no lo tiene, y sale.
+  return r["declared_before"] === true;
+}
+
+/**
+ * H9 de la auditoría fiscal (instructivo, campo 15; decidido por criterio: no emitir lo que el portal
+ * probablemente rechaza). Los documentos con IVA y SIN alícuota única (varias alícuotas) que irían
+ * en el TXT. Con alguno, la exportación da 422 con la lista. VALIDAR-SENIAT P-69.
+ * Alternativa: una línea por alícuota, o el campo vacío.
+ */
+export function documentosConVariasAlicuotas(
+  rows: Record<string, unknown>[],
+  periodoDesde: string,
+): string[] {
+  const conIva = (v: unknown): boolean =>
+    typeof v === "string" && v !== "" && !/^-?0*(?:\.0*)?$/.test(v);
+  return rows
+    .filter(
+      (r) =>
+        r["receipt_status"] !== "annulled" &&
+        !yaDeclarada(r, periodoDesde) &&
+        (r["tax_rate"] === null || r["tax_rate"] === undefined || r["tax_rate"] === "") &&
+        conIva(r["iva_amount"]),
+    )
+    .map((r) => `${comoTexto(r["supplier_document_number"])} (${comoTexto(r["supplier_tax_id"])})`);
+}
+
+/** Un campo de la fila como texto: lo que no es texto ni número sale vacío, nunca «[object Object]». */
+function comoTexto(v: unknown): string {
+  return typeof v === "string" ? v : typeof v === "number" ? String(v) : "";
+}
+
+/** Las correcciones de comprobantes de períodos anteriores que el TXT deja fuera (H4). */
+export function correccionesYaDeclaradas(
+  rows: Record<string, unknown>[],
+  periodoDesde: string,
+): string[] {
+  return rows
+    .filter((r) => r["receipt_status"] !== "annulled" && yaDeclarada(r, periodoDesde))
+    .map((r) => comoTexto(r["voucher_number"]));
+}
+
 export function aTxtRetencionesIva(
   rows: Record<string, unknown>[],
   rifAgente: string,
   periodoDesde: string,
 ): string {
-  // Período YYYYMM, del parámetro del run: el período ES la quincena o el mes
-  // que el agente declara, no la fecha de cada comprobante.
   const periodo = periodoDesde.slice(0, 7).replace("-", "");
   const texto = (v: unknown): string =>
     typeof v === "string"
-      ? // Texto libre (nombres, documentos) neutralizado contra fórmulas; el
-        // separador es el tabulador, así que uno dentro del campo se quita.
+      ? // Texto libre neutralizado contra fórmulas; el separador es el tabulador, así que uno
+        // dentro del campo se quita.
         neutralizarCelda(v.replace(/[\t\r\n]/g, " "))
       : typeof v === "number"
         ? String(v)
         : "";
-  const ddmmyyyy = (iso: string): string => {
-    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-    return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+  // RIF sin guiones ni espacios, en mayúsculas: J999999999 (P-7, campo 1 y 6).
+  const rif = (v: unknown): string =>
+    typeof v === "string" ? v.replace(/[^a-zA-Z0-9]/g, "").toUpperCase() : "";
+  // Fecha AAAA-MM-DD (P-7, campo 3): la del documento tal cual, sin hora.
+  const fecha = (v: unknown): string => {
+    const m = typeof v === "string" ? /^(\d{4}-\d{2}-\d{2})/.exec(v) : null;
+    return m ? m[1]! : "";
+  };
+  // Importe con punto decimal y 2 decimales; vacío si no hay dato.
+  const importe = (v: unknown): string => {
+    const t = typeof v === "string" ? v : "";
+    if (t === "") return "";
+    const d = parseDecimal(t);
+    return d.ok ? d.value.toDecimalPlaces(2, 4).toFixed(2) : "";
   };
   const lineas: string[] = [];
   for (const r of rows) {
-    const base = parseDecimal(texto(r["base_amount"]) || "0");
-    const porcion = parseDecimal(texto(r["rate"]) || "0");
-    const retenido = parseDecimal(texto(r["retained_amount"]) || "0");
-    let alicuota = "";
-    let montoTotal = "";
-    if (base.ok && porcion.ok && retenido.ok && !porcion.value.isZero() && !base.value.isZero()) {
-      const iva = retenido.value.dividedBy(porcion.value).toDecimalPlaces(2, 4);
-      alicuota = iva.dividedBy(base.value).times(100).toDecimalPlaces(2, 4).toFixed(2);
-      montoTotal = base.value.plus(iva).toDecimalPlaces(2, 4).toFixed(2);
-    }
-    // El nº de comprobante con la máscara de PA 102: período + correlativo a
-    // 8 dígitos. Solo si el comprobante ya está emitido; si no, vacío.
-    const numero = texto(r["receipt_number"]);
-    const comprobante =
-      numero === ""
+    if (r["receipt_status"] === "annulled") continue;
+    if (yaDeclarada(r, periodoDesde)) continue;
+    // El comprobante de 14 dígitos (art. 16). Las retenciones anteriores al comprobante-documento
+    // conservan su correlativo viejo con el período delante; sin número, el campo va vacío.
+    const voucher = texto(r["voucher_number"]);
+    const numeroViejo = texto(r["receipt_number"]);
+    const comprobante = /^\d{14}$/.test(voucher)
+      ? voucher
+      : numeroViejo === ""
         ? ""
-        : `${(texto(r["fiscal_period"]) || periodo).replace("-", "")}${numero.padStart(8, "0")}`;
+        : `${(texto(r["fiscal_period"]) || periodo).replace("-", "")}${numeroViejo.padStart(8, "0")}`;
+    const tipo = texto(r["document_type"]);
+    const afectado = texto(r["affected_document"]);
     lineas.push(
       [
-        rifAgente,
+        rif(rifAgente),
         periodo,
-        ddmmyyyy(texto(r["invoice_date"])),
-        texto(r["supplier_document_number"]),
+        fecha(r["invoice_date"]),
         "C",
-        "01",
-        texto(r["supplier_tax_id"]),
+        /^0[1-6]$/.test(tipo) ? tipo : "",
+        rif(r["supplier_tax_id"]),
         texto(r["supplier_document_number"]),
         texto(r["supplier_control_number"]),
-        montoTotal,
-        base.ok ? base.value.toDecimalPlaces(2, 4).toFixed(2) : "",
-        retenido.ok ? retenido.value.toDecimalPlaces(2, 4).toFixed(2) : "",
-        "0",
+        importe(r["total_amount"]),
+        importe(r["base_amount"]),
+        importe(r["retained_amount"]),
+        afectado === "" ? "0" : afectado,
         comprobante,
-        "0.00",
-        alicuota,
+        importe(r["exempt_amount"]),
+        importe(r["tax_rate"]),
         "0",
       ].join("\t"),
     );
@@ -481,6 +570,8 @@ export interface ExportacionHecha {
   /** Solo en ventas y compras: el resumen del art. 72 de ESTA generación (B1), en la misma respuesta. */
   readonly summary_content?: string;
   readonly summary_filename?: string;
+  /** Avisos de la exportación (H4: correcciones ya declaradas que el TXT deja fuera). */
+  readonly warnings?: string[];
 }
 
 /**
@@ -559,6 +650,30 @@ export async function exportFiscalBook(
     input.period_to,
   );
 
+  // A-4: lo que impide el TXT se comprueba ANTES de registrar la generación. `withTransaction`
+  // commitea aunque el caso de uso devuelva `err`: un 422 después del INSERT dejaba una fila en
+  // `fiscal_book_runs` de un fichero que nunca se entregó.
+  let rifAgente = "";
+  if (input.format_code === "txt_retenciones_iva") {
+    const [empresa] = await sql<{ tax_id: string | null }[]>`
+      select tax_id from public.companies where id = ${input.company_id}`;
+    if (empresa?.tax_id == null || empresa.tax_id.trim() === "") {
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          "El TXT de retenciones lleva el RIF del agente en cada línea y la empresa no tiene RIF cargado.",
+      });
+    }
+    rifAgente = empresa.tax_id;
+    const mixtos = documentosConVariasAlicuotas(libro.rows, input.period_from);
+    if (mixtos.length > 0) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `El TXT no se genera: ${mixtos.length} documento(s) llevan más de una alícuota y el instructivo pide una sola en el campo 15 (${mixtos.join(", ")}). Está consultado con el asesor (P-69); mientras, declara esos documentos a mano en el portal.`,
+      });
+    }
+  }
+
   const parametros: Record<string, JSONValue> = {
     book_kind: input.book_kind,
     period_from: input.period_from,
@@ -600,21 +715,20 @@ export async function exportFiscalBook(
   // La serialización, según el adaptador pedido. La rama vive DESPUÉS del run:
   // lo que se firma es el dataset, y el fichero es una vista de él.
   if (input.format_code === "txt_retenciones_iva") {
-    const [empresa] = await sql<{ tax_id: string | null }[]>`
-      select tax_id from public.companies where id = ${input.company_id}`;
-    if (empresa?.tax_id == null || empresa.tax_id.trim() === "") {
-      return err({
-        code: "VALIDATION_FAILED",
-        message:
-          "El TXT de retenciones lleva el RIF del agente en cada línea y la empresa no tiene RIF cargado.",
-      });
-    }
+    const fuera = correccionesYaDeclaradas(libro.rows, input.period_from);
     return ok({
       run: run!,
       book: libro,
-      content: aTxtRetencionesIva(libro.rows, empresa.tax_id, input.period_from),
+      content: aTxtRetencionesIva(libro.rows, rifAgente, input.period_from),
       content_type: "text/plain; charset=utf-8",
       filename: `retenciones-iva-${input.period_from}_${input.period_to}.txt`,
+      ...(fuera.length === 0
+        ? {}
+        : {
+            warnings: [
+              `${fuera.length} corrección(es) de comprobantes declarados en un período anterior no van en este TXT (${fuera.join(", ")}): ya se declararon. Consulta con tu asesor si hace falta una declaración sustitutiva (P-65).`,
+            ],
+          }),
     });
   }
 

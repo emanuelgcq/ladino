@@ -1026,6 +1026,7 @@ function Devolucion({
       const confirmada = await llamar<{
         credit_note_id: string | null;
         customer_credit_id: string | null;
+        igtf_not_refunded?: { notice: string } | null;
       }>(`/v1/returns/${id}/confirm`, {
         method: "POST",
         headers: { "Idempotency-Key": llaveConfirmar.current },
@@ -1060,6 +1061,10 @@ function Devolucion({
           ? "La mercancía reingresó al costo con que salió y el dinero salió de la caja elegida."
           : `La mercancía reingresó al costo con que salió y ${esRecibo ? "el recibo de devolución" : "la nota de crédito"} dejó saldo a favor.`,
       );
+      // G-06: el IGTF de la venta queda percibido y no se devuelve; el texto lo da el servidor.
+      if (confirmada.igtf_not_refunded) {
+        toast.warning("El IGTF no se devuelve", confirmada.igtf_not_refunded.notice);
+      }
       onClose(true);
     } catch (e) {
       // G-16: el diálogo ya enseña el aviso (MensajeError); un toast encima era el segundo.

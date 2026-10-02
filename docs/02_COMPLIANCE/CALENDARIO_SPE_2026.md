@@ -7,8 +7,10 @@
 > (https://naymaconsultores.com/calendario-seniat-2026/), verificada el 2026-09-28. Es la **única
 > fuente textual** hallada. LEGA (https://lega.law/lega-informa/calendario-spe-y-pensiones-2026/),
 > Moore Venezuela, MV3 y gerenciaytributos la publican como **imagen** y no se pudieron cotejar.
-> **Estado: pendiente de cotejo con la Gaceta (VALIDAR-SENIAT).** No se siembra como dato
-> oficial hasta cotejar al menos las celdas marcadas ⚠.
+> **Estado (2026-10-02): SEMBRADO** por decisión del dueño (L-09, ADR-0072 §8), migración
+> 20261002120000, con la fuente en cada fila. Las celdas ⚠ quedan **pendientes de cotejo y no se
+> ofrecen**; el resto se ofrece como transcrito de fuente secundaria (VALIDAR-SENIAT: cotejo con la
+> Gaceta). Ver §6. La discrepancia de gaceta (P-10) era una reimpresión, no un conflicto.
 > Período quincenal del IVA para SPE desde el 01-09-2020 (PA SNAT/2020/00057, citada por las
 > fuentes; su texto no se verificó).
 
@@ -87,5 +89,49 @@ Las fuentes solo las publican como imagen. No se siembran.
    7 (día 18). Posible error de transcripción de la fuente.
 3. En la tabla 1.2, el terminal 3 cae el día 16 en enero y en abril, dentro de la tabla de
    «segunda quincena».
-4. Segunda fuente textual: **ninguna legible**. El test que compare una muestra con dos fuentes
+4. Segunda fuente textual: **ninguna legible**.
+5. **El terminal (auditoría fiscal 2.ª ronda, H11):** Nayma, la fuente de la siembra, define el
+   terminal como «el último número antes del dígito verificador»; lstributos, como «el último dígito
+   del RIF»; `platform.rif_terminal` toma el verificador. Pendiente de la G.O. 43.283 (P-10.2).
+   Desde la migración 20261002120200 las 970 fechas están `pending_review`: no se ofrece ninguna. El test que compare una muestra con dos fuentes
    (2.6, L-09) no puede escribirse todavía con dos fuentes independientes.
+
+## 6. Lo sembrado y lo pendiente (2026-10-02, migración 20261002120000)
+
+Tabla `public.tax_calendar_entries` (catálogo de plataforma; se corrige con migración, nunca desde la
+API). Cada fila lleva `legal_norm` = PA SNAT/2025/000091, `gazette` = G.O. 43.273 reimpresa en la
+G.O. 43.283, y `secondary_source` = Nayma (la URL de arriba).
+
+> **Desde 20261002120200 (H11) toda la tabla está pendiente de cotejo** por la duda del terminal
+> (§5.5): la columna «Estado» de abajo dice por qué más lo estaba cada parte.
+
+| Tabla del documento | Obligaciones sembradas | Filas | Estado |
+|---|---|---|---|
+| 1.1 (1–15, mes de presentación = mes del período) | `iva`, `ret_iva`, `igtf`, `islr_anticipo` | 480 | ofrecidas, salvo 4 celdas ⚠ × 4 |
+| 1.2 (16–último) | las mismas | 480 | **pendientes de cotejo, no se ofrecen** (H1, migración 20261002120100) |
+| 3 (definitiva de ISLR 2025) | `islr_definitiva`, período 01-01-2025 a 31-12-2025 | 10 | ofrecidas |
+| 2 (mensual por pares) | — | 0 | **no sembrada**: su naturaleza está en duda |
+| 4 (retenciones de ISLR) | — | 0 | **no sembrada**: no hay fuente textual |
+
+- **La lectura de la tabla 1.2 NO está resuelta.** Se sembró con la lectura «mes de presentación»
+  («Ene» = 16–31 de diciembre de 2025), pero las 480 filas están `pending_review` y no se ofrecen
+  hasta el cotejo (P-10). **Fe de erratas:** la primera versión de esta sección decía que la lógica
+  la resolvía y que el CHECK `tax_calendar_entries_due_chk` la hacía cumplir. Es falso: la lectura
+  «mes del período» (enero de 2026, presentada en febrero) también vence después del cierre y pasa
+  el mismo CHECK.
+- **Las 496 filas pendientes** (`review_status = 'pending_review'`, con su nota): la tabla 1.2
+  entera (480) y, de la 1.1, febrero, terminales 2 y 3 (día 18 repetido) y diciembre, terminales 6 y
+  7 (día 18 repetido).
+- **Pendiente de fuente — el terminal** (H7): se toma el ÚLTIMO dígito del RIF (el verificador),
+  que es la lectura habitual; la PA no se tuvo delante para confirmarlo (P-10). `platform.tax_due_date` las devuelve con la fecha en NULL y la pantalla
+  solo dice cuántas hay.
+- **El test de la muestra** (`supabase/tests/097_tax_calendar_and_fortnight_test.sql`) compara siete
+  celdas con **una sola fuente secundaria legible** (Nayma) y lo dice en cada aserción, decidido por
+  criterio (ADR-0072 nota parte 4): la segunda fuente independiente sigue sin existir en forma legible
+  (§5.4). **VALIDAR-SENIAT:** cotejar con la G.O. 43.283 las 496 pendientes y, de paso, la muestra.
+- **Para cotejar**: una migración nueva que inserte las fechas corregidas (o cambie el estado) — la
+  tabla no admite UPDATE desde la API.
+- **Funciones**: `platform.rif_terminal(rif)`, `platform.fiscal_fortnight(día)`,
+  `platform.tax_due_date(empresa, obligación, desde, hasta)`, `platform.iva_period_proposal(empresa,
+  hoy)`. Endpoint de lectura: `GET /v1/fiscal-declarations/calendar` (solo el especial; solo celdas
+  ofrecidas; `pending_review` cuenta las demás).

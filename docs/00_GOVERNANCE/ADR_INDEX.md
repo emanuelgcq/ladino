@@ -44,7 +44,7 @@ Usa la skill `adr` de Claude Code.
 | [0036](adr/ADR-0036-variantes-como-productos-derivados.md) | Variantes de producto como productos derivados, no como dimensión de existencias | Aceptado | NO |
 | [0037](adr/ADR-0037-numeracion-fiscal-correlativo-y-numero-de-control.md) | Numeración fiscal: el correlativo del emisor y el número de control son dos campos | Aceptado | SÍ |
 | [0038](adr/ADR-0038-motor-tributario-con-catalogo-vacio.md) | Motor tributario: reglas como dato, catálogo vacío, sin emisión sin regla | Aceptado (enmendado por ADR-0073) | SÍ |
-| [0039](adr/ADR-0039-retenciones-con-catalogo-vacio-y-formulas-cerradas.md) | Retenciones con catálogo vacío y fórmulas cerradas | Aceptado | SÍ |
+| [0039](adr/ADR-0039-retenciones-con-catalogo-vacio-y-formulas-cerradas.md) | Retenciones con catálogo vacío y fórmulas cerradas | Aceptado · enmendado por ADR-0072 (2026-10-02: retención automática del agente, comprobante-documento, máscara de la PA 000054 art. 16) | SÍ |
 | [0040](adr/ADR-0040-compras-tablas-propias-y-landed-cost-con-variacion.md) | Compras con tablas propias; landed cost tardío genera variación | Aceptado | SÍ |
 | [0041](adr/ADR-0041-mapeo-contable-como-vocabulario-cerrado.md) | Mapeo contable como vocabulario cerrado de propósitos | Aceptado | SÍ |
 | [0042](adr/ADR-0042-cola-de-contabilizacion-pendiente.md) | Cola de contabilización pendiente: documento posteado ⇒ asiento o cola | Aceptado | SÍ |
@@ -80,6 +80,10 @@ Usa la skill `adr` de Claude Code.
 | [0072](adr/ADR-0072-el-contribuyente-especial-de-punta-a-punta.md) | El contribuyente especial de punta a punta: tipo con vigencia, IGTF sobre todo pago en divisas y su ND, retención al registrar con exclusiones como data, comprobante de retención como documento, TXT del instructivo, declaración quincenal, dos arrastres y calendario sembrado (enmienda ADR-0052) | Aplicado (respuesta del dueño 2026-09-28) | YES |
 | [0073](adr/ADR-0073-las-alicuotas-son-un-catalogo-con-fuente.md) | Condición fiscal por producto y catálogo de alícuotas con fuente; la empresa acepta su general con acta (8–16,5 %, nunca 0 %); factura, libro y declaración por alícuota; la cesta básica exenta; la adicional del art. 62 no se siembra | Aplicado (respuesta del dueño 2026-09-28) | YES |
 | [0074](adr/ADR-0074-la-importacion-es-un-trabajo.md) | La importación declara el formato numérico, enseña una vista previa interpretada, rechaza lo ambiguo y corre como trabajo en segundo plano, idempotente por el hash del archivo | Aplicado (respuesta del dueño 2026-09-28) | NO |
+| [0075](adr/ADR-0075-moneda-diferencial-y-redondeo.md) | El precio es USD y la factura Bs, con una regla de conversión por línea; diferencial al pagar; documento pagado cerrado en cero; revaluación al cierre; una sola función de deuda; todo el mayor al céntimo, incluido el inventario; reversa de cobros con la restitución del IGTF. Enmienda 0058, 0060 y 0063 | Aplicado (respuesta del dueño 2026-09-28) | YES |
+| [0076](adr/ADR-0076-llave-por-intento-y-cuentas-del-pos.md) | Llave de idempotencia por intento; IDEMPOTENCY_BODY_MISMATCH; la cuenta vendida muere en el servidor; cuentas con autor y caja | Aplicado (respuesta del dueño 2026-09-28) | NO |
+| [0077](adr/ADR-0077-empresa-por-pestana-e-invitaciones.md) | La empresa activa vive en la pestaña; segunda empresa desde el selector; invitación por enlace con token; quien pierde el acceso no aterriza en «monta tu negocio» | Aplicado (respuesta del dueño 2026-09-28) | NO |
+| [0078](adr/ADR-0078-salidas-y-retiros-de-inventario.md) | Traslado, ajuste por conteo y salida con motivo (CHECK); mermas a su cuenta; el retiro (consumo propio, regalo, donación, muestra) causa débito con Nota de retiro; inactivo no es inexistente; «por agotarse» cuenta lotes | Aplicado (respuesta del dueño 2026-09-28) | YES |
 
 ## Decisiones aún abiertas
 

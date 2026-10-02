@@ -15,7 +15,7 @@
 -- =============================================================================
 
 begin;
-select plan(19);
+select plan(20);
 
 -- ── 1. Anclas de la familia ─────────────────────────────────────────────────
 select is(
@@ -149,11 +149,17 @@ select is(
   (select cuota_a_pagar::text from platform.recompute_iva_period(
      'aaaa0046-0000-4000-8000-0000000000a1', date '2026-02-01', date '2026-02-28', 0)),
   '3.00000000', 'débitos netos (NC resta) − retenciones soportadas = cuota');
--- Con excedente anterior 20: 12 − 20 − 9 = −17 → excedente siguiente 17.
+-- Con excedente anterior 20: 12 − 20 = −8 → excedente de CRÉDITO siguiente 8; la retención de 9
+-- no tiene cuota que descontar y pasa APARTE (L-05, migración 20261002120000). Antes esta
+-- aserción esperaba '17.00000000' (12 − 20 − 9): la cifra MEZCLADA, que era el defecto.
 select is(
   (select excedente_siguiente::text from platform.recompute_iva_period(
      'aaaa0046-0000-4000-8000-0000000000a1', date '2026-02-01', date '2026-02-28', 20)),
-  '17.00000000', 'el excedente anterior se aplica y lo no absorbido se arrastra');
+  '8.00000000', 'el excedente anterior se aplica y lo no absorbido se arrastra');
+select is(
+  (select retenciones_acumuladas_por_descontar::text from platform.recompute_iva_period(
+     'aaaa0046-0000-4000-8000-0000000000a1', date '2026-02-01', date '2026-02-28', 20)),
+  '9.00000000', 'L-05: la retención no descontada pasa aparte, no como crédito fiscal');
 select is(
   (select cuota_a_pagar = 0 from platform.recompute_iva_period(
      'aaaa0046-0000-4000-8000-0000000000a1', date '2026-02-01', date '2026-02-28', 20)),

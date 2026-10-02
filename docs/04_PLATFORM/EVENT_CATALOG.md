@@ -146,12 +146,30 @@ contable correspondiente en el preset `ve_basico`. El vocabulario lo asevera el 
 
 - `ap.invoice_posted` — se registró la factura del proveedor. Desde la migración 68 su asiento
   acredita al proveedor el **neto** y al fisco lo retenido: la retención se practica al abono en
-  cuenta (ADR-0065 §3).
+  cuenta (ADR-0065 §3). Desde la migración 20261002110000 (ADR-0072 §3) su payload trae además
+  `retention_voucher_number` (el comprobante emitido al registrar, o null) e
+  `iva_retention_full_reason` (el supuesto del art. 5 por el que se retuvo el 100 %, o null).
+- `ap.retention_excluded` — una empresa agente marcó una exclusión del art. 3 de la PA
+  SNAT/2025/000054 al registrar la factura; payload `exclusion_code` y `reason` (auditoría y outbox,
+  agregado `supplier_invoice`).
+- `ap.retention_voucher_corrected` — se corrigió un comprobante de retención: nace una versión nueva
+  que reemplaza a la anterior; payload `replaces_voucher_id`, `voucher_number`, `version_no`,
+  `reason` (agregado `retention_voucher`, el NUEVO).
+- `ap.retention_voucher_delivered` — se anotó la entrega del comprobante al proveedor (una vez);
+  payload `delivered_on`.
+- `ap.retention_voucher_mode_set` — la empresa eligió un comprobante por operación o por quincena y
+  proveedor; payload `mode` (agregado `retention_voucher` con el id de la empresa).
 - `ap.payment_made` — se le pagó al proveedor. Cancela el neto; ya no crea el pasivo con el fisco.
 - `ap.credit_note_received` — **llegó una nota de crédito del proveedor** (migración 67). Es el
   mismo nombre en el audit, en el outbox y en la plantilla: un hecho, un nombre. Su asiento baja
   la deuda y revierte lo que la factura cargó —inventario y crédito fiscal—, y el documento entra
   al libro de compras en negativo (LIVA arts. 56 y 37; Reglamento art. 75 lit. a).
+- `igtf.perception_absorbed` — **la empresa asumió el IGTF** (migración 20261002100000, F-05):
+  con `company_settings.absorb_igtf`, el cliente paga el documento justo y la percepción se
+  registra igual, con `absorbed = true`. Solo audit y plantilla (`igtf_perception`): su asiento es
+  Dr gastos operativos / Cr IGTF percibido por enterar — no entra efectivo y no suma a la caja.
+  El IGTF percibido de siempre sigue siendo `igtf.perception_recorded`; si el cobro es posterior a
+  la factura, su asiento es también el de la **ND por IGTF** (backlink a la ND, E-03).
 
 - `ap.order_closed` — **el pedido no va a llegar** (ADR-0066, entrega iii). Solo va al audit: no
   tiene plantilla contable ni evento de outbox, porque cerrar un pedido no mueve dinero ni

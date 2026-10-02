@@ -5,7 +5,13 @@ import {
   LoadFiscalDeadlinesRequest,
   RegisterSupportedRetentionRequest,
 } from "@ladino/schemas";
-import { generateIvaPeriod, loadFiscalDeadlines, registerSupportedRetention } from "@ladino/domain";
+import {
+  generateIvaPeriod,
+  listTaxCalendar,
+  loadFiscalDeadlines,
+  proposeIvaPeriod,
+  registerSupportedRetention,
+} from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
 
@@ -118,6 +124,7 @@ export function fiscalDeclarationsRoutes(
       await exigeLectura(tx, actor, companyId);
       return tx<Record<string, unknown>[]>`
         select id, customer_id, document_id, receipt_number, retained_on::text as retained_on,
+               received_on::text as received_on,
                base::text as base, rate::text as rate, amount::text as amount,
                functional_currency, status, annul_reason,
                to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
@@ -166,6 +173,9 @@ export function fiscalDeclarationsRoutes(
                excedente_siguiente::text as excedente_siguiente,
                detalle,
                ajuste_creditos_anteriores::text as ajuste_creditos_anteriores,
+               retenciones_acumuladas_anteriores::text as retenciones_acumuladas_anteriores,
+               retenciones_acumuladas_por_descontar::text
+                 as retenciones_acumuladas_por_descontar,
                (select c.functional_currency_code from public.companies c
                  where c.id = ${companyId}) as functional_currency,
                generator_version, dataset_hash, created_by,
@@ -179,6 +189,40 @@ export function fiscalDeclarationsRoutes(
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
     });
     return c.json(cuerpoPaginado(filas), 200);
+  });
+
+  // L-04: el período que la pantalla propone, según el tipo vigente y el calendario. La regla
+  // vive en el dominio y en SQL (platform.iva_period_proposal); aquí solo se lee.
+  app.get("/v1/fiscal-declarations/iva-periods/proposal", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const propuesta = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLectura(tx, actor, companyId);
+      return proposeIvaPeriod(tx, companyId);
+    });
+    return c.json(propuesta, 200);
+  });
+
+  // L-09: el calendario sembrado de la providencia para el terminal de la empresa, por fecha de
+  // vencimiento. Sin `from`/`to`, el año civil de Caracas en curso.
+  app.get("/v1/fiscal-declarations/calendar", async (c) => {
+    const { companyId } = requireCompany(c);
+    const periodo = periodoOpcional(c);
+    const { actor } = c.get("ladino.auth");
+    const calendario = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      await exigeLectura(tx, actor, companyId);
+      let rango = periodo;
+      if (rango === null) {
+        const [a] = await tx<{ desde: string; hasta: string }[]>`
+          select make_date(extract(year from platform.caracas_day(now()))::int, 1, 1)::text
+                   as desde,
+                 make_date(extract(year from platform.caracas_day(now()))::int, 12, 31)::text
+                   as hasta`;
+        rango = [a!.desde, a!.hasta];
+      }
+      return listTaxCalendar(tx, companyId, rango[0], rango[1]);
+    });
+    return c.json(calendario, 200);
   });
 
   app.put("/v1/fiscal-declarations/deadlines", idempotencia, async (c) => {

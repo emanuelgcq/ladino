@@ -37,6 +37,7 @@ import { tipoVigente } from "./tipo-contribuyente.js";
 import { receiveStockFor, revalueStock, revalorizar } from "./inventory.js";
 import { exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
+import { emitirComprobanteDeRetencion } from "./retention-vouchers.js";
 
 /**
  * Casos de uso de COMPRAS — RIGOR MÁXIMO. Es la contraparte de ventas y toca el
@@ -902,6 +903,121 @@ export async function registerSupplierInvoice(
   // costo entra entero al inventario (rama `if_tax_not_recoverable` del preset, ADR-0066 §2).
   const ivaRecuperable = conSoporte && (tipoEmpresa === "ordinario" || tipoEmpresa === "especial");
 
+  /**
+   * LA RETENCIÓN DE IVA SE PRACTICA SOLA (ADR-0072 §3, H-01; contrato 2026-10-02). La empresa es
+   * AGENTE si es `especial` el día del REGISTRO, día de Caracas (P-72: retener es al abono en
+   * cuenta, que es el registro; la fecha de la factura solo decide si el IVA es crédito). Antes el
+   * servidor solo retenía si el cuerpo traía `retention_concepts`, y ninguna pantalla lo enviaba:
+   * un especial con su regla cargada registraba compras sin retener, en verde.
+   *
+   * Nace al REGISTRAR (abono en cuenta, criterio R-3 ratificado el 2026-09-28), por cualquier
+   * camino —/admin/compras, «Ya llegó la factura», la llegada de mercancía—, porque todos pasan
+   * por aquí. El 75 % (`iva_compras`) o el 100 % del art. 5 (`iva_compras_total`) son FILAS de
+   * `retention_rules`: sin regla vigente, LAD53 → RETENTION_RULE_MISSING (ADR-0039 §2).
+   *
+   * `retention_concepts` sigue valiendo (contrato N-1): lo que el cuerpo pide se practica como
+   * antes, y si ya pide un concepto de IVA no se le añade otro.
+   */
+  // H12 (auditoría fiscal, decidido por criterio): retener es al abono en cuenta (PA 000054 arts. 1
+  // y 13 con R-3), que es el REGISTRO. La empresa es agente según su tipo el día del registro (día
+  // de Caracas), no el de la factura. VALIDAR-TRIBUTARIO P-72. Alternativa: el día de la factura.
+  // El IVA crédito o costo sigue leyéndose por la fecha de la factura (tipoEmpresa).
+  const [diaRegistro] = await sql<{ d: string }[]>`
+    select (now() at time zone 'America/Caracas')::date::text as d`;
+  const esAgente = (await tipoVigente(sql, input.company_id, diaRegistro!.d)) === "especial";
+  const exclusion = input.retention_exclusion;
+  const motivo100 = input.iva_retention_full_reason;
+  if ((exclusion !== undefined || motivo100 !== undefined) && !esAgente) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "La empresa no es agente de retención hoy, el día del registro (no es contribuyente especial): quita la exclusión o el 100 % de «Retención de IVA» y vuelve a registrar. Si sí es especial, decláralo en Configuración → Mi empresa → Tipo de contribuyente.",
+    });
+  }
+  if (
+    (exclusion !== undefined || motivo100 !== undefined) &&
+    (!conSoporte || prov.supplier_kind !== "nacional")
+  ) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "La exclusión y el 100 % son de la retención de IVA a un proveedor nacional con factura: aquí no hay retención que marcar.",
+    });
+  }
+  let topeExclusion: { unidades: string; ut: string } | null = null;
+  if (exclusion !== undefined) {
+    const [ex] = await sql<{ applies: string; max_tax_units: string | null; ut: string | null }[]>`
+      select applies, max_tax_units::text as max_tax_units,
+             platform.tax_unit_at(${input.invoice_date}::date)::text as ut
+        from public.retention_exclusions
+       where code = ${exclusion.code} and effective_from <= ${input.invoice_date}::date
+         and (effective_to is null or effective_to > ${input.invoice_date}::date)`;
+    if (!ex || ex.applies !== "marked") {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: !ex
+          ? `La exclusión «${exclusion.code}» no está en el catálogo del art. 3 vigente en esa fecha.`
+          : ex.applies === "not_markable"
+            ? `La exclusión «${exclusion.code}» es de compras hechas por órganos o entes públicos (art. 3 num. 11 y 12): una empresa privada no la marca.`
+            : `La exclusión «${exclusion.code}» la aplica el servidor solo; no se marca.`,
+      });
+    }
+    // H7 (art. 3 num. 6 y 7): hasta N UT por operación, contra la UT vigente en la fecha de la
+    // factura. Sin UT cargada con su fuente no se marca: nunca un tope supuesto.
+    if (ex.max_tax_units !== null && ex.ut === null) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `La exclusión «${exclusion.code}» vale hasta ${ex.max_tax_units.replace(/\.0+$/, "")} UT por operación, y no hay unidad tributaria cargada para esa fecha. Hasta que se cargue con su fuente no se puede marcar (VALIDAR-TRIBUTARIO P-71).`,
+      });
+    }
+    if (ex.max_tax_units !== null && ex.ut !== null) {
+      topeExclusion = { unidades: ex.max_tax_units, ut: ex.ut };
+    }
+  }
+  const explicitos = input.retention_concepts ?? [];
+  const [ivaPedido] = await sql<{ n: number }[]>`
+    select count(*)::int as n from public.retention_concepts
+     where code = any(${explicitos}::text[]) and retention_code = 'iva'`;
+  const traeIva = (ivaPedido?.n ?? 0) > 0;
+  if (traeIva && (exclusion !== undefined || motivo100 !== undefined)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "El cuerpo pide un concepto de retención de IVA y a la vez una exclusión o el 100 %: elige uno.",
+    });
+  }
+  let conceptoIvaAuto: string | null = null;
+  let faltaEleccion: PurchaseError | null = null;
+  if (
+    esAgente &&
+    conSoporte &&
+    prov.supplier_kind === "nacional" &&
+    exclusion === undefined &&
+    !traeIva
+  ) {
+    const tipoProv = prov.taxpayer_type_code;
+    if (tipoProv === "formal") {
+      // Art. 3 num. 2: al proveedor formal no se le retiene (exclusión automática, data).
+      conceptoIvaAuto = null;
+    } else if (
+      tipoProv === null ||
+      tipoProv === "ordinario" ||
+      tipoProv === "especial" ||
+      motivo100 !== undefined
+    ) {
+      // Sin tipo declarado se presume contribuyente (lado conservador: no retener cuando se debía
+      // deja al agente respondiendo solidariamente, COT arts. 27 y 115).
+      conceptoIvaAuto = motivo100 !== undefined ? "iva_compras_total" : "iva_compras";
+    } else {
+      // H6 (art. 3 num. 1): sin IVA no hay qué retener ni qué preguntar. El 422 se decide en el
+      // savepoint, cuando se conoce el IVA de la factura.
+      faltaEleccion = {
+        code: "VALIDATION_FAILED",
+        message: `El proveedor está declarado como «${tipoProv}». Una empresa agente tiene que decir qué hace con la retención: en «Retención de IVA» de la factura, marca «se retiene el 100 %» con su motivo (art. 5: proveedor no inscrito en el RIF, factura sin requisitos…) o elige la exclusión del art. 3 que aplica.`,
+      };
+    }
+  }
+
   const tasa = await tasaA(
     sql,
     input.company_id,
@@ -1005,7 +1121,8 @@ export async function registerSupplierInvoice(
            posted_at, tax_is_recoverable, fiscal_support, transaction_currency,
            functional_currency, fx_rate,
            rate_source, rate_timestamp, rounding_policy_id, rules_version, notes,
-           accounting_date, supplier_tax_id_snapshot, supplier_name_snapshot)
+           accounting_date, supplier_tax_id_snapshot, supplier_name_snapshot,
+           retention_exclusion_code, retention_exclusion_reason, iva_retention_full_reason)
         values (${ctx.value.tenantId}, ${input.company_id}, ${input.supplier_id},
                 ${input.purchase_order_id ?? null}, ${input.supplier_document_number ?? null},
                 ${input.supplier_control_number ?? null}, ${input.supplier_document_ref ?? null},
@@ -1021,7 +1138,8 @@ export async function registerSupplierInvoice(
                 (select s.tax_id from public.suppliers s
                   where s.id = ${input.supplier_id} and s.company_id = ${input.company_id}),
                 (select s.legal_name from public.suppliers s
-                  where s.id = ${input.supplier_id} and s.company_id = ${input.company_id}))
+                  where s.id = ${input.supplier_id} and s.company_id = ${input.company_id}),
+                ${exclusion?.code ?? null}, ${exclusion?.reason ?? null}, ${motivo100 ?? null})
         returning id`;
 
       let n = 0;
@@ -1141,8 +1259,30 @@ export async function registerSupplierInvoice(
        * Una factura cuya retención no se pudo calcular NO EXISTE: la retención
        * es parte de registrarla, no un paso posterior.
        */
-      if (prov.supplier_kind === "nacional" && (input.retention_concepts?.length ?? 0) > 0) {
-        for (const concepto of input.retention_concepts!) {
+      // La retención automática del agente (ADR-0072 §3). Una factura sin IVA (todo exento,
+      // exonerado o no sujeto) no tiene qué retener: exclusión automática del art. 3.
+      const conceptos = [...explicitos];
+      if (conceptoIvaAuto !== null && !imp.isZero()) conceptos.push(conceptoIvaAuto);
+      if (faltaEleccion !== null && !imp.isZero()) {
+        falloRetencion = faltaEleccion;
+        throw new Error("falta decidir la retención");
+      }
+      // H7: el tope de la exclusión, contra el TOTAL de la factura en Bs (lo más estricto mientras
+      // P-71 no diga si es el total o la base; decidido por criterio).
+      if (topeExclusion !== null) {
+        const totalBs = sub.plus(imp).times(tasa.value.rate);
+        const tope = parseDecimal(topeExclusion.unidades);
+        const ut = parseDecimal(topeExclusion.ut);
+        if (tope.ok && ut.ok && totalBs.greaterThan(tope.value.times(ut.value))) {
+          falloRetencion = {
+            code: "VALIDATION_FAILED",
+            message: `La exclusión «${exclusion!.code}» vale hasta ${tope.value.toFixed()} UT por operación (${tope.value.times(ut.value).toFixed(2)} Bs con la UT de ${ut.value.toFixed(2)} Bs), y esta factura suma ${totalBs.toFixed(2)} Bs: se retiene. Quita la exclusión en «Retención de IVA».`,
+          };
+          throw new Error("exclusión por encima del tope");
+        }
+      }
+      if (prov.supplier_kind === "nacional" && conceptos.length > 0) {
+        for (const concepto of conceptos) {
           const r = await practicarRetencion(sp, ctx.value, {
             companyId: input.company_id,
             supplierId: input.supplier_id,
@@ -1165,6 +1305,15 @@ export async function registerSupplierInvoice(
         await sp`
           update public.supplier_invoices set retention_total = ${suma?.t ?? "0"}
            where id = ${f!.id}`;
+        // EL COMPROBANTE, al practicar la retención (ADR-0072 §4, H-04; P-26 cerrada): dentro del
+        // mismo savepoint, porque una retención sin su documento es la que nadie entrega.
+        await emitirComprobanteDeRetencion(sp, {
+          tenantId: ctx.value.tenantId,
+          companyId: input.company_id,
+          supplierId: input.supplier_id,
+          invoiceId: f!.id,
+          functionalCurrency: ctx.value.functionalCurrency,
+        });
       }
       return f!.id;
     });
@@ -1195,8 +1344,22 @@ export async function registerSupplierInvoice(
       total_amount: detalle.value.total_amount,
       retention_total: detalle.value.retention_total,
       tax_is_recoverable: ivaRecuperable,
+      retention_voucher_number: detalle.value.retention_voucher_number,
+      iva_retention_full_reason: motivo100 ?? null,
     },
   );
+  // La exclusión marcada, con su motivo, como hecho propio de auditoría (ADR-0072 §3).
+  if (exclusion !== undefined) {
+    await auditar(
+      sql,
+      ctx.value.tenantId,
+      input.company_id,
+      "supplier_invoice",
+      facturaId,
+      "ap.retention_excluded",
+      { exclusion_code: exclusion.code, reason: exclusion.reason },
+    );
+  }
 
   /**
    * LOS IMPORTES DEL ASIENTO, EN MONEDA FUNCIONAL (hallado al probar ADR-0060,
@@ -1576,7 +1739,20 @@ async function leerFactura(
            tax_is_recoverable, fiscal_support,
            retention_total::text as retention_total, transaction_currency,
            functional_currency, fx_rate::text as fx_rate, rate_source,
-           accounting_date::text as accounting_date
+           accounting_date::text as accounting_date,
+           retention_exclusion_code, retention_exclusion_reason, iva_retention_full_reason,
+           (select v.id from public.retention_voucher_lines l
+              join public.retention_vouchers v on v.id = l.retention_voucher_id
+             where l.supplier_invoice_id = ${invoiceId}
+               and not exists (select 1 from public.retention_vouchers n
+                                where n.replaces_voucher_id = v.id)
+             order by v.sequence desc limit 1) as retention_voucher_id,
+           (select v.voucher_number from public.retention_voucher_lines l
+              join public.retention_vouchers v on v.id = l.retention_voucher_id
+             where l.supplier_invoice_id = ${invoiceId}
+               and not exists (select 1 from public.retention_vouchers n
+                                where n.replaces_voucher_id = v.id)
+             order by v.sequence desc limit 1) as retention_voucher_number
       from public.supplier_invoices where id = ${invoiceId} and company_id = ${companyId}`;
   if (!f) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   const retenciones = await sql<Record<string, unknown>[]>`
@@ -2134,9 +2310,10 @@ export async function registerSupplierPayment(
    * `supplier_invoice_balance`. Aquí no se descuenta nada más: hacerlo se la cobraría dos
    * veces, una al fisco en el asiento de la factura y otra al proveedor en el pago.
    *
-   * Lo que sí ocurre al pagar es que las retenciones pasan a `applied` y se emite el
-   * comprobante que el proveedor se lleva. (Cuándo debe ENTREGARSE ese comprobante bajo la
-   * providencia nueva está abierto con el asesor: PENDIENTES_ASESOR, P-26.)
+   * Lo que sí ocurre al pagar es que las retenciones pasan a `applied`. El comprobante de IVA
+   * YA EXISTE: se emitió al registrar la factura (ADR-0072 §4, H-04; P-26 cerrada), también para
+   * una factura a crédito pagada en partes. `issue_retention_receipt` sigue emitiendo el
+   * comprobante viejo (`retention_receipts`), que hoy solo documenta el ISLR (contrato N-1).
    */
   const pendientes = await sql<{ id: string; retained_amount: string }[]>`
     select id, retained_amount::text as retained_amount from public.supplier_retentions
@@ -2447,6 +2624,13 @@ export async function simplePurchase(
       : { supplier_control_number: input.supplier_control_number }),
     invoice_date: fechaFactura,
     currency: input.currency,
+    // ADR-0072 §3 (H7): la exclusión marcada y el 100 % viajan igual que en la factura suelta.
+    ...(input.retention_exclusion === undefined
+      ? {}
+      : { retention_exclusion: input.retention_exclusion }),
+    ...(input.iva_retention_full_reason === undefined
+      ? {}
+      : { iva_retention_full_reason: input.iva_retention_full_reason }),
     // Cada línea de factura, atada a SU línea de recepción: es lo que deja correr la
     // revalorización contra lo recibido y el tope de facturación (QA 2026-09-15, h. 75/86).
     lines: await lineasFacturaDeRecepcion(

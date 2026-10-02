@@ -158,6 +158,8 @@ import {
   ListIvaPeriodResultsResponse,
   LoadFiscalDeadlinesRequest,
   ListFiscalDeadlinesResponse,
+  IvaPeriodProposalResponse,
+  TaxCalendarResponse,
   EnableIgtfRequest,
   SetIgtfInstrumentRequest,
   IgtfInstrumentResponse,
@@ -203,6 +205,10 @@ import {
   ListCashClosingsResponse,
   KeepDailyRateRequest,
   DailyRateResponse,
+  RetentionVoucherResponse,
+  CorrectRetentionVoucherRequest,
+  DeliverRetentionVoucherRequest,
+  SetRetentionVoucherModeRequest,
 } from "@ladino/schemas";
 
 /**
@@ -2574,7 +2580,12 @@ export function buildOpenApiDocument(): object {
       "Registra el correlativo y el número de control DEL PROVEEDOR tal como él los emitió; el " +
       "extranjero aporta referencia de documento origen en su lugar. Cruza orden-recepción-" +
       "factura: el precio tolera hasta el umbral de la empresa, la cantidad no tolera nada. " +
-      "Las retenciones se calculan aquí con la regla vigente y se aplican al pagar.",
+      "CONTRATO 2026-10-02 (ADR-0072 §3, API 0.2.0): si la empresa es contribuyente especial en " +
+      "la fecha de la factura, la retención de IVA se practica SOLA al registrar (75 % con " +
+      "«iva_compras»; 100 % con «iva_retention_full_reason», art. 5), salvo proveedor formal, " +
+      "factura sin IVA o «retention_exclusion» marcada con motivo; y se emite el comprobante " +
+      "(«retention_voucher_number», AAAAMM + 8). Sin regla vigente, 409 RETENTION_RULE_MISSING. " +
+      "«retention_concepts» sigue valiendo para los demás conceptos (N-1).",
     security: [{ bearerAuth: [] }],
     request: {
       headers: idemHeader,
@@ -2586,6 +2597,111 @@ export function buildOpenApiDocument(): object {
       409: errorRef(
         "Sin regla de retención (LAD53); precio fuera del umbral sin aprobación; documento del proveedor ya cargado.",
       ),
+    },
+  });
+  const comprobanteRetencion = registry.register(
+    "RetentionVoucherResponse",
+    RetentionVoucherResponse,
+  );
+  const idRetencion = z.object({ id: z.string().uuid() });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/retention-exclusions",
+    summary: "Exclusiones del art. 3 de la PA SNAT/2025/000054 que se pueden marcar (ADR-0072 §3)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: {
+      200: okJson(
+        z.object({ items: z.array(z.record(z.string(), z.unknown())) }),
+        "Catálogo de plataforma con norma y artículo.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/retention-vouchers",
+    summary:
+      "Comprobantes de retención de IVA emitidos (ap.read, purchase.invoice.register o retention.receipt.issue)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      query: z.object({
+        from: z.string().date().optional(),
+        to: z.string().date().optional(),
+        supplier_id: z.string().uuid().optional(),
+      }),
+    },
+    responses: {
+      200: okJson(
+        z.object({ items: z.array(z.record(z.string(), z.unknown())) }),
+        "Comprobantes con su estado (issued/annulled), vencimiento y entrega.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/retention-vouchers/{id}",
+    summary: "Un comprobanteRetencion de retención con sus renglones (ADR-0072 §4)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, params: idRetencion },
+    responses: { 200: okJson(comprobanteRetencion, "El comprobanteRetencion."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/retention-vouchers/{id}/pdf",
+    summary: "PDF del comprobanteRetencion de retención (PA SNAT/2025/000054 art. 16)",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, params: idRetencion },
+    responses: {
+      200: {
+        description: "application/pdf",
+        content: { "application/pdf": { schema: z.string() } },
+      },
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/retention-vouchers/{id}/delivery",
+    summary: "Anotar la entrega del comprobanteRetencion, una vez (retention.receipt.issue)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: idRetencion,
+      body: { content: { "application/json": { schema: DeliverRetentionVoucherRequest } } },
+    },
+    responses: {
+      200: okJson(comprobanteRetencion, "El comprobanteRetencion entregado."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/retention-vouchers/{id}/corrections",
+    summary:
+      "Corregir: emite una versión nueva que reemplaza (y anula) a la anterior (retention.receipt.issue)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: idRetencion,
+      body: { content: { "application/json": { schema: CorrectRetentionVoucherRequest } } },
+    },
+    responses: { 201: okJson(comprobanteRetencion, "La versión nueva."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/retention-vouchers/settings",
+    summary: "Uno por operación (omisión) o uno por quincena y proveedor (company.settings.manage)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: SetRetentionVoucherModeRequest } } },
+    },
+    responses: {
+      200: okJson(z.object({ company_id: z.string().uuid(), mode: z.string() }), "El modo."),
+      ...erroresComunes,
     },
   });
   registry.registerPath({
@@ -3510,6 +3626,38 @@ export function buildOpenApiDocument(): object {
     request: { headers: companyHeader, query: periodoOpcionalQuery },
     responses: { 200: okJson(periodosIva, "Las generaciones."), ...erroresComunes },
   });
+  const propuestaPeriodo = registry.register(
+    "IvaPeriodProposalResponse",
+    IvaPeriodProposalResponse,
+  );
+  const calendarioProvidencia = registry.register("TaxCalendarResponse", TaxCalendarResponse);
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-declarations/iva-periods/proposal",
+    summary: "El período de IVA que corresponde declarar (permiso fiscal_book.read)",
+    description:
+      "L-04 (ADR-0072 §7): según el tipo vigente, la última QUINCENA cerrada para el contribuyente " +
+      "especial (PA SNAT/2025/000091) o el último MES cerrado para el ordinario, con el vencimiento " +
+      "por terminal del RIF cuando la celda del calendario está ofrecida. La pantalla lo muestra; " +
+      "no calcula la quincena.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(propuestaPeriodo, "La propuesta."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/fiscal-declarations/calendar",
+    summary:
+      "El calendario de la providencia de especiales para mi terminal (permiso fiscal_book.read)",
+    description:
+      "L-09 (ADR-0072 §8): las fechas sembradas de la PA SNAT/2025/000091 para el terminal del RIF " +
+      "de la empresa, filtradas por fecha de VENCIMIENTO (sin from/to: el año en curso). Solo las " +
+      "celdas ofrecidas; las pendientes de cotejo con la Gaceta se cuentan en pending_review. Vacío " +
+      "si la empresa no es especial.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, query: periodoOpcionalQuery },
+    responses: { 200: okJson(calendarioProvidencia, "El calendario."), ...erroresComunes },
+  });
   registry.registerPath({
     method: "put",
     path: "/v1/fiscal-declarations/deadlines",
@@ -3900,7 +4048,8 @@ export function buildOpenApiDocument(): object {
     openapi: "3.0.3",
     info: {
       title: "Ladino API",
-      version: "0.1.0",
+      // 0.2.0 (2026-10-02, ADR-0072 §3-§4): retención de IVA automática del agente y comprobantes.
+      version: "0.2.0",
       description:
         "API administrativa, contable y fiscal. Errores: docs/04_PLATFORM/ERROR_CATALOG.md.",
     },

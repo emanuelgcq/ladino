@@ -187,3 +187,27 @@ su huella; el IGTF deja de ser una hoja de cálculo aparte.
   de justificar en un cobro mixto.
 - **Restar la percepción al anular.** Habría dejado el pasivo cuadrado y el
   dinero del cliente en la caja, sin rastro de que hay algo que devolver.
+
+## Enmienda — 2026-10-02 (ADR-0072 §7 y §8; recorrido L-04, L-05, L-09)
+
+La historia de arriba se conserva tal cual: lo que se decidió entonces, con las razones de entonces.
+Esta enmienda cambia tres puntos, por decisión del dueño (RESPUESTA_RECORRIDO_2026-09-24 §2.6).
+
+1. **El calendario SÍ trae fechas de fábrica.** La «alternativa descartada» de sembrarlo se descartó
+   porque las fuentes discrepaban en el número de gaceta. No era un conflicto: la PA SNAT/2025/000091
+   se publicó en la G.O. 43.273 y se **reimprimió por error material** en la G.O. 43.283
+   (23-12-2025). Migración 20261002120000: `public.tax_calendar_entries`, catálogo de plataforma con
+   970 fechas (IVA, retenciones de IVA, IGTF y anticipos de ISLR por quincena y terminal del RIF;
+   la definitiva de ISLR 2025), cada una con norma, gaceta y la fuente secundaria de la que se
+   transcribió. Las 24 celdas ⚠ de `CALENDARIO_SPE_2026.md` —y desde 20261002120100 la tabla de la 2.ª quincena entera, cuyo mapeo de columnas es ⚠ (496 filas)— quedan `pending_review` y **ninguna
+   función las ofrece**. Las retenciones de ISLR y la tabla mensual de naturaleza dudosa no se
+   siembran: no hay fuente textual (VALIDAR-SENIAT). `company_fiscal_deadlines` sigue existiendo
+   para lo que la empresa cargue con su cita.
+2. **El arrastre ya no es combinado** (era «el pendiente más caro de resolver tarde, P-3»). Dos
+   columnas como en la Forma 00030: `excedente_siguiente` es solo crédito fiscal y
+   `retenciones_acumuladas_por_descontar` lleva aparte las retenciones que la cuota no absorbió
+   (con su entrada `retenciones_acumuladas_anteriores`). Generador `iva-declarations/1.1.0`. Las
+   filas 1.0.0 no se reescriben; una con excedente o con retenciones no se encadena: se regenera.
+3. **El período depende del tipo**: el especial declara por quincena (1–15 y 16–último) y el
+   ordinario por mes; la quincena la da el servidor (`platform.fiscal_fortnight`) y la pantalla
+   muestra la propuesta (`platform.iva_period_proposal`).

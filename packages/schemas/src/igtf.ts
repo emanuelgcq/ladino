@@ -48,14 +48,51 @@ export const SetIgtfInstrumentRequest = z
 export type SetIgtfInstrumentRequest = z.infer<typeof SetIgtfInstrumentRequest>;
 
 export const IgtfInstrumentResponse = z
-  .object({ instrument: IgtfInstrument, causes: z.boolean() })
+  .object({
+    instrument: IgtfInstrument,
+    causes: z.boolean(),
+    /** Re-revisión 8 (aditivo): la fuente de la clasificación (PA SNAT/2022/000013 art. 1, o «por criterio»). */
+    legal_source: z.string().nullable().optional(),
+  })
   .strict();
 export type IgtfInstrumentResponse = z.infer<typeof IgtfInstrumentResponse>;
 
 export const IgtfStatusResponse = z
   .object({
+    /** El acta de activación (histórico). Ya NO gobierna la percepción: ver `perceiving`. */
     enabled: z.boolean(),
     enabled_at: z.string().nullable(),
+    /**
+     * E-02 (aditivo): la empresa percibe HOY porque su tipo vigente hoy es «especial». Ningún
+     * interruptor la apaga: el hecho imponible es el pago en divisas a un SPE (LIGTF art. 4.6).
+     */
+    perceiving: z.boolean(),
+    /** F-05 (aditivo): la empresa asume el IGTF (`absorb_igtf` de los ajustes). */
+    absorbs: z.boolean(),
+    /**
+     * L-15 (aditivo): la quincena EN CURSO (día de Caracas), calculada en el servidor por el mes
+     * calendario: 1–15 y 16–último. La fecha de VENCIMIENTO no está aquí: viene del calendario
+     * de la PA SNAT/2025/000091 (L-09), que siembra otra familia.
+     */
+    fortnight: z
+      .object({
+        from: z.string().date(),
+        to: z.string().date(),
+        /**
+         * El vencimiento, del calendario de la PA SNAT/2025/000091 (`platform.tax_due_date`):
+         * `secondary_source` con fecha; `pending_review` con la fecha en null (celda pendiente de
+         * cotejo, no se ofrece); `not_available` si no hay calendario para esa quincena o la
+         * empresa no es especial al cierre.
+         */
+        due: z
+          .object({
+            date: z.string().date().nullable(),
+            status: z.enum(["secondary_source", "pending_review", "not_available"]),
+            legal_source: z.string().nullable(),
+          })
+          .strict(),
+      })
+      .strict(),
     /** La regla nacional vigente HOY (null si no hay ninguna cargada). */
     rate: z.string().nullable(),
     legal_source: z.string().nullable(),
@@ -162,6 +199,10 @@ export const IgtfPerceptionResponse = z
     status: z.enum(["percibido", "pendiente_reintegro"]),
     status_reason: z.string().nullable(),
     occurred_at: z.string(),
+    /** F-05 (aditivo): la asumió la empresa. */
+    absorbed: z.boolean(),
+    /** E-03 (aditivo): la ND por IGTF que la documenta, si el cobro fue posterior a la factura. */
+    debit_note_id: uuid.nullable(),
   })
   .strict();
 export type IgtfPerceptionResponse = z.infer<typeof IgtfPerceptionResponse>;

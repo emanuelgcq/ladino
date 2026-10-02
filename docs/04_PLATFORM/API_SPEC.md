@@ -248,12 +248,56 @@ Pendiente y no decidido: el TTL concreto (`expires_at` no tiene default a propó
 - `fiscal_protocol_version` dentro del payload, no en el path: el tren fiscal es independiente.
 - No se rompe un cliente móvil antiguo sin ventana de compatibilidad. Soporte N y N-1.
 - Si un build deja de ser compatible con el protocolo fiscal, se fuerza actualización.
+- La versión del contrato vive en `info.version` del `openapi.json`. **0.2.0 (2026-10-02, ADR-0072
+  §3-§4):** `POST /v1/supplier-invoices` y `POST /v1/arrivals` practican solos la retención de IVA
+  de una empresa especial (antes solo con `retention_concepts`, que sigue valiendo: N-1), aceptan
+  `retention_exclusion` e `iva_retention_full_reason`, y devuelven `retention_voucher_id`,
+  `retention_voucher_number`, `retention_exclusion_code`, `retention_exclusion_reason` e
+  `iva_retention_full_reason`; nuevas rutas `/v1/retention-vouchers` (lista, detalle, PDF, entrega,
+  corrección y modo). Un cliente 0.1.0 sigue funcionando: los campos nuevos son opcionales en la
+  entrada y aditivos en la salida.
+- **Retenciones de IVA que practicamos (ADR-0072 §3-§4, contrato 0.2.0):**
+  - `GET /v1/retention-exclusions` — las exclusiones del art. 3 de la PA SNAT/2025/000054 que la
+    persona puede MARCAR (`applies = marked`, vigentes hoy), con norma, numeral y si está verificado.
+    Lectura: `ap.read`, `purchase.invoice.register` o `retention.receipt.issue`.
+  - `GET /v1/retention-vouchers?from&to&supplier_id` — comprobantes con estado (`issued` / `annulled`),
+    vencimiento de entrega, entrega y total retenido. Misma lectura.
+  - `GET /v1/retention-vouchers/{id}` y `GET /v1/retention-vouchers/{id}/pdf` — el comprobante con
+    sus renglones, y su PDF (art. 16). Misma lectura.
+  - `POST /v1/retention-vouchers/{id}/delivery` (`Idempotency-Key`, `retention.receipt.issue`) —
+    anota la entrega una vez; 422 si la fecha es futura o la versión está reemplazada.
+  - `POST /v1/retention-vouchers/{id}/corrections` (`Idempotency-Key`, `retention.receipt.issue`) —
+    versión nueva con número nuevo que reemplaza a la vigente; 201.
+  - `PUT /v1/retention-vouchers/settings` (`Idempotency-Key`, `company.settings.manage`) — un
+    comprobante por operación o por quincena y proveedor.
+  - `POST /v1/fiscal-books/export` con `txt_retenciones_iva` devuelve `warnings` cuando omite
+    correcciones de lo ya declarado (P-65), y 422 —sin registrar la generación— si un documento
+    lleva varias alícuotas (P-69).
 
 ## Endpoints principales
 
 `/companies` `/customers` `/suppliers` `/products` `/inventory` `/sales-orders` `/invoices`
 `/purchase-orders` `/supplier-invoices` `/payments` `/banks` `/accounting` `/tax` `/fiscal`
 `/reports` `/audit`
+
+### `POST /v1/payments`: `amount` es lo ENTREGADO, por omisión (2026-10-02, ADR-0072 parte 2)
+
+`igtf_included` (booleano, opcional) decide qué significa `amount` cuando el cobro causa IGTF (un
+sujeto pasivo especial que cobra en divisas o cripto sin mediación financiera, PA SNAT/2022/000013
+art. 1):
+
+- **Por omisión (ausente o `true`)**: `amount` es lo que el cliente ENTREGÓ, IGTF incluido. El
+  servidor lo reparte como la caja —base + IGTF(base) = entregado— contra lo pendiente valorado el
+  DÍA DEL COBRO (`paid_at`), y lo que no alcance queda pendiente en el documento. Nunca se registra
+  dinero que no entró.
+- **`false`**: `amount` es lo que ABONA al documento y el IGTF se percibe aparte. Solo para quien ya
+  repartió lo entregado con el mismo cálculo (`/v1/pos/tender`): la caja.
+
+Es un **cambio de comportamiento** del contrato: antes, por omisión, el IGTF se percibía ADEMÁS de
+`amount`. Si el cobro no causa IGTF, el campo no cambia nada. Un especial que cobra en divisa con el
+instrumento `otro` recibe 422: debe registrarlo con su instrumento verdadero. La respuesta trae
+`igtf` (con `absorbed`) y, en un cobro posterior a la factura, `igtf_debit_note` (la Nota de Débito
+por IGTF que lo documenta).
 
 ## Observabilidad
 

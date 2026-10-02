@@ -1,0 +1,12 @@
+# FIXTURE APROBADO — TXT de retenciones de IVA practicadas (L-03, ADR-0072 §6).
+# Fuente del layout: PENDIENTES_ASESOR.md P-7 — Instructivo SENIAT «Declaración retenciones de IVA»,
+# versión 3_0_0 (septiembre 2020), leído en https://es.readkong.com/page/instructivo-declaracion-retenciones-de-iva-seniat-4300855
+# (2026-09-28). 16 campos por TABULADOR: 1 RIF agente sin guiones · 2 período AAAAMM · 3 fecha AAAA-MM-DD ·
+# 4 C/V · 5 tipo (01 factura, 02 ND, 03 NC) · 6 RIF contraparte · 7 número · 8 control · 9 monto del documento ·
+# 10 base imponible · 11 IVA retenido · 12 documento afectado (0) · 13 comprobante (14 dígitos, PA SNAT/2025/000054
+# art. 16) · 14 monto exento · 15 alícuota · 16 expediente (0). Decimales con punto.
+# VALIDAR-SENIAT (P-7): carga real en el portal; los 2 decimales de importes y alícuota no los fija P-7.
+# Las líneas que empiezan por # no son parte del archivo. La versión ANULADA del comprobante 20261000000002
+# no sale: la reemplazó el 20261000000003.
+J401234567	202610	2026-10-01	C	01	J298765432	000451	00-000451	1160.00	1000.00	120.00	0	20261000000001	0.00	16.00	0
+J401234567	202610	2026-10-05	C	01	V123456780	A-88	00-88	1580.00	1000.00	160.00	0	20261000000003	420.00	16.00	0

@@ -522,7 +522,8 @@ export async function createProductSimple(
   // El SKU: el de la persona, o el siguiente `P-NNNN` libre.
   const skuManual = input.sku !== undefined;
   const [conteo] = await sql<{ n: number }[]>`
-    select count(*)::int as n from public.products where company_id = ${input.company_id}`;
+    select count(*)::int as n from public.products
+     where company_id = ${input.company_id} and system_code is null`;
   let producto: ProductResponse | null = null;
   for (let intento = 0; intento < 5 && producto === null; intento++) {
     const candidato = skuManual

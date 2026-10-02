@@ -106,6 +106,15 @@ export function vestirImporte(exacto: string): string {
   return `${entero},${decimal}`;
 }
 
+/** «0.03000000» → «3.00000000»: la tasa como porcentaje, en texto, sin pasar por un Number. */
+function multiplicarPorCien(tasa: string): string {
+  const [entero = "0", decimal = ""] = tasa.split(".");
+  const d = decimal.padEnd(2, "0");
+  const resto = d.slice(2);
+  const ent = (entero + d.slice(0, 2)).replace(/^0+(?=\d)/, "");
+  return resto === "" ? ent : `${ent}.${resto}`;
+}
+
 function vestirCantidad(exacto: string): string {
   const [entero = "0", decimalCrudo = ""] = exacto.split(".");
   const decimal = decimalCrudo.replace(/0+$/, "");
@@ -274,6 +283,33 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
           from public.documents o
          where o.id = ${String(doc["source_document_id"])} and o.company_id = ${companyId}`
           : [];
+      // E-03 (PA SNAT/2022/000013 art. 6): el IGTF percibido, con alícuota y monto, en la divisa
+      // del pago y en Bs a la tasa del día del COBRO (la de la percepción, congelada). La factura
+      // imprime el que se percibió en su propia venta; el de un cobro POSTERIOR va en su ND por
+      // IGTF, y la ND imprime el suyo. Lo absorbido no se le cobró al cliente: no se imprime.
+      const igtf = await tx<
+        {
+          rate: string;
+          base_amount: string;
+          currency: string;
+          amount: string;
+          functional_amount: string;
+          fx_rate: string;
+          paid_on: string;
+        }[]
+      >`
+        select rate::text as rate, base_amount::text as base_amount, currency,
+               amount::text as amount, functional_amount::text as functional_amount,
+               fx_rate::text as fx_rate,
+               to_char(platform.caracas_day(occurred_at), 'YYYY-MM-DD') as paid_on
+          from public.igtf_perceptions
+         where company_id = ${companyId} and not absorbed
+           and ${
+             doc["kind"] === "debit_note"
+               ? tx`debit_note_id = ${id}`
+               : tx`document_id = ${id} and debit_note_id is null`
+           }
+         order by occurred_at, id`;
       return {
         doc,
         lineas,
@@ -281,12 +317,13 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
         subtotalColumna: columna!.subtotal,
         talonario: talonario ?? null,
         origen: origen ?? null,
+        igtf,
       };
     });
     if (datos === null) {
       throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
     }
-    const { doc, lineas, alicuotas, subtotalColumna, talonario, origen } = datos;
+    const { doc, lineas, alicuotas, subtotalColumna, talonario, origen, igtf } = datos;
     // El recibo y el recibo de devolución no son documentos fiscales (ADR-0050, ADR-0061).
     const esRecibo = doc["kind"] === "receipt" || doc["kind"] === "receipt_return";
     const esNota = doc["kind"] === "credit_note" || doc["kind"] === "debit_note";
@@ -624,6 +661,25 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
           width: 284,
           align: "right",
         });
+    }
+
+    // ── El IGTF percibido (E-03; PA SNAT/2022/000013 art. 6) ─────────────────
+    // En los TRES destinos: no es lo que preimprime la imprenta, es dato del documento. El
+    // porcentaje sale de la percepción (la regla vigente el día del cobro), nunca de un literal.
+    if (igtf.length > 0) {
+      pdf.moveDown(0.3);
+      pdf.font("Helvetica").fontSize(9);
+      for (const p of igtf) {
+        const pct = vestirCantidad(multiplicarPorCien(p.rate));
+        pdf.text(
+          `IGTF ${pct} % sobre ${p.currency} ${vestirImporte(p.base_amount)} pagados en divisas: ` +
+            `${p.currency} ${vestirImporte(p.amount)} · Bs. ${vestirImporte(p.functional_amount)} ` +
+            `a la tasa del ${fechaLegible(p.paid_on)} (Bs ${vestirTasa(p.fx_rate)})`,
+          280,
+          pdf.y,
+          { width: 284, align: "right" },
+        );
+      }
     }
 
     // ── Lo que preimprime la imprenta abajo (art. 31; 13.4, 13.15, 13.16) ──

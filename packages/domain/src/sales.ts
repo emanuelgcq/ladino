@@ -45,7 +45,7 @@ import type {
   RefundCustomerCreditRequest,
   CustomerRefundResponse,
 } from "@ladino/schemas";
-import { RULES_VERSION } from "./create-company.js";
+import { RULES_VERSION, sembrarProductoIgtf } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { issueStockBatchForSale, receiveStockFor, reponerSalidasDeDocumento } from "./inventory.js";
 import { exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
@@ -399,8 +399,42 @@ async function condicionDePago(
     }
     tasa = decimalDe(t.rate);
   }
-  const regla = await reglaIgtf(sql, companyId, instrumento, moneda, funcional, fecha);
-  return ok({ tasa, igtf: regla?.tasa ?? null, igtfFuente: regla?.fuente ?? null });
+  const reglaR = await reglaIgtf(sql, companyId, instrumento, moneda, funcional, fecha);
+  if (!reglaR.ok) return reglaR;
+  const regla = reglaR.value;
+  // F-05: si la empresa ABSORBE el IGTF, la caja no se lo pide al cliente — el documento se paga
+  // justo y la percepción la asume la empresa (registerPayment la asienta como gasto).
+  const cobra = regla !== null && !regla.absorbe;
+  return ok({
+    tasa,
+    igtf: cobra ? regla.tasa : null,
+    igtfFuente: cobra ? regla.fuente : null,
+  });
+}
+
+/**
+ * El IGTF que se le PIDE al cliente en este instrumento y moneda (el aviso `/v1/pos/igtf`): la
+ * tasa si causa y la empresa no lo absorbe, null si no. La misma regla que el cobro.
+ */
+export async function igtfQueSePide(
+  sql: TransactionSql,
+  companyId: string,
+  instrumento: string,
+  moneda: string,
+): Promise<Result<string | null, SalesError>> {
+  const [c] = await sql<{ moneda: string }[]>`
+    select functional_currency_code as moneda from public.companies where id = ${companyId}`;
+  if (!c) return ok(null);
+  const r = await reglaIgtf(
+    sql,
+    companyId,
+    instrumento,
+    moneda,
+    c.moneda,
+    new Date().toISOString(),
+  );
+  if (!r.ok) return r;
+  return ok(r.value === null || r.value.absorbe ? null : r.value.tasaTexto);
 }
 
 /** La regla de IGTF que causa ESTE pago, o null. Una sola definición. */
@@ -411,30 +445,69 @@ async function reglaIgtf(
   moneda: string,
   funcional: string,
   fecha: string,
-): Promise<{ tasa: Decimal; tasaTexto: string; fuente: string | null } | null> {
+): Promise<
+  Result<
+    { tasa: Decimal; tasaTexto: string; fuente: string | null; absorbe: boolean } | null,
+    SalesError
+  >
+> {
   if (moneda === funcional || instrumento === "saldo_a_favor" || instrumento === "retencion_iva") {
-    return null;
+    return ok(null);
   }
   const [gate] = await sql<
-    { enabled: boolean; causes: boolean; rate: string | null; source: string | null }[]
-  >`select (c.igtf_enabled_at is not null and c.igtf_enabled_at <= ${fecha}::timestamptz
-            -- ADR-0072 §1-2: agente de percepción es quien ES especial el día del cobro, por la
-            -- vigencia de su tipo; el acta de activación sola no basta.
-            and platform.taxpayer_type_at(c.id, ${diaNegocio(fecha)}::date) = 'especial')
-           as enabled,
-           coalesce(i.causes, false) as causes,
+    {
+      enabled: boolean;
+      causes: boolean | null;
+      absorbe: boolean;
+      rate: string | null;
+      source: string | null;
+    }[]
+  >`select -- E-02 (RESPUESTA §2.6; ADR-0072 §1-2): agente de percepción es quien ES especial el
+           -- día del cobro, por la vigencia de su tipo. El acta de activación (igtf_enabled_at) ya
+           -- no la apaga: un SPE que cobra en divisas percibe siempre (LIGTF art. 4.6).
+           platform.taxpayer_type_at(c.id, ${diaNegocio(fecha)}::date) is not distinct from
+             'especial' as enabled,
+           -- Qué instrumento causa es DATA de plataforma con su fuente (PA SNAT/2022/000013 art. 1:
+           -- «sin mediación de instituciones financieras»; 20261002100100). La empresa no lo cambia.
+           -- Sin coalesce: un instrumento sin clasificar es un error legible, no un «no causa»
+           -- silencioso (re-revisión 5; el pgTAP 099 exige la fila para todo instrumento).
+           (select k.causes from public.igtf_instrument_classes k
+             where k.instrument = ${instrumento}) as causes,
+           coalesce(cs.absorb_igtf, false) as absorbe,
            r.rate::text as rate, r.legal_source as source
       from public.companies c
-      left join public.igtf_company_instruments i
-        on i.company_id = c.id and i.instrument = ${instrumento}
+      left join public.company_settings cs on cs.company_id = c.id
       left join lateral (
         select rate, legal_source from public.igtf_rules
          where effective_from <= ${diaNegocio(fecha)}::date
          order by effective_from desc limit 1
       ) r on true
      where c.id = ${companyId}`;
-  if (gate?.enabled !== true || !gate.causes || gate.rate === null) return null;
-  return { tasa: decimalDe(gate.rate), tasaTexto: gate.rate, fuente: gate.source };
+  if (gate?.enabled !== true) return ok(null);
+  // Re-revisión 6, decidido por criterio: un especial que cobra en divisa con «otro» no tiene vía
+  // silenciosa para no percibir — que diga con qué le pagaron.
+  if (instrumento === "otro") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Un sujeto pasivo especial no registra un cobro en divisas como «otro»: regístralo con su " +
+        "instrumento verdadero (efectivo en divisas, Zelle, USDT, transferencia, tarjeta o punto de " +
+        "venta). De eso depende si causa IGTF (PA SNAT/2022/000013 art. 1).",
+    });
+  }
+  if (gate.causes === null) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `La forma de pago «${instrumento}» no está clasificada para el IGTF: no se sabe si causa. Avisa a soporte; no se registra un cobro en divisas sin saberlo.`,
+    });
+  }
+  if (!gate.causes || gate.rate === null) return ok(null);
+  return ok({
+    tasa: decimalDe(gate.rate),
+    tasaTexto: gate.rate,
+    fuente: gate.source,
+    absorbe: gate.absorbe,
+  });
 }
 
 /**
@@ -844,12 +917,14 @@ async function calcularLineas(
   // sobre mapas en memoria. La semántica no cambia: mismos errores, mismos
   // mensajes; solo el orden de detección entre líneas puede variar.
   const productIds = [...new Set(input.lines.map((l) => l.product_id))];
+  const deSistema = await rechazaProductoDeSistema(sql, input.companyId, productIds);
+  if (!deSistema.ok) return deSistema;
 
   const productosFilas = await sql<
     { id: string; name: string; tax_category_code: string; kind: string; is_composed: boolean }[]
   >`select id, name, tax_category_code, kind, is_composed from public.products
      where id = any(${productIds}::uuid[]) and company_id = ${input.companyId}
-       and status = 'active'`;
+       and status = 'active' and system_code is null`;
   const productos = new Map(productosFilas.map((p) => [p.id, p]));
   if (productos.size !== productIds.length) {
     return err({
@@ -2073,9 +2148,10 @@ export async function annulInvoice(
     }
 
     // EL BORDE DE LA ANULACIÓN (migración 46, H-7): lo percibido de IGTF
-    // nunca se resta solo — el dinero del cliente ya entró y devolvérselo es
-    // un acto aparte. Se marca `pendiente_reintegro` con el motivo, y el
-    // flujo de reintegro es decisión del asesor (PENDIENTES_ASESOR.md).
+    // nunca se resta solo. Hoy esta rama no se alcanza con IGTF percibido: el IGTF
+    // solo existe si hubo cobro, y una factura con cobros no se anula (ADR-0061).
+    // Se conserva como defensa; la restitución con la venta viva es de la ola 3
+    // (R-61, junto con la reversa de cobros; VALIDAR-TRIBUTARIO P-67).
     const reintegros = await sql<{ id: string }[]>`
       update public.igtf_perceptions
          set status = 'pendiente_reintegro',
@@ -2107,6 +2183,12 @@ export async function registerPayment(
   input: RegisterPaymentRequest,
   /** F-11: la retención soportada la carga quien tiene `ar.retention.register`, no quien cobra. */
   permiso: "sales.payment.register" | "ar.retention.register" = "sales.payment.register",
+  /**
+   * `enEmision`: el cobro es el de la PROPIA venta (la caja, quickSale) — su IGTF se imprime en
+   * la factura. Sin él, el cobro es POSTERIOR (fiado o abono, E-03) y el IGTF se documenta con
+   * una Nota de Débito por IGTF.
+   */
+  opciones: { readonly enEmision?: boolean } = {},
 ): Promise<Result<RegisterPaymentResponse, SalesError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
@@ -2131,9 +2213,13 @@ export async function registerPayment(
       fx_rate: string;
       functional_currency: string;
       customer_id: string;
+      kind: string;
+      source_document_id: string | null;
+      price_list_id: string | null;
     }[]
   >`select id, status, total_amount::text as total_amount, transaction_currency,
-           fx_rate::text as fx_rate, functional_currency, customer_id
+           fx_rate::text as fx_rate, functional_currency, customer_id, kind,
+           source_document_id, price_list_id
       from public.documents where id = ${input.document_id} and company_id = ${input.company_id}
       for update`;
   // `for update`: dos cobros simultáneos del mismo total pasaban ambos el
@@ -2144,6 +2230,93 @@ export async function registerPayment(
       code: "VALIDATION_FAILED",
       message: `Solo se cobra una factura emitida; esta está en ${doc.status}.`,
     });
+  }
+
+  /**
+   * F-05 (RESPUESTA §2.6; revisión 11, decidido por criterio «nunca se registra dinero que no
+   * entró»): POR OMISIÓN `amount` es lo ENTREGADO, IGTF incluido. Solo `igtf_included: false`
+   * —la caja, que ya repartió lo entregado con el mismo cálculo— lo trata como lo que abona. Así,
+   * se reparte EXACTAMENTE como en la caja (pasoDeCobro, ADR-0059): base + IGTF(base) =
+   * entregado, y lo que no alcance queda pendiente en el documento. Antes la ficha abonaba los
+   * 10 USD enteros y percibía 0,30 ADEMÁS: la cuenta registraba 10,30 cuando entraron 10.
+   */
+  if (input.igtf_included !== false) {
+    const resto = { ...input, igtf_included: false as const };
+    if (input.currency === ctx.value.functionalCurrency || input.instrument === "saldo_a_favor") {
+      return registerPayment(uow, resto, permiso, opciones);
+    }
+    const cond = await condicionDePago(
+      sql,
+      input.company_id,
+      input.instrument,
+      input.currency,
+      ctx.value.functionalCurrency,
+      fecha,
+    );
+    if (!cond.ok) return cond;
+    if (cond.value.igtf === null) return registerPayment(uow, resto, permiso, opciones);
+    /**
+     * Re-revisión F1: lo pendiente se valora el DÍA DEL COBRO (`diaNegocio(fecha)`), no a la tasa
+     * de hoy — un cobro con `paid_at` de ayer usa la tasa de ayer, la misma que `condicionDePago`.
+     *   · documento en la moneda funcional: su saldo funcional (`document_balance`);
+     *   · pago en la moneda del documento: el saldo EN ESA MONEDA × la tasa del pago;
+     *   · dos divisas distintas: el saldo en la del documento × su tasa a funcional del día.
+     * Una factura de 100 USD cobrada en USD son 100 USD, a la tasa que sea.
+     */
+    let pendienteTexto: string | null;
+    if (doc.transaction_currency === ctx.value.functionalCurrency) {
+      const [b] = await sql<{ saldo: string | null }[]>`
+        select platform.document_balance(${input.company_id}, ${input.document_id})::text
+                 as saldo`;
+      pendienteTexto = b?.saldo ?? null;
+    } else {
+      const [tx] = await sql<{ saldo: string | null; tasa: string | null }[]>`
+        select platform.document_balance_transaction(${input.company_id}, ${input.document_id})::text
+                 as saldo,
+               platform.rate_at(${input.company_id}, ${doc.transaction_currency},
+                                ${ctx.value.functionalCurrency}, ${diaNegocio(fecha)}::date)::text
+                 as tasa`;
+      const saldoTx = parseDecimal(tx?.saldo ?? "0");
+      const tasaDoc =
+        input.currency === doc.transaction_currency
+          ? ok(cond.value.tasa)
+          : tx?.tasa != null
+            ? parseDecimal(tx.tasa)
+            : err({ code: "EXCHANGE_RATE_MISSING" as const, message: "" });
+      if (!saldoTx.ok || !tasaDoc.ok) {
+        return err({
+          code: "EXCHANGE_RATE_MISSING",
+          message: `No hay tasa de ${doc.transaction_currency} a ${ctx.value.functionalCurrency} para la fecha del cobro.`,
+        });
+      }
+      pendienteTexto = saldoTx.value.times(tasaDoc.value).toFixed(8);
+    }
+    const pendiente = parseDecimal(pendienteTexto ?? "0");
+    const entregado = parseDecimal(input.amount);
+    if (!pendiente.ok || !entregado.ok) {
+      return err({ code: "VALIDATION_FAILED", message: "Importes no interpretables." });
+    }
+    const paso = pasoDeCobro({
+      pendienteFuncional: pendiente.value,
+      entregado: entregado.value,
+      moneda: input.currency,
+      monedaFuncional: ctx.value.functionalCurrency,
+      instrumento: input.instrument,
+      cond: cond.value,
+    });
+    if (!paso.ok) return paso;
+    if (!paso.value.vuelto.isZero()) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `Lo recibido supera lo que falta con IGTF: sobran ${paso.value.vuelto.toFixed(minorUnitsOf(input.currency))} ${input.currency}. Registra lo que queda en caja y entrega el vuelto.`,
+      });
+    }
+    return registerPayment(
+      uow,
+      { ...resto, amount: paso.value.aplicado.toFixed(8) },
+      permiso,
+      opciones,
+    );
   }
 
   // La tasa del DÍA DEL COBRO. Si el cobro es en moneda funcional, la identidad.
@@ -2652,12 +2825,13 @@ export async function registerPayment(
    * anulación la manda a `pendiente_reintegro`, no la borra.
    */
   let percepcion: Record<string, unknown> | null = null;
+  let notaIgtf: RegisterPaymentResponse["igtf_debit_note"] = null;
   if (
     input.currency !== ctx.value.functionalCurrency &&
     input.instrument !== "saldo_a_favor" &&
     input.instrument !== "retencion_iva"
   ) {
-    const regla = await reglaIgtf(
+    const reglaR = await reglaIgtf(
       sql,
       input.company_id,
       input.instrument,
@@ -2665,7 +2839,12 @@ export async function registerPayment(
       ctx.value.functionalCurrency,
       fecha,
     );
-    const gate = regla === null ? null : { rate: regla.tasaTexto, source: regla.fuente };
+    if (!reglaR.ok) return reglaR;
+    const regla = reglaR.value;
+    const gate =
+      regla === null
+        ? null
+        : { rate: regla.tasaTexto, source: regla.fuente, absorbe: regla.absorbe };
     if (gate !== null) {
       const tasaIgtf = parseDecimal(gate.rate);
       if (!tasaIgtf.ok) {
@@ -2684,44 +2863,107 @@ export async function registerPayment(
         return err({ code: "VALIDATION_FAILED", message: enLibros.error.message });
       }
       const funcional = enLibros.value.monto;
+      /**
+       * E-03 (RESPUESTA §2.6): el cobro POSTERIOR a la factura (fiado o abono) documenta su IGTF
+       * con una NOTA DE DÉBITO POR IGTF que referencia la factura — una línea, no sujeta, que
+       * consume control como cualquier ND y va al libro con base 0 e IVA 0. El cobro de la
+       * propia venta (`enEmision`) no: su IGTF se imprime en la factura. Lo absorbido tampoco: no
+       * se le cobró al cliente (VALIDAR-TRIBUTARIO P-40).
+       */
+      const facturaDeLaNd =
+        gate.absorbe || opciones.enEmision === true
+          ? null
+          : doc.kind === "invoice"
+            ? doc.id
+            : doc.kind === "debit_note"
+              ? doc.source_document_id
+              : null;
+      let ndIgtf: DocumentResponse | null = null;
+      if (facturaDeLaNd !== null) {
+        const nd = await emitirNdIgtf(uow, ctx.value, {
+          companyId: input.company_id,
+          facturaId: facturaDeLaNd,
+          customerId: doc.customer_id,
+          priceListId: doc.price_list_id,
+          fecha,
+          montoFuncional: funcional,
+          tasaIgtf: gate.rate,
+          base: importe.value.amount,
+          moneda: input.currency,
+          montoDivisa: monto,
+        });
+        if (!nd.ok) return nd;
+        ndIgtf = nd.value;
+      }
       const [fila] = await sql<Record<string, unknown>[]>`
         insert into public.igtf_perceptions
           (tenant_id, company_id, payment_id, document_id, base_amount, currency, rate,
-           amount, functional_amount, fx_rate, rate_source, rounding_policy_id, occurred_at)
+           amount, functional_amount, fx_rate, rate_source, rounding_policy_id, occurred_at,
+           absorbed, debit_note_id)
         values (${ctx.value.tenantId}, ${input.company_id}, ${pago["id"] as string},
                 ${input.document_id}, ${input.amount}, ${input.currency}, ${gate.rate},
                 ${monto.toFixed(8)}, ${funcional.toFixed(8)}, ${tasaCobro}, ${fuenteCobro},
-                ${enLibros.value.policy.id}, ${fecha})
+                ${enLibros.value.policy.id}, ${fecha}, ${gate.absorbe}, ${ndIgtf?.id ?? null})
         returning id, base_amount::text as base_amount, currency, rate::text as rate,
-                  amount::text as amount, functional_amount::text as functional_amount`;
+                  amount::text as amount, functional_amount::text as functional_amount,
+                  absorbed`;
       percepcion = fila!;
-      await auditar(sql, ctx.value.tenantId, docActual!, "igtf.perception_recorded", {
-        perception_id: percepcion["id"] as string,
-        payment_id: pago["id"] as string,
-        base_amount: input.amount,
-        currency: input.currency,
-        rate: gate.rate,
-        amount: monto.toFixed(8),
-        functional_amount: funcional.toFixed(8),
-        rounding_policy_id: enLibros.value.policy.id,
-        legal_source: gate.source,
-      });
+      if (ndIgtf !== null) {
+        // La ND la paga su percepción en el mismo acto (platform.document_balance la descuenta):
+        // nace pagada, nunca como deuda del cliente por un dinero que ya entró.
+        const [pagada] = await sql<DocumentResponse[]>`
+          update public.documents set status = 'paid'
+           where id = ${ndIgtf.id} and company_id = ${input.company_id}
+          returning ${sql.unsafe(DOC_COLUMNS)}`;
+        ndIgtf = pagada ?? ndIgtf;
+        notaIgtf = {
+          id: ndIgtf.id,
+          series: ndIgtf.series,
+          document_number: ndIgtf.document_number ?? null,
+          control_display: ndIgtf.control_display ?? null,
+        };
+      }
+      // Revisión 7: lo absorbido es otro hecho, con su nombre (EVENT_CATALOG): el audit dice el mismo
+      // evento que la plantilla.
+      await auditar(
+        sql,
+        ctx.value.tenantId,
+        docActual!,
+        gate.absorbe ? "igtf.perception_absorbed" : "igtf.perception_recorded",
+        {
+          perception_id: percepcion["id"] as string,
+          payment_id: pago["id"] as string,
+          base_amount: input.amount,
+          currency: input.currency,
+          rate: gate.rate,
+          amount: monto.toFixed(8),
+          functional_amount: funcional.toFixed(8),
+          rounding_policy_id: enLibros.value.policy.id,
+          legal_source: gate.source,
+          absorbed: gate.absorbe,
+          debit_note_id: ndIgtf?.id ?? null,
+        },
+      );
       // Su asiento propio: Dr caja (lo percibido ENTRA, además del cobro) /
-      // Cr «IGTF percibido por enterar» — un pasivo con el fisco, no ingreso.
+      // Cr «IGTF percibido por enterar» — un pasivo con el fisco, no ingreso. Si la empresa lo
+      // ABSORBE (F-05), no entra efectivo: Dr gasto / Cr IGTF por enterar. Con ND por IGTF, este
+      // MISMO asiento es el de la ND (backlink): la ND se cobra en el acto, su CxC nace y muere
+      // a la vez, y lo que queda es exactamente caja contra el pasivo con el fisco.
       const asientoIgtf = await generateJournalFromDocument(sql, {
         tenantId: ctx.value.tenantId,
         companyId: input.company_id,
         sourceKind: "igtf_perception",
-        sourceEvent: "igtf.perception_recorded",
+        sourceEvent: gate.absorbe ? "igtf.perception_absorbed" : "igtf.perception_recorded",
+        ...(ndIgtf === null ? {} : { backlink: { table: "documents", id: ndIgtf.id } }),
         sourceId: percepcion["id"] as string,
         postingDate: diaNegocio(fecha),
         postedBy: actor.userId,
         description: `IGTF percibido en el cobro de ${serieYNumero(docActual!.series, docActual!.document_number ?? "")}`,
         functionalCurrency: ctx.value.functionalCurrency,
         amounts: { functional_amount: funcional.toFixed(8) },
-        // Sin backlink: `igtf_perceptions` no lleva `journal_entry_id` y el
-        // vínculo va por `journal_entries.source_id` = id de la percepción,
-        // que es el eje de la idempotencia del generador.
+        // `igtf_perceptions` no lleva `journal_entry_id`: el vínculo va por
+        // `journal_entries.source_id` = id de la percepción, que es el eje de la idempotencia
+        // del generador. El único backlink es el de la ND por IGTF (arriba).
       });
       if (!asientoIgtf.ok) {
         return err({ code: "VALIDATION_FAILED", message: asientoIgtf.error.message });
@@ -2735,6 +2977,7 @@ export async function registerPayment(
     balance: saldoDespues?.saldo ?? "0",
     document_status: estado as never,
     igtf: percepcion as never,
+    igtf_debit_note: notaIgtf,
   });
 }
 
@@ -3431,6 +3674,37 @@ export async function confirmReturn(
     return err({ code: "VALIDATION_FAILED", message: contableNc.error.message });
   }
 
+  /**
+   * G-06 (RESPUESTA §2.6): la devolución NO toca el IGTF. El pago ocurrió y la percepción fue
+   * debida: queda percibida y se entera. La NC no lo lleva (sus líneas son las de la factura) y
+   * el saldo a favor —lo que se reembolsa— es el total de la NC, sin IGTF. La pantalla lo dice
+   * con el texto de aquí. La restitución de un IGTF indebido con la venta viva NO existe todavía:
+   * `annulInvoice` rechaza todo documento con cobros, así que su rama `pendiente_reintegro` no
+   * se alcanza con IGTF percibido. Decidido por criterio: la restitución va a la ola 3, junto con
+   * la reversa de cobros (R-61). VALIDAR-TRIBUTARIO P-31 (devolución total del mismo día) y P-67.
+   */
+  const [igtfDevuelta] = await sql<
+    { amount: string | null; currency: string | null; functional_amount: string | null }[]
+  >`
+    select sum(amount)::text as amount, min(currency) as currency,
+           sum(functional_amount)::text as functional_amount
+      from public.igtf_perceptions
+     where company_id = ${companyId} and document_id = ${dev.source_document_id}
+       and status = 'percibido' and not absorbed`;
+  let igtfNoDevuelto: ReturnResponse["igtf_not_refunded"] = null;
+  if (igtfDevuelta?.amount != null && igtfDevuelta.currency != null) {
+    const enDivisa = decimalDe(igtfDevuelta.amount);
+    const escala = minorUnitsOf(igtfDevuelta.currency);
+    const vestido = enDivisa.toDecimalPlaces(escala, 4).toFixed(escala).replace(".", ",");
+    const simbolo = igtfDevuelta.currency === "USD" ? "$" : igtfDevuelta.currency;
+    igtfNoDevuelto = {
+      amount: enDivisa.toFixed(8),
+      currency: igtfDevuelta.currency,
+      functional_amount: decimalDe(igtfDevuelta.functional_amount ?? "0").toFixed(8),
+      notice: `El IGTF de ${vestido} ${simbolo} ya fue enterado al SENIAT y no se devuelve.`,
+    };
+  }
+
   return ok({
     id: returnId,
     source_document_id: dev.source_document_id,
@@ -3446,10 +3720,121 @@ export async function confirmReturn(
       unit_price_transaction: l.unit_price_transaction,
     })),
     customer_credit_id: credito!.id,
+    igtf_not_refunded: igtfNoDevuelto,
   });
 }
 
 /** La nota de crédito: mismo camino fiscal que una factura, otro `kind`. */
+/**
+ * Re-revisión 2: un producto de SISTEMA (`system_code`) no entra en una factura ni en una nota
+ * que alguien teclea. Solo la ND por IGTF lo usa, y la emite el sistema (`emitirNdIgtf`).
+ */
+async function rechazaProductoDeSistema(
+  sql: TransactionSql,
+  companyId: string,
+  ids: readonly string[],
+): Promise<Result<void, SalesError>> {
+  const [p] = await sql<{ name: string }[]>`
+    select name from public.products
+     where company_id = ${companyId} and id = any(${ids as string[]}::uuid[])
+       and system_code is not null
+     limit 1`;
+  if (p) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `«${p.name}» es un producto de sistema: solo lo usa la Nota de Débito por IGTF, que el sistema emite sola al cobrar. No se factura ni va en una nota.`,
+    });
+  }
+  return ok(undefined);
+}
+
+/** «0.03000000» → «3»; «0.025» → «2,5»: el porcentaje de una tasa, para leerlo en un papel. */
+function porcentajeDe(tasa: string): string {
+  return decimalDe(tasa).times(100).toDecimalPlaces(4).toFixed().replace(".", ",");
+}
+
+/**
+ * LA NOTA DE DÉBITO POR IGTF (E-03; RESPUESTA §2.6; PA SNAT/2022/000013 art. 6). El cobro
+ * posterior a la factura (fiado o abono) en divisas a un SPE documenta su percepción con una ND
+ * que referencia la factura: UNA línea «IGTF 3 % sobre pago en divisas» —el porcentaje sale de la
+ * regla vigente, nunca de un literal—, no sujeta al IVA, en bolívares a la tasa del día del cobro.
+ * Consume control como cualquier ND (forma libre o imprenta digital) y va al libro de ventas con
+ * base 0 e IVA 0, en la columna de lo no sujeto.
+ *
+ * El producto de la línea es uno de SISTEMA por empresa (`system_code = 'igtf'`, inactivo): la línea de
+ * un documento exige producto, y el IGTF no es nada que la empresa venda.
+ *
+ * Su asiento es el de la percepción (backlink, en registerPayment) y la paga su percepción
+ * (`platform.document_balance`): nace pagada.
+ */
+async function emitirNdIgtf(
+  uow: UnitOfWork,
+  ctx: Contexto,
+  d: {
+    companyId: string;
+    facturaId: string;
+    customerId: string;
+    priceListId: string | null;
+    fecha: string;
+    montoFuncional: Decimal;
+    tasaIgtf: string;
+    base: Decimal;
+    moneda: string;
+    montoDivisa: Decimal;
+  },
+): Promise<Result<DocumentResponse, SalesError>> {
+  const { sql } = uow;
+  // El producto de SISTEMA, por su marca (`system_code`), nunca por el sku tecleable (revisión 4).
+  // Lo siembran la migración 20261002100100 y createCompany; si faltara, se crea con un sku propio.
+  await sembrarProductoIgtf(sql, ctx.tenantId, d.companyId);
+  const [producto] = await sql<{ id: string }[]>`
+    select id from public.products where company_id = ${d.companyId} and system_code = 'igtf'`;
+  if (!producto)
+    return err({ code: "NOT_FOUND", message: "Falta el producto de sistema del IGTF." });
+  const pct = porcentajeDe(d.tasaIgtf);
+  const escala = minorUnitsOf(d.moneda);
+  const vestir = (x: Decimal, e: number) => x.toDecimalPlaces(e, 4).toFixed(e).replace(".", ",");
+  const motivo =
+    `IGTF ${pct} % percibido sobre el pago en divisas de ${d.moneda} ${vestir(d.base, escala)}: ` +
+    `${d.moneda} ${vestir(d.montoDivisa, escala)} (LIGTF art. 4.6; PA SNAT/2022/000013 art. 6)`;
+  let nd: Result<DocumentResponse, SalesError>;
+  try {
+    nd = await sql.savepoint((sp) =>
+      createInvoiceLike({ ...uow, sql: sp }, ctx, {
+        companyId: d.companyId,
+        customerId: d.customerId,
+        priceListId: d.priceListId,
+        sourceDocumentId: d.facturaId,
+        kind: "debit_note",
+        lineas: [
+          {
+            product_id: producto.id,
+            quantity: "1",
+            unit_price_transaction: d.montoFuncional.toFixed(8),
+            descripcion: `IGTF ${pct} % sobre pago en divisas`,
+            noSujeta: true,
+          },
+        ],
+        fecha: d.fecha,
+        notes: motivo,
+        rateBasis: "own_day",
+        enFuncional: true,
+        permiteProductoDeSistema: true,
+      }),
+    );
+  } catch (e) {
+    const conocido = traducir(e);
+    if (conocido) return err(conocido);
+    throw e;
+  }
+  if (!nd.ok) return nd;
+  await auditar(sql, ctx.tenantId, nd.value, "fiscal.debit_note.issued", {
+    reason: motivo,
+    igtf: true,
+  });
+  return nd;
+}
+
 async function createInvoiceLike(
   uow: UnitOfWork,
   ctx: Contexto,
@@ -3470,9 +3855,17 @@ async function createInvoiceLike(
       quantity: string;
       unit_price_transaction: string;
       source_line_id?: string;
+      /** E-03: la ND por IGTF describe su línea con el dato de la regla, no con el producto. */
+      descripcion?: string;
+      /** E-03: la línea no sujeta al IVA (el IGTF), sin regla: base 0 e IVA 0 en el libro. */
+      noSujeta?: boolean;
     }[];
     fecha: string;
     notes: string | null;
+    /** E-03: la ND por IGTF va en la moneda funcional (Bs), sin tasa: su importe ya es Bs. */
+    enFuncional?: boolean;
+    /** Re-revisión 2: solo `emitirNdIgtf` usa el producto de sistema. */
+    permiteProductoDeSistema?: boolean;
     /**
      * Hallazgo 13 (§2.7, G-11): 'origin' (por omisión) = la tasa de la factura que corrige;
      * 'own_day' = la tasa BCV del día de la nota, para una ND por un concepto nuevo.
@@ -3493,6 +3886,14 @@ async function createInvoiceLike(
       code: "REGIME_KIND_NOT_ALLOWED",
       message: "El régimen fiscal vigente no permite emitir esta nota.",
     });
+  }
+  if (d.permiteProductoDeSistema !== true) {
+    const deSistema = await rechazaProductoDeSistema(
+      sql,
+      d.companyId,
+      d.lineas.map((l) => l.product_id),
+    );
+    if (!deSistema.ok) return deSistema;
   }
   // A-03: la NC y la ND son documentos fiscales; el recibo de devolución no.
   if (d.kind !== "receipt_return") {
@@ -3532,7 +3933,11 @@ async function createInvoiceLike(
   const rateBasis = d.rateBasis ?? "origin";
   let tasaNota = origen.fx_rate;
   let fuenteNota = origen.rate_source;
-  if (rateBasis === "own_day" && origen.transaction_currency !== ctx.functionalCurrency) {
+  if (d.enFuncional === true) {
+    origen.transaction_currency = ctx.functionalCurrency;
+    tasaNota = "1";
+    fuenteNota = "identidad";
+  } else if (rateBasis === "own_day" && origen.transaction_currency !== ctx.functionalCurrency) {
     // Hallazgo 13: el concepto nuevo es un hecho de HOY; su tasa es la BCV de su día.
     const [hoy] = await sql<{ rate: string | null; source: string | null }[]>`
       select f.rate::text as rate, f.source
@@ -3616,6 +4021,9 @@ async function createInvoiceLike(
     if (congelada !== null) {
       taxRuleId = congelada.tax_rule_id;
       tasa = parseDecimal(congelada.tax_rate_snapshot!);
+    } else if (l.noSujeta === true) {
+      // El IGTF no es venta de bien ni servicio: no sujeto al IVA, sin regla que buscar.
+      taxRuleId = null;
     } else if (d.kind !== "receipt_return") {
       try {
         const [regla] = await sql<{ tax_rule_id: string; rate: string }[]>`
@@ -3643,12 +4051,15 @@ async function createInvoiceLike(
     calculadas.push({
       calc: calc.value,
       productId: l.product_id,
-      description: congelada?.description ?? producto!.name,
+      description: l.descripcion ?? congelada?.description ?? producto!.name,
       priceListId: d.priceListId ?? "",
       unitPriceList: precio.value,
       taxRuleId,
       costSnapshot: null,
-      taxCategory: congelada?.tax_category_snapshot ?? producto!.tax_category_code,
+      taxCategory:
+        l.noSujeta === true
+          ? "no_sujeto"
+          : (congelada?.tax_category_snapshot ?? producto!.tax_category_code),
       operationType:
         congelada !== null
           ? congelada.operation_type
@@ -4012,15 +4423,23 @@ export async function quickSale(
       vuelto = { amount: paso.value.vuelto.toFixed(8), currency: p.currency };
     }
 
-    const cobrado = await registerPayment(uow, {
-      company_id: input.company_id,
-      document_id: documento.id,
-      currency: p.currency,
-      amount: paso.value.aplicado.toFixed(8),
-      instrument: p.instrument,
-      ...(p.reference === undefined ? {} : { reference: p.reference }),
-      ...(p.account_id === undefined ? {} : { account_id: p.account_id }),
-    });
+    const cobrado = await registerPayment(
+      uow,
+      {
+        company_id: input.company_id,
+        document_id: documento.id,
+        currency: p.currency,
+        amount: paso.value.aplicado.toFixed(8),
+        instrument: p.instrument,
+        // La caja ya repartió lo entregado (pasoDeCobro): esto es lo que ABONA.
+        igtf_included: false,
+        ...(p.reference === undefined ? {} : { reference: p.reference }),
+        ...(p.account_id === undefined ? {} : { account_id: p.account_id }),
+      },
+      "sales.payment.register",
+      // E-03: el cobro de la propia venta — su IGTF va impreso en la factura, no en una ND.
+      { enEmision: true },
+    );
     if (!cobrado.ok) return cobrado;
     cobros.push(cobrado.value);
     balance = cobrado.value.balance;
@@ -4073,7 +4492,8 @@ export async function quickSale(
   // pago (el cálculo vive en registerPayment; aquí solo se agrega).
   let igtfTotal: Decimal | null = null;
   for (const c of cobros) {
-    if (c.igtf === null) continue;
+    // F-05: lo absorbido no se le cobró al cliente — no es parte de «lo que pagó con IGTF».
+    if (c.igtf === null || c.igtf.absorbed) continue;
     const f = parseDecimal(c.igtf.functional_amount);
     if (!f.ok) return err({ code: "VALIDATION_FAILED", message: "IGTF no interpretable." });
     igtfTotal = igtfTotal === null ? f.value : igtfTotal.plus(f.value);

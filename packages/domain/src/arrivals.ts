@@ -356,6 +356,14 @@ export async function registerArrival(
     ...(input.retention_concepts === undefined
       ? {}
       : { retention_concepts: input.retention_concepts }),
+    // ADR-0072 §3: la exclusión y el 100 % viajan igual que en la factura de proveedor; la
+    // retención automática del agente no necesita nada del cuerpo.
+    ...(input.retention_exclusion === undefined
+      ? {}
+      : { retention_exclusion: input.retention_exclusion }),
+    ...(input.iva_retention_full_reason === undefined
+      ? {}
+      : { iva_retention_full_reason: input.iva_retention_full_reason }),
   });
   if (!factura.ok) return err(factura.error);
 

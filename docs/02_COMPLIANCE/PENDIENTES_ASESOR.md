@@ -53,12 +53,15 @@ pantalla.
 
 ---
 
-## P-3 · Arrastre COMBINADO vs. separado — DECIDIDO (2026-09-28, L-05)
+## P-3 · Arrastre COMBINADO vs. separado — CERRADA (2026-10-02, L-05)
 
 **Decisión del dueño:** dos arrastres separados, como en la Forma 00030:
 `excedente_credito_fiscal` y `retenciones_acumuladas_por_descontar`. Nunca una sola cifra.
 Se implementa con migración nueva; las filas viejas conservan la cifra combinada (insert-only).
-**Queda para el asesor:** confirmar la lectura → P-37.
+**Implementada (migración 20261002120000, generador `iva-declarations/1.1.0`):** `excedente_siguiente`
+es solo crédito fiscal; `retenciones_acumuladas_por_descontar` lleva aparte lo que la cuota no
+absorbió, y el período siguiente arrastra cada uno por su lado. **Cerrada con esta lectura: el asesor
+la confirma en P-37.**
 
 ## P-4 · Prorrata del artículo 34: global v1
 
@@ -119,6 +122,12 @@ número de documento de más en la 4.ª posición), fecha `DD/MM/AAAA` y tipo «
 (`packages/domain/src/fiscal-books.ts:260-302`). Se arregla en L-03 con un fixture aprobado.
 **Sigue abierto:** validar con una carga real en el portal antes de `is_official = true`, y el
 monto exento de facturas mixtas.
+**Aplicado (2026-10-02, L-03, migración 20261002110000):** `aTxtRetencionesIva` produce exactamente
+estos 16 campos en este orden, leídos del comprobante-documento (nada se deriva); fixture aprobado en
+`packages/domain/test/fixtures/txt-retenciones-iva-p7.txt`. Lo que P-7 **no fija** y queda
+VALIDAR-SENIAT: (a) los importes y la alícuota salen con **2 decimales** («16.00»); (b) un documento
+con **varias alícuotas** sale con la alícuota VACÍA (no se parte en líneas); (c) el exento es el
+total menos la base gravada menos el IVA (incluye exonerado y no sujeto).
 
 ## P-8 · Exenciones del IGTF
 
@@ -150,7 +159,32 @@ porque el error grave es distinto en cada caso.
   entera**. La NC no lleva IGTF; el reembolso lo excluye y la pantalla lo dice.
 **Queda para el asesor:** P-31.
 
-## P-10 · Calendario de vencimientos por dígito de RIF
+## P-10 · Calendario de vencimientos por dígito de RIF — REABIERTA (2026-10-02, revisión de L-09)
+
+**Reabierta (H1, H7; migración 20261002120100).** La tabla de la 2.ª quincena está sembrada pero
+**no se ofrece** hasta responder. Preguntas exactas:
+1. «¿La columna "Ene" de la tabla de la 2.ª quincena de la PA SNAT/2025/000091 es la quincena
+   16–31 de diciembre de 2025 (presentada en enero) o la de enero de 2026 (presentada en febrero)?»
+2. «¿El "terminal del RIF" de la PA 000091 es el dígito verificador (el último del RIF)?»
+   **Discrepancia (auditoría fiscal 2.ª ronda, H11):** Nayma, la fuente de la siembra, dice «el
+   último número antes del dígito verificador»; lstributos, «el último dígito del RIF»; ¿qué dice la
+   G.O. 43.283? Mientras no se responda, **ningún** vencimiento se ofrece: las 970 fechas sembradas
+   están `pending_review` (migración 20261002120200).
+
+Si la respuesta a 1 es «diciembre de 2025», basta una migración que pase esas filas a ofrecidas; si
+es «enero de 2026», hay que re-sembrar sus fechas. Si la respuesta a 2 es otra, cambia
+`platform.rif_terminal`.
+
+**Cierre parcial anterior (2026-10-02, L-09):**
+
+**Cierre:** la «discrepancia de gaceta» era una **reimpresión por error material**: la PA
+SNAT/2025/000091 salió en la G.O. 43.273 y se reimprimió en la G.O. 43.283 (23-12-2025). Sembrada
+en `public.tax_calendar_entries` (migración 20261002120000) con norma, gaceta y fuente por fila; las
+celdas ⚠ quedan pendientes de cotejo y no se ofrecen (`CALENDARIO_SPE_2026.md` §6; desde la
+revisión, también la tabla 1.2 entera: 496 filas). Lo que queda
+es un VALIDAR-SENIAT de **cotejo** con la G.O. 43.283 (las celdas pendientes y la muestra), y las
+retenciones de ISLR, que no tienen fuente textual y no se sembraron. El texto de abajo es la
+historia de la pregunta.
 
 **Hoy:** `company_fiscal_deadlines` es una tabla **cargable como dato**, con fuente
 citada obligatoria (mínimo 10 caracteres). Ladino **no trae ninguna fecha sembrada**.
@@ -396,6 +430,10 @@ operación o uno por período y proveedor; agente y proveedor lo registran en el
 El comprobante se emite **al practicar la retención** (pago o abono en cuenta, lo primero, art. 13).
 Con R-3, eso es **al registrar la factura**, no al pagar: el código actual (emisión al pagar) cambia
 en H-04.
+**Implementado (2026-10-02, migración 20261002110000, ADR-0072 §4):** `retention_vouchers` se emite al
+registrar, con número AAAAMM + 8 por empresa, vencimiento de entrega calculado y mostrado, y versión
+nueva al corregir. **VALIDAR-TRIBUTARIO:** el vencimiento cuenta 2 días de **lunes a viernes**; los
+feriados nacionales no están en el repositorio (un feriado adelanta el aviso un día, nunca lo atrasa).
 
 ## P-27 · La compra pagada SIN factura: qué la respalda y qué se puede deducir (VALIDAR-TRIBUTARIO)
 
@@ -486,9 +524,55 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
   la factura o a la del día del comprobante, y el diferencial se reconoce?»
 - **P-31 · G-06** — IGTF de una venta devuelta. **Aplicada:** queda percibido; solo la anulación
   lo hace indebido. **Alternativa:** tratar la devolución total del mismo día como anulación.
+  **Ampliación (2026-10-02, ola 2 C2; amplía también P-9):** construido así — la NC no lleva IGTF,
+  el saldo a favor (lo que se reembolsa) es el total de la NC, y la confirmación de la devolución
+  devuelve el aviso «El IGTF de X ya fue enterado al SENIAT y no se devuelve». **Pregunta exacta
+  (VALIDAR-TRIBUTARIO):** «¿La devolución TOTAL el mismo día del cobro debe tratarse como anulación
+  —percepción indebida, restitución al cliente y reintegro (PA SNAT/2022/000013 art. 4; COT arts.
+  205-210)— o se entera igual porque el pago ocurrió?». Hoy: se entera igual (VALIDAR-TRIBUTARIO). Amplía P-9. **Corrección (revisión):**
+  la anulación tampoco restituye hoy: una factura con cobros no se anula, y la restitución con la
+  venta viva va a la ola 3 con la reversa de cobros (R-61); ver P-67.
 - **P-32 · E-02 / H-01** — Procedimiento para regularizar IGTF no percibido y retenciones no
   practicadas en períodos vencidos. **Aplicada:** enterar en la quincena en que se debió, con los
   recargos del COT; comprobante con la fecha real. **Alternativa:** la que indique el asesor.
+  - **P-63 · H-01 · regularizar F-88771 y F-89002 de E3 (VALIDAR-TRIBUTARIO, 2026-10-02).** Las dos
+    facturas de la empresa de pruebas «Ferretería El Tornillo» (especial desde el 2026-09-24) se
+    registraron el 2026-09-24 y el 2026-09-25 sin retener (`retention_total = 0`, sin comprobante).
+    Con R-3, registrarlas como cuenta por pagar **fue** el abono en cuenta: la retención se debió
+    ese día (PA SNAT/2025/000054 art. 13), y F-88771 además tiene un abono de 50 USD. No están
+    «sin pagar»: por eso **no se regularizan solas** (la comprobación `pnpm recorrido H` lo vigila).
+    Procedimiento de la respuesta del dueño (H-01), pendiente de confirmar: emitir el comprobante
+    con la fecha real del abono, enterar en la quincena que tocaba con los recargos del COT. Hoy el
+    sistema no emite un comprobante con fecha pasada: si el asesor lo confirma, se construye como
+    acto propio con acta. Pregunta exacta: «¿una retención de IVA no practicada al registrar la
+    factura se regulariza con un comprobante fechado el día del abono en cuenta original y se entera
+    en esa quincena con recargos, o con un comprobante de hoy?»
+  - **P-65 · H-04 / L-03 · la corrección de un comprobante ya declarado (VALIDAR-SENIAT, 2026-10-02).**
+    Pregunta exacta (auditoría fiscal): «Si se corrige la identidad del proveedor (RIF o razón social)
+    en un comprobante ya declarado, ¿se declara la línea corregida en la quincena siguiente? ¿Con qué
+    tratamiento de la línea errónea para no enterar dos veces?». **Aplicada (decidido por criterio,
+    evitar el doble enteramiento):** el TXT de un período excluye las versiones >= 2 de un comprobante
+    cuya versión 1 se emitió antes del período, y la exportación lo avisa (`warnings`).
+    **Alternativa:** declarar la corregida en la quincena siguiente. Dónde se toca: `yaDeclarada` en
+    `packages/domain/src/fiscal-books.ts` y `original_issued_on` de `platform.iva_retention_book`.
+    (La migración 20261002110200 la citaba como «P-64», que es la del IGTF asumido; lo corrige el
+    COMMENT de la 20261002110300.)
+  - **P-69 · L-03 · un documento con varias alícuotas en el TXT (VALIDAR-SENIAT, amplía P-7(b)).**
+    Pregunta exacta: «En el TXT, un documento con 16 % y 8 %: ¿una línea por alícuota o una sola, y con
+    qué valor en el campo 15?». **Aplicada (decidido por criterio, no emitir lo que el portal
+    probablemente rechaza):** el TXT que incluiría uno de esos documentos da 422 con su lista, en vez
+    de dejar el campo 15 vacío. **Alternativa:** una línea por alícuota.
+  - **P-71 · H-01 · el tope de 20 UT de las exclusiones del art. 3 num. 6 y 7 (VALIDAR-TRIBUTARIO).**
+    Pregunta exacta: «¿Las 20 UT se miden contra el total de la factura o contra la base imponible, y
+    con la UT vigente en qué fecha?». **Aplicada (lo más estricto):** contra el TOTAL de la factura en
+    Bs, con la UT vigente en la fecha de la factura (`tax_units`: Bs 43, PA SNAT/2025/000048,
+    REGULATORY_STATUS.md, vigente desde la fecha de la Gaceta 02-06-2025 — también a confirmar). Sin
+    UT cargada para la fecha, esas dos exclusiones no se pueden marcar (422).
+  - **P-74 · H-01 · el art. 3 de la PA SNAT/2025/000054 contra la Gaceta, y el art. 146 del COT (VALIDAR-TRIBUTARIO, 2026-10-02).** Los 13 numerales están leídos en una reproducción no oficial (ivecofi, auditor fiscal, 2026-10-02) y cargados en `retention_exclusions` (migración 20261002110400). Falta: (a) cotejarlos con la G.O. 43.171 del 16-07-2025; (b) el texto del art. 146 del COT, al que remite el num. 13. Pregunta exacta: «¿El texto del art. 3 de la PA SNAT/2025/000054 en la G.O. 43.171 coincide con estos 13 numerales, y qué excepción establece el art. 146 del COT vigente?»
+  - **P-72 · H-01 · el día en que se evalúa la condición de agente (VALIDAR-TRIBUTARIO).** Pregunta
+    exacta: «¿La condición de agente se evalúa el día del abono en cuenta o el de la factura?».
+    **Aplicada (PA 000054 arts. 1 y 13 con R-3: retener es al abono en cuenta, que es el registro):**
+    el tipo de la empresa el día del REGISTRO (día de Caracas). **Alternativa:** el día de la factura.
 - **P-33 · G-01** — Un correlativo de control por emisor (PA 00071 art. 44). **Aplicada:** uno
   por empresa e identificador, compartido por factura, NC y ND. **Alternativa:** tramos por clase,
   si el SENIAT lo admite por escrito.
@@ -506,7 +590,13 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
   **Aplicada:** half-up; cuentas de resultado propias. **Alternativa:** half-even; códigos del
   contador.
 - **P-37 · L-05** — Dos arrastres separados en la declaración del especial. **Aplicada:**
-  separados. **Alternativa:** una sola cifra (lo de antes).
+  separados (migración 20261002120000, 2026-10-02): las retenciones soportadas se descuentan solo
+  de la cuota tributaria positiva y lo que sobra pasa como «retenciones acumuladas por descontar»;
+  nunca se convierte en excedente de crédito fiscal. **Alternativa:** una sola cifra (lo de antes).
+  **Pregunta exacta:** «En la Forma 00030 del especial, ¿las retenciones soportadas no descontadas
+  en la quincena pasan a la siguiente como "retenciones acumuladas por descontar", separadas del
+  excedente de crédito fiscal, y se descuentan primero el excedente de crédito y después las
+  retenciones (PA SNAT/2025/000054 arts. 7 y 8)?»
 - **P-38 · M-10** — Contribuyente formal: artículos vigentes de la PA SNAT/2003/1677 (G.O.
   37.677, 25-04-2003). Verificados los arts. 3 (documento con leyenda «contribuyente formal») y 4.
   **Pendiente de fuente:** periodicidad de la declaración informativa (¿trimestral, o semestral
@@ -518,6 +608,31 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
 - **P-40 · E-03** — Cobro en divisas posterior a la factura de un SPE. **Aplicada:** Nota de
   Débito por IGTF que referencia la factura (PA 00071 art. 22), sin IVA, base 0 en el libro.
   **Alternativa:** comprobante de percepción no fiscal.
+  **Ampliación (2026-10-02, ola 2 C2):** construida. La ND por IGTF sale sola en el cobro
+  POSTERIOR (fiado o abono en la ficha): una línea «IGTF 3 % sobre pago en divisas» (el porcentaje
+  sale de `igtf_rules`), no sujeta, en Bs a la tasa del día del cobro, consume control, va al libro
+  con base 0 e IVA 0 y nace pagada por su percepción. El cobro de la propia venta (caja) imprime el
+  IGTF en la factura. **Preguntas exactas (VALIDAR-TRIBUTARIO):** (1) «¿Basta la ND por IGTF del
+  art. 22 de la PA 00071 para cumplir el art. 6 de la PA SNAT/2022/000013 en el cobro posterior, o
+  es preferible el "comprobante de percepción" no fiscal?»; (2) «Si la empresa ASUME el IGTF (el
+  cliente paga el documento justo): ¿la factura o una ND deben mostrar igual alícuota y monto?» —
+  hoy no se imprime ni se emite ND, porque al cliente no se le cobró; (3) «Un abono en divisas a una
+  ND (no a la factura): ¿su ND por IGTF referencia la factura original?» — hoy sí.
+- **P-64 · F-05** — IGTF asumido por la empresa (`absorb_igtf`). **Aplicada:** se asienta Dr
+  5.1.05 Gastos operativos / Cr 2.1.91 IGTF percibido por enterar, y se entera igual. **Pregunta
+  exacta (VALIDAR-CONTABLE / VALIDAR-TRIBUTARIO):** «¿El IGTF asumido es gasto deducible del ISLR
+  y en qué cuenta va? ¿Hace falta una cuenta propia "IGTF asumido" en lugar de gastos operativos?».
+- **P-66 · E-02 (auditoría fiscal, VALIDAR-TRIBUTARIO; PA SNAT/2022/000013 art. 1)** — Qué
+  instrumento causa. **Aplicada** (migración 20261002100100, data con fuente): efectivo en divisa y
+  USDT causan; Zelle causa por criterio (lectura reversible); transferencia, tarjeta y punto de venta
+  bancarios no. **Pregunta exacta:** «¿Percibe IGTF el SPE en cobros en divisas por transferencia a
+  una cuenta en divisas de un banco nacional, con tarjeta o en punto de venta, dado que el art. 1 de
+  la PA 000013 limita la percepción a pagos "sin mediación de instituciones financieras"? ¿Un pago
+  por Zelle cuenta como pago con mediación de una institución financiera (extranjera)?»
+- **P-67 · G-06 / H3 (VALIDAR-TRIBUTARIO; PA SNAT/2022/000013 art. 4)** — Restitución de un IGTF
+  indebido con la venta viva. **Aplicada:** no existe todavía; va a la ola 3 con la reversa de cobros
+  (R-61). **Pregunta exacta:** «¿Con qué soporte se documenta la restitución al cliente de un IGTF
+  percibido indebidamente cuando la venta sigue viva?»
 - **P-41 · B-19** — Ejercicio y UT de referencia para las 1.500 UT del art. 8 de la PA 00071.
   **Aplicada:** ingresos brutos del ejercicio anterior a la UT vigente en ese ejercicio (hoy Bs 43
   → Bs 64.500). **Alternativa:** UT vigente al evaluar.
@@ -721,3 +836,29 @@ por empresa).
 
 **Qué se rompe si la respuesta es otra.** Nada del dinero: el total de la familia no cambia. Cambia
 cómo se reparte entre sus hijas; se corrige con un asiento manual entre subcuentas.
+
+---
+
+## Auditoría fiscal, 2.ª ronda: declaración, libros y calendario (2026-10-02)
+
+- **P-68 · H4 (VALIDAR-TRIBUTARIO, PA SNAT/2025/000054 art. 7).** **Aplicada** (migraciones
+  20261002120200, 20261002120300 y 20261002120400): la retención soportada cuenta en el período de
+  su fecha; si ese período ya estaba declarado cuando se entregó el comprobante, en el período de
+  la entrega (`received_on`). «Declarado» = una generación que lo cubre, hecha DESPUÉS de cerrar el
+  período y el día de la entrega o antes (B-1, decidido por criterio): una vista previa a mitad de
+  quincena no cuenta. **Alternativa:** alinearlo con «período cerrado y generado», como
+  `platform.supplier_invoice_late_annulment_day` (exigir además el cierre contable del período).
+  **Pregunta exacta:** «Si el comprobante llega después de declarar la quincena de la retención, ¿se
+  descuenta obligatoriamente en el período de entrega (art. 7) o cabe una sustitutiva?»
+- **P-70 · H1 (VALIDAR-TRIBUTARIO, amplía P-40; PA SNAT/2022/000013 arts. 5-6, LIVA art. 34).**
+  **Aplicada** (migraciones 20261002120200 y 20261002120300, que la reconoce por
+  `products.system_code = 'igtf'`): la ND por IGTF no es venta no sujeta; no entra en la
+  planilla ni en la prorrata, ni en las bases del libro de ventas ni en el resumen del art. 72; el
+  libro la muestra aparte («IGTF percibido», con su número y control). **Pregunta exacta:** «¿La ND
+  por IGTF debe registrarse en el libro de ventas y en la Forma 00030, y en qué casilla, si no es
+  venta no sujeta ni entra en la prorrata?»
+- **P-73 · H13 (VALIDAR-TRIBUTARIO).** **Aplicada:** el ordinario declara el IVA por mes calendario
+  completo. La fuente citada era la PA SNAT/2025/000091, que es de los especiales. **Pregunta
+  exacta:** «¿Qué artículo de la LIVA (o de su Reglamento) fija el período de imposición mensual del
+  contribuyente ordinario?» (P-68 y P-70 son los números asignados por la coordinación; P-71 y P-72
+  ya estaban ocupados, por eso este es P-73.)

@@ -50,6 +50,10 @@ cual: el libro, la pantalla, el CSV exportado, la planilla y el mayor dicen la m
   de ajustes a los créditos fiscales de períodos anteriores: aparte de `creditos_deducibles` (que
   sigue siendo el crédito del período tras la prorrata, nunca negativo), fuera de la prorrata, y
   dentro de la cuota y el excedente (migración 20260928120300; VALIDAR-TRIBUTARIO P-46).
+- Desde la migración 20261002120000 (L-05) la planilla tiene **dos arrastres**: el ajuste entra en el
+  excedente de **crédito fiscal** (`excedente_siguiente`), nunca en el de retenciones
+  (`retenciones_acumuladas_por_descontar`). Periodicidad, imputación y fórmula: `IVA_SPEC.md`,
+  «La declaración del período» (quincena del especial, mes del ordinario, L-04).
 - **Invariante:** `book_ledger_reconciliation()` — libro = mayor + cola — tiene que dar «cuadra».
   En el gate (`pnpm verify`, paso 11) lo prueban los pgTAP 074 (con una NC) y 078 (NC, ND,
   anulada y ajuste de período anterior). Sobre toda la historia de cada empresa del escenario lo
@@ -115,6 +119,22 @@ cual: el libro, la pantalla, el CSV exportado, la planilla y el mayor dicen la m
   `control_number` (ADR-0071).
 - `BOOK_GENERATOR_VERSION` sigue en 1.3.0 (no publicada).
 
+### El comprobante de retención en los libros (migraciones 20261002110000 y 20261002110200; ADR-0072 §4 y §6)
+
+- `BOOK_GENERATOR_VERSION` = `fiscal-books/1.4.0`. **Cambian los hashes del libro de compras y del
+  libro de retenciones de IVA:** un período ya exportado, regenerado, da otro hash, y la versión dice
+  por qué.
+- **Compras** (`purchases_book_with_vouchers`, sobre `purchases_book_by_rate` sin tocarla): número,
+  fecha e IVA retenido del comprobante emitido en el período (H-12); el de otro período que su factura
+  sale en el de su emisión como renglón `comprobante_retencion` con importes en cero, firmado con ese
+  estado legal.
+- **Retenciones de IVA** (`iva_retention_book`): del comprobante-documento, con la identidad
+  congelada al emitir, tipo de documento, total, base, exento, IVA causado, alícuota, vencimiento y
+  entrega; una versión reemplazada hasta el cierre del período sale `annulled`; `original_issued_on`
+  dice cuándo se emitió la versión 1.
+- **TXT**: los 16 campos de P-7; sin versiones anuladas ni correcciones de comprobantes declarados en
+  un período anterior (P-65, con aviso en la exportación).
+
 ### Revisión de los cambios fiscales (migración 20260928170400: A1, A2, F6)
 
 - **A2:** la NC recibida se reparte por el tratamiento de la línea de factura que devuelve: la que
@@ -125,3 +145,15 @@ cual: el libro, la pantalla, el CSV exportado, la planilla y el mayor dicen la m
   el resumen.
 - **F6:** `unclassified_rows` cuenta también los renglones con `base_gravada_sin_alicuota` o
   `iva_sin_clasificar` distintos de cero.
+
+## Libro de ventas: IGTF aparte y comprobante soportado (auditoría fiscal 2.ª ronda, migración 20261002120200)
+
+- **La ND por IGTF (H1, P-70)** sale en el libro con su número, control y estado, con **todos los
+  importes de venta en cero** (no suma en «no sujeta» ni en el total) y su monto en la columna
+  `igtf_percibido` («IGTF percibido (no es venta)»). El resumen del art. 72 no la incluye.
+- **El comprobante de retención soportado (H5; PA SNAT/2025/000054 art. 16 in fine)**: el libro que
+  se exporta es `platform.sales_book_with_receipts`. El renglón de la factura identifica el
+  comprobante ENTREGADO en el período (`retention_receipt_number`, `retention_received_on`,
+  `retention_iva`); si la factura es de otro período, sale en el de la entrega como renglón propio
+  «comprobante_retencion», con importes en cero. Espejo del libro de compras (H-12).
+- Generador `fiscal-books/1.5.0`: cambia el hash del libro de ventas.

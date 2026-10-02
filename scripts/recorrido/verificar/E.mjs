@@ -10,6 +10,8 @@
 import { inflateSync } from "node:zlib";
 import { comprobaciones, pedir, pedirBytes, afirmar, sql, EMPRESAS, PERSONAS } from "./_app.mjs";
 import { textoDe, tiene, idDocumento } from "./_pdf.mjs";
+import { pedir as pedirIgtf, EMPRESAS as EMP_IGTF, PERSONAS as PER_IGTF } from "./_app.mjs";
+import { textoDe as textoIgtf, tiene as tieneIgtf } from "./_pdf.mjs";
 
 const c = comprobaciones("E");
 
@@ -273,6 +275,73 @@ c.caso(
     afirmar(r.status === 200, `dio ${r.status}`);
     const e3 = (r.json ?? []).find((e) => e.id === EMPRESAS.E3);
     afirmar(e3?.taxpayer_type_code === "especial", JSON.stringify(e3?.taxpayer_type_code));
+  },
+);
+
+// ── IGTF del especial (ADR-0072 §2; RESPUESTA §2.6) ─────────────────────────────────────────
+/** Una venta de caja de E3 con 1,03 USD por Zelle (1 a la venta, 0,03 de IGTF) y el resto fiado. */
+async function ventaZelleIgtfE3() {
+  const E3i = EMP_IGTF.E3;
+  await sql`
+    insert into public.exchange_rates
+      (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+    select 'USD', 'VES', 854.46, 'BCV', (now() at time zone 'America/Caracas')::date, now()
+     where not exists (
+       select 1 from public.exchange_rates
+        where from_currency = 'USD' and to_currency = 'VES'
+          and rate_date = (now() at time zone 'America/Caracas')::date)`;
+  const [w] = await sql`select id from public.warehouses where company_id = ${E3i} limit 1`;
+  const [p] = await sql`
+    select sb.product_id from public.stock_balances sb
+      join public.products pr on pr.id = sb.product_id
+     where sb.company_id = ${E3i} and sb.quantity > 1 and pr.status = 'active'
+       and pr.name ilike 'tornillo%'
+     limit 1`;
+  const [cl] = await sql`
+    select id from public.customers where company_id = ${E3i} and not is_system
+       and status <> 'blocked' order by legal_name limit 1`;
+  afirmar(w && p && cl, "E3 no trae depósito, tornillos con existencia o un cliente");
+  const r = await pedirIgtf(PER_IGTF.duenoE2E3, "E3", "POST", "/v1/pos/sales", {
+    company_id: E3i,
+    customer_id: cl.id,
+    warehouse_id: w.id,
+    lines: [{ product_id: p.product_id, quantity: "1" }],
+    payments: [{ instrument: "zelle", currency: "USD", amount: "1.03" }],
+  });
+  afirmar(r.status === 201, `venta de caja de E3: ${r.status} ${r.texto}`);
+  return r.json;
+}
+
+c.caso(
+  "E-02",
+  "E3, especial, percibe sin activar nada: el estado y el aviso de la caja lo dicen",
+  async () => {
+    const st = await pedirIgtf(PER_IGTF.duenoE2E3, "E3", "GET", "/v1/igtf/status");
+    afirmar(st.status === 200 && st.json.perceiving === true, `E3 no percibe: ${st.texto}`);
+    const av = await pedirIgtf(
+      PER_IGTF.duenoE2E3,
+      "E3",
+      "GET",
+      "/v1/pos/igtf?amount=10.00&currency=USD&instrument=zelle",
+    );
+    afirmar(av.json?.applies === true && av.json.amount === "0.30000000", `aviso: ${av.texto}`);
+  },
+);
+
+c.caso(
+  "E-03",
+  "la factura de una venta de caja de E3 por Zelle imprime alícuota y monto del IGTF",
+  async () => {
+    const v = await ventaZelleIgtfE3();
+    afirmar(v.payments[0].igtf?.amount === "0.03000000", "la venta no percibió 0,03");
+    for (const q of ["", "?destino=papel", "?destino=vista"]) {
+      const { status, texto: t } = await textoIgtf(PER_IGTF.duenoE2E3, "E3", v.document.id, q);
+      afirmar(status === 200, `PDF ${q || "cortesía"}: ${status}`);
+      afirmar(
+        tieneIgtf(t, "IGTF 3 % sobre USD 1,00 pagados en divisas: USD 0,03"),
+        `falta el IGTF en ${q || "cortesía"}`,
+      );
+    }
   },
 );
 

@@ -145,7 +145,10 @@ select is(
                                'treasury.transfer.registered',
                                -- Nota de crédito recibida (migración 67, ADR-0065 §1): el
                                -- MISMO nombre que ya emite registerSupplierCreditNote.
-                               'ap.credit_note_received')),
+                               'ap.credit_note_received',
+                               -- El IGTF asumido por la empresa (20261002100000, F-05): la misma
+                               -- percepción, asentada como gasto.
+                               'igtf.perception_absorbed')),
   0::bigint,
   'los eventos del preset son los del OUTBOX, con su nombre real: no se inventa un vocabulario paralelo');
 

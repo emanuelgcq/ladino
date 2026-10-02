@@ -26,10 +26,12 @@ import { MensajeError } from "../ventas/comunes.js";
 import {
   errorDePersona,
   type FiscalDeadline,
+  type IvaPeriodProposal,
   type IvaPeriodResult,
+  type TaxCalendar,
   type SupportedRetention,
 } from "../../lib.js";
-import { hoyLocal, fechaLocal, mesLocalAnterior } from "../../fechas.js";
+import { hoyLocal, fechaLocal } from "../../fechas.js";
 
 /** Cuántas filas trae cada página de los listados de esta pantalla (el default del servidor). */
 const POR_PAGINA = 50;
@@ -121,14 +123,65 @@ function mesDe(fecha: string): { from: string; to: string } {
   };
 }
 
-function mesAnterior(): { from: string; to: string } {
-  // El mes anterior del día de CARACAS, no del día UTC (CLAUDE.md §3).
-  const m = mesLocalAnterior();
-  return { from: m.desde, to: m.hasta };
+/** Cero escrito como texto («0», «0.00000000»): comparación de representación, sin aritmética. */
+const esCeroTexto = (v: string | undefined): boolean =>
+  v === undefined || /^-?0*(?:\.0*)?$/.test(v);
+
+/**
+ * L-04: lo que el servidor propone, dicho en una frase. La quincena NO se calcula aquí: viene en
+ * la propuesta (platform.iva_period_proposal), igual que el vencimiento por terminal del RIF.
+ */
+function AvisoPeriodicidad({ p }: { p: IvaPeriodProposal }): React.JSX.Element {
+  const quien =
+    p.periodicity === "quincenal"
+      ? "Eres contribuyente especial: declaras el IVA por quincena (del 1 al 15 y del 16 al último día), según la PA SNAT/2025/000091."
+      : p.periodicity === "mensual"
+        ? "Declaras el IVA por mes."
+        : "Declara tu tipo de contribuyente en Configuración para saber si declaras por mes o por quincena.";
+  const vence =
+    p.due_date !== null
+      ? ` Vence el ${fechaLocal(p.due_date)} según el terminal de tu RIF.`
+      : p.due_date_status === "pending_review"
+        ? " La fecha de vencimiento de este período está pendiente de cotejo con la Gaceta: no la mostramos hasta confirmarla."
+        : "";
+  return (
+    <p className="text-[0.86rem] text-muted-foreground">
+      {quien} Período propuesto: del {fechaLocal(p.period_from)} al {fechaLocal(p.period_to)}.
+      {vence}
+    </p>
+  );
 }
 
 export function Declaraciones(): React.JSX.Element {
-  const [rango, setRango] = useState(mesAnterior());
+  const { empresa, llamar } = useSesion();
+  // L-04: el período inicial lo propone el servidor según el tipo vigente; antes era el mes
+  // anterior calculado aquí, también para el especial que declara por quincena.
+  const propuesta = useQuery({
+    queryKey: ["iva-propuesta", empresa.id],
+    queryFn: () => llamar<IvaPeriodProposal>("/v1/fiscal-declarations/iva-periods/proposal"),
+  });
+  const [elegido, setRango] = useState<{ from: string; to: string } | null>(null);
+  const rango =
+    elegido ??
+    (propuesta.data === undefined
+      ? null
+      : { from: propuesta.data.period_from, to: propuesta.data.period_to });
+
+  if (rango === null) {
+    return (
+      <div>
+        <PageHeader
+          title="Declarar IVA"
+          description="La planilla demostrativa del período: lo que Ladino calcula desde tus documentos. NO es la declaración oficial — se transcribe al portal del SENIAT."
+        />
+        {propuesta.isError ? (
+          <FalloDeCarga error={propuesta.error} reintentar={() => void propuesta.refetch()} />
+        ) : (
+          <Skeleton className="h-64" />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -144,6 +197,7 @@ export function Declaraciones(): React.JSX.Element {
               <DateRangePicker from={rango.from} to={rango.to} onChange={(r) => setRango(r)} />
             )}
           </FormField>
+          {propuesta.data !== undefined && <AvisoPeriodicidad p={propuesta.data} />}
         </CardContent>
       </Card>
 
@@ -234,10 +288,31 @@ function descargarPlanilla(p: IvaPeriodResult, desde: string, hasta: string): vo
             aDosDecimalesTexto(p.ajuste_creditos_anteriores),
           ],
         ]),
-    ["Retenciones de IVA soportadas", aDosDecimalesTexto(p.retenciones_soportadas)],
-    ["Excedente del período anterior", aDosDecimalesTexto(p.excedente_anterior)],
+    ["Excedente de crédito fiscal del período anterior", aDosDecimalesTexto(p.excedente_anterior)],
+    ...(p.retenciones_acumuladas_anteriores === undefined
+      ? []
+      : [
+          [
+            "Retenciones acumuladas por descontar del período anterior",
+            aDosDecimalesTexto(p.retenciones_acumuladas_anteriores),
+          ],
+        ]),
+    ["Retenciones de IVA soportadas en el período", aDosDecimalesTexto(p.retenciones_soportadas)],
     ["Cuota a pagar", aDosDecimalesTexto(p.cuota_a_pagar)],
-    ["Excedente que pasa al período siguiente", aDosDecimalesTexto(p.excedente_siguiente)],
+    // L-05: dos arrastres, nunca una sola cifra (Forma 00030).
+    [
+      "Excedente de crédito fiscal que pasa al período siguiente",
+      aDosDecimalesTexto(p.excedente_siguiente),
+    ],
+    ...(p.retenciones_acumuladas_por_descontar === undefined
+      ? []
+      : [
+          [
+            "Retenciones acumuladas por descontar que pasan al período siguiente",
+            aDosDecimalesTexto(p.retenciones_acumuladas_por_descontar),
+          ],
+        ]),
+    [`Generador`, p.generator_version],
   ];
   // Separador «;» y BOM, como el resto de las descargas de Ladino: es lo que
   // abre bien un Excel en español sin pelearse con las comas decimales.
@@ -425,15 +500,23 @@ function Periodo({ desde, hasta }: { desde: string; hasta: string }): React.JSX.
                       />
                     )}
                   <Renglon
-                    concepto="Retenciones de IVA que nos practicaron"
-                    nota="Comprobantes cargados con fecha dentro del período"
-                    importe={ultima.retenciones_soportadas}
-                    moneda={moneda}
-                  />
-                  <Renglon
-                    concepto="Excedente del período anterior"
+                    concepto="Excedente de crédito fiscal del período anterior"
                     nota="Viene encadenado de la última generación del período contiguo"
                     importe={ultima.excedente_anterior}
+                    moneda={moneda}
+                  />
+                  {ultima.retenciones_acumuladas_anteriores !== undefined && (
+                    <Renglon
+                      concepto="Retenciones acumuladas por descontar del período anterior"
+                      nota="Las que la cuota del período anterior no absorbió: llegan aparte del crédito fiscal"
+                      importe={ultima.retenciones_acumuladas_anteriores}
+                      moneda={moneda}
+                    />
+                  )}
+                  <Renglon
+                    concepto="Retenciones de IVA que nos practicaron en el período"
+                    nota="Comprobantes cargados con fecha dentro del período"
+                    importe={ultima.retenciones_soportadas}
                     moneda={moneda}
                   />
                   <Renglon
@@ -443,12 +526,28 @@ function Periodo({ desde, hasta }: { desde: string; hasta: string }): React.JSX.
                     destacado
                   />
                   <Renglon
-                    concepto="Excedente que pasa al período siguiente"
-                    nota="Traslado del excedente de crédito fiscal al período siguiente"
+                    concepto="Excedente de crédito fiscal que pasa al período siguiente"
+                    nota={
+                      // H9: la MISMA condición con la que el dominio se niega a encadenar.
+                      ultima.generator_version === "iva-declarations/1.0.0" &&
+                      (!esCeroTexto(ultima.excedente_siguiente) ||
+                        !esCeroTexto(ultima.retenciones_soportadas))
+                        ? "Generada con la versión que mezclaba crédito fiscal y retenciones en una sola cifra: vuelve a generar el período para separarlas"
+                        : "Solo crédito fiscal: las retenciones no descontadas van en su renglón"
+                    }
                     importe={ultima.excedente_siguiente}
                     moneda={moneda}
                     destacado
                   />
+                  {ultima.retenciones_acumuladas_por_descontar !== undefined && (
+                    <Renglon
+                      concepto="Retenciones acumuladas por descontar que pasan al período siguiente"
+                      nota="Retenciones soportadas que la cuota no absorbió: pasan aparte, como en la Forma 00030"
+                      importe={ultima.retenciones_acumuladas_por_descontar}
+                      moneda={moneda}
+                      destacado
+                    />
+                  )}
                 </TBody>
               </Table>
             </CardContent>
@@ -468,7 +567,8 @@ function Periodo({ desde, hasta }: { desde: string; hasta: string }): React.JSX.
                   <TR>
                     <TH>Generada</TH>
                     <TH className="text-right">Cuota</TH>
-                    <TH className="text-right">Excedente siguiente</TH>
+                    <TH className="text-right">Excedente de crédito fiscal</TH>
+                    <TH className="text-right">Retenciones por descontar</TH>
                     <TH>Huella</TH>
                   </TR>
                 </THead>
@@ -486,6 +586,14 @@ function Periodo({ desde, hasta }: { desde: string; hasta: string }): React.JSX.
                       <TDNum>{mostrarImporte({ amount: g.cuota_a_pagar, currency: moneda })}</TDNum>
                       <TDNum>
                         {mostrarImporte({ amount: g.excedente_siguiente, currency: moneda })}
+                      </TDNum>
+                      <TDNum>
+                        {g.retenciones_acumuladas_por_descontar === undefined
+                          ? "—"
+                          : mostrarImporte({
+                              amount: g.retenciones_acumuladas_por_descontar,
+                              currency: moneda,
+                            })}
                       </TDNum>
                       <TD>
                         <span className="font-mono text-[0.78rem]">
@@ -626,6 +734,9 @@ export function CargarRetencion({
   const [factura, setFactura] = useState<EntityOption | null>(inicial?.factura ?? null);
   const [numero, setNumero] = useState("");
   const [fecha, setFecha] = useState(() => hoyLocal());
+  // H4 (PA SNAT/2025/000054 art. 7): el día en que el agente ENTREGÓ el comprobante.
+  // B-3: vacía por omisión — el servidor usa entonces la fecha de la retención.
+  const [entrega, setEntrega] = useState("");
   const [base, setBase] = useState("");
   const [porcion, setPorcion] = useState("0.75");
   const [monto, setMonto] = useState("");
@@ -638,6 +749,7 @@ export function CargarRetencion({
     setNumero("");
     setBase("");
     setMonto("");
+    setEntrega("");
     setError(null);
   }
 
@@ -655,6 +767,7 @@ export function CargarRetencion({
           document_id: factura.id,
           receipt_number: numero.trim(),
           retained_on: fecha,
+          ...(entrega === "" ? {} : { received_on: entrega }),
           base: base.trim().replace(",", "."),
           rate: porcion,
           amount: monto.trim().replace(",", "."),
@@ -784,6 +897,21 @@ export function CargarRetencion({
               />
             )}
           </FormField>
+          <FormField label="Fecha en que te entregaron el comprobante (opcional)">
+            {(a) => (
+              <Input
+                id={a.id}
+                type="date"
+                value={entrega}
+                onChange={(e) => setEntrega(e.target.value)}
+              />
+            )}
+          </FormField>
+          <p className="text-[0.8rem] text-faint-foreground sm:col-span-2">
+            Déjala vacía si te lo entregaron a tiempo: se toma la fecha de la retención. Si te lo
+            entregaron después de declarar la quincena de la retención, la retención se descuenta en
+            el período de la entrega (PA SNAT/2025/000054 art. 7).
+          </p>
           <FormField label="Base (el IVA de la factura)">
             {(a) => (
               <Input
@@ -865,21 +993,21 @@ function Calendario(): React.JSX.Element {
 
   return (
     <div className="space-y-4">
+      <CalendarioProvidencia />
       <CargarVencimiento />
       <Card>
         <CardHeader>
-          <CardTitle>Vencimientos cargados</CardTitle>
+          <CardTitle>Vencimientos que cargaste</CardTitle>
           <CardDescription>
-            Ladino no trae ninguna fecha de fábrica. El calendario por dígito de RIF sale de la
-            providencia vigente y se carga con su cita: una fecha inventada aquí sería una multa
-            allá.
+            Fechas que cargaste tú, con su cita. Las de la providencia de especiales ya vienen
+            arriba; aquí van las demás, o una corrección mientras se coteja una fecha.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {items.length === 0 ? (
             <p className="py-6 text-center text-muted-foreground">
-              No hay vencimientos cargados. Pídele a tu contador la providencia del año y cárgalos
-              con la fuente.
+              No cargaste ningún vencimiento propio. Las fechas de la providencia de especiales, si
+              te aplican, están arriba.
             </p>
           ) : (
             <Table>
@@ -915,6 +1043,100 @@ function Calendario(): React.JSX.Element {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+const OBLIGACIONES: Record<string, string> = {
+  iva: "Declaración de IVA",
+  ret_iva: "Retenciones de IVA que practicamos",
+  igtf: "IGTF percibido",
+  islr_anticipo: "Anticipo de ISLR",
+  islr_definitiva: "Declaración definitiva de ISLR",
+  islr_retenciones: "Retenciones de ISLR",
+};
+
+/**
+ * L-09 (ADR-0072 §8): el calendario sembrado de la PA SNAT/2025/000091 para el terminal del RIF
+ * de la empresa. El servidor filtra: solo llegan las fechas ofrecidas, y las pendientes de cotejo
+ * con la Gaceta vienen contadas, no listadas.
+ */
+function CalendarioProvidencia(): React.JSX.Element | null {
+  const { empresa, llamar } = useSesion();
+  // El año del día de Caracas: solo el rango que se pide (formato, sin cálculo fiscal).
+  const anio = hoyLocal().slice(0, 4);
+  const calendario = useQuery({
+    queryKey: ["calendario-providencia", empresa.id, anio],
+    queryFn: () =>
+      llamar<TaxCalendar>(`/v1/fiscal-declarations/calendar?from=${anio}-01-01&to=${anio}-12-31`),
+  });
+  if (calendario.isPending) return <Skeleton className="h-32" />;
+  if (calendario.isError) {
+    return <FalloDeCarga error={calendario.error} reintentar={() => void calendario.refetch()} />;
+  }
+  const c = calendario.data;
+  const hoy = hoyLocal();
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Calendario de contribuyentes especiales {anio}</CardTitle>
+        <CardDescription>
+          Las fechas de la providencia del año, transcritas de una fuente secundaria y pendientes de
+          cotejo con la Gaceta.
+          {c.items[0] !== undefined && ` Fuente: ${c.items[0].legal_source}`}
+          {c.rif_terminal !== null && ` Terminal de tu RIF: ${c.rif_terminal}.`}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {c.items.length === 0 ? (
+          <p className="py-4 text-center text-muted-foreground">
+            {/* H6: «no aplica» y «no hay calendario» son dos frases distintas. */}
+            {c.applies
+              ? c.pending_review > 0
+                ? `Ninguna fecha de ${anio} está confirmada todavía para tu terminal.`
+                : `No hay calendario sembrado para ${anio}: pídele a tu contador la providencia del año y carga las fechas abajo, con su cita.`
+              : c.rif_terminal === null
+                ? "Tu RIF no termina en un dígito: no hay terminal con el que buscar tus fechas."
+                : "Este calendario es de los contribuyentes especiales: no aplica a tu empresa."}
+          </p>
+        ) : (
+          <Table>
+            <THead>
+              <TR>
+                <TH>Obligación</TH>
+                <TH>Período</TH>
+                <TH>Vence</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {c.items.map((d) => (
+                <TR key={`${d.obligation}_${d.period_from}_${d.period_to}`}>
+                  <TD>{OBLIGACIONES[d.obligation] ?? d.obligation}</TD>
+                  <TD>
+                    {fechaLocal(d.period_from)} → {fechaLocal(d.period_to)}
+                  </TD>
+                  <TD>
+                    {fechaLocal(d.due_date)}
+                    {d.due_date < hoy && (
+                      <Badge tone="warning" className="ml-2">
+                        pasó
+                      </Badge>
+                    )}
+                  </TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        )}
+        {c.pending_review > 0 && (
+          <p className="mt-3 text-[0.82rem] text-faint-foreground">
+            {c.pending_review === 1
+              ? "1 fecha está pendiente de cotejo con la Gaceta y no se muestra."
+              : `${c.pending_review} fechas están pendientes de cotejo con la Gaceta y no se muestran.`}{" "}
+            Si te toca una, confírmala con tu contador y cárgala abajo con su cita.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

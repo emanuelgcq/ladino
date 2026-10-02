@@ -1,3 +1,104 @@
+# Handoff — 2026-10-02 (34ª entrega) — Ola 2, segunda ronda: el contribuyente especial (IGTF, retenciones que practicamos, declaración quincenal y calendario)
+
+Hallazgos cerrados (12):
+- **IGTF:** E-02, E-03, F-05, G-06 y L-15.
+- **Retenciones que practicamos:** H-01, H-04, H-12 y L-03.
+- **Declaración y calendario:** L-04, L-05 y L-09.
+
+Con esto la **ola 2 queda cerrada**: 47 hallazgos de papel fiscal entre las dos rondas.
+
+**Cadena de cada familia:**
+1. reparador;
+2. revisor;
+3. arreglos;
+4. re-revisión del arreglo;
+5. arreglos.
+
+Además, una auditoría fiscal de la ronda, que salió BLOQUEADA. Sus arreglos se re-revisaron.
+
+## Lo que la norma impuso sobre lo decidido (RESPUESTA §0: manda la norma)
+- **PA 000013 art. 1:** el especial percibe IGTF solo en pagos en divisas o cripto recibidos «sin mediación de instituciones financieras». Qué instrumento causa es data de plataforma (`igtf_instrument_classes`) con su fuente:
+  - causan efectivo en divisa y USDT;
+  - Zelle causa por criterio, la lectura reversible (VALIDAR P-66);
+  - transferencia, tarjeta y punto de venta en divisas a través de un banco no causan;
+  - la empresa no puede cambiar la clasificación, y «otro» en divisa de un especial da 422.
+  - Antes, §2.6 decía «siempre que un SPE recibe un pago en divisas».
+- **PA 000091:** la fuente citada contradice qué dígito del RIF es el «terminal», y el mapeo de la tabla de la 2.ª quincena está marcado ⚠ en el propio documento. **Las 970 fechas del calendario quedan sembradas y en `pending_review`:** no se ofrece ningún vencimiento hasta cotejarlas con la G.O. 43.283 (P-10).
+
+## IGTF (ADR-0072 §2)
+- **Percepción:** percibe quien es especial el día del pago (`taxpayer_type_at`), sin interruptor.
+- **Total:** la caja y la ficha suman el IGTF al total; `amount` es lo ENTREGADO (cambio de comportamiento del contrato de `igtf_included`); lo pendiente se valora el día del cobro.
+- **`absorber_igtf`:** la empresa lo asume, a 5.1.05, con asiento propio (P-64).
+- **La factura:** imprime alícuota y monto en divisa y en Bs, en los tres destinos (FC-27).
+- **El cobro posterior:** emite una **ND por IGTF**:
+  - consume control y va a la tasa de su día;
+  - su línea es el producto de sistema (`products.system_code = 'igtf'`), sembrado por empresa y fuera del catálogo y de la caja;
+  - la paga su percepción, y el libro y la declaración NO la cuentan como venta ni activa la prorrata: es «IGTF percibido» aparte (P-70).
+- **La devolución:** deja el IGTF percibido y no lo reembolsa (G-06).
+- **La restitución de un IGTF indebido con la venta viva va a la OLA 3**, con la reversa de cobros (R-61, P-67): `annulInvoice` no acepta documentos con cobros, así que la anulación no puede restituir.
+- **Cuentas e invariante:** `ar_aging` y el estado de cuenta no cuentan la ND por IGTF. `accounting_coverage_gaps()` cambia su ENUNCIADO: la ND está cubierta por su percepción, con asiento o en cola.
+
+## Retenciones de IVA que practicamos (ADR-0072 §3, §4 y §6)
+- **La retención:** se practica sola al REGISTRAR la factura (R-3), si la empresa es agente el día del registro (P-72), con el 75/100 % desde data.
+- **Exclusiones del art. 3:** como data, los 13 numerales con fuente (reproducción no oficial, P-74):
+  - el tope de 20 UT con la UT de `tax_units`;
+  - las de comprador público no son marcables;
+  - el 422 del proveedor no contribuyente solo con IVA.
+  - En la web, «Registrar factura» y «Ya llegó la factura» tienen el selector de exclusión o del 100 %.
+- **El comprobante es un documento** (`retention_vouchers`):
+  - `AAAAMM` + 8, por operación o por quincena;
+  - PDF y entrega una sola vez;
+  - la corrección versiona;
+  - el abierto de la quincena nunca es una corrección.
+  - Pantalla de comprobantes en Compras.
+- **Libro y TXT:**
+  - el libro de compras identifica el comprobante (H-12);
+  - el TXT tiene los 16 campos de P-7, contra un fixture (`-text` en `.gitattributes`);
+  - lo ya declarado se decide por renglón (P-65);
+  - un documento con varias alícuotas da 422 (P-69).
+- **Invariante nuevo:** `retention_voucher_gaps()` (CLAUDE.md §3, `pnpm recorrido`: 15 invariantes).
+- **Pendiente:** el correo del comprobante no se construye, porque no hay proveedor de correo.
+
+## Declaración y calendario (ADR-0072 §7 y §8, ADR-0052 enmendado)
+- **Periodicidad:** el especial declara por quincena y el ordinario por mes calendario completo (la cita de la LIVA está pendiente, P-73). El servidor propone el período, también en la transición de tipo.
+- **Dos arrastres:** `excedente_credito_fiscal` y `retenciones_acumuladas_por_descontar`; generador 1.1.0 (P-3 cerrada, P-37).
+- **Retención soportada tardía (PA 000054 art. 7):**
+  - `received_on`;
+  - se imputa al período de entrega si el de la retención ya se declaró: solo cuenta una generación hecha después de cerrar el período, no una vista previa (P-68).
+- **El libro de ventas:** registra el comprobante soportado en el período de la entrega. Generador de libros 1.5.0.
+
+## Aserciones existentes cambiadas (clase autorizada, §5.2.4)
+- **L-05**, la cifra mezclada del excedente:
+  - `e2e-fiscal-declarations.test.ts:346` y `:357`;
+  - `046_declarations_igtf_test.sql:156`.
+- **L-03**, el TXT de 17 campos: `packages/domain/test/declarations.test.ts`.
+- **H-12**, las columnas del comprobante: las listas de `packages/domain/test/fiscal-books-cabeceras.test.ts`.
+- **E-02**, el IGTF que se omitía en silencio: `e2e-igtf.test.ts:747` (apagar un instrumento da 422 y el cobro percibe).
+- **`absorber_igtf`:** la lista blanca de eventos del `026_journal_generator_test.sql`.
+
+Solo cambiaron entradas, no cifras esperadas:
+- los períodos de mes completo en e2e-fiscal-declarations y e2e-ajuste-creditos-anteriores;
+- `igtf_included: false` en ocho cobros de e2e-igtf.
+
+## Preguntas al asesor nuevas o cambiadas
+P-10 (reabierta: tabla 1.2 y terminal del RIF), P-31, P-32, P-37, P-40, P-63 a P-74.
+
+## Despliegue (para la sección 7)
+- **Todas van justo después del pull** y no antes:
+  - `20261002100000` a `100200` (el IGTF cambia saldos de caja y cartera);
+  - `110000` a `110500` (la retención automática);
+  - `120000` a `120400` (la declaración y el libro de ventas).
+  - La API vieja leería mal los saldos con la ND por IGTF y no conoce las columnas nuevas.
+- **Producción:** las 5 empresas tienen la categoría general por omisión, así que la `170400` de la ronda 1 no fallará. Consultado con el token nuevo el 2026-10-02.
+
+Gate: VERIFY EXIT=0, 808 pasos, vitest 1158 en 19 paquetes, pgTAP 1825 en 98 ficheros (base anterior 1092 / 1693 / 92; base nueva guardada). `pnpm recorrido` A, B, C, E, F, G, H, J, K, L, M, N, O y P en verde, con 15 invariantes en 0 en E1, E2 y E3.
+
+También entran los ADR de la ola 3 (0075 a 0078), escritos para abrirla.
+
+HOMOLOGATION_IMPACT = YES: quién percibe IGTF y qué imprime la factura, un documento fiscal nuevo (la ND por IGTF), cuándo se retiene, el comprobante de retención, el TXT, el libro de ventas y el cálculo de la declaración.
+
+---
+
 # Handoff — 2026-10-02 (33ª entrega) — Ola 2, primera ronda: el papel fiscal (numeración, documento, identidad, alícuotas, importación y el tipo de contribuyente)
 
 Hallazgos cerrados (35):

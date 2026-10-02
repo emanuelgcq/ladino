@@ -171,6 +171,13 @@ export {
   ArrivalResponse,
   ArrivalImpactResponse,
   ClosePurchaseOrderRequest,
+  IvaRetentionFullReason,
+  RetentionExclusionMark,
+  RetentionVoucherLineResponse,
+  RetentionVoucherResponse,
+  CorrectRetentionVoucherRequest,
+  DeliverRetentionVoucherRequest,
+  SetRetentionVoucherModeRequest,
 } from "./purchases.js";
 export {
   AccountKind,
@@ -261,6 +268,9 @@ export {
   IvaPeriodDetalleAlicuota,
   IvaPeriodResultResponse,
   ListIvaPeriodResultsResponse,
+  IvaPeriodProposalResponse,
+  TaxCalendarObligation,
+  TaxCalendarResponse,
   FiscalObligation,
   LoadFiscalDeadlinesRequest,
   FiscalDeadlineResponse,

@@ -363,6 +363,8 @@ export const ExportFiscalBookResponse = z
     /** Solo en ventas y compras (B1): el resumen del art. 72 de esta generación y su fichero. */
     summary_content: z.string().optional(),
     summary_filename: z.string().optional(),
+    /** ADR-0072 §6 (H4): avisos, p. ej. correcciones de comprobantes ya declarados fuera del TXT. */
+    warnings: z.array(z.string()).optional(),
   })
   .strict();
 export type ExportFiscalBookResponse = z.infer<typeof ExportFiscalBookResponse>;

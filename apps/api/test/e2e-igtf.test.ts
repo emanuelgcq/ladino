@@ -264,6 +264,8 @@ describe("IGTF — la activación es una designación, no una moneda", () => {
       currency: "USD",
       amount: "5.00",
       instrument: "zelle",
+      // `amount` es lo que ABONA (por omisión, desde la revisión 11, es lo entregado).
+      igtf_included: false,
     });
     expect(r.status, await r.clone().text()).toBe(201);
     const cuerpo = (await r.json()) as CobroHecho;
@@ -349,6 +351,8 @@ describe("IGTF — la percepción es POR PAGO", () => {
       currency: "USD",
       amount: "10.00",
       instrument: "zelle",
+      // `amount` es lo que ABONA (por omisión, desde la revisión 11, es lo entregado).
+      igtf_included: false,
     });
     expect(enUsd.status).toBe(201);
     const cobro = (await enUsd.json()) as CobroHecho;
@@ -439,6 +443,8 @@ describe("IGTF — ADR-0053: se percibe lo que la moneda sabe cobrar", () => {
       currency: "USD",
       amount: "35.45",
       instrument: "zelle",
+      // `amount` es lo que ABONA (por omisión, desde la revisión 11, es lo entregado).
+      igtf_included: false,
     });
     expect(pago.status).toBe(201);
     const cobro = (await pago.json()) as CobroHecho;
@@ -682,6 +688,8 @@ describe("IGTF — los bordes", () => {
       currency: "USD",
       amount: "20.00",
       instrument: "zelle",
+      // `amount` es lo que ABONA (por omisión, desde la revisión 11, es lo entregado).
+      igtf_included: false,
     });
     expect(cobro.status).toBe(201);
     const percibido = (await cobro.json()) as CobroHecho;
@@ -733,13 +741,23 @@ describe("IGTF — los bordes", () => {
     expect(neto!.n).toBe(0);
   });
 
-  it("un instrumento que se apaga deja de percibir en el cobro siguiente", async () => {
+  /*
+   * CAMBIO AUTORIZADO (coordinador, 2026-10-02 · E-02, RESPUESTA §2.6): aquí se aseveraba que
+   * apagar «zelle» dejaba de percibir (PUT 200 y el cobro siguiente con igtf null). Pasaba gracias
+   * al defecto de E-02: para un especial, el IGTF se omitía en silencio. La norma dice «siempre que
+   * un SPE recibe un pago en divisas se percibe»: apagar un instrumento en divisas es un 422 que lo
+   * explica, y el cobro siguiente percibe.
+   */
+  it("un especial no puede apagar un instrumento: 422 legible, y el cobro siguiente percibe", async () => {
     const apagar = await pedir("PUT", "/v1/igtf/instruments", {
       company_id: COMPANY,
       instrument: "zelle",
       causes: false,
     });
-    expect(apagar.status).toBe(200);
+    expect(apagar.status).toBe(422);
+    expect(((await apagar.json()) as { message: string }).message).toContain(
+      "no la decide la empresa",
+    );
 
     const doc = await facturar("1");
     const cobro = await pedir("POST", "/v1/payments", {
@@ -748,9 +766,11 @@ describe("IGTF — los bordes", () => {
       currency: "USD",
       amount: "5.00",
       instrument: "zelle",
+      // `amount` es lo que ABONA (por omisión, desde la revisión 11, es lo entregado).
+      igtf_included: false,
     });
     expect(cobro.status).toBe(201);
-    expect(((await cobro.json()) as CobroHecho).igtf).toBeNull();
+    expect(((await cobro.json()) as CobroHecho).igtf).not.toBeNull();
 
     // Se vuelve a encender para no dejar el estado torcido a los que sigan.
     await pedir("PUT", "/v1/igtf/instruments", {
@@ -779,6 +799,8 @@ describe("IGTF — los bordes", () => {
       currency: "USD",
       amount: "2.00",
       instrument: "zelle",
+      // `amount` es lo que ABONA (por omisión, desde la revisión 11, es lo entregado).
+      igtf_included: false,
     });
     expect(hoy.status).toBe(201);
     expect(((await hoy.json()) as CobroHecho).igtf).not.toBeNull();
@@ -790,6 +812,8 @@ describe("IGTF — los bordes", () => {
       amount: "2.00",
       instrument: "zelle",
       paid_at: `${manana}T16:00:00.000Z`,
+      // `amount` es lo que ABONA (por omisión, desde la revisión 11, es lo entregado).
+      igtf_included: false,
     });
     expect(delDiaSiguiente.status).toBe(201);
     expect(((await delDiaSiguiente.json()) as CobroHecho).igtf).toBeNull();
@@ -815,6 +839,8 @@ describe("IGTF — los bordes", () => {
       currency: "USD",
       amount: "5.00",
       instrument: "zelle",
+      // `amount` es lo que ABONA (por omisión, desde la revisión 11, es lo entregado).
+      igtf_included: false,
     });
     expect(cobro.status).toBe(201);
     expect(((await cobro.json()) as CobroHecho).igtf).toBeNull();

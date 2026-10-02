@@ -131,7 +131,7 @@ export function igtfRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler)
         select id, payment_id, document_id, base_amount::text as base_amount, currency,
                rate::text as rate, amount::text as amount,
                functional_amount::text as functional_amount, fx_rate::text as fx_rate,
-               rate_source, status, status_reason,
+               rate_source, status, status_reason, absorbed, debit_note_id,
                to_char(occurred_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
                  as occurred_at,
                count(*) over ()::int as total

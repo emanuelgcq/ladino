@@ -967,6 +967,8 @@ export interface SupportedRetention {
   document_id: string;
   receipt_number: string;
   retained_on: string;
+  /** H4: el día de la entrega del comprobante; null = el de la retención. */
+  received_on?: string | null;
   base: string;
   rate: string;
   amount: string;
@@ -992,7 +994,12 @@ export interface IvaPeriodResult {
   retenciones_soportadas: string;
   excedente_anterior: string;
   cuota_a_pagar: string;
+  /** El excedente de CRÉDITO FISCAL que pasa. Desde el generador 1.1.0 (L-05) no incluye retenciones. */
   excedente_siguiente: string;
+  /** L-05: retenciones acumuladas por descontar que llegan del período anterior. */
+  retenciones_acumuladas_anteriores?: string;
+  /** L-05: retenciones que la cuota no absorbió y pasan APARTE al período siguiente. */
+  retenciones_acumuladas_por_descontar?: string;
   detalle: IvaPeriodDetalle[];
   /** Ajustes a los créditos de períodos anteriores (R-2 ampliada). Cero o negativo; aparte de creditos_deducibles, entra en la cuota. */
   ajuste_creditos_anteriores?: string;
@@ -1004,6 +1011,31 @@ export interface IvaPeriodResult {
   created_at: string;
 }
 export type FiscalObligation = "iva" | "igtf" | "ret_iva" | "islr";
+/** L-04: el período que el servidor propone según el tipo y el calendario. */
+export interface IvaPeriodProposal {
+  taxpayer_type: string | null;
+  periodicity: "quincenal" | "mensual" | null;
+  period_from: string;
+  period_to: string;
+  due_date: string | null;
+  due_date_status: string | null;
+  legal_source: string | null;
+}
+/** L-09: el calendario sembrado de la providencia para el terminal de la empresa. */
+export interface TaxCalendar {
+  rif_terminal: number | null;
+  /** Si la providencia de especiales aplica a la empresa. */
+  applies: boolean;
+  items: {
+    obligation: string;
+    period_from: string;
+    period_to: string;
+    due_date: string;
+    legal_source: string;
+  }[];
+  total: number;
+  pending_review: number;
+}
 export interface FiscalDeadline {
   id: string;
   obligation: FiscalObligation;
@@ -1015,10 +1047,27 @@ export interface FiscalDeadline {
 export interface IgtfInstrumentRow {
   instrument: string;
   causes: boolean;
+  /** La fuente de la clasificación (PA SNAT/2022/000013 art. 1, o «por criterio, VALIDAR P-66»). */
+  legal_source?: string | null;
 }
 export interface IgtfStatus {
   enabled: boolean;
   enabled_at: string | null;
+  /** E-02: percibe hoy por ser especial (lo decide el servidor). */
+  perceiving: boolean;
+  /** F-05: la empresa asume el IGTF. */
+  absorbs: boolean;
+  /** L-15: la quincena en curso, calculada en el servidor. */
+  fortnight: {
+    from: string;
+    to: string;
+    /** L-15: el vencimiento del calendario; null si está pendiente de cotejo o no hay calendario. */
+    due: {
+      date: string | null;
+      status: "secondary_source" | "pending_review" | "not_available";
+      legal_source: string | null;
+    };
+  };
   rate: string | null;
   legal_source: string | null;
   instruments: IgtfInstrumentRow[];

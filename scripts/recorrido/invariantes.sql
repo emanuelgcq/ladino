@@ -44,3 +44,8 @@ select 'control_number_collisions (controles repetidos)', count(*)::text
   from platform.control_number_collisions() where company_id = :'cid';
 select 'control_range_overlaps (talonarios que se pisan)', count(*)::text
   from platform.control_range_overlaps() where company_id = :'cid';
+-- ADR-0072 §4 (H10 de la revisión de la parte 3): toda retención de IVA practicada desde el corte tiene su
+-- renglón en un comprobante VIGENTE por el mismo importe. El corte (platform.invariant_cutoffs) va en el
+-- enunciado: lo anterior a la migración 20261002110200 lo vigila PENDIENTES_ASESOR P-63.
+select 'retention_voucher_gaps (retenciones sin comprobante vigente)', count(*)::text
+  from platform.retention_voucher_gaps(:'cid');

@@ -3318,34 +3318,34 @@ Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes 
 |---|---|---|---|
 | A-01 | alta | abierto | — |
 | A-02 | alta | abierto | — |
-| A-03 | alta | cerrado (pendiente de commit) | historia append-only del tipo con vigencia; sin tipo vigente no se factura (TAXPAYER_TYPE_REQUIRED en el dominio, LAD98 en la base); el registro lo pregunta (migraciones 20260928190000-190200, ADR-0072 §1). Decidido por criterio (no_contribuyente se deriva de no tener RIF y nunca se declara, alternativa: declararlo con RIF; lectura del tipo sin permiso, alternativa: exigir company.settings.manage; retroactivo admitido con aviso de documentos ya emitidos, alternativa: prohibir fechas anteriores al último emitido) — ADR-0072, nota de aplicación |
+| A-03 | alta | cerrado (c36753e) | historia append-only del tipo con vigencia; sin tipo vigente no se factura (TAXPAYER_TYPE_REQUIRED en el dominio, LAD98 en la base); el registro lo pregunta (migraciones 20260928190000-190200, ADR-0072 §1). Decidido por criterio (no_contribuyente se deriva de no tener RIF y nunca se declara, alternativa: declararlo con RIF; lectura del tipo sin permiso, alternativa: exigir company.settings.manage; retroactivo admitido con aviso de documentos ya emitidos, alternativa: prohibir fechas anteriores al último emitido) — ADR-0072, nota de aplicación |
 | A-04 | alta | abierto | — |
 | A-05 | alta | abierto | — |
-| A-06 | alta | cerrado (pendiente de commit) | el recibo de devolución imprime «Recibo de devolución · Documento no fiscal: no es factura ni nota de crédito y no otorga derecho a crédito fiscal», sin RIF (nunca el marcador `PEND-`, detectado con `esMarcadorSinRif` de rif.ts), sin IVA, sin providencia y sin copia fiscal (422); la web no le ofrece forma libre. P-16 afina la redacción |
+| A-06 | alta | cerrado (c36753e) | el recibo de devolución imprime «Recibo de devolución · Documento no fiscal: no es factura ni nota de crédito y no otorga derecho a crédito fiscal», sin RIF (nunca el marcador `PEND-`, detectado con `esMarcadorSinRif` de rif.ts), sin IVA, sin providencia y sin copia fiscal (422); la web no le ofrece forma libre. P-16 afina la redacción |
 | A-07 | media | abierto | — |
-| A-08 | media | cerrado (pendiente de commit) | estructura del RIF validada en el servidor (422 legible); dígito verificador módulo 11 que avisa y deja acta `*.tax_id_check_digit_mismatch`; registro con las seis letras (añade C); OPEN_QUESTIONS #9 cerrada; letra C abierta en PENDIENTES_ASESOR P-49. Decidido por criterio: el cliente se identifica con RIF o con cédula (V/E + hasta 8 dígitos, sin verificador; PA 00071 art. 13.7); la empresa y el proveedor siempre con RIF; un V/E de 9 dígitos es RIF, nunca cédula; la cédula se sigue mostrando `V-12.345.678` (alternativa: un selector explícito de tipo de documento). Revisión 2026-09-28 (criterio §2.16): **decidido por criterio** que el cliente acepta también pasaporte (manda la PA 00071 art. 13.7): P + 9 dígitos es RIF P y cualquier otro «P» + alfanumérico de 5 a 20 es pasaporte, guardado «P» + mayúsculas sin separadores y mostrado como hoy (alternativa: un selector explícito de tipo de documento); `createCompany` no acepta el marcador por la entrada, solo el que genera el registro por un parámetro interno (alternativa: aceptar `^PEND-[0-9A-F]{10}$` por la entrada); el mismo documento con otra grafía es ok sin escribir (alternativa: 422 «ya es ese»). La clasificación «P → no domiciliado» queda como está, pendiente del asesor (R-58) |
+| A-08 | media | cerrado (c36753e) | estructura del RIF validada en el servidor (422 legible); dígito verificador módulo 11 que avisa y deja acta `*.tax_id_check_digit_mismatch`; registro con las seis letras (añade C); OPEN_QUESTIONS #9 cerrada; letra C abierta en PENDIENTES_ASESOR P-49. Decidido por criterio: el cliente se identifica con RIF o con cédula (V/E + hasta 8 dígitos, sin verificador; PA 00071 art. 13.7); la empresa y el proveedor siempre con RIF; un V/E de 9 dígitos es RIF, nunca cédula; la cédula se sigue mostrando `V-12.345.678` (alternativa: un selector explícito de tipo de documento). Revisión 2026-09-28 (criterio §2.16): **decidido por criterio** que el cliente acepta también pasaporte (manda la PA 00071 art. 13.7): P + 9 dígitos es RIF P y cualquier otro «P» + alfanumérico de 5 a 20 es pasaporte, guardado «P» + mayúsculas sin separadores y mostrado como hoy (alternativa: un selector explícito de tipo de documento); `createCompany` no acepta el marcador por la entrada, solo el que genera el registro por un parámetro interno (alternativa: aceptar `^PEND-[0-9A-F]{10}$` por la entrada); el mismo documento con otra grafía es ok sin escribir (alternativa: 422 «ya es ese»). La clasificación «P → no domiciliado» queda como está, pendiente del asesor (R-58) |
 | A-09 | media | abierto | — |
 | A-10 | media | abierto | — |
-| A-11 | media | cerrado (pendiente de commit) | borrada la leyenda de homologación del pie (`documents-pdf.ts`); la única leyenda legal es «SIN DERECHO A CRÉDITO FISCAL» en la copia (FC-28, probado en los tres destinos). El papel (ADR-0071 §4, revisión 2026-09-29): la marca de cortesía y el pie en CADA página y solo en factura, NC y ND; la franja preimpresa con el mismo alto en vista y papel. Decidido por criterio: `print_control_number` es presentación y se lee al imprimir (alternativa: congelarlo al emitir); `?destino=cortesia` explícito se acepta (alternativa: solo papel y vista); la «Venta lista» de la caja ofrece «Imprimir en la forma libre» para la factura, con el diálogo del detalle (alternativa: solo desde el detalle); la marca nombra la clase, «La nota de crédito válida…» (alternativa: el literal «La factura válida…»). Auditoría fiscal 2026-10-02 (RESPUESTA §0, manda la norma): PA 00071 art. 33, un documento ocupa UNA forma libre — P-55 cerrada; decidido por criterio, opción (a): tope de FILAS IMPRESAS por empresa (`rows_per_free_form`, 15, máximo 18; revisión A-2: las filas las parte una sola función que usan el dominio y el PDF; alternativa rechazada: truncar la descripción), 422 al emitir, aviso en la caja y en la factura de administración, y el papel rechaza lo que pase de una página o invada el pie (FC-34) (alternativa (b): partir la operación sola en varios documentos). Arts. 26-27: el papel imprime «Serie A N° 00000001». Art. 13.7: la factura sobre forma libre exige adquirente identificado (P-57, lectura conservadora; LAD99). Decidido por criterio en la revisión: la NC y la ND identifican al adquirente como su factura (regla 1; R-63 resuelto; alternativa: exigirles el 13.7); la contingencia refleja su papel y no pasa por el tope ni el adquirente (alternativa: exigírselo); `delivery_note` fuera, P-62 |
+| A-11 | media | cerrado (c36753e) | borrada la leyenda de homologación del pie (`documents-pdf.ts`); la única leyenda legal es «SIN DERECHO A CRÉDITO FISCAL» en la copia (FC-28, probado en los tres destinos). El papel (ADR-0071 §4, revisión 2026-09-29): la marca de cortesía y el pie en CADA página y solo en factura, NC y ND; la franja preimpresa con el mismo alto en vista y papel. Decidido por criterio: `print_control_number` es presentación y se lee al imprimir (alternativa: congelarlo al emitir); `?destino=cortesia` explícito se acepta (alternativa: solo papel y vista); la «Venta lista» de la caja ofrece «Imprimir en la forma libre» para la factura, con el diálogo del detalle (alternativa: solo desde el detalle); la marca nombra la clase, «La nota de crédito válida…» (alternativa: el literal «La factura válida…»). Auditoría fiscal 2026-10-02 (RESPUESTA §0, manda la norma): PA 00071 art. 33, un documento ocupa UNA forma libre — P-55 cerrada; decidido por criterio, opción (a): tope de FILAS IMPRESAS por empresa (`rows_per_free_form`, 15, máximo 18; revisión A-2: las filas las parte una sola función que usan el dominio y el PDF; alternativa rechazada: truncar la descripción), 422 al emitir, aviso en la caja y en la factura de administración, y el papel rechaza lo que pase de una página o invada el pie (FC-34) (alternativa (b): partir la operación sola en varios documentos). Arts. 26-27: el papel imprime «Serie A N° 00000001». Art. 13.7: la factura sobre forma libre exige adquirente identificado (P-57, lectura conservadora; LAD99). Decidido por criterio en la revisión: la NC y la ND identifican al adquirente como su factura (regla 1; R-63 resuelto; alternativa: exigirles el 13.7); la contingencia refleja su papel y no pasa por el tope ni el adquirente (alternativa: exigírselo); `delivery_note` fuera, P-62 |
 | A-12 | media | abierto | — |
 | A-13 | media | abierto | — |
 | A-14 | baja | abierto | — |
 | A-15 | baja | abierto | — |
 | A-16 | baja | abierto | — |
-| A-17 | baja | cerrado (pendiente de commit) | `cambiarRif` rechaza `PEND-…` con su propio mensaje y cualquier cosa que no sea un RIF (422) |
+| A-17 | baja | cerrado (c36753e) | `cambiarRif` rechaza `PEND-…` con su propio mensaje y cualquier cosa que no sea un RIF (422) |
 | A-18 | baja | abierto | — |
 | A-19 | baja | abierto | — |
 | B-01 | alta | abierto | — |
-| B-02 | alta | cerrado (pendiente de commit) | aceptar otra tasa cierra la vigencia y abre otra desde hoy (`platform.accept_general_vat`); 0 % y fuera de 8–16,5 % → 422 LAD97; trigger en `tax_rules` (ADR-0073). Decidido por criterio: una regla con líneas emitidas se cierra, nunca se retira; el mismo día en que ya se facturó, 422 y la persona elige la fecha efectiva (alternativa: correrla sola a mañana) |
-| B-03 | alta | cerrado (pendiente de commit) | ADR-0071 |
-| B-04 | media | cerrado (pendiente de commit) | reducida, adicional (general + 15 %) y exenta vienen del catálogo con su cita y se venden; `no_sujeto` y exonerado no se ofrecen; la exenta «ACEPTADA por el dueño» se cierra (migraciones 20260928150000 y 150100, ADR-0073). Decidido por criterio: el servidor rechaza (422) clasificar en lo que el catálogo no ofrece (alternativa: solo esconderlo en la pantalla); la adicional se factura como 31 % en una línea (alternativa: 16 % + 15 %, VALIDAR-SENIAT P-53) |
+| B-02 | alta | cerrado (c36753e) | aceptar otra tasa cierra la vigencia y abre otra desde hoy (`platform.accept_general_vat`); 0 % y fuera de 8–16,5 % → 422 LAD97; trigger en `tax_rules` (ADR-0073). Decidido por criterio: una regla con líneas emitidas se cierra, nunca se retira; el mismo día en que ya se facturó, 422 y la persona elige la fecha efectiva (alternativa: correrla sola a mañana) |
+| B-03 | alta | cerrado (c36753e) | ADR-0071 |
+| B-04 | media | cerrado (c36753e) | reducida, adicional (general + 15 %) y exenta vienen del catálogo con su cita y se venden; `no_sujeto` y exonerado no se ofrecen; la exenta «ACEPTADA por el dueño» se cierra (migraciones 20260928150000 y 150100, ADR-0073). Decidido por criterio: el servidor rechaza (422) clasificar en lo que el catálogo no ofrece (alternativa: solo esconderlo en la pantalla); la adicional se factura como 31 % en una línea (alternativa: 16 % + 15 %, VALIDAR-SENIAT P-53) |
 | B-05 | media | abierto | — |
 | B-06 | media | abierto | — |
-| B-07 | media | cerrado (pendiente de commit) | `platform.taxpayer_type_at(empresa, día)` es la única lectura; especial con fecha de notificación y vigencia. Decidido por criterio (el IGTF exige ser especial el día del cobro, alternativa: apagar el acta al declarar una vigencia futura) — ADR-0072, nota de aplicación |
-| B-08 | media | cerrado (pendiente de commit) | «Formas libres» en el catálogo de regímenes (migración 20260928180100; el `code` no cambia), en /empezar, en la puesta a punto y en los docs; cita PA 00071 arts. 6, 30 y 31 |
+| B-07 | media | cerrado (c36753e) | `platform.taxpayer_type_at(empresa, día)` es la única lectura; especial con fecha de notificación y vigencia. Decidido por criterio (el IGTF exige ser especial el día del cobro, alternativa: apagar el acta al declarar una vigencia futura) — ADR-0072, nota de aplicación |
+| B-08 | media | cerrado (c36753e) | «Formas libres» en el catálogo de regímenes (migración 20260928180100; el `code` no cambia), en /empezar, en la puesta a punto y en los docs; cita PA 00071 arts. 6, 30 y 31 |
 | B-09 | media | abierto | — |
 | B-10 | media | abierto | — |
-| B-11 | media | cerrado (pendiente de commit) | la ayuda del porcentaje sale de `iva_catalog` (catálogo con cita), sin cifra en la web |
+| B-11 | media | cerrado (c36753e) | la ayuda del porcentaje sale de `iva_catalog` (catálogo con cita), sin cifra en la web |
 | B-12 | media | abierto | — |
 | B-13 | baja | abierto | — |
 | B-14 | baja | abierto | — |
@@ -3354,11 +3354,11 @@ Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes 
 | B-17 | baja | abierto | — |
 | B-18 | baja | abierto | — |
 | B-19 | baja | abierto | — |
-| C-01 | crítica | cerrado (pendiente de commit) | ADR-0074 |
+| C-01 | crítica | cerrado (c36753e) | ADR-0074 |
 | C-02 | alta | abierto | — |
 | C-03 | alta | abierto | — |
-| C-04 | alta | cerrado (pendiente de commit) | ADR-0074 · decidido por criterio (§2.16): un trabajo `failed` se puede volver a subir (alt.: reanudarlo); coherencia de formato por archivo (alt.: detectarlo); el worker adopta `ladino_api` (alt.: procesar en la API); costo de referencia guardado en el producto (alt.: solo en el informe) |
-| C-05 | media | cerrado (pendiente de commit) | ADR-0074 |
+| C-04 | alta | cerrado (c36753e) | ADR-0074 · decidido por criterio (§2.16): un trabajo `failed` se puede volver a subir (alt.: reanudarlo); coherencia de formato por archivo (alt.: detectarlo); el worker adopta `ladino_api` (alt.: procesar en la API); costo de referencia guardado en el producto (alt.: solo en el informe) |
+| C-05 | media | cerrado (c36753e) | ADR-0074 |
 | C-06 | media | abierto | — |
 | C-07 | media | abierto | — |
 | C-08 | media | cerrado (6ceea89) | ADR-0068 |
@@ -3386,72 +3386,72 @@ Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes 
 | D-16 | baja | abierto | — |
 | D-17 | baja | abierto | — |
 | D-18 | baja | abierto | — |
-| E-01 | crítica | cerrado (pendiente de commit) | ADR-0071 · decidido por criterio: serie opcional (vacía = sin serie), alternativa: exigir serie; corrección de imprenta con acta, alternativa: solo anular y registrar |
-| E-02 | crítica | abierto | — |
-| E-03 | crítica | abierto | — |
-| E-04 | alta | cerrado (pendiente de commit) | el PDF discrimina base e IVA por alícuota con su porcentaje y «Exento (E)»; columnas sin IVA (FC-10, FC-11, FC-31) |
+| E-01 | crítica | cerrado (c36753e) | ADR-0071 · decidido por criterio: serie opcional (vacía = sin serie), alternativa: exigir serie; corrección de imprenta con acta, alternativa: solo anular y registrar |
+| E-02 | crítica | cerrado (pendiente de commit) | migración 20261002100000: percibe quien es especial el día del pago, en los pagos en divisas o cripto sin mediación financiera (PA SNAT/2022/000013 art. 1): qué instrumento causa es data de plataforma con fuente (migración 20261002100100: efectivo en divisa, USDT y Zelle sí; transferencia, tarjeta y punto de venta bancarios no; VALIDAR-TRIBUTARIO P-66); ni el acta `igtf_enabled_at` ni la empresa lo cambian (422 en los dos sentidos); el aviso de la caja usa la misma regla. E2E `e2e-igtf-especial`, `pnpm recorrido E`. Lo no percibido no se regulariza: VALIDAR-TRIBUTARIO P-32 |
+| E-03 | crítica | cerrado (pendiente de commit) | el PDF imprime alícuota y monto del IGTF, en divisa y en Bs a la tasa del cobro, en los tres destinos (FC-27 real); el cobro posterior emite la ND por IGTF (una línea no sujeta, consume control, libro base 0 e IVA 0, nace pagada; `igtf_debit_note` aditivo). pgTAP 098, `pnpm recorrido E/F`. VALIDAR-TRIBUTARIO P-40 |
+| E-04 | alta | cerrado (c36753e) | el PDF discrimina base e IVA por alícuota con su porcentaje y «Exento (E)»; columnas sin IVA (FC-10, FC-11, FC-31) |
 | E-05 | alta | abierto | — |
 | E-06 | alta | abierto | — |
 | E-07 | alta | abierto | — |
 | E-08 | alta | abierto | — |
 | E-09 | media | abierto | — |
-| E-10 | media | cerrado (pendiente de commit) | el PDF lleva «P. unit. sin IVA» y «Total sin IVA»; el subtotal es la suma de la columna, luego el IVA por alícuota y el total (familia alícuotas; e2e-checklist-factura asevera los importes). El desfase de céntimos entre cantidad × unitario redondeado y el total de línea es el cálculo fiscal de E-05 (ola 3) |
+| E-10 | media | cerrado (c36753e) | el PDF lleva «P. unit. sin IVA» y «Total sin IVA»; el subtotal es la suma de la columna, luego el IVA por alícuota y el total (familia alícuotas; e2e-checklist-factura asevera los importes). El desfase de céntimos entre cantidad × unitario redondeado y el total de línea es el cálculo fiscal de E-05 (ola 3) |
 | E-11 | media | abierto | — |
 | E-12 | media | abierto | — |
 | E-13 | media | abierto | — |
 | E-14 | media | abierto | — |
 | E-15 | media | abierto | — |
-| E-16 | media | cerrado (pendiente de commit) | /admin/igtf: si ya es especial dice «Eres sujeto pasivo especial y no estás percibiendo IGTF»; si no, manda a declararlo con sus fechas |
-| E-17 | media | cerrado (pendiente de commit) | ADR-0071 |
-| E-18 | media | cerrado (pendiente de commit) | catálogo del art. 18.1 por literal (fuente secundaria); el escenario reclasifica la cesta básica como exenta (`corregir-escenario-post.sql`); atún y sardinas no (P-52) |
+| E-16 | media | cerrado (c36753e) | /admin/igtf: si ya es especial dice «Eres sujeto pasivo especial y no estás percibiendo IGTF»; si no, manda a declararlo con sus fechas |
+| E-17 | media | cerrado (c36753e) | ADR-0071 |
+| E-18 | media | cerrado (c36753e) | catálogo del art. 18.1 por literal (fuente secundaria); el escenario reclasifica la cesta básica como exenta (`corregir-escenario-post.sql`); atún y sardinas no (P-52) |
 | E-19 | baja | abierto | — |
 | E-20 | baja | abierto | — |
 | E-21 | baja | abierto | — |
 | E-22 | baja | abierto | — |
 | E-23 | baja | abierto | — |
-| E-24 | baja | cerrado (pendiente de commit) | «(E)» en el 13.8 y adquirente en el 13.7 en EMISION_FACTURAS, en el comentario del PDF y en la descripción OpenAPI del PDF |
+| E-24 | baja | cerrado (c36753e) | «(E)» en el 13.8 y adquirente en el 13.7 en EMISION_FACTURAS, en el comentario del PDF y en la descripción OpenAPI del PDF |
 | F-01 | crítica | abierto | — |
 | F-02 | alta | abierto | — |
 | F-03 | alta | abierto | — |
 | F-04 | alta | abierto | — |
-| F-05 | alta | abierto | — |
+| F-05 | alta | cerrado (pendiente de commit) | la ficha muestra el total a pagar con IGTF del servidor (`/v1/pos/tender`) y registra lo entregado con `igtf_included` (10 USD = 9,71 + 0,29; la cuenta sube 10); `absorb_igtf` por empresa (gasto 5.1.05, no suma a la caja, se entera igual). E2E `e2e-igtf-especial`, pgTAP 098, `pnpm recorrido F`. VALIDAR-CONTABLE P-64 |
 | F-06 | alta | abierto | — |
 | F-07 | alta | abierto | — |
 | F-08 | alta | abierto | — |
-| F-09 | media | cerrado (pendiente de commit) | tras cargar, la lista salta al mes del comprobante |
+| F-09 | media | cerrado (c36753e) | tras cargar, la lista salta al mes del comprobante |
 | F-10 | media | abierto | — |
-| F-11 | media | cerrado (pendiente de commit) | `ar.retention.register` (quien cobra) y `ar.retention.correct` (contador); la reversa queda en R-61 |
+| F-11 | media | cerrado (c36753e) | `ar.retention.register` (quien cobra) y `ar.retention.correct` (contador); la reversa queda en R-61 |
 | F-12 | media | abierto | — |
 | F-13 | media | abierto | — |
 | F-14 | baja | abierto | — |
 | F-15 | baja | abierto | — |
 | F-16 | baja | abierto | — |
 | F-17 | baja | abierto | — |
-| G-01 | crítica | cerrado (pendiente de commit) | ADR-0071 · decidido por criterio: «contingencia…» solo por su camino, alternativa: columna explícita; anular solo sin emitir, alternativa: solo anular y registrar |
-| G-02 | alta | cerrado (pendiente de commit) | la NC y la ND imprimen «Factura que corrige: N° … · Control 00-… · del dd/mm/aaaa · por Bs. …» (arts. 23-24; FC-23, FC-24) |
-| G-03 | alta | cerrado (pendiente de commit) | ver A-06: título «RECIBO DE DEVOLUCIÓN», sin RIF inventado, sin IVA, sin cita a la PA 00071, pie propio; `?copia=1` → 422 |
+| G-01 | crítica | cerrado (c36753e) | ADR-0071 · decidido por criterio: «contingencia…» solo por su camino, alternativa: columna explícita; anular solo sin emitir, alternativa: solo anular y registrar |
+| G-02 | alta | cerrado (c36753e) | la NC y la ND imprimen «Factura que corrige: N° … · Control 00-… · del dd/mm/aaaa · por Bs. …» (arts. 23-24; FC-23, FC-24) |
+| G-03 | alta | cerrado (c36753e) | ver A-06: título «RECIBO DE DEVOLUCIÓN», sin RIF inventado, sin IVA, sin cita a la PA 00071, pie propio; `?copia=1` → 422 |
 | G-04 | alta | abierto | — |
 | G-05 | alta | abierto | — |
-| G-06 | alta | abierto | — |
+| G-06 | alta | cerrado (pendiente de commit) | la devolución deja el IGTF percibido; la NC no lo lleva; el saldo a favor lo excluye; la confirmación devuelve el aviso «el IGTF de X ya fue enterado al SENIAT y no se devuelve» y la pantalla lo muestra; la anulación sigue enviando a reintegro. `pnpm recorrido G`. VALIDAR-TRIBUTARIO P-31 (devolución total del mismo día) |
 | G-07 | alta | abierto | — |
 | G-08 | alta | cerrado (6ceea89) | ADR-0068 |
-| G-09 | media | cerrado (pendiente de commit) | porcentaje por alícuota (parte 1), «Descripción del ajuste: crédito | débito de Bs. X sobre la factura N° …» y «Motivo: …» (el guardado en la nota; el de la devolución para la NC de devolución, probado; «—» si no hay, probado) |
+| G-09 | media | cerrado (c36753e) | porcentaje por alícuota (parte 1), «Descripción del ajuste: crédito | débito de Bs. X sobre la factura N° …» y «Motivo: …» (el guardado en la nota; el de la devolución para la NC de devolución, probado; «—» si no hay, probado) |
 | G-10 | media | abierto | — |
-| G-11 | media | cerrado (pendiente de commit) | la NC y la ND imprimen «Tasa BCV de la factura N° … del dd/mm/aaaa: Bs …» (FC-26); cierra P-20 y P-21 en lo que toca a las notas |
+| G-11 | media | cerrado (c36753e) | la NC y la ND imprimen «Tasa BCV de la factura N° … del dd/mm/aaaa: Bs …» (FC-26); cierra P-20 y P-21 en lo que toca a las notas |
 | G-12 | media | abierto | — |
 | G-13 | media | abierto | — |
 | G-14 | media | abierto | — |
 | G-15 | media | abierto | — |
-| G-16 | media | cerrado (pendiente de commit) | ADR-0071 |
+| G-16 | media | cerrado (c36753e) | ADR-0071 |
 | G-17 | baja | abierto | — |
 | G-18 | baja | abierto | — |
 | G-19 | baja | abierto | — |
 | G-20 | baja | abierto | — |
 | G-21 | baja | abierto | — |
-| H-01 | crítica | abierto | — |
+| H-01 | crítica | cerrado (pendiente de commit) | migración 20261002110000: la empresa especial en la fecha de la factura retiene SOLA al registrar, por los tres caminos (75 % `iva_compras`, 100 % `iva_compras_total` con `iva_retention_full_reason`), sin regla vigente RETENTION_RULE_MISSING; exclusiones del art. 3 como data (`retention_exclusions`) marcables con motivo auditado (`ap.retention_excluded`); contrato API 0.2.0, OpenAPI regenerado. E2E `e2e-retencion-agente`, pgTAP 094, `pnpm recorrido H`. F-88771 y F-89002 no se regularizan solas: VALIDAR-TRIBUTARIO P-63. Revisión y auditoría fiscal (migraciones 20261002110200 y 110300): pantalla de exclusión/100 % en Compras y «Ya llegó la factura»; agente por el día del registro (P-72); sin IVA no se pregunta nada (art. 3 num. 1); 20 UT en los num. 6 y 7 con `tax_units` (P-71); num. 11-12 no marcables; invariante `retention_voucher_gaps()` |
 | H-02 | alta | abierto | — |
 | H-03 | alta | abierto | — |
-| H-04 | alta | abierto | — |
+| H-04 | alta | cerrado (pendiente de commit) | migraciones 20261002110000 y 20261002110100: `retention_vouchers` emitido al registrar, número AAAAMM + 8 por empresa (PA 000054 art. 16, atribución corregida), identidad congelada, vencimiento de entrega calculado y mostrado, entrega una vez, corrección = versión nueva que anula la anterior, uno por operación o por quincena y proveedor, PDF. P-26 implementada (feriados: VALIDAR-TRIBUTARIO) |
 | H-05 | alta | abierto | — |
 | H-06 | alta | abierto | — |
 | H-07 | alta | abierto | — |
@@ -3459,7 +3459,7 @@ Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes 
 | H-09 | media | abierto | — |
 | H-10 | media | abierto | — |
 | H-11 | media | abierto | — |
-| H-12 | media | abierto | — |
+| H-12 | media | cerrado (pendiente de commit) | migración 20261002110000: `purchases_book_with_vouchers` (libro de compras del generador 1.4.0) trae número, fecha e IVA retenido del comprobante emitido en el período; el de otro período sale en el de su emisión como renglón propio con importes en cero. Aserción de cabeceras ampliada (fiscal-books-cabeceras.test.ts) |
 | H-13 | baja | abierto | — |
 | H-14 | baja | abierto | — |
 | H-15 | media | abierto | — |
@@ -3497,24 +3497,24 @@ Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes 
 | K-15 | baja | abierto | — |
 | L-01 | crítica | cerrado (6ceea89) | migración 20260928120000: NC en negativo en libro, pantalla y CSV; pgTAP 074 y 078 |
 | L-02 | alta | cerrado (6ceea89) | conciliación en el gate: pgTAP 074 sin todo, invariante 12 del recorrido, fila en CLAUDE.md §3; 046:170 ya no aplica el signo |
-| L-03 | alta | abierto | — |
-| L-04 | alta | abierto | — |
-| L-05 | alta | abierto | — |
+| L-03 | alta | cerrado (pendiente de commit) | `aTxtRetencionesIva` con los 16 campos de P-7 en su orden, leídos del comprobante (RIF sin guiones, AAAAMM, AAAA-MM-DD, tipo 01/02/03, comprobante de 14), sin versiones anuladas; fixture aprobado `packages/domain/test/fixtures/txt-retenciones-iva-p7.txt`. Aserciones cambiadas con autorización (declarations.test.ts:36-45). VALIDAR-SENIAT: 2 decimales y documentos con varias alícuotas (P-7). Revisión y auditoría fiscal: un documento con varias alícuotas da 422 con su lista (P-69); la corrección de un comprobante ya declarado no se declara otra vez y se avisa (P-65); fixture con `-text` en .gitattributes |
+| L-04 | alta | cerrado (pendiente de commit) | migración 20261002120000: el especial declara por quincena y el ordinario por mes (422 legible con sus dos quincenas, o con su mes); `platform.fiscal_fortnight` y `platform.iva_period_proposal`; `GET /v1/fiscal-declarations/iva-periods/proposal` y la pantalla arranca en esa propuesta (adiós `mesLocalAnterior`). E2E `e2e-declaracion-quincenal`. Revisión (migración 20261002120100): el ordinario declara el mes calendario completo (H5; la entrada de e2e-fiscal-declarations y e2e-ajuste-creditos-anteriores pasa a meses, mismas cifras) y la propuesta evalúa el tipo al cierre del candidato (H3) |
+| L-05 | alta | cerrado (pendiente de commit) | migración 20261002120000: dos arrastres (`excedente_siguiente` = solo crédito fiscal; `retenciones_acumuladas_por_descontar` aparte, con su entrada `retenciones_acumuladas_anteriores`) en el cálculo, la fila, el hash (generador 1.1.0), la API y la pantalla; una fila 1.0.0 con excedente o retenciones no se encadena. P-3 cerrada, P-37 al asesor. Aserción cambiada: e2e-fiscal-declarations:346 y :357 (240 → 0, pasaban gracias a la cifra mezclada) |
 | L-06 | media | cerrado (6ceea89) | discrepancias y coverage_gaps en la conciliación (campos opcionales), con enlaces; concepto en palabras |
 | L-07 | media | cerrado (6ceea89) | anulada con número e importes en cero en libro y CSV (P-34) |
-| L-08 | media | cerrado (pendiente de commit) | libro de ventas por alícuota (`sales_book_by_rate`, con `iva_sin_clasificar`) y resumen del art. 72 (`summary`, y en el hash del exportado); generador 1.3.0. Decidido por criterio: el resumen se descarga como `resumen-art72.csv` de la misma generación y el CSV del libro sigue siendo cabecera + renglones (alternativa: bloque al final del mismo CSV, que exigiría cambiar la aserción de e2e-fiscal-books) |
-| L-09 | media | abierto | — |
+| L-08 | media | cerrado (c36753e) | libro de ventas por alícuota (`sales_book_by_rate`, con `iva_sin_clasificar`) y resumen del art. 72 (`summary`, y en el hash del exportado); generador 1.3.0. Decidido por criterio: el resumen se descarga como `resumen-art72.csv` de la misma generación y el CSV del libro sigue siendo cabecera + renglones (alternativa: bloque al final del mismo CSV, que exigiría cambiar la aserción de e2e-fiscal-books) |
+| L-09 | media | cerrado (pendiente de commit) | migración 20261002120000: PA SNAT/2025/000091 sembrada en `tax_calendar_entries` (970 fechas con norma, gaceta y fuente; 496 pendientes de cotejo y no ofrecidas — la tabla 1.2 entera desde 20261002120100, H1, con P-10 reabierta; desde 20261002120200 las 970, por la duda del terminal del RIF, H11 de la auditoría fiscal, P-10.2), vencimiento por terminal del RIF (`platform.tax_due_date`), `GET /v1/fiscal-declarations/calendar` y su tarjeta en Vencimientos; pgTAP 097. ADR-0052 enmendado. VALIDAR-SENIAT: cotejo con la G.O. 43.283; retenciones de ISLR sin fuente textual, no sembradas |
 | L-10 | media | abierto | — |
-| L-11 | baja | cerrado (pendiente de commit) | la pantalla de libros, el adaptador `csv_columnas_legales` (migración 20260928180200) y R-22 citan el Reglamento de la LIVA arts. 70 a 78 (REGULATORY_STATUS); el CSV sigue siendo NO oficial |
-| L-12 | baja | cerrado (pendiente de commit) | «Retenciones que practicamos (a proveedores)» y «Retenciones que nos practicaron (clientes)» |
+| L-11 | baja | cerrado (c36753e) | la pantalla de libros, el adaptador `csv_columnas_legales` (migración 20260928180200) y R-22 citan el Reglamento de la LIVA arts. 70 a 78 (REGULATORY_STATUS); el CSV sigue siendo NO oficial |
+| L-12 | baja | cerrado (c36753e) | «Retenciones que practicamos (a proveedores)» y «Retenciones que nos practicaron (clientes)» |
 | L-13 | baja | abierto | — |
 | L-14 | baja | abierto | — |
-| L-15 | baja | abierto | — |
+| L-15 | baja | cerrado (pendiente de commit) | `GET /v1/igtf/status` da la quincena en curso y su vencimiento desde `platform.tax_due_date` (null si está pendiente de cotejo, nunca inventado); `quincenaLocal` sale de la web. `pnpm recorrido L` |
 | M-01 | crítica | abierto | — |
 | M-02 | alta | abierto | — |
 | M-03 | media | abierto | — |
 | M-04 | media | abierto | — |
-| M-05 | alta | cerrado (pendiente de commit) | una sola función `formatearDocumento` (packages/schemas/src/rif.ts) para la web y el PDF: el RIF V/E de 9 dígitos sale `V-12345678-9`, nunca agrupado como cédula. Decidido por criterio: un V/E de 9 dígitos es RIF, nunca cédula; la cédula se sigue mostrando `V-12.345.678` |
+| M-05 | alta | cerrado (c36753e) | una sola función `formatearDocumento` (packages/schemas/src/rif.ts) para la web y el PDF: el RIF V/E de 9 dígitos sale `V-12345678-9`, nunca agrupado como cédula. Decidido por criterio: un V/E de 9 dígitos es RIF, nunca cédula; la cédula se sigue mostrando `V-12.345.678` |
 | M-06 | alta | abierto | — |
 | M-07 | media | abierto | — |
 | M-08 | baja | abierto | — |
@@ -3537,12 +3537,12 @@ Línea base al empezar: VERIFY EXIT=0 · 736 pasos · vitest 805 en 19 paquetes 
 | O-01 | alta | abierto | — |
 | O-02 | media | abierto | — |
 | O-03 | media | abierto | — |
-| O-04 | baja | cerrado (pendiente de commit) | «Elige la empresa» y «Cambiar de empresa» usan `rifParaMostrar`, que delega en el formateador compartido: RIF con guiones |
+| O-04 | baja | cerrado (c36753e) | «Elige la empresa» y «Cambiar de empresa» usan `rifParaMostrar`, que delega en el formateador compartido: RIF con guiones |
 | O-05 | media | abierto | — |
 | O-06 | baja | abierto | — |
 | O-07 | baja | abierto | — |
 | P-01 | alta | abierto | — |
-| P-02 | media | cerrado (pendiente de commit) | todos los caminos guardan el documento normalizado; la búsqueda de clientes (y Ctrl+K) compara normalizado; reparación de datos `scripts/reparar/p-02-rif-normalizado.mjs` (función de la migración 20260928170000: idempotente, acta por fila, falla ante duplicados) que corre tras el pull; el CSV de los libros imprime el RIF formateado (generador `fiscal-books/1.2.0`); snapshots emitidos intactos. Revisión 2026-09-28 (criterio §2.16): **decidido por criterio** que el libro de ventas lee el RIF y el nombre del adquirente del snapshot del documento y el de compras del snapshot de la factura (`supplier_invoices.supplier_*_snapshot`, sin backfill), con la proyección del hash sobre el RIF normalizado (migración 20260928170100; alternativa: seguir leyendo el maestro vivo); índices únicos normalizados en proveedores y empresas (alternativa: solo el caso de uso); la búsqueda de proveedores también compara normalizado; la reparación lista además lo que normaliza a vacío. **Aserciones existentes cambiadas** (autorizadas: pasaban gracias a P-02, porque esperaban lo tecleado, y la regla del dueño manda guardar normalizado): (1) `apps/api/test/e2e-customers.test.ts:244-246`, antes `tax_id_anterior: J-E2E-${RUN}` y `tax_id_nuevo: J-NEW-${RUN}`, después `J1${D7}1` y `J2${D7}2`: el acta guarda lo normalizado; (2) `apps/api/test/e2e-company-profile.test.ts:157`, antes `J-88${RUN.slice(0, 6)}-2`, después `J88${D6}2`, por lo mismo; (3) `apps/api/test/e2e-company-profile.test.ts:221`, antes `J-99${RUN.slice(0, 6)}-3`, después `J99${D6}3`, por lo mismo; (4) `packages/domain/test/customers.test.ts:199`, antes `J-${RUN}-NEW`, después `rifDePrueba(7)`; (5) `:204`, antes `J-${RUN}-SEG`, después `rifDePrueba(6)`; (6) `:205`, antes `J-${RUN}-NEW`, después `rifDePrueba(7)`. En (4) a (6), el RIF de base36 ya no es un RIF (422) y el valor esperado es el mismo que se envía, que ya es la forma normalizada |
+| P-02 | media | cerrado (c36753e) | todos los caminos guardan el documento normalizado; la búsqueda de clientes (y Ctrl+K) compara normalizado; reparación de datos `scripts/reparar/p-02-rif-normalizado.mjs` (función de la migración 20260928170000: idempotente, acta por fila, falla ante duplicados) que corre tras el pull; el CSV de los libros imprime el RIF formateado (generador `fiscal-books/1.2.0`); snapshots emitidos intactos. Revisión 2026-09-28 (criterio §2.16): **decidido por criterio** que el libro de ventas lee el RIF y el nombre del adquirente del snapshot del documento y el de compras del snapshot de la factura (`supplier_invoices.supplier_*_snapshot`, sin backfill), con la proyección del hash sobre el RIF normalizado (migración 20260928170100; alternativa: seguir leyendo el maestro vivo); índices únicos normalizados en proveedores y empresas (alternativa: solo el caso de uso); la búsqueda de proveedores también compara normalizado; la reparación lista además lo que normaliza a vacío. **Aserciones existentes cambiadas** (autorizadas: pasaban gracias a P-02, porque esperaban lo tecleado, y la regla del dueño manda guardar normalizado): (1) `apps/api/test/e2e-customers.test.ts:244-246`, antes `tax_id_anterior: J-E2E-${RUN}` y `tax_id_nuevo: J-NEW-${RUN}`, después `J1${D7}1` y `J2${D7}2`: el acta guarda lo normalizado; (2) `apps/api/test/e2e-company-profile.test.ts:157`, antes `J-88${RUN.slice(0, 6)}-2`, después `J88${D6}2`, por lo mismo; (3) `apps/api/test/e2e-company-profile.test.ts:221`, antes `J-99${RUN.slice(0, 6)}-3`, después `J99${D6}3`, por lo mismo; (4) `packages/domain/test/customers.test.ts:199`, antes `J-${RUN}-NEW`, después `rifDePrueba(7)`; (5) `:204`, antes `J-${RUN}-SEG`, después `rifDePrueba(6)`; (6) `:205`, antes `J-${RUN}-NEW`, después `rifDePrueba(7)`. En (4) a (6), el RIF de base36 ya no es un RIF (422) y el valor esperado es el mismo que se envía, que ya es la forma normalizada |
 | P-03 | media | abierto | — |
 | P-04 | media | abierto | — |
 | P-05 | media | abierto | — |

@@ -39,6 +39,11 @@ const FACTURA = crypto.randomUUID();
 const RUN = Date.now().toString(36);
 const HOY = diaCaracas();
 const DESDE = `${HOY.slice(0, 8)}01`;
+// H5 (2026-10-02): el ordinario declara el mes calendario completo, hasta su último día.
+const HASTA = (() => {
+  const [a, m] = HOY.split("-").map(Number) as [number, number];
+  return `${HOY.slice(0, 8)}${String(new Date(Date.UTC(a, m, 0)).getUTCDate()).padStart(2, "0")}`;
+})();
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -137,7 +142,7 @@ describe("R-2 ampliada — la casilla de ajustes de créditos anteriores, distin
     const r = await pedir("POST", "/v1/fiscal-declarations/iva-periods", {
       company_id: COMPANY,
       period_from: DESDE,
-      period_to: HOY,
+      period_to: HASTA,
     });
     expect(r.status, await r.clone().text()).toBe(201);
     const p = (await r.json()) as Record<string, unknown>;
@@ -174,10 +179,10 @@ describe("R-2 ampliada — la casilla de ajustes de créditos anteriores, distin
              retenciones_soportadas::text as retenciones_soportadas,
              cuota_a_pagar::text as cuota_a_pagar, excedente_siguiente::text as excedente_siguiente,
              detalle, ajuste_creditos_anteriores::text as ajuste_creditos_anteriores
-        from platform.recompute_iva_period(${COMPANY}, ${DESDE}::date, ${HOY}::date, 0)`;
+        from platform.recompute_iva_period(${COMPANY}, ${DESDE}::date, ${HASTA}::date, 0)`;
     const base = {
       period_from: DESDE,
-      period_to: HOY,
+      period_to: HASTA,
       excedente_anterior: "0",
       debitos: c!.debitos,
       creditos: c!.creditos,

@@ -71,6 +71,11 @@ const ROTULO: Record<string, string> = {
   alicuota_reducida: "Alícuota reducida",
   base_gravada_sin_alicuota: "Base gravada sin alícuota",
   iva_sin_clasificar: "IVA sin clasificar",
+  // H1 y H5 (auditoría fiscal 2.ª ronda): el IGTF aparte y el comprobante soportado.
+  igtf_percibido: "IGTF percibido (no es venta)",
+  retention_receipt_number: "Comprobante de retención recibido",
+  retention_received_on: "Entregado el",
+  retention_iva: "IVA retenido (comprobante recibido)",
   // compras
   invoice_id: "Id",
   invoice_date: "Fecha de factura",
@@ -88,6 +93,20 @@ const ROTULO: Record<string, string> = {
   // retenciones (IVA e ISLR)
   retention_id: "Id",
   receipt_number: "N.º de comprobante",
+  // ADR-0072 §4 y §6 (H-04, H-12): el comprobante de retención como documento.
+  voucher_number: "Comprobante (14 dígitos)",
+  version_no: "Versión",
+  delivered_on: "Entregado el",
+  delivery_due_on: "Entregar a más tardar",
+  supplier_address: "Domicilio del proveedor",
+  document_type: "Tipo de documento",
+  affected_document: "Documento afectado",
+  exempt_amount: "Exento",
+  iva_amount: "IVA causado",
+  tax_rate: "Alícuota %",
+  retention_voucher_number: "Comprobante de retención",
+  retention_voucher_date: "Fecha del comprobante",
+  retention_voucher_iva: "IVA retenido (comprobante)",
   receipt_series: "Serie del comprobante",
   fiscal_period: "Período fiscal",
   base_amount: "Base",
@@ -109,6 +128,7 @@ const COLUMNAS_OCULTAS: ReadonlySet<string> = new Set([
   "document_id",
   "invoice_id",
   "retention_id",
+  "voucher_id",
   "journal_entry_id",
   // K-04: se enseñan DENTRO de la fecha de factura, como marca, no como columnas sueltas.
   "booked_on",
@@ -129,6 +149,7 @@ const VALOR_LEGIBLE: Record<string, Record<string, string>> = {
     annulled: "Anulada",
     posted: "Registrada",
     ajuste_periodo_anterior: "Ajuste de período anterior",
+    comprobante_retencion: "Comprobante de retención",
   },
   receipt_status: { issued: "Emitido", annulled: "Anulado", draft: "Borrador" },
   customer_taxpayer_type: {
@@ -166,6 +187,11 @@ const COLUMNAS_DINERO: ReadonlySet<string> = new Set([
   "base_gravada_sin_alicuota",
   "iva_sin_clasificar",
   "retenido_iva",
+  "retention_voucher_iva",
+  "igtf_percibido",
+  "retention_iva",
+  "exempt_amount",
+  "iva_amount",
   "retenido_islr",
   "total_amount",
   "base_amount",
@@ -174,7 +200,14 @@ const COLUMNAS_DINERO: ReadonlySet<string> = new Set([
 ]);
 
 /** Columnas con fecha calendario («YYYY-MM-DD»): se enseñan como dd/mm/aaaa. */
-const COLUMNAS_FECHA: ReadonlySet<string> = new Set(["issued_on", "invoice_date"]);
+const COLUMNAS_FECHA: ReadonlySet<string> = new Set([
+  "issued_on",
+  "invoice_date",
+  "delivered_on",
+  "delivery_due_on",
+  "retention_voucher_date",
+  "retention_received_on",
+]);
 
 /** «supplier_document_ref» → «Supplier document ref», si la clave no tiene rótulo. */
 function humanizar(clave: string): string {

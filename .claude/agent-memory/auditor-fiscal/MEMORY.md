@@ -1,2 +1,2 @@
-- [Normas verificadas](normas_verificadas.md) — una linea por norma: PA 00071 (arts. 2/6/13/15/26-27/30/31/33), RLIVA 72-78, IGTF, 000054, 000091, Decreto 4.079 (16 %), LIVA 27/61-64, art. 18, Decreto 5.196, TXT v3, PA 1677, UT; lista de NO verificados
+- [Normas verificadas](normas_verificadas.md) — una linea por norma: PA 00071, RLIVA 72-78, PA 000013 (art. 1 sin mediacion bancaria), 000054 (arts. 2/3/5/7/16), 000091 (terminal discrepante), TXT v3, LIVA, UT; NO verificados
 - [Hook solo memoria](project_hook_solo_memoria.md) — auditor-fiscal no puede escribir en docs/; entregar texto listo en el informe

@@ -143,6 +143,16 @@ export const RegisterPaymentRequest = z
      * no se admite: aplicar un crédito no mete efectivo en ninguna cuenta.
      */
     account_id: uuid.optional(),
+    /**
+     * F-05 (RESPUESTA §2.6; revisión 11, decidido por criterio «nunca se registra dinero que no
+     * entró»). POR OMISIÓN (sin el campo, o `true`) `amount` es lo que el cliente ENTREGÓ, con el
+     * IGTF dentro: si el pago causa IGTF, el servidor lo reparte como la caja —base + IGTF(base) =
+     * entregado— y lo que no alcance queda pendiente en el documento. Con `false`, `amount` es lo
+     * que ABONA al documento y el IGTF se percibe aparte: solo para quien ya repartió lo entregado
+     * con el mismo cálculo (`/v1/pos/tender`). CAMBIO DE COMPORTAMIENTO del contrato: antes, por
+     * omisión, el IGTF se percibía ADEMÁS de `amount`.
+     */
+    igtf_included: z.boolean().optional(),
   })
   .strict();
 export type RegisterPaymentRequest = z.infer<typeof RegisterPaymentRequest>;
@@ -353,6 +363,8 @@ export const IgtfOnPayment = z
     rate: z.string(),
     amount: z.string(),
     functional_amount: z.string(),
+    /** F-05: la asumió la empresa (`absorb_igtf`): el cliente no la pagó; se entera igual. */
+    absorbed: z.boolean(),
   })
   .strict();
 export type IgtfOnPayment = z.infer<typeof IgtfOnPayment>;
@@ -366,6 +378,22 @@ export const RegisterPaymentResponse = z
     document_status: DocumentStatus,
     /** null cuando el pago no causó IGTF. */
     igtf: IgtfOnPayment.nullable(),
+    /**
+     * E-03 (RESPUESTA §2.6, aditivo): la Nota de Débito por IGTF que documenta la percepción de
+     * un cobro POSTERIOR a la factura (fiado o abono). null si no hubo percepción, si la empresa
+     * la absorbe, o si el cobro es el de la propia venta (el IGTF va impreso en la factura).
+     */
+    igtf_debit_note: z
+      .object({
+        id: uuid,
+        series: z.string(),
+        document_number: z.number().int().nullable(),
+        /** El control impreso (00-00001234), o null fuera de forma libre. */
+        control_display: z.string().nullable(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 export type RegisterPaymentResponse = z.infer<typeof RegisterPaymentResponse>;
@@ -651,6 +679,21 @@ export const ReturnResponse = z
     ),
     /** El saldo a favor que generó la nota de crédito, si ya se confirmó. */
     customer_credit_id: uuid.nullable(),
+    /**
+     * G-06 (RESPUESTA §2.6, aditivo; solo al confirmar): el IGTF que se percibió en el cobro de
+     * la factura devuelta. La percepción fue debida y se entera: la NC no lo lleva y el reembolso
+     * lo excluye. `notice` es el texto que la pantalla muestra tal cual. null si no hubo IGTF.
+     */
+    igtf_not_refunded: z
+      .object({
+        amount: z.string(),
+        currency: z.string(),
+        functional_amount: z.string(),
+        notice: z.string(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 export type ReturnResponse = z.infer<typeof ReturnResponse>;

@@ -53,6 +53,13 @@ import type {
 } from "../../lib.js";
 import { hoyLocal, fechaLocal } from "../../fechas.js";
 import { useConFacturas } from "../../app/modo-venta.js";
+import {
+  ComprobantesRetencion,
+  RetencionIvaCampos,
+  cuerpoRetencionIva,
+  eleccionCompleta,
+  type EleccionRetencion,
+} from "../../components/RetencionIva.js";
 import { tasaLimpia } from "../../tasa.js";
 
 /** «2026-08-19» → «agosto de 2026». Solo presentación: el mes lo decidió la API. */
@@ -94,6 +101,7 @@ export function Compras(): React.JSX.Element {
           {puedeOrdenar && <TabsTab value="nueva">Nueva orden</TabsTab>}
           <TabsTab value="cxp">Cuentas por pagar</TabsTab>
           {conFacturas && <TabsTab value="retenciones">Reglas de retención</TabsTab>}
+          {conFacturas && <TabsTab value="comprobantes">Comprobantes de retención</TabsTab>}
         </TabsList>
         <TabsPanel value="ordenes">
           <Ordenes />
@@ -109,6 +117,11 @@ export function Compras(): React.JSX.Element {
         {conFacturas && (
           <TabsPanel value="retenciones">
             <Retenciones />
+          </TabsPanel>
+        )}
+        {conFacturas && (
+          <TabsPanel value="comprobantes">
+            <ComprobantesRetencion />
           </TabsPanel>
         )}
       </Tabs>
@@ -1777,10 +1790,13 @@ function RegistrarFacturaProveedor({
   );
   const [error, setError] = useState<unknown>(null);
   const [ocupado, setOcupado] = useState(false);
+  // ADR-0072 §3 (H7): la exclusión o el 100 %, solo si la empresa es agente.
+  const [retencion, setRetencion] = useState<EleccionRetencion>({ tipo: "normal" });
 
   const listo =
     nroFactura.trim() !== "" &&
     nroControl.trim() !== "" &&
+    eleccionCompleta(retencion) &&
     lineas.some((l) => l.quantity.trim() !== "" && l.unit_price.trim() !== "");
 
   async function registrar(): Promise<void> {
@@ -1798,6 +1814,7 @@ function RegistrarFacturaProveedor({
           supplier_control_number: nroControl.trim(),
           invoice_date: fecha,
           currency: detalle.order.transaction_currency,
+          ...cuerpoRetencionIva(retencion),
           lines: lineas
             .filter((l) => l.quantity.trim() !== "" && l.unit_price.trim() !== "")
             .map((l) => ({
@@ -1857,6 +1874,7 @@ function RegistrarFacturaProveedor({
               {(a) => <DatePicker id={a.id} value={fecha} onChange={setFecha} />}
             </FormField>
           </div>
+          <RetencionIvaCampos valor={retencion} onCambio={setRetencion} />
           <div className="space-y-2">
             {lineas.map((l, i) => (
               <div key={l.clave} className="flex items-center gap-2">

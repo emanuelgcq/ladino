@@ -26,6 +26,7 @@ import { negocioRoutes } from "./routes/negocio.js";
 import { fiscalSetupRoutes } from "./routes/fiscal-setup.js";
 import { contingencyRoutes } from "./routes/contingency.js";
 import type { StorageConfig } from "./config.js";
+import { retentionVoucherRoutes } from "./routes/retention-vouchers.js";
 import type { BcvConfig } from "./bcv.js";
 
 export interface AppConfig {
@@ -179,6 +180,7 @@ export function buildApp(cfg: AppConfig): Hono {
   salesRoutes(app, cfg.sql, idempotencia, cfg.bcv);
   accountingRoutes(app, cfg.sql, idempotencia);
   purchasesRoutes(app, cfg.sql, idempotencia);
+  retentionVoucherRoutes(app, cfg.sql, idempotencia);
   fiscalBooksRoutes(app, cfg.sql, idempotencia);
   fiscalDeclarationsRoutes(app, cfg.sql, idempotencia);
   igtfRoutes(app, cfg.sql, idempotencia);

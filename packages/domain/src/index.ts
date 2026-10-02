@@ -86,6 +86,7 @@ export {
   pasoDeCobro,
   percibirIgtf,
   avisoIgtf,
+  igtfQueSePide,
   type SalesError,
 } from "./sales.js";
 export {
@@ -116,6 +117,13 @@ export {
   closePurchaseOrder,
   type PurchaseError,
 } from "./purchases.js";
+export {
+  correctRetentionVoucher,
+  deliverRetentionVoucher,
+  setRetentionVoucherMode,
+  leerComprobante,
+  type RetentionVoucherError,
+} from "./retention-vouchers.js";
 export {
   createAccount,
   updateAccount,
@@ -188,8 +196,12 @@ export {
   registerSupportedRetention,
   generateIvaPeriod,
   loadFiscalDeadlines,
+  proposeIvaPeriod,
+  listTaxCalendar,
   IVA_PERIOD_GENERATOR_VERSION,
   type DeclarationsError,
+  type IvaPeriodProposal,
+  type TaxCalendarEntry,
 } from "./declarations.js";
 export {
   enableIgtf,

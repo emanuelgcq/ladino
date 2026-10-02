@@ -1,6 +1,6 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ShieldCheck } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DateRangePicker, FormField } from "../../components/forms.js";
@@ -8,15 +8,13 @@ import { Button } from "../../ui/button.js";
 import { Badge } from "../../ui/badge.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../ui/card.js";
 import { Skeleton } from "../../ui/card.js";
-import { Switch } from "../../ui/switch.js";
 import { Table, TBody, TD, TDNum, TH, THead, TR } from "../../ui/table.js";
-import { Textarea } from "../../ui/input.js";
 import { useToast } from "../../ui/toast.js";
 import { mostrarImporte } from "../../money.js";
 import { mostrarPorcentaje } from "../../porcentaje.js";
+import { fechaLocal } from "../../fechas.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { errorDePersona, type IgtfPerceptions, type IgtfStatus } from "../../lib.js";
-import { quincenaLocal } from "../../fechas.js";
 
 /** El permiso REAL que exigen enable / instruments / taxpayer-type (packages/domain/src/igtf.ts). */
 const PERMISO_CONFIGURAR = "company.settings.manage";
@@ -45,11 +43,6 @@ function tasaTexto(estado: IgtfStatus | undefined): string {
  * incómodos —`otro`, y la ausencia de exenciones cargadas— en vez de decidir
  * en silencio.
  */
-function quincenaActual(): { from: string; to: string } {
-  // La quincena del día de CARACAS, no del día UTC (CLAUDE.md §3).
-  const q = quincenaLocal();
-  return { from: q.desde, to: q.hasta };
-}
 
 const ROTULO: Record<string, string> = {
   efectivo_bs: "Efectivo en bolívares",
@@ -66,11 +59,14 @@ const ROTULO: Record<string, string> = {
 
 export function Igtf(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
-  const [rango, setRango] = useState(quincenaActual());
+  // L-15: la quincena en curso la calcula el SERVIDOR (CLAUDE.md §7: cero reglas tributarias en
+  // la web). Mientras el usuario no elija otra, se usa la que trae el estado.
+  const [elegido, setRango] = useState<{ from: string; to: string } | null>(null);
   const estado = useQuery({
     queryKey: ["igtf-status", empresa.id],
     queryFn: () => llamar<IgtfStatus>("/v1/igtf/status"),
   });
+  const rango = elegido ?? estado.data?.fortnight ?? { from: "", to: "" };
 
   return (
     <div>
@@ -90,10 +86,11 @@ export function Igtf(): React.JSX.Element {
             Reintentar
           </Button>
         </div>
-      ) : estado.data.enabled !== true ? (
-        <Activacion estado={estado.data} />
+      ) : estado.data.perceiving !== true ? (
+        <NoPercibe estado={estado.data} />
       ) : (
         <div className="space-y-4">
+          <Absorcion estado={estado.data} />
           <Instrumentos estado={estado.data} />
           <Card>
             <CardContent className="flex flex-wrap items-end gap-3 pt-4">
@@ -102,6 +99,17 @@ export function Igtf(): React.JSX.Element {
                   <DateRangePicker from={rango.from} to={rango.to} onChange={(r) => setRango(r)} />
                 )}
               </FormField>
+              {/* L-15: el vencimiento lo da el servidor desde el calendario (PA SNAT/2025/000091). */}
+              {rango.from === estado.data.fortnight.from && (
+                <p className="text-[0.85rem] text-muted-foreground">
+                  {estado.data.fortnight.due.status === "secondary_source" &&
+                  estado.data.fortnight.due.date !== null
+                    ? `Esta quincena vence el ${fechaLocal(estado.data.fortnight.due.date)}.`
+                    : estado.data.fortnight.due.status === "pending_review"
+                      ? "El vencimiento de esta quincena está pendiente de cotejo en el calendario: no se muestra una fecha sin confirmar."
+                      : "No hay calendario cargado para esta quincena: consulta el vencimiento con tu asesor."}
+                </p>
+              )}
             </CardContent>
           </Card>
           {/* La clave reinicia la página al cambiar la quincena. */}
@@ -112,27 +120,59 @@ export function Igtf(): React.JSX.Element {
   );
 }
 
-function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.Element {
+/**
+ * Re-revisión 7: la percepción NO se activa. Percibe quien el SENIAT designó sujeto pasivo
+ * especial, desde la notificación de la providencia, según el tipo DECLARADO (ADR-0072 §1-2). Aquí
+ * solo se explica y se lleva a declarar el tipo.
+ */
+function NoPercibe({ estado }: { estado: IgtfStatus | undefined }): React.JSX.Element {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Esta empresa no percibe IGTF hoy</CardTitle>
+        <CardDescription>
+          Percibe IGTF quien el SENIAT designó sujeto pasivo especial, desde la fecha de
+          notificación de la providencia. Ladino lo sabe por el tipo de contribuyente que
+          declaraste: si eres especial, declara el tipo con esa fecha y la percepción empieza sola.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {estado?.rate !== null && estado?.rate !== undefined && (
+          <p className="text-[0.88rem] text-muted-foreground">
+            Regla vigente: <strong>{mostrarPorcentaje(estado.rate)}</strong>. {estado.legal_source}
+          </p>
+        )}
+        <Link
+          to="/admin/configuracion"
+          className="text-[0.9rem] font-medium text-accent underline-offset-2 hover:underline"
+        >
+          Declarar el tipo de contribuyente (Configuración → Mi empresa)
+        </Link>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * F-05: quién paga el IGTF. Por omisión el cliente (la caja lo suma al total); si la empresa lo
+ * asume, el cliente paga el documento justo y el IGTF se asienta como gasto. Se entera igual.
+ */
+function Absorcion({ estado }: { estado: IgtfStatus }): React.JSX.Element {
   const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
-  // Que la pantalla esconda el botón no es control de acceso (el servidor lo
-  // repite); es no ofrecer un acto que va a fallar.
-  const puedeConfigurar = puede(PERMISO_CONFIGURAR);
-  const [acta, setActa] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [enviando, setEnviando] = useState(false);
-
-  async function activar(): Promise<void> {
+  async function cambiar(valor: boolean): Promise<void> {
     setError(null);
     setEnviando(true);
     try {
-      await llamar<IgtfStatus>("/v1/igtf/enable", {
-        method: "POST",
+      await llamar("/v1/company-settings", {
+        method: "PUT",
         headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ company_id: empresa.id, reason: acta }),
+        body: JSON.stringify({ absorb_igtf: valor }),
       });
-      toast.success("Percepción activada", "Desde ahora, cada pago en divisas que cause percibe.");
+      toast.success(valor ? "La empresa asume el IGTF" : "El cliente paga el IGTF");
       await qc.invalidateQueries({ queryKey: ["igtf-status", empresa.id] });
     } catch (e) {
       setError(e);
@@ -140,159 +180,71 @@ function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.E
       setEnviando(false);
     }
   }
-
-  // E-16 (ADR-0072 §1): el tipo VIGENTE HOY lo sirve el servidor en la empresa de la sesión.
-  const esEspecial = empresa.taxpayer_type_code === "especial";
-
   return (
     <Card>
       <CardHeader>
-        <CardTitle>La percepción está apagada</CardTitle>
+        <CardTitle>Quién paga el IGTF</CardTitle>
         <CardDescription>
-          Solo percibe IGTF quien el SENIAT designó sujeto pasivo especial. Si es tu caso, actívala
-          y deja escrito por qué: esa nota queda en la auditoría con la providencia citada.
+          {estado.absorbs
+            ? "La empresa lo asume: el cliente paga el documento justo y el IGTF se registra como gasto. Se entera igual."
+            : "El cliente: la caja lo suma al total a pagar en divisas. Si el cliente entrega solo el documento, lo que falta queda pendiente."}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-2">
         <MensajeError error={error} />
-        {estado?.rate !== null && estado?.rate !== undefined && (
-          <p className="text-[0.88rem] text-muted-foreground">
-            Regla vigente: <strong>{mostrarPorcentaje(estado.rate)}</strong>. {estado.legal_source}
-          </p>
-        )}
-        {!puedeConfigurar ? (
-          <p className="text-[0.88rem] text-muted-foreground">
-            Activarla, o clasificar la empresa, exige el permiso{" "}
-            <code className="text-[0.82rem]">{PERMISO_CONFIGURAR}</code>. Pídeselo a quien
-            administra la empresa.
-          </p>
-        ) : (
-          <>
-            {esEspecial ? (
-              <p className="rounded-md bg-warning-soft px-3 py-2 text-[0.88rem] text-warning-soft-foreground">
-                <strong>Eres sujeto pasivo especial y no estás percibiendo IGTF.</strong> Cada pago
-                en divisas que recibas debería llevar su IGTF
-                {/* La alícuota la sirve el servidor (regla con fuente), nunca escrita aquí. */}
-                {estado?.rate != null ? ` (${mostrarPorcentaje(estado.rate)})` : ""}. Actívala abajo
-                con el acta.
-              </p>
-            ) : (
-              <div className="rounded-md border border-border bg-surface-muted px-3 py-2">
-                <p className="text-[0.88rem]">
-                  ¿El SENIAT designó a esta empresa <strong>sujeto pasivo especial</strong>?
-                  Decláralo en <strong>Configuración → Mi empresa → Tipo de contribuyente</strong>{" "}
-                  con la fecha de notificación de la providencia; después vuelve aquí a activar la
-                  percepción.
-                </p>
-              </div>
-            )}
-            <FormField label="Por qué esta empresa percibe (queda en la auditoría)">
-              {(a) => (
-                <Textarea
-                  id={a.id}
-                  value={acta}
-                  rows={3}
-                  placeholder="Ej.: Designada sujeto pasivo especial según notificación del SENIAT del …"
-                  onChange={(e) => setActa(e.target.value)}
-                />
-              )}
-            </FormField>
-            <Button onClick={() => void activar()} disabled={enviando || acta.trim().length < 10}>
-              <ShieldCheck className="mr-2 h-4 w-4" />
-              Activar la percepción
-            </Button>
-          </>
+        {puede(PERMISO_CONFIGURAR) && (
+          <Button
+            variant="secondary"
+            disabled={enviando}
+            onClick={() => void cambiar(!estado.absorbs)}
+          >
+            {estado.absorbs ? "Que lo pague el cliente" : "Que lo asuma la empresa"}
+          </Button>
         )}
       </CardContent>
     </Card>
   );
 }
 
+/**
+ * Qué forma de pago causa IGTF (auditoría fiscal, PA SNAT/2022/000013 art. 1): pagos en divisas o
+ * criptoactivos SIN mediación de instituciones financieras. Es data de la plataforma con su fuente
+ * (el servidor la sirve); la empresa no la cambia. Aquí solo se enseña: sin interruptores.
+ */
 function Instrumentos({ estado }: { estado: IgtfStatus }): React.JSX.Element {
-  const { empresa, llamar, puede } = useSesion();
-  const toast = useToast();
-  const qc = useQueryClient();
-  const [error, setError] = useState<unknown>(null);
-  // Mientras un cambio viaja, los interruptores se bloquean: dos clics
-  // seguidos sobre el mismo mandaban dos PUT con dos claves distintas.
-  const [cambiando, setCambiando] = useState(false);
-  const puedeConfigurar = puede(PERMISO_CONFIGURAR);
-
-  async function cambiar(instrument: string, causes: boolean): Promise<void> {
-    setError(null);
-    setCambiando(true);
-    try {
-      await llamar("/v1/igtf/instruments", {
-        method: "PUT",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ company_id: empresa.id, instrument, causes }),
-      });
-      toast.success(
-        causes
-          ? `${ROTULO[instrument] ?? instrument} ahora causa`
-          : `${ROTULO[instrument] ?? instrument} ya no causa`,
-        "Aplica a los cobros siguientes; lo ya percibido no cambia.",
-      );
-      await qc.invalidateQueries({ queryKey: ["igtf-status", empresa.id] });
-    } catch (e) {
-      setError(e);
-    } finally {
-      setCambiando(false);
-    }
-  }
-
-  const otroCausa = estado.instruments.find((i) => i.instrument === "otro")?.causes === true;
-
   return (
     <Card>
       <CardHeader>
         <CardTitle>Qué forma de pago causa IGTF</CardTitle>
         <CardDescription>
-          Solo causa un pago en moneda distinta a la de tus libros. De esos, marca los que de verdad
-          son una transacción en divisas.
+          Un sujeto pasivo especial percibe {tasaTexto(estado)} en los pagos en divisas o
+          criptoactivos que recibe sin mediación de instituciones financieras (PA SNAT/2022/000013
+          art. 1). La lista la fija la norma, no la empresa; cada forma de pago dice su fuente.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <MensajeError error={error} />
-        <p
-          role="note"
-          className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-[0.88rem] text-warning-soft-foreground"
-        >
-          Ladino no trae cargada ninguna exención del IGTF: mientras no las cargue tu asesor, todo
-          pago que encaje aquí <strong>percibe</strong>. Y «Otro» viene apagado a propósito — bajo
-          ese nombre suele esconderse un pago en bolívares, y percibirle {tasaTexto(estado)} sería
-          cobrarle al cliente un impuesto que no causó.
-          {otroCausa && (
-            <>
-              {" "}
-              <strong>Lo tienes encendido:</strong> revisa que ahí solo entren pagos en divisas.
-            </>
-          )}
-        </p>
-        {!puedeConfigurar && (
-          <p className="text-[0.85rem] text-muted-foreground">
-            Cambiar el catálogo exige el permiso{" "}
-            <code className="text-[0.82rem]">{PERMISO_CONFIGURAR}</code>: aquí se ve, no se toca.
-          </p>
-        )}
+      <CardContent>
         <Table>
           <THead>
             <TR>
               <TH>Forma de pago</TH>
-              <TH className="text-right">Causa IGTF</TH>
+              <TH className="text-right">¿Causa IGTF?</TH>
             </TR>
           </THead>
           <TBody>
             {estado.instruments.map((i) => (
               <TR key={i.instrument}>
-                <TD>{ROTULO[i.instrument] ?? i.instrument}</TD>
+                <TD>
+                  {ROTULO[i.instrument] ?? i.instrument}
+                  {i.legal_source != null && (
+                    <span className="block text-[0.78rem] text-muted-foreground">
+                      {i.legal_source}
+                    </span>
+                  )}
+                </TD>
                 <TD className="text-right">
-                  <Switch
-                    checked={i.causes}
-                    disabled={cambiando || !puedeConfigurar}
-                    aria-label={`${ROTULO[i.instrument] ?? i.instrument} causa IGTF`}
-                    onCheckedChange={(v) => void cambiar(i.instrument, v)}
-                  />
+                  <Badge tone={i.causes ? "warning" : "neutral"}>
+                    {i.causes ? "Sí, en divisas" : "No"}
+                  </Badge>
                 </TD>
               </TR>
             ))}

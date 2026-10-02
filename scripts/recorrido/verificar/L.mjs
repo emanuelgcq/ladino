@@ -7,6 +7,7 @@
  * L-07 / G-10: la factura anulada A-6 de E2 va en el libro con su número e importes en cero.
  */
 import { comprobaciones, pedir, afirmar, sql, EMPRESAS, PERSONAS } from "./_app.mjs";
+import { pedir as pedirIgtf, EMPRESAS as EMP_IGTF, PERSONAS as PER_IGTF } from "./_app.mjs";
 
 const c = comprobaciones("L");
 
@@ -120,6 +121,152 @@ c.caso(
     );
     afirmar(lib.includes("Retenciones que practicamos (a proveedores)"), "Libros sin el nombre");
     afirmar(!dec.includes("Retenciones que nos hicieron"), "queda el nombre viejo");
+  },
+);
+
+// ── Ola 2 · L-04 / L-05 / L-09 (ADR-0072 §7 y §8, migración 20261002120000) ──
+c.caso(
+  "L-09",
+  "la PA 000091 está sembrada con su fuente, y las celdas ⚠ no se ofrecen",
+  async () => {
+    const [n] = await sql`
+      select count(*)::int as total,
+             count(*) filter (where review_status = 'pending_review')::int as pendientes
+        from public.tax_calendar_entries where legal_norm = 'PA SNAT/2025/000091'`;
+    afirmar(n.total === 970, `filas sembradas: ${n.total} (esperaba 970)`);
+    // Todas pendientes desde 20261002120200 (H11): el terminal del RIF está en duda (P-10.2).
+    afirmar(n.pendientes === 970, `pendientes de cotejo: ${n.pendientes} (esperaba 970)`);
+    // E3 es especial de terminal 6: el calendario le aplica, pero no se ofrece ninguna fecha
+    // hasta el cotejo; las de octubre se cuentan como pendientes.
+    const r = await pedir(
+      PERSONAS.duenoE2E3,
+      "E3",
+      "GET",
+      "/v1/fiscal-declarations/calendar?from=2026-10-01&to=2026-10-31",
+    );
+    afirmar(r.status === 200, `esperaba 200, llegó ${r.status}: ${r.texto.slice(0, 200)}`);
+    afirmar(r.json?.rif_terminal === 6, `terminal de E3: ${r.json?.rif_terminal}`);
+    afirmar(r.json?.applies === true, "a E3 (especial) el calendario debía aplicarle");
+    afirmar(
+      Array.isArray(r.json?.items) && r.json.items.length === 0,
+      `se ofrecen fechas pendientes de cotejo: ${JSON.stringify(r.json?.items)?.slice(0, 200)}`,
+    );
+    afirmar(r.json?.pending_review > 0, "las fechas de octubre debían contarse como pendientes");
+  },
+);
+
+c.caso(
+  "L-04",
+  "a E3 (especial) se le propone la quincena y el mes completo se rechaza con sus dos quincenas",
+  async () => {
+    const p = await pedir(
+      PERSONAS.duenoE2E3,
+      "E3",
+      "GET",
+      "/v1/fiscal-declarations/iva-periods/proposal",
+    );
+    afirmar(p.status === 200, `propuesta: ${p.status} ${p.texto.slice(0, 200)}`);
+    afirmar(p.json?.periodicity === "quincenal", `periodicidad propuesta: ${p.json?.periodicity}`);
+    const r = await pedir(PERSONAS.duenoE2E3, "E3", "POST", "/v1/fiscal-declarations/iva-periods", {
+      company_id: EMPRESAS.E3,
+      period_from: "2026-10-01",
+      period_to: "2026-10-31",
+    });
+    afirmar(r.status === 422, `el mes de octubre debía dar 422; llegó ${r.status}`);
+    afirmar(
+      /por quincena/.test(r.json?.message ?? "") &&
+        (r.json?.message ?? "").includes("del 01-10-2026 al 15-10-2026") &&
+        (r.json?.message ?? "").includes("del 16-10-2026 al 31-10-2026"),
+      `mensaje: ${r.json?.message}`,
+    );
+    const fs = await import("node:fs");
+    const dec = fs.readFileSync("apps/web/src/pages/libros/Declaraciones.tsx", "utf8");
+    afirmar(!dec.includes("mesLocalAnterior"), "la pantalla sigue calculando el mes anterior");
+  },
+);
+
+c.caso(
+  "L-05",
+  "el arrastre de E3 sale en dos cifras: 34.667,30 de crédito y 2.688,92 de retenciones",
+  async () => {
+    const [x] = await sql`
+      select excedente_siguiente::text as credito,
+             retenciones_acumuladas_por_descontar::text as retenciones
+        from platform.recompute_iva_period(${EMPRESAS.E3}, '2026-09-01', '2026-09-30', 0, 0)`;
+    afirmar(!cero(x.retenciones), `retenciones por descontar: ${x.retenciones}`);
+    // Lo que solo produce el arreglo: antes salía una sola cifra de 37.356,224768.
+    afirmar(
+      x.credito.startsWith("34667.30") && x.retenciones.startsWith("2688.92"),
+      `crédito ${x.credito}, retenciones ${x.retenciones}`,
+    );
+  },
+);
+
+c.caso(
+  "L-15",
+  "la quincena del IGTF la da el servidor: /v1/igtf/status trae la quincena en curso",
+  async () => {
+    const st = await pedirIgtf(PER_IGTF.duenoE2E3, "E3", "GET", "/v1/igtf/status");
+    const [q] = await sql`
+    with d as (select (now() at time zone 'America/Caracas')::date as d)
+    select (case when extract(day from d) <= 15 then date_trunc('month', d)::date
+                 else date_trunc('month', d)::date + 15 end)::text as desde,
+           (case when extract(day from d) <= 15 then date_trunc('month', d)::date + 14
+                 else (date_trunc('month', d) + interval '1 month - 1 day')::date end)::text as hasta
+      from d`;
+    afirmar(
+      st.json?.fortnight?.from === q.desde && st.json.fortnight.to === q.hasta,
+      `quincena: ${st.texto}`,
+    );
+  },
+);
+
+c.caso(
+  "L-03",
+  "el TXT de retenciones de E3 del mes sigue los 16 campos de P-7 (RIF sin guiones, fecha AAAA-MM-DD, comprobante de 14)",
+  async () => {
+    // Una compra de E3 con retención automática (H-01) para que el TXT no salga vacío.
+    const [base] = await sql`
+      select i.supplier_id, l.product_id
+        from public.supplier_invoices i
+        join public.supplier_invoice_lines l on l.supplier_invoice_id = i.id
+       where i.company_id = ${EMPRESAS.E3} and i.supplier_document_number = 'F-89002'
+       limit 1`;
+    afirmar(base, "no está F-89002 en E3");
+    const [hoy] = await sql`
+      select (now() at time zone 'America/Caracas')::date::text as d,
+             to_char(date_trunc('month', (now() at time zone 'America/Caracas')), 'YYYY-MM-DD') as desde`;
+    const run = Date.now().toString(36);
+    const f = await pedir(PERSONAS.duenoE2E3, "E3", "POST", "/v1/supplier-invoices", {
+      company_id: EMPRESAS.E3,
+      supplier_id: base.supplier_id,
+      supplier_document_number: `L03-${run}`,
+      supplier_control_number: `00-L${run}`,
+      invoice_date: hoy.d,
+      currency: "VES",
+      lines: [{ product_id: base.product_id, quantity: "1", unit_price: "1000" }],
+    });
+    afirmar(f.status === 201, `registrar: ${f.status} ${f.texto.slice(0, 200)}`);
+    const r = await pedir(PERSONAS.duenoE2E3, "E3", "POST", "/v1/fiscal-books/export", {
+      company_id: EMPRESAS.E3,
+      book_kind: "retenciones_iva",
+      period_from: hoy.desde,
+      period_to: hoy.d,
+      format_code: "txt_retenciones_iva",
+      timezone: "America/Caracas",
+    });
+    afirmar(r.status === 201, `exportar: ${r.status} ${r.texto.slice(0, 200)}`);
+    const linea = r.json.content.split("\r\n").find((l) => l.includes(`L03-${run}\t`));
+    afirmar(linea, "la compra no está en el TXT del mes");
+    const campos = linea.split("\t");
+    // Lo que solo produce el arreglo: 16 campos (antes 17), RIF sin guiones, fecha ISO, campo 4 «C».
+    afirmar(campos.length === 16, `campos: ${campos.length} (antes del arreglo, 17)`);
+    afirmar(/^[JVEGPC]\d{9}$/.test(campos[0]), `RIF del agente: ${campos[0]}`);
+    afirmar(campos[2] === hoy.d, `fecha: ${campos[2]}`);
+    afirmar(campos[3] === "C" && campos[4] === "01", `C/V y tipo: ${campos[3]} ${campos[4]}`);
+    afirmar(!campos[5].includes("-"), `RIF del proveedor: ${campos[5]}`);
+    afirmar(/^\d{14}$/.test(campos[12]), `comprobante: ${campos[12]}`);
+    afirmar(campos[10] === "120.00", `IVA retenido: ${campos[10]}`);
   },
 );
 
