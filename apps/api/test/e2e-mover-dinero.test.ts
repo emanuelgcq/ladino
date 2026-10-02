@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
  * EL DINERO DEL NEGOCIO (ADR-0062, migración 61). Cuatro cosas que el QA de pantalla del
@@ -110,6 +111,7 @@ beforeAll(async () => {
                                            functional_currency_code, taxpayer_type_code)
              values (${COMPANY}, ${TENANT}, ${`J-MOV-${RUN}`}, 'Bodega del dinero', 'VES',
                      'ordinario')`;
+    await declararTipoDeFixture(tx, COMPANY);
     await tx`insert into public.warehouses (id, tenant_id, company_id, code, name)
              values (${W1}, ${TENANT}, ${COMPANY}, 'E2E-MDW1', 'Local')`;
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values

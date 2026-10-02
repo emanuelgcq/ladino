@@ -27,11 +27,7 @@ import { Input } from "../../ui/input.js";
 import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
-import {
-  ImportarArchivo,
-  PLANTILLA_PRODUCTOS,
-  NOTA_FORMATO_PRODUCTOS,
-} from "../../components/importar.js";
+import { ImportarProductos } from "../../components/importar-productos.js";
 import { BotonEscanear } from "../../components/EscanerCodigo.js";
 import { tasaLimpia } from "../../tasa.js";
 import { ACEPTA_FOTOS, subirFotoProducto } from "../../components/foto.js";
@@ -748,17 +744,7 @@ export function ImportarExcel({
   onCerrar: () => void;
   onListo: () => void;
 }): React.JSX.Element {
-  return (
-    <ImportarArchivo
-      titulo="Importar productos"
-      descripcion="Descarga la plantilla, llénala en Excel o en cualquier editor, y súbela. Las filas buenas entran; las malas se explican con su número."
-      notaFormato={NOTA_FORMATO_PRODUCTOS}
-      endpoint="/v1/products/import"
-      plantilla={PLANTILLA_PRODUCTOS}
-      onCerrar={onCerrar}
-      onListo={onListo}
-    />
-  );
+  return <ImportarProductos onCerrar={onCerrar} onListo={onListo} />;
 }
 
 /**

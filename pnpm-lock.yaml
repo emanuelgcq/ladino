@@ -186,6 +186,9 @@ importers:
       '@ladino/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@ladino/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@ladino/fiscal':
         specifier: workspace:*
         version: link:../../packages/fiscal

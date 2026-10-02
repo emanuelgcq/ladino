@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { formatearDocumento } from "@ladino/schemas";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -269,7 +270,7 @@ export function Ventas(): React.JSX.Element {
                   return r.items.map((c) => ({
                     id: c.id,
                     label: c.legal_name,
-                    ...(c.tax_id === null ? {} : { detalle: c.tax_id }),
+                    ...(c.tax_id === null ? {} : { detalle: formatearDocumento(c.tax_id) }),
                   }));
                 }}
               />

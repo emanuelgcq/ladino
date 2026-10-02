@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { formatearDocumento } from "@ladino/schemas";
 import { Link, useNavigate, useParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, BookOpenCheck, FileMinus2, FilePlus2, HandCoins, Undo2 } from "lucide-react";
@@ -10,6 +11,7 @@ import { DualMoney } from "../../components/DualMoney.js";
 import { FiscalStatusBadge } from "../../components/FiscalStatusBadge.js";
 import { ExchangeDiffIndicator } from "../../components/ExchangeDiffIndicator.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
+import { ImprimirFormaLibre } from "../../components/ImprimirFormaLibre.js";
 import { Button } from "../../ui/button.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../ui/dialog.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card.js";
@@ -26,6 +28,7 @@ import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import { useConFacturas } from "../../app/modo-venta.js";
 import { KIND_LABEL, MensajeError, numeroDe } from "./comunes.js";
 import { CobrarDocumento } from "../../components/CobrarDocumento.js";
+import { CargarRetencion } from "../libros/Declaraciones.js";
 import {
   nombreDeInstrumento,
   type FormaDePago as FormaConfigurada,
@@ -53,6 +56,8 @@ interface Documento {
   series: string;
   document_number: number | null;
   control_number: number | null;
+  /** El control ya vestido por el servidor, `00-00001234` (ADR-0071 §4). */
+  control_display: string | null;
   status: string;
   issued_at: string | null;
   annulled_at: string | null;
@@ -128,6 +133,7 @@ export function DetalleFactura(): React.JSX.Element {
   const qc = useQueryClient();
   const toast = useToast();
   const [anulando, setAnulando] = useState(false);
+  const [imprimiendo, setImprimiendo] = useState(false);
   const [motivo, setMotivo] = useState("");
   const [pagando, setPagando] = useState(false);
   const [devolviendo, setDevolviendo] = useState(false);
@@ -266,13 +272,22 @@ export function DetalleFactura(): React.JSX.Element {
     doc.status === "issued" &&
     payments.length === 0;
   const nombreDoc = doc.kind === "receipt" ? "recibo" : "factura";
+  // Solo la factura, la NC y la ND son fiscales: la cotización y el pedido imprimen «PDF» a secas (H2).
+  const esFiscal =
+    doc.kind === "invoice" || doc.kind === "credit_note" || doc.kind === "debit_note";
 
   /**
-   * La COPIA imprime «SIN DERECHO A CRÉDITO FISCAL» (PA 00071 art. 13.13):
-   * existía en el generador sin ningún botón (Nivel C de la auditoría).
+   * Los destinos del PDF (ADR-0071 §4): sin destino, la COPIA DE CORTESÍA (lo que se descarga o
+   * se envía; no es la factura); `papel`, para imprimir SOBRE la forma libre, con lo preimpreso en
+   * blanco; `vista`, la vista previa con lo preimpreso sombreado. La COPIA impresa lleva «SIN
+   * DERECHO A CRÉDITO FISCAL» (PA 00071 art. 13.13). La web solo pide: el servidor arma el papel.
    */
-  function abrirPdf(copia: boolean): void {
-    void abrirPdfApi(`/v1/documents/${doc.id}/pdf${copia ? "?copia=1" : ""}`, empresa.id, (m) =>
+  function abrirPdf(destino: "cortesia" | "papel" | "vista", copia = false): void {
+    const params = new URLSearchParams();
+    if (destino !== "cortesia") params.set("destino", destino);
+    if (copia) params.set("copia", "1");
+    const q = params.toString();
+    void abrirPdfApi(`/v1/documents/${doc.id}/pdf${q === "" ? "" : `?${q}`}`, empresa.id, (m) =>
       toast.error("No se pudo abrir el PDF", m),
     );
   }
@@ -304,7 +319,7 @@ export function DetalleFactura(): React.JSX.Element {
         title={`${KIND_LABEL[doc.kind] ?? doc.kind} ${numeroDe(doc)}`}
         description={
           cliente.data !== undefined
-            ? `${cliente.data.legal_name}${cliente.data.tax_id === null ? "" : ` · ${cliente.data.tax_id}`}`
+            ? `${cliente.data.legal_name}${cliente.data.tax_id === null ? "" : ` · ${formatearDocumento(cliente.data.tax_id)}`}`
             : undefined
         }
         actions={
@@ -317,15 +332,31 @@ export function DetalleFactura(): React.JSX.Element {
             )}
             {doc.document_number !== null && (
               <>
-                <Button variant="ghost" onClick={() => void abrirPdf(false)}>
-                  PDF
+                <Button variant="ghost" onClick={() => void abrirPdf("cortesia")}>
+                  {esFiscal ? "PDF de cortesía" : "PDF"}
                 </Button>
-                {doc.kind !== "receipt" && (
-                  <Button variant="ghost" onClick={() => void abrirPdf(true)}>
-                    PDF copia
+                {/* El recibo y el recibo de devolución no son fiscales: ni forma libre ni copia
+                    fiscal (A-06). */}
+                {esFiscal && doc.control_display !== null && (
+                  <Button variant="ghost" onClick={() => setImprimiendo(true)}>
+                    Imprimir en la forma libre
                   </Button>
                 )}
               </>
+            )}
+            {/* F-11 (ADR-0072 §5): quien cobra carga aquí el comprobante de retención que el
+                cliente entrega al pagar. El propio componente exige ar.retention.register. */}
+            {doc.kind === "invoice" && doc.status === "issued" && esFiscal && (
+              <CargarRetencion
+                inicial={{
+                  cliente: { id: doc.customer_id, label: "El cliente de esta factura" },
+                  factura: {
+                    id: doc.id,
+                    label: numeroDocumento(doc.series, doc.document_number),
+                  },
+                }}
+                onCargado={() => invalidarTrasCambio()}
+              />
             )}
             {cobrable &&
               balance !== null &&
@@ -635,7 +666,7 @@ export function DetalleFactura(): React.JSX.Element {
               <CardContent className="space-y-2 text-[0.85rem]">
                 {doc.control_number !== null && (
                   <Fila etiqueta="N.º de control">
-                    <span className="font-mono">{doc.control_number}</span>
+                    <span className="font-mono">{doc.control_display ?? doc.control_number}</span>
                   </Fila>
                 )}
                 {conFacturas && (
@@ -672,6 +703,14 @@ export function DetalleFactura(): React.JSX.Element {
           )}
         </div>
       </div>
+
+      {imprimiendo && (
+        <ImprimirFormaLibre
+          documentId={doc.id}
+          controlDisplay={doc.control_display}
+          onClose={() => setImprimiendo(false)}
+        />
+      )}
 
       <ConfirmDialog
         open={anulando}
@@ -1023,8 +1062,8 @@ function Devolucion({
       );
       onClose(true);
     } catch (e) {
+      // G-16: el diálogo ya enseña el aviso (MensajeError); un toast encima era el segundo.
       setError(e);
-      toast.error("No se pudo devolver", errorDePersona(e));
     } finally {
       setOcupado(false);
     }
@@ -1201,8 +1240,8 @@ function NotaCreditoDirecta({
       );
       onClose(true);
     } catch (e) {
+      // G-16: el diálogo ya enseña el aviso (MensajeError); un toast encima era el segundo.
       setError(e);
-      toast.error("No se pudo emitir la nota de crédito", errorDePersona(e));
     } finally {
       setOcupado(false);
     }
@@ -1331,8 +1370,8 @@ function NotaDebito({
       );
       onClose(true);
     } catch (e) {
+      // G-16: el diálogo ya enseña el aviso (MensajeError); un toast encima era el segundo.
       setError(e);
-      toast.error("No se pudo emitir la nota de débito", errorDePersona(e));
     } finally {
       setOcupado(false);
     }

@@ -46,12 +46,15 @@ insert into public.company_fiscal_regimes (id, tenant_id, company_id, regime_cod
    'aaaa0043-0000-4000-8000-0000000000a1', 'sin_facturacion', '2026-01-01'),
   ('aaaa0043-0000-4000-8000-00000000e102', 'aaaa0043-0000-4000-8000-00000000000a',
    'aaaa0043-0000-4000-8000-0000000000a2', 'formatos_libres', '2026-01-01');
-insert into public.customers (id, tenant_id, company_id, legal_name,
+-- El cliente de la facturadora lleva su cédula: sobre forma libre la factura identifica al
+-- adquirente (PA 00071 art. 13.7, P-57, migraciones 20260928190400/190500).
+insert into public.customers (id, tenant_id, company_id, tax_id, legal_name,
                               person_type_code, taxpayer_type_code) values
   ('aaaa0043-0000-4000-8000-00000000c001', 'aaaa0043-0000-4000-8000-00000000000a',
-   'aaaa0043-0000-4000-8000-0000000000a1', 'Vecino 43', 'natural', 'consumidor_final'),
+   'aaaa0043-0000-4000-8000-0000000000a1', null, 'Vecino 43', 'natural', 'consumidor_final'),
   ('aaaa0043-0000-4000-8000-00000000c002', 'aaaa0043-0000-4000-8000-00000000000a',
-   'aaaa0043-0000-4000-8000-0000000000a2', 'Cliente 43', 'natural', 'consumidor_final');
+   'aaaa0043-0000-4000-8000-0000000000a2', 'V4343434', 'Cliente 43', 'natural',
+   'consumidor_final');
 
 -- ── 1. Las columnas de perfil existen y el CHECK muerde ──────────────────────
 select is(
@@ -92,6 +95,19 @@ select is(platform.company_has_fiscal_documents('aaaa0043-0000-4000-8000-0000000
   false, 'sin documentos, false: el RIF se puede tocar');
 
 -- El negocio de recibos EMITE un recibo…
+-- ADR-0072 §1 (migración 20260928190100): el montaje declara el tipo de contribuyente de sus
+-- empresas con RIF; sin tipo vigente la base no deja emitir factura, NC ni ND (LAD98).
+insert into public.company_taxpayer_types
+  (tenant_id, company_id, taxpayer_type_code, effective_from, notified_on, reason, rules_version)
+select c.tenant_id, c.id,
+       case when c.taxpayer_type_code in ('ordinario', 'especial', 'formal')
+            then c.taxpayer_type_code else 'ordinario' end,
+       '2000-01-01', case when c.taxpayer_type_code = 'especial' then '2000-01-01'::date end,
+       'Montaje pgTAP: el tipo que declara la empresa de prueba', 'pgtap'
+  from public.companies c
+ where c.created_at = now() and upper(btrim(c.tax_id)) not like 'PEND-%'
+   and not exists (select 1 from public.company_taxpayer_types h where h.company_id = c.id);
+
 insert into public.documents
   (id, tenant_id, company_id, kind, series, customer_id, status, issued_at, document_number,
    regime_version_id, rules_version,

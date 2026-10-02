@@ -264,6 +264,30 @@
           "activity_start_date": {
             "type": "string",
             "format": "date"
+          },
+          "taxpayer": {
+            "type": "object",
+            "properties": {
+              "taxpayer_type_code": {
+                "type": "string",
+                "enum": [
+                  "ordinario",
+                  "especial"
+                ]
+              },
+              "notified_on": {
+                "type": "string",
+                "format": "date"
+              },
+              "effective_from": {
+                "type": "string",
+                "format": "date"
+              }
+            },
+            "required": [
+              "taxpayer_type_code"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -603,6 +627,15 @@
           "stock_quantity": {
             "type": "string",
             "nullable": true
+          },
+          "reference_cost_amount": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
+          "reference_cost_currency": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -750,6 +783,15 @@
                 "stock_quantity": {
                   "type": "string",
                   "nullable": true
+                },
+                "reference_cost_amount": {
+                  "type": "string",
+                  "nullable": true,
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "reference_cost_currency": {
+                  "type": "string",
+                  "nullable": true
                 }
               },
               "required": [
@@ -819,6 +861,15 @@
           "tax_category_code": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]{0,39}$"
+          },
+          "reduced_rate_literal": {
+            "type": "string",
+            "pattern": "^64(\\.[0-9a-z]+)+$"
+          },
+          "tax_category_justification": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 500
           },
           "category_id": {
             "type": "string",
@@ -1079,6 +1130,15 @@
               "stock_quantity": {
                 "type": "string",
                 "nullable": true
+              },
+              "reference_cost_amount": {
+                "type": "string",
+                "nullable": true,
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "reference_cost_currency": {
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [
@@ -1283,6 +1343,12 @@
                 },
                 "name": {
                   "type": "string"
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 }
               },
               "required": [
@@ -1298,6 +1364,563 @@
           "created",
           "failed",
           "rows"
+        ],
+        "additionalProperties": false
+      },
+      "ProductImportPreviewResponse": {
+        "type": "object",
+        "properties": {
+          "number_format": {
+            "type": "string",
+            "enum": [
+              "comma_decimal",
+              "dot_decimal"
+            ]
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "file_hash": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "ready": {
+            "type": "integer"
+          },
+          "rejected": {
+            "type": "integer"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "row": {
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "ready",
+                    "rejected"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "name": {
+                  "type": "string"
+                },
+                "sku": {
+                  "type": "string"
+                },
+                "barcode": {
+                  "type": "string"
+                },
+                "category_name": {
+                  "type": "string"
+                },
+                "is_service": {
+                  "type": "boolean"
+                },
+                "price": {
+                  "type": "object",
+                  "properties": {
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    },
+                    "currency": {
+                      "type": "string",
+                      "pattern": "^[A-Z]{3}$"
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "currency"
+                  ],
+                  "additionalProperties": false
+                },
+                "initial_stock": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "quantity": {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    },
+                    "unit_cost": {
+                      "type": "object",
+                      "properties": {
+                        "amount": {
+                          "type": "string",
+                          "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                        },
+                        "currency": {
+                          "type": "string",
+                          "pattern": "^[A-Z]{3}$"
+                        }
+                      },
+                      "required": [
+                        "amount",
+                        "currency"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "quantity",
+                    "unit_cost"
+                  ],
+                  "additionalProperties": false
+                },
+                "reference_cost": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    },
+                    "currency": {
+                      "type": "string",
+                      "pattern": "^[A-Z]{3}$"
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "currency"
+                  ],
+                  "additionalProperties": false
+                },
+                "updates_existing": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "row",
+                "status",
+                "warnings"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "rejected_rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "row": {
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "ready",
+                    "rejected"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "name": {
+                  "type": "string"
+                },
+                "sku": {
+                  "type": "string"
+                },
+                "barcode": {
+                  "type": "string"
+                },
+                "category_name": {
+                  "type": "string"
+                },
+                "is_service": {
+                  "type": "boolean"
+                },
+                "price": {
+                  "type": "object",
+                  "properties": {
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    },
+                    "currency": {
+                      "type": "string",
+                      "pattern": "^[A-Z]{3}$"
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "currency"
+                  ],
+                  "additionalProperties": false
+                },
+                "initial_stock": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "quantity": {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    },
+                    "unit_cost": {
+                      "type": "object",
+                      "properties": {
+                        "amount": {
+                          "type": "string",
+                          "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                        },
+                        "currency": {
+                          "type": "string",
+                          "pattern": "^[A-Z]{3}$"
+                        }
+                      },
+                      "required": [
+                        "amount",
+                        "currency"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "quantity",
+                    "unit_cost"
+                  ],
+                  "additionalProperties": false
+                },
+                "reference_cost": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    },
+                    "currency": {
+                      "type": "string",
+                      "pattern": "^[A-Z]{3}$"
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "currency"
+                  ],
+                  "additionalProperties": false
+                },
+                "updates_existing": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "row",
+                "status",
+                "warnings"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "warned_rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "row": {
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "ready",
+                    "rejected"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "name": {
+                  "type": "string"
+                },
+                "sku": {
+                  "type": "string"
+                },
+                "barcode": {
+                  "type": "string"
+                },
+                "category_name": {
+                  "type": "string"
+                },
+                "is_service": {
+                  "type": "boolean"
+                },
+                "price": {
+                  "type": "object",
+                  "properties": {
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    },
+                    "currency": {
+                      "type": "string",
+                      "pattern": "^[A-Z]{3}$"
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "currency"
+                  ],
+                  "additionalProperties": false
+                },
+                "initial_stock": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "quantity": {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    },
+                    "unit_cost": {
+                      "type": "object",
+                      "properties": {
+                        "amount": {
+                          "type": "string",
+                          "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                        },
+                        "currency": {
+                          "type": "string",
+                          "pattern": "^[A-Z]{3}$"
+                        }
+                      },
+                      "required": [
+                        "amount",
+                        "currency"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "quantity",
+                    "unit_cost"
+                  ],
+                  "additionalProperties": false
+                },
+                "reference_cost": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    },
+                    "currency": {
+                      "type": "string",
+                      "pattern": "^[A-Z]{3}$"
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "currency"
+                  ],
+                  "additionalProperties": false
+                },
+                "updates_existing": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "row",
+                "status",
+                "warnings"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "suspected_format": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "comma_decimal",
+              "dot_decimal"
+            ]
+          }
+        },
+        "required": [
+          "number_format",
+          "file_name",
+          "file_hash",
+          "total",
+          "ready",
+          "rejected",
+          "rows",
+          "rejected_rows",
+          "warned_rows",
+          "suspected_format"
+        ],
+        "additionalProperties": false
+      },
+      "ProductImportJobResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "file_hash": {
+            "type": "string"
+          },
+          "number_format": {
+            "type": "string",
+            "enum": [
+              "comma_decimal",
+              "dot_decimal"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "failed"
+            ]
+          },
+          "total_rows": {
+            "type": "integer"
+          },
+          "processed_rows": {
+            "type": "integer"
+          },
+          "created_count": {
+            "type": "integer"
+          },
+          "updated_count": {
+            "type": "integer"
+          },
+          "rejected_count": {
+            "type": "integer"
+          },
+          "report": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "row": {
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "created",
+                    "updated",
+                    "rejected"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "name": {
+                  "type": "string"
+                },
+                "sku": {
+                  "type": "string"
+                },
+                "product_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "reference_cost": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    },
+                    "currency": {
+                      "type": "string",
+                      "pattern": "^[A-Z]{3}$"
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "currency"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "row",
+                "status",
+                "warnings"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "last_error": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string",
+            "nullable": true
+          },
+          "reused": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "company_id",
+          "file_name",
+          "file_hash",
+          "number_format",
+          "status",
+          "total_rows",
+          "processed_rows",
+          "created_count",
+          "updated_count",
+          "rejected_count",
+          "report",
+          "last_error",
+          "created_at",
+          "finished_at",
+          "reused"
         ],
         "additionalProperties": false
       },
@@ -1348,6 +1971,15 @@
           "tax_category_code": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]{0,39}$"
+          },
+          "reduced_rate_literal": {
+            "type": "string",
+            "pattern": "^64(\\.[0-9a-z]+)+$"
+          },
+          "tax_category_justification": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 500
           }
         },
         "required": [
@@ -3541,6 +4173,14 @@
             "type": "integer",
             "nullable": true
           },
+          "control_identifier": {
+            "type": "string",
+            "nullable": true
+          },
+          "control_display": {
+            "type": "string",
+            "nullable": true
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -3623,6 +4263,8 @@
           "series",
           "document_number",
           "control_number",
+          "control_identifier",
+          "control_display",
           "status",
           "issued_at",
           "annulled_at",
@@ -3678,6 +4320,14 @@
               },
               "control_number": {
                 "type": "integer",
+                "nullable": true
+              },
+              "control_identifier": {
+                "type": "string",
+                "nullable": true
+              },
+              "control_display": {
+                "type": "string",
                 "nullable": true
               },
               "status": {
@@ -3762,6 +4412,8 @@
               "series",
               "document_number",
               "control_number",
+              "control_identifier",
+              "control_display",
               "status",
               "issued_at",
               "annulled_at",
@@ -4069,6 +4721,14 @@
                   "type": "integer",
                   "nullable": true
                 },
+                "control_identifier": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "control_display": {
+                  "type": "string",
+                  "nullable": true
+                },
                 "status": {
                   "type": "string",
                   "enum": [
@@ -4151,6 +4811,8 @@
                 "series",
                 "document_number",
                 "control_number",
+                "control_identifier",
+                "control_display",
                 "status",
                 "issued_at",
                 "annulled_at",
@@ -4210,7 +4872,7 @@
           },
           "series": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9-]{1,30}$"
+            "pattern": "^[A-Za-z0-9-]{0,30}$"
           },
           "lines": {
             "type": "array",
@@ -4280,7 +4942,7 @@
           },
           "series": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9-]{1,30}$"
+            "pattern": "^[A-Za-z0-9-]{0,30}$"
           },
           "lines": {
             "type": "array",
@@ -4372,7 +5034,7 @@
           },
           "series": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9-]{1,30}$"
+            "pattern": "^[A-Za-z0-9-]{0,30}$"
           },
           "lines": {
             "type": "array",
@@ -5190,7 +5852,11 @@
           },
           "series": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9-]{1,30}$"
+            "pattern": "^[A-Za-z0-9-]{0,30}$"
+          },
+          "printer_identifier": {
+            "type": "string",
+            "pattern": "^\\d{2}$"
           },
           "range_from": {
             "type": "string",
@@ -5205,6 +5871,29 @@
             "minLength": 1,
             "maxLength": 200
           },
+          "printer_legal_name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 200
+          },
+          "printer_tax_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20
+          },
+          "printer_authorization": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 100
+          },
+          "printer_authorization_date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "printed_on": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
           "alert_threshold_pct": {
             "type": "integer",
             "minimum": 0,
@@ -5213,11 +5902,9 @@
         },
         "required": [
           "company_id",
-          "kind",
           "series",
           "range_from",
-          "range_to",
-          "printer_source"
+          "range_to"
         ],
         "additionalProperties": false
       },
@@ -5229,9 +5916,13 @@
             "format": "uuid"
           },
           "kind": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "series": {
+            "type": "string"
+          },
+          "printer_identifier": {
             "type": "string"
           },
           "range_from": {
@@ -5254,6 +5945,32 @@
           "printer_source": {
             "type": "string"
           },
+          "printer_legal_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "printer_tax_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "printer_authorization": {
+            "type": "string",
+            "nullable": true
+          },
+          "printer_authorization_date": {
+            "type": "string",
+            "nullable": true
+          },
+          "printed_on": {
+            "type": "string",
+            "nullable": true
+          },
+          "printer_data_complete": {
+            "type": "boolean"
+          },
+          "is_contingency": {
+            "type": "boolean"
+          },
           "remaining": {
             "type": "integer"
           }
@@ -5262,12 +5979,135 @@
           "id",
           "kind",
           "series",
+          "printer_identifier",
           "range_from",
           "range_to",
           "next_available",
           "status",
           "printer_source",
+          "printer_legal_name",
+          "printer_tax_id",
+          "printer_authorization",
+          "printer_authorization_date",
+          "printed_on",
+          "printer_data_complete",
+          "is_contingency",
           "remaining"
+        ],
+        "additionalProperties": false
+      },
+      "CompleteFiscalRangePrinterRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "printer_legal_name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 200
+          },
+          "printer_tax_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20
+          },
+          "printer_authorization": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 100
+          },
+          "printer_authorization_date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "printed_on": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "printer_identifier": {
+            "type": "string",
+            "pattern": "^\\d{2}$"
+          }
+        },
+        "required": [
+          "company_id",
+          "printer_legal_name",
+          "printer_tax_id",
+          "printer_authorization",
+          "printer_authorization_date",
+          "printed_on"
+        ],
+        "additionalProperties": false
+      },
+      "CorrectFiscalRangePrinterRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "printer_legal_name": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 200
+          },
+          "printer_tax_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20
+          },
+          "printer_authorization": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 100
+          },
+          "printer_authorization_date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "printed_on": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "printer_identifier": {
+            "type": "string",
+            "pattern": "^\\d{2}$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "company_id",
+          "printer_legal_name",
+          "printer_tax_id",
+          "printer_authorization",
+          "printer_authorization_date",
+          "printed_on",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "CancelFiscalRangeRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "company_id",
+          "reason"
         ],
         "additionalProperties": false
       },
@@ -5501,6 +6341,12 @@
             "type": "string",
             "nullable": true,
             "format": "uuid"
+          },
+          "print_control_number": {
+            "type": "boolean"
+          },
+          "rows_per_free_form": {
+            "type": "integer"
           }
         },
         "required": [
@@ -5509,7 +6355,9 @@
           "allow_unidentified_sales",
           "default_tax_category_code",
           "default_warehouse_id",
-          "default_price_list_id"
+          "default_price_list_id",
+          "print_control_number",
+          "rows_per_free_form"
         ],
         "additionalProperties": false
       },
@@ -5524,6 +6372,14 @@
           },
           "allow_unidentified_sales": {
             "type": "boolean"
+          },
+          "print_control_number": {
+            "type": "boolean"
+          },
+          "rows_per_free_form": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 18
           },
           "default_price_list_id": {
             "type": "string",
@@ -5605,13 +6461,42 @@
               "legal_source"
             ],
             "additionalProperties": false
+          },
+          "iva_catalog": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "rate": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "rate_min": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "rate_max": {
+                "type": "string",
+                "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+              },
+              "legal_source": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "rate",
+              "rate_min",
+              "rate_max",
+              "legal_source"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
           "regimes",
           "current_regime",
           "sales_mode",
-          "iva_general"
+          "iva_general",
+          "iva_catalog"
         ],
         "additionalProperties": false
       },
@@ -5639,6 +6524,10 @@
           "rate": {
             "type": "string",
             "pattern": "^0(\\.\\d{1,4})?$"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date"
           }
         },
         "required": [
@@ -5659,12 +6548,16 @@
           "accepted_on": {
             "type": "string",
             "format": "date"
+          },
+          "changed": {
+            "type": "boolean"
           }
         },
         "required": [
           "rate",
           "rules_created",
-          "accepted_on"
+          "accepted_on",
+          "changed"
         ],
         "additionalProperties": false
       },
@@ -6297,7 +7190,7 @@
           },
           "series": {
             "type": "string",
-            "pattern": "^[A-Za-z0-9-]{1,30}$"
+            "pattern": "^[A-Za-z0-9-]{0,30}$"
           },
           "price_list_id": {
             "type": "string",
@@ -6427,6 +7320,14 @@
                 "type": "integer",
                 "nullable": true
               },
+              "control_identifier": {
+                "type": "string",
+                "nullable": true
+              },
+              "control_display": {
+                "type": "string",
+                "nullable": true
+              },
               "status": {
                 "type": "string",
                 "enum": [
@@ -6509,6 +7410,8 @@
               "series",
               "document_number",
               "control_number",
+              "control_identifier",
+              "control_display",
               "status",
               "issued_at",
               "annulled_at",
@@ -7084,6 +7987,14 @@
                 "type": "integer",
                 "nullable": true
               },
+              "control_identifier": {
+                "type": "string",
+                "nullable": true
+              },
+              "control_display": {
+                "type": "string",
+                "nullable": true
+              },
               "status": {
                 "type": "string",
                 "enum": [
@@ -7166,6 +8077,8 @@
               "series",
               "document_number",
               "control_number",
+              "control_identifier",
+              "control_display",
               "status",
               "issued_at",
               "annulled_at",
@@ -7229,6 +8142,10 @@
                 "unit_price": {
                   "type": "string",
                   "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
+                "source_line_id": {
+                  "type": "string",
+                  "format": "uuid"
                 }
               },
               "required": [
@@ -7240,6 +8157,13 @@
             },
             "minItems": 1,
             "maxItems": 200
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "corrects_invoice",
+              "new_concept"
+            ]
           }
         },
         "required": [
@@ -11613,6 +12537,10 @@
                       "type": "integer",
                       "nullable": true
                     },
+                    "control_identifier": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "control_number": {
                       "type": "integer",
                       "nullable": true
@@ -11661,6 +12589,42 @@
                       "type": "string",
                       "nullable": true,
                       "format": "uuid"
+                    },
+                    "base_alicuota_general": {
+                      "type": "string"
+                    },
+                    "iva_alicuota_general": {
+                      "type": "string"
+                    },
+                    "alicuota_general": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "base_alicuota_adicional": {
+                      "type": "string"
+                    },
+                    "iva_alicuota_adicional": {
+                      "type": "string"
+                    },
+                    "alicuota_adicional": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "base_alicuota_reducida": {
+                      "type": "string"
+                    },
+                    "iva_alicuota_reducida": {
+                      "type": "string"
+                    },
+                    "alicuota_reducida": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "base_gravada_sin_alicuota": {
+                      "type": "string"
+                    },
+                    "iva_sin_clasificar": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -11669,6 +12633,7 @@
                     "kind",
                     "series",
                     "document_number",
+                    "control_identifier",
                     "control_number",
                     "status",
                     "customer_tax_id",
@@ -11683,7 +12648,18 @@
                     "base_sin_clasificar",
                     "iva_debito",
                     "total_amount",
-                    "journal_entry_id"
+                    "journal_entry_id",
+                    "base_alicuota_general",
+                    "iva_alicuota_general",
+                    "alicuota_general",
+                    "base_alicuota_adicional",
+                    "iva_alicuota_adicional",
+                    "alicuota_adicional",
+                    "base_alicuota_reducida",
+                    "iva_alicuota_reducida",
+                    "alicuota_reducida",
+                    "base_gravada_sin_alicuota",
+                    "iva_sin_clasificar"
                   ],
                   "additionalProperties": false
                 },
@@ -11770,6 +12746,42 @@
                     },
                     "received_late": {
                       "type": "boolean"
+                    },
+                    "base_alicuota_general": {
+                      "type": "string"
+                    },
+                    "iva_alicuota_general": {
+                      "type": "string"
+                    },
+                    "alicuota_general": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "base_alicuota_adicional": {
+                      "type": "string"
+                    },
+                    "iva_alicuota_adicional": {
+                      "type": "string"
+                    },
+                    "alicuota_adicional": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "base_alicuota_reducida": {
+                      "type": "string"
+                    },
+                    "iva_alicuota_reducida": {
+                      "type": "string"
+                    },
+                    "alicuota_reducida": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "base_gravada_sin_alicuota": {
+                      "type": "string"
+                    },
+                    "iva_sin_clasificar": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -11797,7 +12809,18 @@
                     "total_amount",
                     "journal_entry_id",
                     "booked_on",
-                    "received_late"
+                    "received_late",
+                    "base_alicuota_general",
+                    "iva_alicuota_general",
+                    "alicuota_general",
+                    "base_alicuota_adicional",
+                    "iva_alicuota_adicional",
+                    "alicuota_adicional",
+                    "base_alicuota_reducida",
+                    "iva_alicuota_reducida",
+                    "alicuota_reducida",
+                    "base_gravada_sin_alicuota",
+                    "iva_sin_clasificar"
                   ],
                   "additionalProperties": false
                 },
@@ -11970,6 +12993,46 @@
           },
           "unclassified_rows": {
             "type": "integer"
+          },
+          "summary": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "concept": {
+                  "type": "string"
+                },
+                "rate": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "base": {
+                  "type": "string"
+                },
+                "tax": {
+                  "type": "string"
+                },
+                "adjustments_base": {
+                  "type": "string"
+                },
+                "adjustments_tax": {
+                  "type": "string"
+                },
+                "documents": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "concept",
+                "rate",
+                "base",
+                "tax",
+                "adjustments_base",
+                "adjustments_tax",
+                "documents"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -12325,6 +13388,10 @@
                           "type": "integer",
                           "nullable": true
                         },
+                        "control_identifier": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "control_number": {
                           "type": "integer",
                           "nullable": true
@@ -12373,6 +13440,42 @@
                           "type": "string",
                           "nullable": true,
                           "format": "uuid"
+                        },
+                        "base_alicuota_general": {
+                          "type": "string"
+                        },
+                        "iva_alicuota_general": {
+                          "type": "string"
+                        },
+                        "alicuota_general": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "base_alicuota_adicional": {
+                          "type": "string"
+                        },
+                        "iva_alicuota_adicional": {
+                          "type": "string"
+                        },
+                        "alicuota_adicional": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "base_alicuota_reducida": {
+                          "type": "string"
+                        },
+                        "iva_alicuota_reducida": {
+                          "type": "string"
+                        },
+                        "alicuota_reducida": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "base_gravada_sin_alicuota": {
+                          "type": "string"
+                        },
+                        "iva_sin_clasificar": {
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -12381,6 +13484,7 @@
                         "kind",
                         "series",
                         "document_number",
+                        "control_identifier",
                         "control_number",
                         "status",
                         "customer_tax_id",
@@ -12395,7 +13499,18 @@
                         "base_sin_clasificar",
                         "iva_debito",
                         "total_amount",
-                        "journal_entry_id"
+                        "journal_entry_id",
+                        "base_alicuota_general",
+                        "iva_alicuota_general",
+                        "alicuota_general",
+                        "base_alicuota_adicional",
+                        "iva_alicuota_adicional",
+                        "alicuota_adicional",
+                        "base_alicuota_reducida",
+                        "iva_alicuota_reducida",
+                        "alicuota_reducida",
+                        "base_gravada_sin_alicuota",
+                        "iva_sin_clasificar"
                       ],
                       "additionalProperties": false
                     },
@@ -12482,6 +13597,42 @@
                         },
                         "received_late": {
                           "type": "boolean"
+                        },
+                        "base_alicuota_general": {
+                          "type": "string"
+                        },
+                        "iva_alicuota_general": {
+                          "type": "string"
+                        },
+                        "alicuota_general": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "base_alicuota_adicional": {
+                          "type": "string"
+                        },
+                        "iva_alicuota_adicional": {
+                          "type": "string"
+                        },
+                        "alicuota_adicional": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "base_alicuota_reducida": {
+                          "type": "string"
+                        },
+                        "iva_alicuota_reducida": {
+                          "type": "string"
+                        },
+                        "alicuota_reducida": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "base_gravada_sin_alicuota": {
+                          "type": "string"
+                        },
+                        "iva_sin_clasificar": {
+                          "type": "string"
                         }
                       },
                       "required": [
@@ -12509,7 +13660,18 @@
                         "total_amount",
                         "journal_entry_id",
                         "booked_on",
-                        "received_late"
+                        "received_late",
+                        "base_alicuota_general",
+                        "iva_alicuota_general",
+                        "alicuota_general",
+                        "base_alicuota_adicional",
+                        "iva_alicuota_adicional",
+                        "alicuota_adicional",
+                        "base_alicuota_reducida",
+                        "iva_alicuota_reducida",
+                        "alicuota_reducida",
+                        "base_gravada_sin_alicuota",
+                        "iva_sin_clasificar"
                       ],
                       "additionalProperties": false
                     },
@@ -12682,6 +13844,46 @@
               },
               "unclassified_rows": {
                 "type": "integer"
+              },
+              "summary": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "concept": {
+                      "type": "string"
+                    },
+                    "rate": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "base": {
+                      "type": "string"
+                    },
+                    "tax": {
+                      "type": "string"
+                    },
+                    "adjustments_base": {
+                      "type": "string"
+                    },
+                    "adjustments_tax": {
+                      "type": "string"
+                    },
+                    "documents": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "concept",
+                    "rate",
+                    "base",
+                    "tax",
+                    "adjustments_base",
+                    "adjustments_tax",
+                    "documents"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -12703,11 +13905,59 @@
           },
           "filename": {
             "type": "string"
+          },
+          "summary_content": {
+            "type": "string"
+          },
+          "summary_filename": {
+            "type": "string"
           }
         },
         "required": [
           "run",
           "book",
+          "content",
+          "content_type",
+          "filename"
+        ],
+        "additionalProperties": false
+      },
+      "ExportSalesBookSummaryRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "company_id"
+        ],
+        "additionalProperties": false
+      },
+      "ExportSalesBookSummaryResponse": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dataset_hash": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "dataset_hash",
           "content",
           "content_type",
           "filename"
@@ -12817,8 +14067,7 @@
           },
           "receipt_number": {
             "type": "string",
-            "minLength": 1,
-            "maxLength": 40
+            "pattern": "^[0-9]{14}$"
           },
           "retained_on": {
             "type": "string",
@@ -13726,14 +14975,27 @@
               "ordinario",
               "especial",
               "formal",
-              "no_sujeto",
-              "no_domiciliado"
+              "no_contribuyente"
             ]
+          },
+          "notified_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
           }
         },
         "required": [
           "company_id",
-          "taxpayer_type_code"
+          "taxpayer_type_code",
+          "reason"
         ],
         "additionalProperties": false
       },
@@ -13857,6 +15119,144 @@
           "base",
           "currency",
           "amount"
+        ],
+        "additionalProperties": false
+      },
+      "CompanyTaxpayerTypeResponse": {
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date"
+          },
+          "current": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "taxpayer_type_code": {
+                "type": "string",
+                "enum": [
+                  "ordinario",
+                  "especial",
+                  "formal",
+                  "no_contribuyente"
+                ]
+              },
+              "effective_from": {
+                "type": "string",
+                "nullable": true,
+                "format": "date"
+              },
+              "notified_on": {
+                "type": "string",
+                "nullable": true,
+                "format": "date"
+              }
+            },
+            "required": [
+              "taxpayer_type_code",
+              "effective_from",
+              "notified_on"
+            ],
+            "additionalProperties": false
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "taxpayer_type_code": {
+                  "type": "string",
+                  "enum": [
+                    "ordinario",
+                    "especial",
+                    "formal",
+                    "no_contribuyente"
+                  ]
+                },
+                "effective_from": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "notified_on": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "date"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "taxpayer_type_code",
+                "effective_from",
+                "notified_on",
+                "reason",
+                "created_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "documents_issued_since": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "today",
+          "current",
+          "history",
+          "documents_issued_since"
+        ],
+        "additionalProperties": false
+      },
+      "SetCompanyTaxpayerTypeResponse": {
+        "type": "object",
+        "properties": {
+          "taxpayer_type_code": {
+            "type": "string",
+            "enum": [
+              "ordinario",
+              "especial",
+              "formal",
+              "no_contribuyente"
+            ]
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "notified_on": {
+            "type": "string",
+            "nullable": true,
+            "format": "date"
+          },
+          "igtf_disabled": {
+            "type": "boolean"
+          },
+          "documents_issued_since": {
+            "type": "integer"
+          },
+          "retroactive_warning": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "taxpayer_type_code",
+          "effective_from",
+          "notified_on",
+          "igtf_disabled",
+          "documents_issued_since",
+          "retroactive_warning"
         ],
         "additionalProperties": false
       },
@@ -16125,6 +17525,14 @@
                   "file": {
                     "type": "string",
                     "format": "binary"
+                  },
+                  "number_format": {
+                    "type": "string",
+                    "enum": [
+                      "comma_decimal",
+                      "dot_decimal"
+                    ],
+                    "description": "Formato de los números del archivo. Por omisión «comma_decimal» (el venezolano: 1.234,50). Una celda ambigua bajo el formato elegido («0.500» con coma decimal) se rechaza con su fila y el motivo (ADR-0074, C-01)."
                   }
                 },
                 "required": [
@@ -16136,11 +17544,313 @@
         },
         "responses": {
           "201": {
-            "description": "El resultado fila por fila.",
+            "description": "El resultado fila por fila, con avisos.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ImportProductsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/products/import/preview": {
+      "post": {
+        "summary": "Vista previa de una importación: las diez primeras filas como se van a guardar",
+        "description": "Multipart con `file` y `number_format` opcional. No escribe nada. Devuelve las diez primeras filas INTERPRETADAS con sus avisos (la existencia de un servicio se ignora con aviso; el costo sin existencia se acepta como costo de referencia) y TODAS las rechazadas con su número de fila y el motivo (ADR-0074, C-01 y C-05).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "number_format": {
+                    "type": "string",
+                    "enum": [
+                      "comma_decimal",
+                      "dot_decimal"
+                    ],
+                    "description": "Formato de los números del archivo. Por omisión «comma_decimal» (el venezolano: 1.234,50). Una celda ambigua bajo el formato elegido («0.500» con coma decimal) se rechaza con su fila y el motivo (ADR-0074, C-01)."
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Las filas interpretadas y las rechazadas.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductImportPreviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/products/import/jobs": {
+      "post": {
+        "summary": "Confirmar una importación: crea el TRABAJO que el worker procesa",
+        "description": "Multipart con `file` y `number_format` opcional. La petición solo crea el trabajo (202). El mismo archivo con el mismo formato devuelve el trabajo existente (200, `reused: true`): la llave es el sha256 del archivo. Exige `Idempotency-Key` con hash canónico (archivo + formato): la misma llave con otro archivo da 409 IDEMPOTENCY_KEY_REUSED. Dentro del trabajo, el código del producto es la llave: si ya existe, la fila actualiza su precio en vez de duplicar (ADR-0074, C-04).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "number_format": {
+                    "type": "string",
+                    "enum": [
+                      "comma_decimal",
+                      "dot_decimal"
+                    ],
+                    "description": "Formato de los números del archivo. Por omisión «comma_decimal» (el venezolano: 1.234,50). Una celda ambigua bajo el formato elegido («0.500» con coma decimal) se rechaza con su fila y el motivo (ADR-0074, C-01)."
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "El trabajo que ya existía para ese archivo.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductImportJobResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "El trabajo nuevo, pendiente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductImportJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/products/import/jobs/{id}": {
+      "get": {
+        "summary": "Progreso e informe de un trabajo de importación",
+        "description": "Estado (pending, running, done, failed), filas procesadas y el informe fila por fila: creadas, actualizadas y rechazadas con el motivo (ADR-0074, C-04).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El trabajo con su progreso y su informe.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductImportJobResponse"
                 }
               }
             }
@@ -17179,13 +18889,17 @@
                       },
                       "status": {
                         "type": "string"
+                      },
+                      "offered_in_sales": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
                       "code",
                       "name",
                       "description",
-                      "status"
+                      "status",
+                      "offered_in_sales"
                     ]
                   }
                 }
@@ -21384,7 +23098,7 @@
     "/v1/fiscal/iva-general": {
       "post": {
         "summary": "ACEPTAR la alícuota general del IVA (permiso tax.rules.manage)",
-        "description": "Ladino no afirma la alícuota: la declara y la acepta LA PERSONA. Crea —si no existen— las reglas generales (gravado a la alícuota aceptada, exento a cero; venta y compra) con el acta de aceptación como `legal_source`, y siempre deja el acta en la auditoría. VALIDAR-TRIBUTARIO: confirmar contra la Ley de IVA vigente antes de producción.",
+        "description": "La persona acepta la general desde el catálogo con fuente (ADR-0073): solo dentro del rango del art. 27 (8–16,5 %); el 0 % y lo que caiga fuera se rechazan con 422. Otra tasa cierra la vigencia de la anterior y abre otra desde hoy (B-02); la misma tasa no crea nada. Completa la reducida, la exenta y la adicional desde el catálogo, con su cita. Siempre deja el acta en la auditoría.",
         "security": [
           {
             "bearerAuth": []
@@ -21965,8 +23679,8 @@
     },
     "/v1/documents/{id}/pdf": {
       "get": {
-        "summary": "El PDF del documento — formato libre, y lo dice en el pie",
-        "description": "VALIDAR-SENIAT: layout NO homologado, con la marca visible en el pie. Imprime lo PERSISTIDO — los snapshots congelados de emisor y cliente (R-05, migraciones 33-34), importes exactos vestidos, la tasa del día de emisión citada, ANULADA en rojo si aplica. Del art. 13 de PA 00071: fecha en ocho dígitos (13.6), «(E)» en líneas exentas/exoneradas/no sujetas (13.9), leyenda de copia (13.13, `copia=1`) y ambas monedas con tipo de cambio (13.14).",
+        "summary": "El PDF del documento: copia de cortesía, papel sobre la forma libre o vista previa",
+        "description": "ADR-0071 §4. Sin `destino`, la COPIA DE CORTESÍA (no es la factura: lo dice). `destino=papel` imprime sobre la forma libre y deja en blanco lo que la imprenta preimprime (PA 00071 art. 31); `destino=vista` lo sombrea. `copia=1` añade «SIN DERECHO A CRÉDITO FISCAL» (13.13), la única leyenda legal. Imprime lo PERSISTIDO: los snapshots de emisor y cliente, fecha en ocho dígitos (13.6), «(E)» en líneas exentas, exoneradas o no sujetas (13.8), base e IVA por alícuota (13.10-11), ambas monedas con tipo de cambio (13.14); la NC y la ND citan su factura, su motivo y la tasa de la factura. El recibo y el recibo de devolución no tienen copia fiscal (422).",
         "security": [
           {
             "bearerAuth": []
@@ -21991,6 +23705,19 @@
             },
             "required": false,
             "name": "copia",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "cortesia",
+                "papel",
+                "vista"
+              ]
+            },
+            "required": false,
+            "name": "destino",
             "in": "query"
           },
           {
@@ -23542,8 +25269,8 @@
         }
       },
       "post": {
-        "summary": "Cargar un rango autorizado (permiso fiscal.range.manage)",
-        "description": "El rango viene de la imprenta digital con su autorización; aquí no se inventa.",
+        "summary": "Registrar el talonario de la imprenta (permiso fiscal.range.manage)",
+        "description": "ADR-0071: un talonario por empresa e identificador sirve para factura, NC y ND. Sin los datos de la imprenta (razón social, RIF, providencia y su fecha, fecha de elaboración) responde 422; si pisa otro rango del mismo identificador, 409.",
         "security": [
           {
             "bearerAuth": []
@@ -23580,7 +25307,310 @@
         },
         "responses": {
           "201": {
-            "description": "Rango cargado.",
+            "description": "Talonario registrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiscalRangeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-number-ranges/{id}/printer": {
+      "post": {
+        "summary": "Completar los datos de la imprenta de un talonario anterior (fiscal.range.manage)",
+        "description": "Una sola vez: los datos de la imprenta de un talonario completo no se reescriben (409). Hasta completarlos, emitir con ese talonario responde 409.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteFiscalRangePrinterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Datos de la imprenta completados.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiscalRangeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-number-ranges/{id}/printer-correction": {
+      "post": {
+        "summary": "Corregir los datos de la imprenta con motivo y acta (fiscal.range.manage)",
+        "description": "ADR-0071 (H3, decidido por criterio; alternativa: solo anular y registrar de nuevo). Permitido siempre: lo emitido lleva impreso lo que la imprenta preimprimió y no cambia. El acta fiscal.range.printer_corrected guarda lo anterior y lo nuevo. El identificador solo cambia si el talonario no emitió nada (409).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectFiscalRangePrinterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Datos de la imprenta corregidos.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FiscalRangeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/fiscal-number-ranges/{id}/cancel": {
+      "post": {
+        "summary": "Anular un talonario que no emitió nada, con motivo y acta (fiscal.range.manage)",
+        "description": "ADR-0071 (H3). Solo si el talonario no emitió ningún documento; si emitió, 409 legible. Deja el acta fiscal.range.cancelled.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelFiscalRangeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Talonario anulado.",
             "content": {
               "application/json": {
                 "schema": {
@@ -23666,7 +25696,8 @@
                         "format": "uuid"
                       },
                       "kind": {
-                        "type": "string"
+                        "type": "string",
+                        "nullable": true
                       },
                       "series": {
                         "type": "string"
@@ -29644,6 +31675,107 @@
         }
       }
     },
+    "/v1/fiscal-books/runs/{id}/summary-art72": {
+      "post": {
+        "summary": "El resumen del art. 72 del RLIVA de una generación del libro de ventas (permiso fiscal_book.export)",
+        "description": "Devuelve `resumen-art72.csv` de una generación ya exportada del libro de ventas (H6, ADR-0073). No crea otra generación ni cambia el hash firmado; si el libro cambió desde entonces, 422 y hay que volver a exportar.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportSalesBookSummaryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "El resumen serializado y la generación a la que pertenece.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportSalesBookSummaryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/fiscal-books/{kind}": {
       "get": {
         "summary": "El libro de ventas, compras o retenciones (permiso fiscal_book.read)",
@@ -30643,9 +32775,70 @@
       }
     },
     "/v1/companies/taxpayer-type": {
+      "get": {
+        "summary": "Tipo de contribuyente vigente hoy y su historia (ADR-0072 §1)",
+        "description": "`current` es null cuando la empresa tiene RIF y no ha declarado tipo: no factura hasta declararlo (TAXPAYER_TYPE_REQUIRED). Nunca «ordinario por omisión».",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "El tipo vigente y la historia append-only.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyTaxpayerTypeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "put": {
-        "summary": "Clasificación fiscal de la empresa (permiso company.settings.manage)",
-        "description": "Con auditoría del valor anterior. Si deja de ser `especial` con el IGTF activo, la percepción se apaga en el mismo acto: un no-SPE no es agente de percepción.",
+        "summary": "Declara el tipo de contribuyente de la empresa (permiso company.settings.manage)",
+        "description": "Abre una VIGENCIA nueva con acta (ADR-0072 §1): el especial exige la fecha de notificación de la providencia y rige desde ella salvo `effective_from`. Si hoy deja de ser `especial` con el IGTF activo, la percepción se apaga en el mismo acto.",
         "security": [
           {
             "bearerAuth": []
@@ -30682,24 +32875,11 @@
         },
         "responses": {
           "200": {
-            "description": "La clasificación, como quedó.",
+            "description": "La declaración, como quedó.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "taxpayer_type_code": {
-                      "type": "string"
-                    },
-                    "igtf_disabled": {
-                      "type": "boolean"
-                    }
-                  },
-                  "required": [
-                    "taxpayer_type_code",
-                    "igtf_disabled"
-                  ],
-                  "additionalProperties": false
+                  "$ref": "#/components/schemas/SetCompanyTaxpayerTypeResponse"
                 }
               }
             }

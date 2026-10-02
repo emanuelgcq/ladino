@@ -1,4 +1,4 @@
-import type { Hono, MiddlewareHandler } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql, type TransactionSql } from "@ladino/db";
 import { tasaOficialBcv, BcvNoDisponible, type BcvConfig } from "../bcv.js";
 import {
@@ -15,6 +15,9 @@ import {
   CreateDebitNoteRequest,
   CreateReturnRequest,
   CreateFiscalRangeRequest,
+  CompleteFiscalRangePrinterRequest,
+  CorrectFiscalRangePrinterRequest,
+  CancelFiscalRangeRequest,
   PosTenderRequest,
   RefundCustomerCreditRequest,
 } from "@ladino/schemas";
@@ -41,6 +44,11 @@ import {
   previsualizarCobro,
   exigeEmpresaQueFactura,
   refundCustomerCredit,
+  registrarTalonario,
+  completarImprenta,
+  corregirImprenta,
+  anularTalonario,
+  TALONARIO_COLUMNS,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -48,7 +56,9 @@ import { requireCompany } from "./products.js";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const DOC_COLUMNS = `id, company_id, kind, series,
-  document_number::int as document_number, control_number::int as control_number, status,
+  document_number::int as document_number, control_number::int as control_number, control_identifier,
+  case when control_number is null then null
+       else control_identifier || '-' || lpad(control_number::text, 8, '0') end as control_display, status,
   to_char(issued_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as issued_at,
   to_char(annulled_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as annulled_at,
   annul_reason, customer_id, vendor_id, price_list_id, source_document_id,
@@ -732,11 +742,10 @@ export function salesRoutes(
     const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigeLecturaDeRangos(tx, actor, companyId);
       return tx<Record<string, unknown>[]>`
-        select id, kind, series, range_from::int as range_from, range_to::int as range_to,
-               next_available::int as next_available, status, printer_source,
-               (range_to - next_available + 1)::int as remaining
-          from public.fiscal_number_ranges
-         where company_id = ${companyId} order by kind, series, range_from`;
+        select ${tx.unsafe(TALONARIO_COLUMNS)}
+          from public.fiscal_number_ranges r
+         where r.company_id = ${companyId}
+         order by r.printer_identifier, r.range_from`;
     });
     return c.json(filas, 200);
   });
@@ -774,19 +783,87 @@ export function salesRoutes(
       if (!factura.ok) throw new DominioError(factura.error);
       const [tenant] = await tx<{ tenant_id: string }[]>`
         select tenant_id from public.companies where id = ${companyId}`;
-      const [r] = await tx<Record<string, unknown>[]>`
-        insert into public.fiscal_number_ranges
-          (tenant_id, company_id, kind, series, range_from, range_to, next_available,
-           printer_source, alert_threshold_pct)
-        values (${tenant!.tenant_id}, ${companyId}, ${d.kind}, ${d.series}, ${d.range_from},
-                ${d.range_to}, ${d.range_from}, ${d.printer_source},
-                ${d.alert_threshold_pct ?? 10})
-        returning id, kind, series, range_from::int as range_from, range_to::int as range_to,
-                  next_available::int as next_available, status, printer_source,
-                  (range_to - next_available + 1)::int as remaining`;
-      return r!;
+      // ADR-0071: sin datos de imprenta no hay talonario (422), y ninguno pisa otro (409).
+      const r = await registrarTalonario(tx, tenant!.tenant_id, companyId, d);
+      if (!r.ok) throw new DominioError(r.error);
+      return r.value;
     });
     return c.json(fila, 201);
+  });
+
+  /**
+   * Los tres actos sobre un talonario ya registrado (ADR-0071; B-03 y H3), con el mismo molde:
+   * usuario real, `fiscal.range.manage`, y el caso de uso deja su acta. Completar la imprenta (una
+   * vez), corregirla con motivo (lo emitido no cambia) y anular uno que no emitió nada.
+   */
+  type ActoTalonario = (
+    tx: TransactionSql,
+    companyId: string,
+    id: string,
+  ) => Promise<
+    { ok: true; value: unknown } | { ok: false; error: { code: string; message: string } }
+  >;
+  async function actoSobreTalonario(
+    c: Context,
+    que: string,
+    ejecutar: ActoTalonario,
+  ): Promise<Response> {
+    const { companyId } = requireCompany(c);
+    const id = idValido(c.req.param("id") ?? "");
+    const { actor } = c.get("ladino.auth");
+    if (actor.kind !== "user") {
+      throw new DominioError({
+        code: "PERMISSION_REQUIRED",
+        message: `${que} exige un usuario real.`,
+      });
+    }
+    const fila = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      const [permiso] = await tx<{ ok: boolean }[]>`
+        select platform.ladino_user_has_permission(${actor.userId}, 'fiscal.range.manage',
+                                                   ${companyId}) as ok`;
+      if (!permiso?.ok) {
+        throw new DominioError({
+          code: "PERMISSION_REQUIRED",
+          message: `${que} exige el permiso fiscal.range.manage.`,
+        });
+      }
+      const r = await ejecutar(tx, companyId, id);
+      if (!r.ok) throw new DominioError(r.error);
+      return r.value;
+    });
+    return c.json(fila as Record<string, unknown>, 200);
+  }
+
+  /** Completar, una vez, los datos de la imprenta de un talonario anterior a ADR-0071 (B-03). */
+  app.post("/v1/fiscal-number-ranges/:id/printer", idempotencia, async (c) => {
+    const parsed = CompleteFiscalRangePrinterRequest.safeParse(
+      await c.req.json().catch(() => null),
+    );
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(requireCompany(c).companyId, parsed.data.company_id);
+    return actoSobreTalonario(c, "Completar el talonario", (tx, companyId, id) =>
+      completarImprenta(tx, companyId, id, parsed.data),
+    );
+  });
+
+  /** Corregir los datos de la imprenta con motivo y acta (H3, decidido por criterio). */
+  app.post("/v1/fiscal-number-ranges/:id/printer-correction", idempotencia, async (c) => {
+    const parsed = CorrectFiscalRangePrinterRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(requireCompany(c).companyId, parsed.data.company_id);
+    return actoSobreTalonario(c, "Corregir el talonario", (tx, companyId, id) =>
+      corregirImprenta(tx, companyId, id, parsed.data),
+    );
+  });
+
+  /** Anular un talonario que no emitió nada, con motivo y acta (H3). */
+  app.post("/v1/fiscal-number-ranges/:id/cancel", idempotencia, async (c) => {
+    const parsed = CancelFiscalRangeRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(requireCompany(c).companyId, parsed.data.company_id);
+    return actoSobreTalonario(c, "Anular el talonario", (tx, companyId, id) =>
+      anularTalonario(tx, companyId, id, parsed.data),
+    );
   });
 
   /** Rangos por agotarse: la alerta llega ANTES de que la caja se pare. */

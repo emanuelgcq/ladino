@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
  * REGISTRO PREMIUM, el backend de punta a punta: la fundación con RIF exige
@@ -26,6 +27,8 @@ const JWT_SECRET = new TextEncoder().encode(
 const ISSUER = "http://127.0.0.1:54321/auth/v1";
 const DUENA = crypto.randomUUID();
 const RUN = Date.now().toString(36);
+/** Seis dígitos por corrida: desde A-08 el RIF exige letra + 9 dígitos (base36 ya no vale). */
+const D6 = String(Date.now()).slice(-6);
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -92,7 +95,7 @@ describe("registro premium: perfil, política de RIF y logo", () => {
       "/v1/onboarding",
       {
         business_name: `Abasto Premium ${RUN}`,
-        tax_id: `J-77${RUN.slice(0, 6)}-1`,
+        tax_id: `J-77${D6}-1`,
         legal_name: `Abasto Premium ${RUN}, C.A.`,
       },
       false,
@@ -108,7 +111,7 @@ describe("registro premium: perfil, política de RIF y logo", () => {
       "/v1/onboarding",
       {
         business_name: `Abasto Premium ${RUN}`,
-        tax_id: `J-77${RUN.slice(0, 6)}-1`,
+        tax_id: `J-77${D6}-1`,
         legal_name: `Inversiones Premium ${RUN}, C.A.`,
         fiscal_address: "Av. Bolívar, local 7, Valencia, Carabobo",
         business_type: "bodega",
@@ -146,13 +149,13 @@ describe("registro premium: perfil, política de RIF y logo", () => {
   });
 
   it("nivel 1: sin documentos, el RIF se cambia con confirmación simple y el trigger deja el acta", async () => {
-    const r = await pedir("PUT", "/v1/companies/tax-id", { tax_id: `J-88${RUN.slice(0, 6)}-2` });
+    const r = await pedir("PUT", "/v1/companies/tax-id", { tax_id: `J-88${D6}-2` });
     expect(r.status).toBe(200);
     const [acta] = await sql<{ payload: Record<string, string> }[]>`
       select payload from public.audit_events
        where company_id = ${COMPANY} and event_type = 'company.tax_id_changed'
        order by occurred_at desc limit 1`;
-    expect(acta!.payload["tax_id_nuevo"]).toBe(`J-88${RUN.slice(0, 6)}-2`);
+    expect(acta!.payload["tax_id_nuevo"]).toBe(`J88${D6}2`);
   });
 
   it("nivel 2: UNA factura emitida bloquea el RIF y la razón social exige motivo con acta", async () => {
@@ -162,8 +165,17 @@ describe("registro premium: perfil, política de RIF y logo", () => {
     const DOC = crypto.randomUUID();
     await sql`insert into public.company_fiscal_regimes (id, tenant_id, company_id, regime_code, effective_from)
               values (${REGIMEN}, ${TENANT}, ${COMPANY}, 'formatos_libres', '2026-01-01')`;
+    // Sin tipo de contribuyente vigente la base no deja emitir (ADR-0072, migración 190100):
+    // la empresa de prueba lo declara, como haría una real.
+    await declararTipoDeFixture(sql, COMPANY);
+    // PA 00071 art. 13.7 (P-57, migración 20260928190400): sobre forma libre la factura lleva al
+    // adquirente identificado; el «Consumidor final» de sistema es solo para recibos.
     const [cf] = await sql<{ id: string }[]>`
-      select id from public.customers where company_id = ${COMPANY} and is_system`;
+      insert into public.customers (tenant_id, company_id, tax_id, legal_name, person_type_code,
+                                    taxpayer_type_code)
+      values (${TENANT}, ${COMPANY}, 'V12345678', 'Cliente identificado', 'natural',
+              'consumidor_final')
+      returning id`;
     await sql`insert into public.documents
         (id, tenant_id, company_id, kind, series, customer_id, status, issued_at, document_number,
          control_number, regime_version_id, rules_version,
@@ -172,7 +184,7 @@ describe("registro premium: perfil, política de RIF y logo", () => {
          amount_transaction_currency, functional_amount, subtotal_amount, tax_amount, total_amount)
       values (${DOC}, ${TENANT}, ${COMPANY}, 'invoice', 'A', ${cf!.id}, 'issued', now(), 1,
               1, ${REGIMEN}, 'e2e-perfil',
-              ${`Inversiones Premium ${RUN}, C.A.`}, ${`J-88${RUN.slice(0, 6)}-2`},
+              ${`Inversiones Premium ${RUN}, C.A.`}, ${`J-88${D6}-2`},
               'Av. Bolívar, local 7, Valencia, Carabobo',
               'VES', 'VES', 1, 'identidad', 116, 116, 100, 16, 116)`;
 
@@ -203,12 +215,12 @@ describe("registro premium: perfil, política de RIF y logo", () => {
 
   it("nivel 3: la corrección excepcional exige motivo y deja su acta propia", async () => {
     const zodazo = await pedir("POST", "/v1/companies/tax-id/correct", {
-      tax_id: `J-99${RUN.slice(0, 6)}-3`,
+      tax_id: `J-99${D6}-3`,
     });
     expect(zodazo.status).toBe(422);
 
     const r = await pedir("POST", "/v1/companies/tax-id/correct", {
-      tax_id: `J-99${RUN.slice(0, 6)}-3`,
+      tax_id: `J-99${D6}-3`,
       reason: "Dedazo en el registro: el RIF real es el del certificado",
     });
     expect(r.status).toBe(200);
@@ -216,7 +228,7 @@ describe("registro premium: perfil, política de RIF y logo", () => {
       select payload from public.audit_events
        where company_id = ${COMPANY} and event_type = 'company.tax_id_corrected'
        order by occurred_at desc limit 1`;
-    expect(acta!.payload.to).toBe(`J-99${RUN.slice(0, 6)}-3`);
+    expect(acta!.payload.to).toBe(`J99${D6}3`);
     expect(acta!.payload.reason).toContain("certificado");
   });
 

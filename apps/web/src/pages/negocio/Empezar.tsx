@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronRight, FileSpreadsheet, Package, Plus, Store } from "lucide-react";
+import { Check, ChevronRight, FileSpreadsheet, Plus, Store } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { tieneRif as tieneRifEmpresa } from "../../app/rif.js";
 import { LogoLadino } from "../../components/LogoLadino.js";
@@ -15,9 +15,16 @@ import { useToast } from "../../ui/toast.js";
 import { FormField } from "../../components/forms.js";
 import { AltaSimple, ImportarExcel } from "./Productos.js";
 import { CrearCuenta } from "./Dinero.js";
-import { IvaQueCobras } from "../../components/capa-fiscal/IvaQueCobras.js";
+import { IvaQueCobras, type IvaDelCatalogo } from "../../components/capa-fiscal/IvaQueCobras.js";
 import { TipoDeContribuyente } from "../../components/capa-fiscal/TipoDeContribuyente.js";
 import { porcentajeAFraccion, fraccionAPorcentaje } from "./comunes.js";
+import {
+  CompletarImprenta,
+  FormularioTalonario,
+  talonariosConPapel,
+  talonariosListos,
+  type Talonario,
+} from "../setup/Talonario.js";
 
 /**
  * EMPEZAR (Fase C, PARTE 4): el primer día del negocio en cuatro pasos. Cada
@@ -44,6 +51,7 @@ interface SetupFiscal {
   /** Definición única del modo (migración 54). */
   sales_mode: "facturas" | "recibos" | "ninguno";
   iva_general: { rate: string; legal_source: string } | null;
+  iva_catalog: IvaDelCatalogo | null;
 }
 interface Resumen {
   tasa_del_dia: { rate: string; rate_date: string; es_de_hoy: boolean } | null;
@@ -88,7 +96,7 @@ export function Empezar(): React.JSX.Element {
   });
   const rangos = useQuery({
     queryKey: ["empezar-rangos", empresa.id],
-    queryFn: () => llamar<{ kind: string; status: string }[]>("/v1/fiscal-number-ranges"),
+    queryFn: () => llamar<Talonario[]>("/v1/fiscal-number-ranges"),
   });
 
   const recargar = () => {
@@ -105,8 +113,11 @@ export function Empezar(): React.JSX.Element {
   const hayTasa = (resumen.data?.tasa_del_dia ?? null) !== null;
   const facturacion = fiscal.data ?? null;
   const necesitaTalonario = facturacion?.current_regime === "formatos_libres";
-  const hayTalonario = (rangos.data ?? []).some(
-    (r) => r.kind === "invoice" && r.status === "active",
+  // ADR-0071 (E-01, B-03): un talonario activo, con papel y con los datos de la imprenta. Uno
+  // solo sirve a factura, NC y ND.
+  const hayTalonario = talonariosListos(rangos.data ?? []).length > 0;
+  const talonariosIncompletos = talonariosConPapel(rangos.data ?? []).filter(
+    (r) => !r.printer_data_complete,
   );
   const fiscalListo =
     facturacion !== null &&
@@ -219,6 +230,7 @@ export function Empezar(): React.JSX.Element {
             <PasoFacturas
               setup={facturacion}
               hayTalonario={hayTalonario}
+              talonariosIncompletos={talonariosIncompletos}
               tipoContribuyente={conRif ? tipoContribuyente : "no_aplica"}
               onCambio={() => {
                 recargar();
@@ -427,11 +439,14 @@ function PasoTasa({
 function PasoFacturas({
   setup,
   hayTalonario,
+  talonariosIncompletos,
   tipoContribuyente,
   onCambio,
 }: {
   setup: SetupFiscal;
   hayTalonario: boolean;
+  /** Talonarios anteriores a ADR-0071, sin los datos de la imprenta. */
+  talonariosIncompletos: readonly Talonario[];
   /** El de la empresa con RIF (null si falta); «no_aplica» sin RIF. */
   tipoContribuyente: string | null;
   onCambio: () => void;
@@ -457,10 +472,6 @@ function PasoFacturas({
   // por Ladino era un porcentaje que se aceptaba sin haberla tecleado
   // (auditoría 2026-09-11); el número vigente va en la AYUDA, con su fuente.
   const [porcentaje, setPorcentaje] = useState("");
-  const [desde, setDesde] = useState("");
-  const [hasta, setHasta] = useState("");
-  const [serie, setSerie] = useState("A");
-  const [imprenta, setImprenta] = useState("");
   // El domicilio fiscal (art. 13.5): la factura lo lleva, así que se pide
   // ANTES de elegir cómo facturar. La sesión se refresca al recargar; mientras
   // tanto este flag local evita pedirlo dos veces.
@@ -515,27 +526,6 @@ function PasoFacturas({
       onCambio();
     },
     onError: (e) => toast.error("No se pudo registrar", errorDePersona(e)),
-  });
-
-  const talonario = useMutation({
-    mutationFn: () =>
-      llamar("/v1/fiscal-number-ranges", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          kind: "invoice",
-          series: serie.trim() === "" ? "A" : serie.trim(),
-          range_from: desde.trim(),
-          range_to: hasta.trim(),
-          printer_source: imprenta.trim(),
-        }),
-      }),
-    onSuccess: () => {
-      toast.success("Talonario registrado");
-      onCambio();
-    },
-    onError: (e) => toast.error("No se pudo registrar el talonario", errorDePersona(e)),
   });
 
   return (
@@ -750,7 +740,7 @@ function PasoFacturas({
                 )}
                 {maquina === false && formaLibre !== null && vendeA !== null && (
                   <p className="text-[0.78rem] text-faint-foreground">
-                    Facturarás con formatos libres de imprenta autorizada ·{" "}
+                    Facturarás sobre formas libres de imprenta autorizada (arts. 6 y 31) ·{" "}
                     {formaLibre.legal_source}
                   </p>
                 )}
@@ -815,8 +805,9 @@ function PasoFacturas({
           </div>
         )}
 
-        {/* Con RIF y facturando: el tipo de contribuyente, que las compras necesitan (h. 62). */}
-        {setup.sales_mode === "facturas" && tipoContribuyente !== "no_aplica" && (
+        {/* Con RIF: el tipo de contribuyente, que la factura y las compras necesitan (h. 62; A-03,
+            ADR-0072 §1). Se declara ANTES de la primera factura, en cualquier modo. */}
+        {tipoContribuyente !== "no_aplica" && (
           <TipoDeContribuyente actual={tipoContribuyente} onCambio={onCambio} />
         )}
 
@@ -827,6 +818,7 @@ function PasoFacturas({
               aceptado={
                 setup.iva_general !== null ? fraccionAPorcentaje(setup.iva_general.rate) : null
               }
+              catalogo={setup.iva_catalog}
               valor={porcentaje}
               onValor={setPorcentaje}
               puedeAceptar={!aceptar.isPending && porcentajeAFraccion(porcentaje) !== null}
@@ -845,60 +837,14 @@ function PasoFacturas({
             ) : (
               <>
                 <p className="text-[0.9rem] text-muted-foreground">
-                  Tus facturas vienen impresas con números. Dime el primero y el último del
-                  talonario, y de qué imprenta es.
+                  Tus facturas vienen de la imprenta con su numeración ya impresa. Dime el primero y
+                  el último del talonario, su identificador y los datos de la imprenta, como vienen
+                  en el papel.
                 </p>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <FormField label="Del número">
-                    {(p) => (
-                      <Input
-                        {...p}
-                        value={desde}
-                        onChange={(e) => setDesde(e.target.value)}
-                        inputMode="numeric"
-                        placeholder="1"
-                      />
-                    )}
-                  </FormField>
-                  <FormField label="Al número">
-                    {(p) => (
-                      <Input
-                        {...p}
-                        value={hasta}
-                        onChange={(e) => setHasta(e.target.value)}
-                        inputMode="numeric"
-                        placeholder="5000"
-                      />
-                    )}
-                  </FormField>
-                  <FormField label="Serie (como aparece impresa)">
-                    {(p) => (
-                      <Input {...p} value={serie} onChange={(e) => setSerie(e.target.value)} />
-                    )}
-                  </FormField>
-                  <FormField label="Imprenta">
-                    {(p) => (
-                      <Input
-                        {...p}
-                        value={imprenta}
-                        onChange={(e) => setImprenta(e.target.value)}
-                        placeholder="Gráficas El Sol, C.A."
-                      />
-                    )}
-                  </FormField>
-                </div>
-                <Button
-                  variant="primary"
-                  disabled={
-                    talonario.isPending ||
-                    !/^\d+$/.test(desde.trim()) ||
-                    !/^\d+$/.test(hasta.trim()) ||
-                    imprenta.trim() === ""
-                  }
-                  onClick={() => talonario.mutate()}
-                >
-                  <Package /> Registrar talonario
-                </Button>
+                {talonariosIncompletos.map((r) => (
+                  <CompletarImprenta key={r.id} talonario={r} />
+                ))}
+                <FormularioTalonario onRegistrado={onCambio} />
               </>
             )}
           </div>

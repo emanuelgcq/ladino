@@ -113,7 +113,8 @@ select 'aaaa0040-0000-4000-8000-00000000a0b1', 'aaaa0040-0000-4000-8000-00000000
 select is(
   (select count(*) from platform.ladino_user_permissions(
      'aaaa0040-0000-4000-8000-0000000000a1', 'aaaa0040-0000-4000-8000-0000000000c1')),
-  5::bigint, 'un cajero recién asignado tiene EXACTAMENTE sus 5 permisos');
+  -- 5 → 6 (ADR-0072 §5, F-11): ar.retention.register, decisión del dueño del 2026-09-28.
+  6::bigint, 'un cajero recién asignado tiene EXACTAMENTE sus 6 permisos');
 select ok(
   'sales.invoice.issue' in (select * from platform.ladino_user_permissions(
      'aaaa0040-0000-4000-8000-0000000000a1', 'aaaa0040-0000-4000-8000-0000000000c1')),

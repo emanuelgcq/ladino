@@ -201,6 +201,91 @@ describe("productos de extremo a extremo", () => {
     expect(incoherente.status).toBe(422);
   });
 
+  it("H3 (ADR-0073): lo que el catálogo de alícuotas no ofrece en ventas no se asigna: 422 con el porqué", async () => {
+    const gestor = await tokenDe(GESTOR);
+    const alta = await pedir("POST", "/v1/products", {
+      token: gestor,
+      key: `NS-${RUN}`,
+      body: {
+        company_id: COMPANY,
+        sku: `NS-${RUN}`,
+        name: "No sujeto e2e",
+        kind: "good",
+        unit_code: "unidad",
+        tax_category_code: "no_sujeto",
+      },
+    });
+    expect(alta.status).toBe(422);
+    // El mensaje: solo lo produce la comprobación del catálogo, no la de «categoría inactiva».
+    expect(((await alta.json()) as { message: string }).message).toMatch(
+      /no se ofrece en ventas.*catálogo de alícuotas/,
+    );
+
+    const contador = await tokenDe(CONTADOR);
+    const cambio = await pedir("PUT", `/v1/products/${productoId}/tax-category`, {
+      token: contador,
+      key: `EXO-${RUN}`,
+      body: { company_id: COMPANY, tax_category_code: "exonerado" },
+    });
+    expect(cambio.status).toBe(422);
+    expect(((await cambio.json()) as { message: string }).message).toMatch(
+      /no se ofrece en ventas.*catálogo de alícuotas/,
+    );
+  });
+
+  it("H10: la reducida es una lista cerrada y la adicional exige justificación con acta", async () => {
+    const contador = await tokenDe(CONTADOR);
+    const reducida = await pedir("PUT", `/v1/products/${productoId}/tax-category`, {
+      token: contador,
+      key: `RED-${RUN}`,
+      body: { company_id: COMPANY, tax_category_code: "gravado_reducida" },
+    });
+    expect(reducida.status).toBe(422);
+    expect(((await reducida.json()) as { message: string }).message).toMatch(
+      /lista cerrada.*art\. 64/,
+    );
+
+    const sinPorque = await pedir("PUT", `/v1/products/${productoId}/tax-category`, {
+      token: contador,
+      key: `ADI-${RUN}`,
+      body: { company_id: COMPANY, tax_category_code: "gravado_adicional" },
+    });
+    expect(sinPorque.status).toBe(422);
+    expect(((await sinPorque.json()) as { message: string }).message).toMatch(
+      /suntuari.*justificación/,
+    );
+
+    const porque = "Perfume importado de lujo, suntuario según el contador (prueba e2e).";
+    const conPorque = await pedir("PUT", `/v1/products/${productoId}/tax-category`, {
+      token: contador,
+      key: `ADJ-${RUN}`,
+      body: {
+        company_id: COMPANY,
+        tax_category_code: "gravado_adicional",
+        tax_category_justification: porque,
+      },
+    });
+    expect(conPorque.status).toBe(200);
+    const [acta] = await sql<{ payload: { justification: string; to: string } }[]>`
+      select payload from public.audit_events
+       where aggregate_id = ${productoId} and event_type = 'product.tax_category_set'
+       order by occurred_at desc limit 1`;
+    expect(acta!.payload).toMatchObject({ to: "gravado_adicional", justification: porque });
+  });
+
+  it("A5: reclasificar dejando la MISMA categoría no exige su literal (no da 422)", async () => {
+    await sql`update public.products set tax_category_code = 'gravado_reducida'
+                where id = ${productoId}`;
+    const contador = await tokenDe(CONTADOR);
+    const misma = await pedir("PUT", `/v1/products/${productoId}/tax-category`, {
+      token: contador,
+      key: `MISMA-${RUN}`,
+      body: { company_id: COMPANY, tax_category_code: "gravado_reducida" },
+    });
+    expect(misma.status).toBe(200);
+    await sql`update public.products set tax_category_code = 'exento' where id = ${productoId}`;
+  });
+
   it("GET /v1/products: búsqueda y paginación en servidor, con total", async () => {
     const token = await tokenDe(GESTOR);
     const res = await pedir("GET", `/v1/products?search=E2E-${RUN}&per_page=10&page=1`, { token });

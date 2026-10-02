@@ -16,8 +16,20 @@ import { LlamadaApiError } from "../../lib.js";
 import { mostrarImporte } from "../../money.js";
 import { mostrarPorcentaje } from "../../porcentaje.js";
 import { MensajeError } from "../ventas/comunes.js";
+import {
+  ayudaDelCatalogo,
+  type IvaDelCatalogo,
+} from "../../components/capa-fiscal/IvaQueCobras.js";
 import { porcentajeAFraccion } from "../negocio/comunes.js";
-import { fechaLocal } from "../../fechas.js";
+import {
+  CompletarImprenta,
+  FormularioTalonario,
+  nombreTalonario,
+  talonariosConPapel,
+  talonariosListos,
+  type Talonario,
+} from "./Talonario.js";
+import { fechaLocal, hoyLocal } from "../../fechas.js";
 import { mostrarTasa, tasaLimpia } from "../../tasa.js";
 
 /**
@@ -51,6 +63,7 @@ interface SetupFiscal {
   sales_mode: "facturas" | "recibos" | "ninguno";
   /** La alícuota general VIGENTE (fracción en string) con su fuente, o null. */
   iva_general: { rate: string; legal_source: string } | null;
+  iva_catalog: IvaDelCatalogo | null;
 }
 
 function AlertaRangos(): React.JSX.Element | null {
@@ -82,8 +95,7 @@ function AlertaRangos(): React.JSX.Element | null {
       <ul className="mt-1 space-y-0.5 text-[0.88rem]">
         {items.map((r) => (
           <li key={r.range_id} className="tabular-nums">
-            Serie {r.series} ({r.kind === "invoice" ? "facturas" : r.kind}): quedan {r.remaining} de{" "}
-            {r.total}
+            Talonario serie {r.series}: quedan {r.remaining} de {r.total}
           </li>
         ))}
       </ul>
@@ -132,20 +144,15 @@ export function ChecklistFiscal(): React.JSX.Element {
     (setup.data?.current_regime === null || setup.data?.sales_mode === "recibos");
   const rangos = useQuery({
     queryKey: ["rangos", empresa.id],
-    queryFn: () =>
-      llamar<{ id: string; kind: string; series: string; status: string; remaining: number }[]>(
-        "/v1/fiscal-number-ranges",
-      ),
+    queryFn: () => llamar<Talonario[]>("/v1/fiscal-number-ranges"),
   });
 
   const tasaOk = (tasas.data?.length ?? 0) > 0;
-  // Cada clase de documento numera su control desde SU rango (ADR-0037): con solo el de
-  // facturas, la primera nota de crédito o devolución respondía «no hay rango» mientras esta
-  // lista decía «Completo» (QA de pantalla 2026-09-15, h. 54).
-  const clasesSinRango = CLASES_CON_RANGO.filter(
-    (c) => !(rangos.data ?? []).some((r) => r.kind === c.value && r.status === "active"),
-  );
-  const rangoOk = rangos.data !== undefined && clasesSinRango.length === 0;
+  // ADR-0071 (E-01, B-03): UN talonario sirve a factura, NC y ND. El paso está completo si hay
+  // un talonario activo, con papel y con los datos de la imprenta — no «un rango por clase».
+  const listos = talonariosListos(rangos.data ?? []);
+  const incompletos = talonariosConPapel(rangos.data ?? []).filter((r) => !r.printer_data_complete);
+  const rangoOk = rangos.data !== undefined && listos.length > 0;
   const contingencias = useQuery({
     queryKey: ["contingencias", empresa.id],
     queryFn: () => llamar<{ items: RangoContingencia[] }>("/v1/fiscal/contingency-ranges"),
@@ -194,7 +201,12 @@ export function ChecklistFiscal(): React.JSX.Element {
             ) : undefined
           }
         >
-          {ivaVigente === null && puede("tax.rules.manage") ? <AceptarIva /> : undefined}
+          {ivaVigente === null && puede("tax.rules.manage") ? (
+            <AceptarIva catalogo={datos?.iva_catalog ?? null} />
+          ) : undefined}
+          {ivaVigente !== null && puede("tax.rules.manage") ? (
+            <CambiarIva catalogo={datos?.iva_catalog ?? null} />
+          ) : undefined}
         </Paso>
 
         <Paso
@@ -244,7 +256,7 @@ export function ChecklistFiscal(): React.JSX.Element {
               ? "No se pudo consultar la puesta a punto fiscal."
               : regimenVigente !== null
                 ? `Régimen vigente: ${regimenVigente.name}${regimenVigente.legal_source === "" ? "" : ` · ${regimenVigente.legal_source}`}. El régimen decide cómo se numeran tus documentos.`
-                : "Sin régimen vigente: el régimen (formatos libres, máquina fiscal…) decide cómo se numera. Se asigna en /empezar, o aquí mismo si tienes el permiso."
+                : "Sin régimen vigente: el régimen (formas libres, máquina fiscal…) decide cómo se numera. Se asigna en /empezar, o aquí mismo si tienes el permiso."
           }
           sello="VALIDAR-SENIAT: qué régimen corresponde a la empresa lo confirma su contador."
           extra={
@@ -262,24 +274,23 @@ export function ChecklistFiscal(): React.JSX.Element {
 
         <Paso
           numero={4}
-          titulo="Rango de numeración autorizado"
+          titulo="Talonario de la imprenta (número de control)"
           estado={rangos.isPending ? "cargando" : rangoOk ? "completo" : "pendiente"}
           codigo409="FISCAL_NUMBERING_INVALID"
           resumen={
             rangoOk
-              ? `Rangos activos: ${(rangos.data ?? [])
-                  .filter((r) => r.status === "active")
-                  .map(
-                    (r) =>
-                      `${NOMBRE_CLASE[r.kind] ?? r.kind} serie ${r.series} (quedan ${r.remaining})`,
-                  )
+              ? `Talonarios listos: ${listos
+                  .map((r) => `${nombreTalonario(r)} (quedan ${r.remaining})`)
                   .join(" · ")}`
-              : clasesSinRango.length < CLASES_CON_RANGO.length
-                ? `Falta el rango de: ${clasesSinRango.map((c) => c.label.toLowerCase()).join(", ")}. Sin él, ese documento no recibe número de control.`
-                : "Sin rango de la imprenta autorizada no se asigna número de control."
+              : incompletos.length > 0
+                ? "Al talonario le faltan los datos de la imprenta: complétalos antes de volver a emitir."
+                : "Sin talonario de la imprenta no se asigna número de control."
           }
         >
-          <CargarRango />
+          {incompletos.map((r) => (
+            <CompletarImprenta key={r.id} talonario={r} />
+          ))}
+          <FormularioTalonario />
         </Paso>
 
         <Paso
@@ -415,7 +426,7 @@ function Paso({
  * fracción en string). Ladino no la afirma: la escribe y la acepta la persona,
  * y queda su acta con usuario y fecha. Exige `tax.rules.manage` en servidor.
  */
-function AceptarIva(): React.JSX.Element {
+function AceptarIva({ catalogo }: { catalogo: IvaDelCatalogo | null }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const qc = useQueryClient();
   const toast = useToast();
@@ -450,7 +461,7 @@ function AceptarIva(): React.JSX.Element {
         aceptar queda registrado con tu usuario y la fecha de hoy.
       </p>
       <div className="flex flex-wrap items-end gap-2">
-        <FormField label="Porcentaje (%)" required>
+        <FormField label="Porcentaje (%)" required hint={ayudaDelCatalogo(catalogo)}>
           {(a) => (
             <Input
               id={a.id}
@@ -591,122 +602,6 @@ function TraerDelBcv(): React.JSX.Element {
         {ocupado ? "Consultando al BCV…" : "Traer del BCV"}
       </Button>
       {error !== null && <MensajeError error={error} />}
-    </div>
-  );
-}
-
-/** Las clases de documento fiscal que numeran su control desde un rango (ADR-0037). */
-const CLASES_CON_RANGO: readonly { value: string; label: string }[] = [
-  { value: "invoice", label: "Facturas" },
-  { value: "credit_note", label: "Notas de crédito" },
-  { value: "debit_note", label: "Notas de débito" },
-];
-const NOMBRE_CLASE: Record<string, string> = {
-  invoice: "Facturas",
-  credit_note: "Notas de crédito",
-  debit_note: "Notas de débito",
-  receipt: "Recibos",
-};
-
-function CargarRango(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
-  const qc = useQueryClient();
-  const toast = useToast();
-  const [forma, setForma] = useState({
-    kind: "invoice",
-    series: "A",
-    range_from: "1",
-    range_to: "",
-    printer_source: "",
-  });
-  const [error, setError] = useState<unknown>(null);
-  const [ocupado, setOcupado] = useState(false);
-
-  async function cargar(): Promise<void> {
-    setError(null);
-    setOcupado(true);
-    try {
-      await llamar("/v1/fiscal-number-ranges", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ company_id: empresa.id, ...forma }),
-      });
-      toast.success("Rango cargado", NOMBRE_CLASE[forma.kind] ?? forma.kind);
-      await qc.invalidateQueries({ queryKey: ["rangos", empresa.id] });
-    } catch (e) {
-      setError(e);
-    } finally {
-      setOcupado(false);
-    }
-  }
-
-  return (
-    <div className="space-y-3 rounded-md border border-border bg-surface-muted/40 p-3">
-      <FormField
-        label="Para qué documento"
-        required
-        hint="La imprenta autoriza un rango por cada clase: facturas, notas de crédito y notas de débito."
-      >
-        {(a) => (
-          <SimpleSelect
-            id={a.id}
-            value={forma.kind}
-            onValueChange={(v) => setForma({ ...forma, kind: v })}
-            options={CLASES_CON_RANGO.map((c) => ({ value: c.value, label: c.label }))}
-          />
-        )}
-      </FormField>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <FormField label="Serie" required>
-          {(a) => (
-            <Input
-              id={a.id}
-              value={forma.series}
-              onChange={(e) => setForma({ ...forma, series: e.target.value })}
-            />
-          )}
-        </FormField>
-        <FormField label="Desde" required>
-          {(a) => (
-            <Input
-              id={a.id}
-              inputMode="numeric"
-              className="font-mono"
-              value={forma.range_from}
-              onChange={(e) => setForma({ ...forma, range_from: e.target.value })}
-            />
-          )}
-        </FormField>
-        <FormField label="Hasta" required>
-          {(a) => (
-            <Input
-              id={a.id}
-              inputMode="numeric"
-              className="font-mono"
-              value={forma.range_to}
-              onChange={(e) => setForma({ ...forma, range_to: e.target.value })}
-            />
-          )}
-        </FormField>
-        <FormField label="Imprenta autorizada" required hint="Quién autorizó el rango.">
-          {(a) => (
-            <Input
-              id={a.id}
-              value={forma.printer_source}
-              onChange={(e) => setForma({ ...forma, printer_source: e.target.value })}
-            />
-          )}
-        </FormField>
-      </div>
-      {error !== null && <MensajeError error={error} />}
-      <Button
-        variant="primary"
-        size="sm"
-        disabled={ocupado || forma.range_to.trim() === "" || forma.printer_source.trim() === ""}
-        onClick={() => void cargar()}
-      >
-        Cargar rango
-      </Button>
     </div>
   );
 }
@@ -1203,6 +1098,110 @@ function Contingencia({ rangos }: { rangos: RangoContingencia[] }): React.JSX.El
         </div>
       )}
 
+      {error !== null && <MensajeError error={error} />}
+    </div>
+  );
+}
+
+/**
+ * «Cambiar la alícuota general» (B-02, ADR-0073): con el IVA ya aceptado, quien tiene
+ * `tax.rules.manage` acepta otro valor del catálogo y la fecha desde la que rige (hoy o después). El
+ * servidor cierra la vigencia actual y abre la nueva; si hoy ya se facturó con la anterior, responde
+ * 422 y su mensaje de persona dice que puede regir desde mañana. Ninguna cifra escrita aquí: el
+ * rango y la referencia salen del catálogo.
+ */
+function CambiarIva({ catalogo }: { catalogo: IvaDelCatalogo | null }): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [abierto, setAbierto] = useState(false);
+  const [porcentaje, setPorcentaje] = useState("");
+  const [desde, setDesde] = useState(hoyLocal());
+  const [error, setError] = useState<unknown>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  async function cambiar(): Promise<void> {
+    const fraccion = porcentajeAFraccion(porcentaje);
+    if (fraccion === null) return;
+    setError(null);
+    setOcupado(true);
+    try {
+      const r = await llamar<{ changed: boolean }>("/v1/fiscal/iva-general", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ rate: fraccion, effective_from: desde }),
+      });
+      // B5: lo dice la respuesta del servidor, no una comparación hecha aquí.
+      if (r.changed) {
+        toast.success(
+          "Alícuota cambiada",
+          `Rige desde el ${fechaLocal(desde)}; queda en la auditoría.`,
+        );
+      } else {
+        toast.success(
+          "Ya regía esa alícuota",
+          "No cambió nada; la aceptación queda en la auditoría.",
+        );
+      }
+      setAbierto(false);
+      setPorcentaje("");
+      await qc.invalidateQueries({ queryKey: ["empezar-fiscal", empresa.id] });
+    } catch (e) {
+      setError(e);
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  if (!abierto) {
+    return (
+      <Button variant="secondary" size="sm" onClick={() => setAbierto(true)}>
+        Cambiar la alícuota general
+      </Button>
+    );
+  }
+  return (
+    <div className="space-y-3 rounded-md border border-border bg-surface-muted/40 p-3">
+      <p className="text-[0.88rem] text-muted-foreground">
+        La alícuota vigente se cierra el día anterior a la fecha que elijas y la nueva rige desde
+        ese día. Lo ya facturado conserva la suya.
+      </p>
+      <div className="flex flex-wrap items-end gap-2">
+        <FormField label="Porcentaje (%)" required hint={ayudaDelCatalogo(catalogo)}>
+          {(a) => (
+            <Input
+              id={a.id}
+              value={porcentaje}
+              onChange={(e) => setPorcentaje(e.target.value)}
+              inputMode="decimal"
+              className="w-28"
+            />
+          )}
+        </FormField>
+        <FormField label="Rige desde" required hint="Hoy o un día posterior.">
+          {(a) => (
+            <Input
+              id={a.id}
+              type="date"
+              value={desde}
+              min={hoyLocal()}
+              onChange={(e) => setDesde(e.target.value)}
+              className="w-44"
+            />
+          )}
+        </FormField>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={ocupado || porcentajeAFraccion(porcentaje) === null || desde === ""}
+          onClick={() => void cambiar()}
+        >
+          Acepto el cambio
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setAbierto(false)}>
+          Cancelar
+        </Button>
+      </div>
       {error !== null && <MensajeError error={error} />}
     </div>
   );

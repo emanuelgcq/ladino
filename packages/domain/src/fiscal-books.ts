@@ -1,7 +1,8 @@
 import { err, ok, type Result } from "@ladino/core";
 import { parseDecimal } from "@ladino/money";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
-import type { ExportFiscalBookRequest, BookKind } from "@ladino/schemas";
+import type { ExportFiscalBookRequest } from "@ladino/schemas";
+import { BookKind, formatearDocumento } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 
@@ -36,8 +37,19 @@ export type FiscalBookError =
  * anulada en cero y el libro de compras trae el «ajuste de período anterior». El libro cambió
  * de significado: una reexportación de un período ya exportado da otro hash, y la versión dice
  * por qué (R-54).
+ *
+ * 1.2.0 (2026-09-28, P-02): el RIF de cliente y proveedor del CSV pasa por el formateador
+ * compartido (`J-40888777-6`). Corrección (revisión 2026-09-28, hallazgo 1): hasta la
+ * migración 20260928170100 el libro NO leía el snapshot del documento sino el maestro vivo;
+ * desde ella, ventas lee el snapshot del documento y compras el de la factura. La proyección
+ * trae el RIF NORMALIZADO, así que el hash no depende de la grafía; la pantalla y el CSV lo
+ * formatean. Sin versión propia: 1.2.0 no llegó a publicarse y 1.3.0 (abajo) lo cubre.
  */
-export const BOOK_GENERATOR_VERSION = "fiscal-books/1.1.0";
+// 1.3.0 (ADR-0073, L-08 y hallazgo 6): los libros de ventas y de compras traen la base y el IVA
+// por alícuota y el resumen del art. 72 del RLIVA, firmado en el hash; ventas trae además el
+// identificador del control; y los dos hashes firman solo lo legal (B1: sin asiento ni estado de
+// pago). Un libro de ventas o de compras regenerado de un período ya exportado cambia de hash.
+export const BOOK_GENERATOR_VERSION = "fiscal-books/1.3.0";
 
 /**
  * Los adaptadores que este release SABE serializar.
@@ -64,22 +76,44 @@ const ADAPTADORES_IMPLEMENTADOS = new Set<string>(["csv_columnas_legales", "txt_
  * Y el hash se calcula sobre ESTA misma proyección, no sobre la consulta cruda:
  * así lo que se firma es exactamente lo que se sirve.
  */
-const PROYECCION: Record<BookKind, { fn: string; cols: string }> = {
+/**
+ * El RIF de la contraparte, NORMALIZADO en la proyección (revisión 2026-09-28, hallazgo 1): la
+ * misma expresión que `normalizarDocumento` y que los únicos del esquema. Así el hash del libro
+ * no cambia si un snapshot viejo trae guiones y otro no.
+ */
+const rifNormalizado = (col: string): string =>
+  `upper(regexp_replace(${col}, '[^a-zA-Z0-9]', '', 'g')) as ${col}`;
+
+const PROYECCION_CRUDA: Record<BookKind, { fn: string; cols: string }> = {
   ventas: {
-    fn: "platform.sales_book",
+    // L-08 (RLIVA arts. 72 y 76): el renglón de sales_book más la base y el IVA POR ALÍCUOTA.
+    fn: "platform.sales_book_by_rate",
     cols: `document_id, issued_on::text as issued_on, kind, series,
-           document_number::int as document_number, control_number::int as control_number,
-           status, customer_tax_id, customer_name, customer_taxpayer_type,
+           document_number::int as document_number, control_identifier,
+           control_number::int as control_number,
+           status, @@RIF(customer_tax_id)@@, customer_name, customer_taxpayer_type,
            transaction_currency, fx_rate::text as fx_rate,
            base_gravada::text as base_gravada, iva_debito::text as iva_debito,
            base_exenta::text as base_exenta, base_exonerada::text as base_exonerada,
            base_no_sujeta::text as base_no_sujeta,
            base_sin_clasificar::text as base_sin_clasificar,
-           total_amount::text as total_amount, journal_entry_id`,
+           total_amount::text as total_amount, journal_entry_id,
+           base_alicuota_general::text as base_alicuota_general,
+           iva_alicuota_general::text as iva_alicuota_general,
+           alicuota_general::text as alicuota_general,
+           base_alicuota_adicional::text as base_alicuota_adicional,
+           iva_alicuota_adicional::text as iva_alicuota_adicional,
+           alicuota_adicional::text as alicuota_adicional,
+           base_alicuota_reducida::text as base_alicuota_reducida,
+           iva_alicuota_reducida::text as iva_alicuota_reducida,
+           alicuota_reducida::text as alicuota_reducida,
+           base_gravada_sin_alicuota::text as base_gravada_sin_alicuota,
+           iva_sin_clasificar::text as iva_sin_clasificar`,
   },
   compras: {
-    fn: "platform.purchases_book",
-    cols: `invoice_id, invoice_date::text as invoice_date, supplier_tax_id, supplier_name,
+    // H6 (RLIVA arts. 72 y 75, P-59): el renglón de purchases_book más su base e IVA por alícuota.
+    fn: "platform.purchases_book_by_rate",
+    cols: `invoice_id, invoice_date::text as invoice_date, @@RIF(supplier_tax_id)@@, supplier_name,
            supplier_kind, supplier_document_number, supplier_control_number,
            supplier_document_ref, status,
            transaction_currency, fx_rate::text as fx_rate,
@@ -90,12 +124,23 @@ const PROYECCION: Record<BookKind, { fn: string; cols: string }> = {
            base_sin_clasificar::text as base_sin_clasificar,
            retenido_iva::text as retenido_iva, retenido_islr::text as retenido_islr,
            total_amount::text as total_amount, journal_entry_id,
-           booked_on::text as booked_on, received_late`,
+           booked_on::text as booked_on, received_late,
+           base_alicuota_general::text as base_alicuota_general,
+           iva_alicuota_general::text as iva_alicuota_general,
+           alicuota_general::text as alicuota_general,
+           base_alicuota_adicional::text as base_alicuota_adicional,
+           iva_alicuota_adicional::text as iva_alicuota_adicional,
+           alicuota_adicional::text as alicuota_adicional,
+           base_alicuota_reducida::text as base_alicuota_reducida,
+           iva_alicuota_reducida::text as iva_alicuota_reducida,
+           alicuota_reducida::text as alicuota_reducida,
+           base_gravada_sin_alicuota::text as base_gravada_sin_alicuota,
+           iva_sin_clasificar::text as iva_sin_clasificar`,
   },
   retenciones_iva: {
     fn: "platform.iva_retention_book",
     cols: `retention_id, receipt_number::int as receipt_number, receipt_series, fiscal_period,
-           issued_on::text as issued_on, supplier_tax_id, supplier_name,
+           issued_on::text as issued_on, @@RIF(supplier_tax_id)@@, supplier_name,
            supplier_document_number, supplier_control_number,
            invoice_date::text as invoice_date, base_amount::text as base_amount,
            rate::text as rate, retained_amount::text as retained_amount,
@@ -104,13 +149,52 @@ const PROYECCION: Record<BookKind, { fn: string; cols: string }> = {
   retenciones_islr: {
     fn: "platform.islr_retention_book",
     cols: `retention_id, receipt_number::int as receipt_number, receipt_series, fiscal_period,
-           issued_on::text as issued_on, supplier_tax_id, supplier_name, concept_code,
+           issued_on::text as issued_on, @@RIF(supplier_tax_id)@@, supplier_name, concept_code,
            concept_name, formula_kind, supplier_document_number,
            invoice_date::text as invoice_date, base_amount::text as base_amount,
            rate::text as rate, subtrahend::text as subtrahend,
            retained_amount::text as retained_amount, legal_source, receipt_status`,
   },
 };
+
+/** La proyección que se sirve y se firma: la cruda con el RIF de la contraparte normalizado. */
+const PROYECCION: Record<BookKind, { fn: string; cols: string }> = Object.fromEntries(
+  Object.entries(PROYECCION_CRUDA).map(([k, p]) => [
+    k,
+    {
+      fn: p.fn,
+      cols: p.cols.replace(/@@RIF\((\w+)\)@@/g, (_m, col: string) => rifNormalizado(col)),
+    },
+  ]),
+) as Record<BookKind, { fn: string; cols: string }>;
+
+/**
+ * El resumen del art. 72 del RLIVA (L-08, H6, hallazgo 6): la MISMA proyección para la pantalla,
+ * el fichero del resumen y el hash. Existe para los libros de ventas y de compras.
+ */
+const RESUMEN_COLS = `concept, rate::text as rate, base::text as base, tax::text as tax,
+  adjustments_base::text as adjustments_base, adjustments_tax::text as adjustments_tax,
+  documents::int as documents`;
+const RESUMEN_CABECERAS = [
+  "concept",
+  "rate",
+  "base",
+  "tax",
+  "adjustments_base",
+  "adjustments_tax",
+  "documents",
+];
+/** Los libros con resumen del art. 72 (ventas; compras por la lectura conservadora de P-59). */
+const FUNCION_RESUMEN: Partial<Record<BookKind, string>> = {
+  ventas: "platform.sales_book_summary",
+  compras: "platform.purchases_book_summary",
+};
+/** El nombre del fichero del resumen de cada libro. */
+function nombreDelResumen(kind: BookKind): string {
+  return kind === "ventas" ? "resumen-art72.csv" : `resumen-art72-${kind}.csv`;
+}
+/** El rótulo del resumen: en el dataset firmado y en la primera línea de `resumen-art72*.csv`. */
+export const ROTULO_RESUMEN_CSV = "RESUMEN (RLIVA art. 72)";
 
 export interface LibroLeido {
   readonly book_kind: BookKind;
@@ -120,6 +204,8 @@ export interface LibroLeido {
   readonly rows: Record<string, unknown>[];
   readonly row_count: number;
   readonly unclassified_rows: number;
+  /** Solo en los libros de ventas y de compras: el resumen del art. 72 del RLIVA (L-08, hallazgo 6). */
+  readonly summary?: Record<string, unknown>[];
 }
 
 /**
@@ -149,10 +235,25 @@ export async function readFiscalBook(
   // regla 7 no tiene excepción para comparaciones, y una que hoy solo mira si
   // es cero es la que mañana alguien reutiliza para sumar.
   const esCero = (v: unknown): boolean => typeof v === "string" && /^-?0*(?:\.0*)?$/.test(v);
-  const sinClasificar = rows.filter((r) => {
-    const v = r["base_sin_clasificar"];
-    return typeof v === "string" && v !== "" && !esCero(v);
-  }).length;
+  // F6: también lo gravado que ninguna alícuota explica y el IVA sin clasificar (libros por
+  // alícuota): un renglón con cualquiera de los tres distinto de cero es un renglón sin clasificar.
+  const distintoDeCero = (v: unknown): boolean => typeof v === "string" && v !== "" && !esCero(v);
+  const sinClasificar = rows.filter(
+    (r) =>
+      distintoDeCero(r["base_sin_clasificar"]) ||
+      distintoDeCero(r["base_gravada_sin_alicuota"]) ||
+      distintoDeCero(r["iva_sin_clasificar"]),
+  ).length;
+
+  // El RESUMEN del art. 72 del RLIVA (L-08): base e IVA por alícuota, exentas, exoneradas, no
+  // sujetas y ajustes por notas. Se calcula en la base, con el mismo signo que el libro.
+  const fnResumen = FUNCION_RESUMEN[kind];
+  const resumen =
+    fnResumen !== undefined
+      ? await sql<Record<string, unknown>[]>`
+          select ${sql.unsafe(RESUMEN_COLS)}
+            from ${sql.unsafe(fnResumen)}(${companyId}, ${from}::date, ${to}::date)`
+      : undefined;
 
   return {
     book_kind: kind,
@@ -162,6 +263,7 @@ export async function readFiscalBook(
     rows,
     row_count: rows.length,
     unclassified_rows: sinClasificar,
+    ...(resumen === undefined ? {} : { summary: resumen }),
   };
 }
 
@@ -179,16 +281,49 @@ async function hashDelDataset(
   to: string,
 ): Promise<{ hash: string; n: number }> {
   const p = PROYECCION[kind];
+  // H6 (RLIVA art. 72, decidido por criterio): en ventas, lo que se firma son los renglones Y el
+  // resumen, separados por su rótulo. Un resumen que cambia cambia el hash.
+  const fnResumen = FUNCION_RESUMEN[kind];
+  const resumen =
+    fnResumen !== undefined
+      ? sql`(select chr(10) || ${ROTULO_RESUMEN_CSV} || chr(10)
+               || coalesce(string_agg(to_jsonb(s)::text, chr(10) order by to_jsonb(s)::text), '')
+               from (select ${sql.unsafe(RESUMEN_COLS)}
+                       from ${sql.unsafe(fnResumen)}(${companyId}, ${from}::date,
+                                                     ${to}::date)) s)`
+      : sql`''`;
+  // B1 (decidido por criterio): en ventas, el hash firma el LIBRO LEGAL. Fuera `journal_entry_id`
+  // (contabilidad, no libro) y el `status` operativo: entra solo el estado legal, «anulada» o
+  // «vigente». Cobrar una factura (issued → paid) o asentarla no cambia el hash. Alternativa:
+  // guardar aparte el hash del resumen en la generación.
+  // Compras, igual (re-revisión, 2026-10-02): pagar una factura de proveedor (posted → paid) no
+  // cambia el hash. El «ajuste de período anterior» SÍ es un estado legal del libro y se conserva.
+  // Los libros de retenciones no firman ni asiento ni estado de pago (su `receipt_status` es el
+  // del comprobante: borrador, emitido, anulado) y quedan como estaban.
+  const fila =
+    kind === "ventas"
+      ? sql`(to_jsonb(f) - 'journal_entry_id' - 'status')
+              || jsonb_build_object('estado_legal',
+                   case when f.status = 'annulled' then 'anulada' else 'vigente' end)`
+      : kind === "compras"
+        ? sql`(to_jsonb(f) - 'journal_entry_id' - 'status')
+              || jsonb_build_object('estado_legal',
+                   case f.status when 'annulled' then 'anulada'
+                                 when 'ajuste_periodo_anterior' then 'ajuste_periodo_anterior'
+                                 else 'vigente' end)`
+        : sql`to_jsonb(f)`;
   const [r] = await sql<{ h: string; n: number }[]>`
     with filas as (
       select ${sql.unsafe(p.cols)}
         from ${sql.unsafe(p.fn)}(${companyId}, ${from}::date, ${to}::date)
-    )
+    ),
+    firmadas as (select (${fila})::text as t from filas f)
     select count(*)::int as n,
            encode(sha256(convert_to(
-             coalesce(string_agg(to_jsonb(f)::text, chr(10) order by to_jsonb(f)::text), ''),
+             coalesce(string_agg(t, chr(10) order by t), '')
+               || ${resumen},
              'utf8')), 'hex') as h
-      from filas f`;
+      from firmadas`;
   return { hash: r?.h ?? "", n: r?.n ?? 0 };
 }
 
@@ -227,7 +362,14 @@ function aCsv(rows: Record<string, unknown>[], cabeceras: string[]): string {
     return /[",\n\r]/.test(protegido) ? `"${protegido.replace(/"/g, '""')}"` : protegido;
   };
   const lineas = [cabeceras.join(",")];
-  for (const r of rows) lineas.push(cabeceras.map((c) => escapar(r[c])).join(","));
+  // El RIF de la contraparte llega NORMALIZADO de la proyección (el hash no depende de la
+  // grafía) y sale con la función compartida (P-02, M-05), `J-40888777-6`, igual que en la
+  // pantalla de Libros.
+  const celda = (r: Record<string, unknown>, c: string): unknown => {
+    const v = r[c];
+    return c.endsWith("_tax_id") && typeof v === "string" ? formatearDocumento(v) : v;
+  };
+  for (const r of rows) lineas.push(cabeceras.map((c) => escapar(celda(r, c))).join(","));
   return lineas.join("\r\n");
 }
 
@@ -313,9 +455,14 @@ export function aTxtRetencionesIva(
   return lineas.join("\r\n");
 }
 
-/** Las cabeceras salen de la proyección, así que no pueden desincronizarse. */
-function cabecerasDe(kind: BookKind): string[] {
-  return PROYECCION[kind].cols
+/**
+ * Las cabeceras salen de la proyección CRUDA (B4, re-revisión 2026-09-28): el token
+ * `@@RIF(col)@@` no lleva comas, así que el `split(",")` de siempre vale; la expandida sí las
+ * lleva dentro de su `regexp_replace`. Exportada solo para el test que fija las cuatro listas.
+ */
+export function cabecerasDe(kind: BookKind): string[] {
+  return PROYECCION_CRUDA[kind].cols
+    .replace(/@@RIF\((\w+)\)@@/g, "$1")
     .split(",")
     .map((c) => {
       const t = c.trim().replace(/\s+/g, " ");
@@ -331,6 +478,9 @@ export interface ExportacionHecha {
   readonly content: string;
   readonly content_type: string;
   readonly filename: string;
+  /** Solo en ventas y compras: el resumen del art. 72 de ESTA generación (B1), en la misma respuesta. */
+  readonly summary_content?: string;
+  readonly summary_filename?: string;
 }
 
 /**
@@ -472,8 +622,115 @@ export async function exportFiscalBook(
   return ok({
     run: run!,
     book: libro,
+    // H6 (decidido por criterio): el CSV «columnas legales» es solo cabecera + renglones, legible
+    // por máquina. El resumen del art. 72 va firmado en el hash y se descarga como fichero propio
+    // de esta misma generación (exportSalesBookSummary). Alternativa: bloque al final de este CSV.
     content: aCsv(libro.rows, cabeceras),
     content_type: "text/csv; charset=utf-8",
     filename: `libro-${input.book_kind}-${input.period_from}_${input.period_to}.csv`,
+    // B1: en ventas, el resumen del art. 72 de esta misma generación, leído en la MISMA
+    // transacción que el libro y el hash. La ruta hermana queda para volver a descargarlo.
+    ...(libro.summary === undefined
+      ? {}
+      : {
+          summary_content: serializarResumen(libro.summary),
+          summary_filename: nombreDelResumen(input.book_kind),
+        }),
+  });
+}
+
+/** `resumen-art72.csv`: el rótulo, las cabeceras y las filas del resumen. */
+function serializarResumen(filas: Record<string, unknown>[]): string {
+  return ROTULO_RESUMEN_CSV + "\r\n" + aCsv(filas, RESUMEN_CABECERAS);
+}
+
+export interface ResumenExportado {
+  readonly run_id: string;
+  readonly dataset_hash: string;
+  readonly content: string;
+  readonly content_type: string;
+  readonly filename: string;
+}
+
+/**
+ * El resumen del art. 72 del RLIVA (L-08, H6) como fichero PROPIO de una generación ya exportada
+ * del libro de ventas o de compras (`resumen-art72.csv`, `resumen-art72-compras.csv`). No crea otra
+ * generación ni toca la firmada. Antes de
+ * servirlo recalcula el hash del período y lo compara con el del run: si el libro cambió desde
+ * entonces, el resumen ya no es el de esa generación y no se sirve (hay que volver a exportar).
+ */
+export async function exportSalesBookSummary(
+  uow: UnitOfWork,
+  input: { company_id: string; run_id: string },
+): Promise<Result<ResumenExportado, FiscalBookError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "Descargar el resumen de un libro fiscal exige un usuario real.",
+    });
+  }
+  const scope = await companyScope(sql, actor.userId, input.company_id, "fiscal_book.export");
+  if (!scope.ok) return scope;
+  const [run] = await sql<
+    {
+      id: string;
+      book_kind: string;
+      period_from: string;
+      period_to: string;
+      dataset_hash: string;
+      generator_version: string;
+    }[]
+  >`
+    select id, book_kind, period_from::text as period_from, period_to::text as period_to,
+           dataset_hash, generator_version
+      from public.fiscal_book_runs
+     where id = ${input.run_id} and company_id = ${input.company_id}`;
+  if (!run) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  const kind = BookKind.safeParse(run.book_kind);
+  const fnResumen = kind.success ? FUNCION_RESUMEN[kind.data] : undefined;
+  if (!kind.success || fnResumen === undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "El resumen del art. 72 es de los libros de ventas y de compras: esta generación es de " +
+        "otro libro.",
+    });
+  }
+  // B1 (c): con otra versión del generador el hash no es comparable; se dice eso, no «cambió».
+  if (run.generator_version !== BOOK_GENERATOR_VERSION) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        `Esa generación es de otra versión del generador (${run.generator_version}): exporta de ` +
+        "nuevo el libro y descarga su resumen.",
+    });
+  }
+  const { hash } = await hashDelDataset(
+    sql,
+    input.company_id,
+    kind.data,
+    run.period_from,
+    run.period_to,
+  );
+  if (hash !== run.dataset_hash) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        `El libro de ${kind.data} cambió desde esa generación: vuelve a exportarlo y descarga el ` +
+        "resumen " +
+        "de la nueva.",
+    });
+  }
+  const resumen = await sql<Record<string, unknown>[]>`
+    select ${sql.unsafe(RESUMEN_COLS)}
+      from ${sql.unsafe(fnResumen)}(${input.company_id}, ${run.period_from}::date,
+                                    ${run.period_to}::date)`;
+  return ok({
+    run_id: run.id,
+    dataset_hash: run.dataset_hash,
+    content: serializarResumen(resumen),
+    content_type: "text/csv; charset=utf-8",
+    filename: nombreDelResumen(kind.data),
   });
 }

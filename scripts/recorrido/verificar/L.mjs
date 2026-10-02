@@ -78,4 +78,49 @@ c.caso(
   },
 );
 
+// ── Ola 2 · L-11: la fuente de los libros es el Reglamento de la LIVA ───────────
+c.caso(
+  "L-11",
+  "la pantalla y el catálogo de formatos citan el Reglamento de la LIVA, no «PA 071 y PA 102»",
+  async () => {
+    const fs = await import("node:fs");
+    const libros = fs.readFileSync(
+      new URL("../../../apps/web/src/pages/libros/Libros.tsx", import.meta.url),
+      "utf8",
+    );
+    afirmar(
+      !libros.includes("PA 071 y PA 102"),
+      "la pantalla de libros sigue citando la PA 071 y la PA 102",
+    );
+    afirmar(
+      libros.includes("Reglamento de la LIVA (arts. 70 a 78)"),
+      "la pantalla no cita el Reglamento",
+    );
+    const [a] = await sql`select name, legal_source, is_official from public.book_format_adapters
+                         where code = 'csv_columnas_legales'`;
+    afirmar(
+      a && /Reglamento de la LIVA/.test(a.name) && !/PA 071/.test(a.name),
+      `adaptador: ${a?.name}`,
+    );
+    afirmar(a.is_official === false, "el CSV no es un formato oficial y no debe decir que lo es");
+  },
+);
+
+// ── L-12 (ADR-0072 §9): los nombres dicen de quién es la retención ──
+c.caso(
+  "L-12",
+  "«practicamos (a proveedores)» y «nos practicaron (clientes)» en pantalla",
+  async () => {
+    const fs = await import("node:fs");
+    const dec = fs.readFileSync("apps/web/src/pages/libros/Declaraciones.tsx", "utf8");
+    const lib = fs.readFileSync("apps/web/src/pages/libros/Libros.tsx", "utf8");
+    afirmar(
+      dec.includes("Retenciones que nos practicaron (clientes)"),
+      "Declaraciones sin el nombre",
+    );
+    afirmar(lib.includes("Retenciones que practicamos (a proveedores)"), "Libros sin el nombre");
+    afirmar(!dec.includes("Retenciones que nos hicieron"), "queda el nombre viejo");
+  },
+);
+
 export default c.correr;

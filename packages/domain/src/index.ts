@@ -23,6 +23,21 @@ export {
   setProductImage,
   type ProductError,
 } from "./products.js";
+export {
+  leerNumeroDeclarado,
+  interpretarFilasProductos,
+  importarFila,
+  anotarCodigosExistentes,
+  guardarCostoReferencia,
+  SIN_PERMISO_DE_PRECIO,
+  crearTrabajoImportacion,
+  leerTrabajoImportacion,
+  procesarFilaDeTrabajo,
+  procesarTrabajoImportacion,
+  MAX_FILAS_IMPORTACION,
+  type FilaLista,
+  type ProductImportError,
+} from "./product-import.js";
 export { createPriceList, setPrice, type PricingError } from "./pricing.js";
 export {
   receiveStock,
@@ -73,6 +88,16 @@ export {
   avisoIgtf,
   type SalesError,
 } from "./sales.js";
+export {
+  registrarTalonario,
+  completarImprenta,
+  serieDelTalonario,
+  corregirImprenta,
+  anularTalonario,
+  bloquearTalonario,
+  TALONARIO_COLUMNS,
+  type TalonarioError,
+} from "./talonario.js";
 export {
   registerContingencyRange,
   registerContingencyInvoice,
@@ -152,6 +177,8 @@ export {
 export {
   readFiscalBook,
   exportFiscalBook,
+  exportSalesBookSummary,
+  type ResumenExportado,
   BOOK_GENERATOR_VERSION,
   type LibroLeido,
   type ExportacionHecha,
@@ -171,6 +198,12 @@ export {
   readIgtfStatus,
   type IgtfError,
 } from "./igtf.js";
+export {
+  tipoVigente,
+  exigeTipoParaFacturar,
+  readCompanyTaxpayerType,
+  type TaxpayerTypeRequiredError,
+} from "./tipo-contribuyente.js";
 export { onboardBusiness, type OnboardingError } from "./onboarding.js";
 export { listPosCarts, upsertPosCart, deletePosCart, type PosCartError } from "./pos-carts.js";
 export { createDirectCreditNote, createDebitNote } from "./sales.js";

@@ -64,14 +64,88 @@ export const IgtfStatusResponse = z
   .strict();
 export type IgtfStatusResponse = z.infer<typeof IgtfStatusResponse>;
 
-/** Cambiar la clasificación fiscal de LA EMPRESA (cierra H-6). */
+/**
+ * Declarar el tipo de contribuyente de LA EMPRESA (ADR-0072 §1; A-03, B-07). Cada declaración
+ * abre una VIGENCIA nueva en una historia append-only, con acta: nunca sobrescribe.
+ *   · `especial` exige `notified_on` (notificación de la providencia de calificación); por
+ *     omisión rige desde ese día, y `effective_from` recoge otra fecha si la providencia la dice;
+ *   · los demás no llevan notificación; por omisión rigen desde el inicio de actividades si es la
+ *     primera declaración, y desde hoy si cambia una anterior.
+ * `formal` se acepta en el contrato; la pantalla lo oculta mientras la periodicidad de la
+ * PA 1677 esté pendiente de fuente (P-38).
+ */
+export const CompanyTaxpayerTypeCode = z.enum([
+  "ordinario",
+  "especial",
+  "formal",
+  "no_contribuyente",
+]);
 export const SetCompanyTaxpayerTypeRequest = z
   .object({
     company_id: uuid,
-    taxpayer_type_code: z.enum(["ordinario", "especial", "formal", "no_sujeto", "no_domiciliado"]),
+    taxpayer_type_code: CompanyTaxpayerTypeCode,
+    notified_on: z.string().date().optional(),
+    effective_from: z.string().date().optional(),
+    /** El acta: por qué se declara o se cambia. */
+    reason: z.string().trim().min(3).max(500),
+  })
+  .strict()
+  .refine((v) => v.taxpayer_type_code !== "especial" || v.notified_on !== undefined, {
+    message: "el contribuyente especial exige la fecha de notificación de la providencia",
+    path: ["notified_on"],
+  })
+  .refine((v) => v.taxpayer_type_code === "especial" || v.notified_on === undefined, {
+    message: "la fecha de notificación es solo de la calificación como contribuyente especial",
+    path: ["notified_on"],
+  });
+export type SetCompanyTaxpayerTypeRequest = z.infer<typeof SetCompanyTaxpayerTypeRequest>;
+
+/** Una vigencia del tipo de contribuyente. */
+export const CompanyTaxpayerTypePeriod = z
+  .object({
+    id: uuid,
+    taxpayer_type_code: CompanyTaxpayerTypeCode,
+    effective_from: z.string().date(),
+    notified_on: z.string().date().nullable(),
+    reason: z.string(),
+    created_at: z.string(),
   })
   .strict();
-export type SetCompanyTaxpayerTypeRequest = z.infer<typeof SetCompanyTaxpayerTypeRequest>;
+export type CompanyTaxpayerTypePeriod = z.infer<typeof CompanyTaxpayerTypePeriod>;
+
+/** La declaración, como quedó. */
+export const SetCompanyTaxpayerTypeResponse = z
+  .object({
+    taxpayer_type_code: CompanyTaxpayerTypeCode,
+    effective_from: z.string().date(),
+    notified_on: z.string().date().nullable(),
+    igtf_disabled: z.boolean(),
+    /** Documentos fiscales ya emitidos desde `effective_from` (declaración retroactiva). */
+    documents_issued_since: z.number().int(),
+    /** El aviso, si los hay: no se reemiten; consultar al asesor. */
+    retroactive_warning: z.string().nullable(),
+  })
+  .strict();
+export type SetCompanyTaxpayerTypeResponse = z.infer<typeof SetCompanyTaxpayerTypeResponse>;
+
+/** El tipo vigente HOY (null: con RIF y sin declarar — no se factura) y la historia entera. */
+export const CompanyTaxpayerTypeResponse = z
+  .object({
+    today: z.string().date(),
+    current: z
+      .object({
+        taxpayer_type_code: CompanyTaxpayerTypeCode,
+        effective_from: z.string().date().nullable(),
+        notified_on: z.string().date().nullable(),
+      })
+      .strict()
+      .nullable(),
+    history: z.array(CompanyTaxpayerTypePeriod),
+    /** Con `?effective_from=`: documentos fiscales emitidos desde esa fecha; si no, null. */
+    documents_issued_since: z.number().int().nullable(),
+  })
+  .strict();
+export type CompanyTaxpayerTypeResponse = z.infer<typeof CompanyTaxpayerTypeResponse>;
 
 export const IgtfPerceptionResponse = z
   .object({

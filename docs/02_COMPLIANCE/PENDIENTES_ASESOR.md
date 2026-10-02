@@ -480,6 +480,10 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
 
 - **P-30 · F-01** — Retención soportada sobre factura en USD. **Aplicada:** abona la CxC a la
   tasa de la factura. **Alternativa:** tasa del día del comprobante (parámetro).
+  Implementado (migración 20260928190000): `company_settings.retention_received_voucher_rate`,
+  apagado; cada comprobante guarda con qué tasa abonó (`ar_valuation`). Pregunta exacta: «¿la
+  retención de IVA soportada sobre una factura en divisa abona la cuenta por cobrar a la tasa de
+  la factura o a la del día del comprobante, y el diferencial se reconoce?»
 - **P-31 · G-06** — IGTF de una venta devuelta. **Aplicada:** queda percibido; solo la anulación
   lo hace indebido. **Alternativa:** tratar la devolución total del mismo día como anulación.
 - **P-32 · E-02 / H-01** — Procedimiento para regularizar IGTF no percibido y retenciones no
@@ -554,6 +558,134 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
   pago con fecha anterior se asienta en el período abierto con su fecha original. **Pregunta:** ¿es
   correcto asentar en el período abierto lo que ocurrió antes del inicio de actividades, o esos
   hechos tienen que entrar como saldos iniciales?
+- **P-49 · A-08 (regla del dueño del 2026-09-28, VALIDAR-SENIAT)** — La letra **C** del RIF.
+  **Aplicado:** el RIF es letra (V, E, J, G, P, C) + 8 dígitos + 1 verificador; la estructura bloquea
+  y el dígito verificador se calcula con el módulo 11 del portal del SENIAT (V=1, E=2, J=3, P=4, G=5;
+  pesos 4 para la letra y 3,2,7,6,5,4,3,2 para los dígitos; dv = 11 − (suma mod 11), 0 si da 10 u
+  11) y solo **avisa**: si no cuadra, se acepta y queda el acta `*.tax_id_check_digit_mismatch`. Para
+  la **C** no hay valor confirmado de la letra: con C Ladino **no avisa** del dígito (ni correcto ni
+  incorrecto). **Pregunta:** ¿qué valor tiene la letra C en el cálculo del dígito verificador (y qué
+  contribuyentes la reciben)? **Qué se rompe si la respuesta es otra:** nada guardado; solo empieza
+  a avisar. **Dónde se toca:** `packages/schemas/src/rif.ts` (`VALOR_LETRA`).
+- **P-50 · B-02 (ADR-0073, VALIDAR-TRIBUTARIO)** — Una general **distinta** de la del catálogo.
+  **Aplicado:** la empresa acepta cualquier valor dentro de 8–16,5 % (LIVA art. 27); si difiere del
+  16 % del Decreto 4.079, la regla lo dice en su `legal_source` («distinta de la del catálogo…
+  VALIDAR-TRIBUTARIO») y el acta guarda la tasa anterior. **Pregunta:** ¿una general distinta de la
+  del decreto vigente debe exigir a la persona la cita de la Gaceta que la fija, o basta el acta?
+- **P-51 · B-04 (ADR-0073, VALIDAR-TRIBUTARIO)** — Vigencia de la reforma de la LIVA y alcance
+  de la reducida. **Aplicado:** las plantillas de la reducida (art. 64), la adicional (art. 61) y la
+  exenta (arts. 17-19) rigen desde el **29-01-2020**, fecha de la G.O. 6.507 Ext. **No verificado**
+  que la reforma rija desde su publicación. Tampoco qué bienes alcanza la reducida (pendiente de
+  fuente en IVA_SPEC.md): la reducida **no se ofrece** al clasificar hasta tener la lista (abajo);
+  lo clasificado así antes de la migración 20260928170300 se sigue vendiendo al 8 %. Y la plantilla de
+  `exonerado` (Decreto 5.196, solo importación) rige desde el **01-01-2026**: IVA_SPEC.md cita la
+  G.O. 6.952 Ext. del 31-12-2025 y la vigencia «hasta el 31-12-2026», pero **no** el día de entrada
+  en vigor; el 01-01-2026 es una lectura (pendiente de fuente). **Preguntas:** ¿fecha de entrada en
+  vigencia de la G.O. 6.507? ¿Qué bienes y servicios lleva hoy la alícuota reducida? ¿Desde qué día
+  rige el Decreto 5.196? **Pista (hallazgo 10 de la auditoría fiscal):** el art. 64 es una LISTA
+  CERRADA de bienes. Desde la migración 20260928170300 clasificar un producto como reducida exige
+  su literal (`tax_reduced_rate_literals`), y esa lista **nace vacía**: ninguna fuente de
+  docs/02_COMPLIANCE la trae. Hasta que el asesor la dé con su texto (literal por literal, con
+  Gaceta), ningún producto nuevo se clasifica como reducida y la pantalla no la ofrece.
+- **P-52 · E-18 (ADR-0073 §4, VALIDAR-TRIBUTARIO)** — La cesta básica. **Aplicado:** los 21
+  literales del art. 18.1 (a–u) como «fuente secundaria» (no cotejados con la G.O. 6.507, que es un
+  escaneo); el literal pendiente (maíz, sorgo, soya…) no se siembra. En el escenario local se
+  reclasificaron como exentos los alimentos del recorrido, **no** el atún ni las sardinas, cuyo
+  literal depende de la presentación. **Preguntas:** cotejar los literales con la G.O. 6.507; ¿el
+  atún en lata «170 g» y las sardinas «en lata» sin más datos son exentos?
+- **P-53 · B-04 / E-04 (ADR-0073, VALIDAR-SENIAT)** — La adicional suntuaria en la factura.
+  **Aplicado:** la línea de un bien suntuario lleva UNA alícuota, general + adicional (hoy 31 %), y
+  el pie de la factura la discrimina como «Base imponible 31 %» e «IVA 31 %». Lo respalda que el
+  resumen del libro (RLIVA art. 72) nombra la categoría «alícuota general más adicional». Se queda así
+  hasta que el auditor fiscal o el asesor digan otra cosa. **Pregunta:** ¿la PA 00071 art. 13.10-11
+  exige discriminar el 16 % y el 15 % por separado en la factura, o basta el 31 % en una línea?
+- **P-54 · G-01 / H11 (ADR-0071, VALIDAR-SENIAT)** — El talonario de contingencia y el papel sin
+  serie. **Aplicado:** el correlativo único del art. 44 de la PA 00071 cubre facturas, notas de
+  crédito y notas de débito de la forma libre; el talonario de **contingencia** (PA 102, serie
+  «contingencia…», solo por su camino) y el **comprobante de retención** llevan su propio correlativo.
+  Un papel **sin serie** se registra con serie vacía (migración 20260928160200) y el número se
+  imprime sin guion. Desde la auditoría fiscal del 2026-10-02 (PA 00071 arts. 26-27), el PAPEL
+  escribe la palabra «Serie» delante del número —«Serie A N° 00000001»— y, sin serie, solo el número
+  («N° 00000001»); la pantalla sigue con «A-00000001». **Preguntas:** (1) ¿el talonario físico de
+  contingencia de la PA 102 comparte el correlativo de control único del emisor, o lleva uno propio,
+  y qué artículo lo dice? (2) Con un sistema centralizado (art. 27), ¿hacen falta series? Si se usan,
+  ¿se imprime «Serie A» delante del número?
+  **Qué se rompe si la respuesta es otra:** (1) una migración que quite
+  `lower(series) not like 'contingencia%'` de la exclusión y del índice, previa revisión de
+  solapes; (2) solo cambia lo impreso: el formateador del papel `serieYNumeroImpreso`.
+- **P-55 · ADR-0071 §4 / H13 — CERRADA por la PA 00071 art. 33** (auditoría fiscal, fuente ivecofi
+  verificada el 2026-10-02). La factura que no cabe en una forma libre: **cada factura, NC o ND
+  sobre forma libre ocupa UNA forma**; si la operación no cabe, se emiten varios documentos, cada uno
+  con su número. Lo que se había aplicado («las líneas siguen en la hoja siguiente») queda
+  corregido. **Aplicado (decidido por criterio, opción (a)):** tope de filas impresas por documento, ajuste
+  por empresa (`company_settings.rows_per_free_form`, por omisión 15, máximo 18, medido sobre el
+  PDF), exigido por el dominio al emitir (422) y defendido por `?destino=papel`, que rechaza lo que
+  pase de una página. **Alternativa (b), no aplicada:** partir la operación sola en varios
+  documentos. FC-34 en FACTURA_CHECKLIST.
+
+- **P-57 · auditoría fiscal 2026-10-02, PA 00071 art. 13.7 (VALIDAR-SENIAT)** — El adquirente sin
+  identificar. **Pregunta:** ¿puede emitirse factura sobre forma libre sin nombre ni cédula del
+  adquirente persona natural? **Aplicado mientras tanto (lectura conservadora):** en una empresa con
+  régimen de formas libres, factura, NC y ND exigen el nombre del adquirente y su RIF, cédula o
+  pasaporte — en el dominio (422) y en la base (`platform.assert_document_issuance`, LAD99,
+  migración 20260928190400). El «Consumidor final» y el ajuste «Permitir ventas sin identificar»
+  quedan solo para RECIBOS; la caja pide nombre y cédula al facturar. **Qué se rompe si la
+  respuesta es «sí puede»:** se quita el bloque del trigger con una migración y la comprobación del
+  dominio, y la caja vuelve a ofrecer «Venta sin identificar» con facturas. Nada de lo emitido cambia.
+  La NC y la ND no siguen el 13.7: identifican al adquirente EXACTAMENTE como la factura que corrigen
+  (decidido por criterio, regla 1), así que una factura vieja al «Consumidor final» tiene su nota
+  (R-63, resuelto). El registro a posteriori de una factura de contingencia refleja un papel que ya
+  existe y no pasa por esta exigencia.
+
+- **P-56 · A-03 (decidido por criterio, VALIDAR-TRIBUTARIO)** — El «no contribuyente» con RIF.
+  **Aplicado:** `no_contribuyente` no se declara. Lo es por hecho la empresa sin RIF, que emite
+  recibos, y una empresa con RIF declara ordinario o especial antes de su primera factura, NC o
+  ND (CHECK `company_taxpayer_types_declarable_chk`, LAD98, migraciones 20260928190100 y 190300;
+  `formal` queda fuera hasta M-10, P-38). **Pregunta exacta** (reformulada por el auditor-fiscal,
+  hallazgo 9): «Una persona jurídica inscrita en el RIF que solo realiza actividades no sujetas
+  emite factura con la leyenda "no sujeto al IVA" (PA 00071 arts. 2 y 15). ¿Cuándo califica como
+  tal y con qué deberes formales?» **Qué se rompe si la respuesta es otra:** se
+  quita el CHECK, `no_contribuyente` vuelve a ser declarable y la puerta de emisión decide qué
+  kinds admite para él. Nada de lo emitido cambia.
+
+- **P-58 · hallazgo 3 de la auditoría fiscal (ADR-0071, VALIDAR-TRIBUTARIO)** — La alícuota de la
+  nota de crédito. **Aplicado:** la NC que acredita líneas de una factura toma de CADA línea de la
+  factura su alícuota, categoría, regla y descripción congeladas, no la condición del día de la nota:
+  revierte el débito que la factura generó, y en el libro cae en la fila de la alícuota de la
+  factura. **Pregunta:** si entre la factura y su NC cambia la alícuota o la condición del bien,
+  ¿la nota revierte el IVA a la alícuota y condición de la factura? **Qué se rompe si la respuesta es
+  otra:** `createInvoiceLike` volvería a resolver la regla a la fecha de la nota para la NC.
+  **Ampliada a la ND (B-5, decidido por criterio):** la ND que corrige una LÍNEA de la factura
+  (`source_line_id`) también va a la alícuota y condición de esa línea; la ND sin línea (ajuste
+  global) o por un concepto nuevo va a la condición de hoy. La asimetría es deliberada: sin línea
+  no hay débito que revertir. **Pregunta ampliada:** ¿la ND de ajuste global sobre una factura
+  sigue la alícuota de la factura o la del día de la nota?
+- **P-59 · Hallazgo 6 (auditoría fiscal, VALIDAR-SENIAT)** — ¿El resumen del art. 72 y la
+  agrupación por alícuota son obligatorios también en el libro de compras (RLIVA arts. 72 y 75,
+  fuente secundaria)? **Aplicado, lectura conservadora:** el libro de compras trae base e IVA por
+  alícuota (`purchases_book_by_rate`) y su resumen (`purchases_book_summary`), en la misma
+  exportación (`resumen-art72-compras.csv`) y firmados en el hash. Si la respuesta es no, sobran
+  columnas, no faltan.
+- **P-60 · Hallazgo 10 (auditoría fiscal, VALIDAR-TRIBUTARIO)** — ¿Qué bienes son suntuarios a efectos
+  del art. 61 de la LIVA? **Aplicado:** no hay lista con fuente, así que clasificar un producto como
+  adicional exige una justificación escrita, que queda en el acta (`product.created` o
+  `product.tax_category_set`, campo `justification`). **Pregunta:** ¿hay una lista o un criterio
+  normativo (anexo, decreto, providencia) de bienes suntuarios? Si lo hay, se carga como lista
+  cerrada, como la del art. 64.
+- **P-61 · hallazgo 14 de la auditoría fiscal (ADR-0071, VALIDAR-SENIAT)** — Formas libres perdidas o
+  deterioradas. **Aplicado:** nada en el código. Un talonario que no emitió se anula con motivo y
+  acta (`POST /v1/fiscal-number-ranges/{id}/cancel`); uno que ya emitió no se anula, y sus controles
+  restantes no tienen camino. **Pregunta:** ¿qué se hace con las formas libres restantes de un rango
+  perdidas o deterioradas (denuncia, acta, notificación a la imprenta o al SENIAT, y si sus números de
+  control se dan por anulados)? **Qué se rompe si la respuesta es otra:** haría falta un acto de
+  «controles inutilizados» por tramo, con su acta, que hoy no existe.
+
+- **P-62 · revisión de la auditoría fiscal, F3 (VALIDAR-SENIAT)** — La orden de entrega sobre forma
+  libre. **Pregunta:** ¿la orden de entrega o guía de despacho sobre forma libre exige nombre y RIF
+  o cédula del adquirente según la PA 00071? **Aplicado mientras tanto:** `delivery_note` queda FUERA
+  de la exigencia del adquirente en la base (`platform.assert_document_issuance`, migración
+  20260928190500), a la vista y con su comentario. **Qué se rompe si la respuesta es «sí»:** una
+  migración añade `delivery_note` al bloque y el dominio la valida como a la factura.
 
 ## Resumen para la conversación con el asesor
 

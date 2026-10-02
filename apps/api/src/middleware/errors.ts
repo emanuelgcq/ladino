@@ -63,8 +63,16 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // haya traducido. Es la red que hace que «sin regla no se emite» valga también
   // para el camino que nadie previó.
   LAD49: { code: "FISCAL_NUMBERING_INVALID", status: 409 },
+  // ADR-0072 §1: la base rechaza factura/NC/ND sin tipo de contribuyente vigente.
+  LAD98: { code: "TAXPAYER_TYPE_REQUIRED", status: 409 },
+  // PA 00071 art. 13.7 (migración 20260928190400): factura, NC o ND sobre forma libre sin
+  // adquirente identificado. El dominio lo dice antes con su propio mensaje.
+  LAD99: { code: "VALIDATION_FAILED", status: 422 },
   LAD50: { code: "TAX_RULE_MISSING", status: 409 },
   LAD51: { code: "EXCHANGE_RATE_MISSING", status: 409 },
+  // ADR-0073 (B-02): la general propuesta no es una general del catálogo (0 %, fuera de 8–16,5 %
+  // o sin plantilla vigente). Es un dato del cliente que la ley no admite: 422.
+  LAD97: { code: "VALIDATION_FAILED", status: 422 },
   // Contabilidad (migración 25). Los tres los levanta el ESQUEMA, que es donde
   // vive el invariante: llegan aquí aunque el caso de uso no los traduzca.
   LAD59: { code: "ENTRY_UNBALANCED", status: 409 },
@@ -194,6 +202,9 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   // ADR-0062 §4: el egreso deja la cuenta en negativo y nadie lo confirmó. 409: el cuerpo está
   // bien; lo que no alcanza es el saldo, y el mensaje dice cuánto hay.
   INSUFFICIENT_FUNDS: 409,
+  // ADR-0072 §1 (A-03): sin tipo de contribuyente vigente en la fecha del documento no se
+  // factura. 409: el cuerpo está bien; falta una declaración, y el mensaje dice dónde hacerla.
+  TAXPAYER_TYPE_REQUIRED: 409,
   // ADR-0064 §1: solo existe la tasa del BCV; teclearla o confirmarla a mano ya no se puede.
   // 409: el cuerpo está bien; lo que lo impide es la regla, y el mensaje dice el camino.
   RATE_ONLY_FROM_BCV: 409,
@@ -354,6 +365,8 @@ function mensajePara(code: string): string {
       return "Ese formato de libro no está disponible en este release.";
     case "REGIME_KIND_NOT_ALLOWED":
       return "El régimen fiscal de la empresa no emite ese tipo de documento.";
+    case "TAXPAYER_TYPE_REQUIRED":
+      return "La empresa no tiene tipo de contribuyente vigente en la fecha del documento.";
     case "MONEY_ERROR":
       return "Un importe no se pudo interpretar o redondear.";
     case "UNAUTHENTICATED":
@@ -398,6 +411,8 @@ export function mensajePersona(code: string): string {
       return "Esto ya quedó registrado y no se puede cambiar. Lo que corresponde es registrar la corrección.";
     case "REGIME_KIND_NOT_ALLOWED":
       return "Ese tipo de documento no va con cómo factura tu negocio. Revisa el paso de facturación en Empezar.";
+    case "TAXPAYER_TYPE_REQUIRED":
+      return "Para facturar falta declarar el tipo de contribuyente del negocio. Decláralo en Configuración → Mi empresa, o pídeselo a quien administra.";
     case "DOCUMENT_SNAPSHOT_FROZEN":
       return "Los datos del cliente quedaron impresos en esa factura y no se cambian. Si están mal, se corrige con una nota de crédito.";
     case "PERIOD_CLOSED":

@@ -9,6 +9,7 @@ import {
   enableIgtf,
   setIgtfInstrument,
   setCompanyTaxpayerType,
+  readCompanyTaxpayerType,
   readIgtfStatus,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
@@ -163,6 +164,26 @@ export function igtfRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler)
   // de producción tuvo que ponerla por SQL). Vive aquí y no en companies.ts
   // porque su efecto colateral —apagar la percepción si deja de ser SPE— es
   // de esta familia.
+  // ADR-0072 §1: el tipo vigente hoy y su historia. SIN permiso propio, decidido por criterio
+  // (ADR-0072, nota de aplicación): lo lee cualquier miembro de la empresa, porque la web decide
+  // flujos con él (facturar, IGTF, Empezar); el X-Company-Id ya exige ser miembro. Con
+  // ?effective_from= devuelve además cuántos documentos fiscales se emitieron desde esa fecha.
+  app.get("/v1/companies/taxpayer-type", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const desdeCrudo = c.req.query("effective_from");
+    if (desdeCrudo !== undefined && !/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(desdeCrudo)) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "effective_from va como AAAA-MM-DD.",
+      });
+    }
+    const cuerpo = await withTransaction(sql, actor, ({ sql: tx }) =>
+      readCompanyTaxpayerType(tx, companyId, desdeCrudo),
+    );
+    return c.json(cuerpo, 200);
+  });
+
   app.put("/v1/companies/taxpayer-type", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);
     const parsed = SetCompanyTaxpayerTypeRequest.safeParse(await c.req.json().catch(() => null));

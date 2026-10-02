@@ -17,6 +17,7 @@ import { SimpleSelect } from "../../ui/select.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField } from "../../components/forms.js";
 import { Link } from "react-router";
+import { avisoDigitoRif, normalizarDocumento } from "@ladino/schemas";
 import { formatearDocumento } from "../negocio/comunes.js";
 import { Recortador } from "../registro/Registro.js";
 import { tieneRif } from "../../app/rif.js";
@@ -573,10 +574,10 @@ function DialogoRif({
   const pideDireccion = sinRif && modo === "poner" && !hayDireccion;
   const [error, setError] = useState<string | null>(null);
 
-  const normalizado = rif
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
+  // La función compartida (A-08): normaliza igual que el servidor y avisa del dígito
+  // verificador ANTES de guardar. El servidor acepta el dígito que no cuadra y lo registra.
+  const normalizado = normalizarDocumento(rif);
+  const avisoDigito = avisoDigitoRif(rif);
   const esCorreccion = modo === "corregir";
 
   const enviar = useMutation({
@@ -648,6 +649,11 @@ function DialogoRif({
               />
             )}
           </FormField>
+          {avisoDigito !== null && (
+            <p role="status" className="text-[0.85rem] text-warning-soft-foreground">
+              {avisoDigito}
+            </p>
+          )}
           {pideDireccion && (
             <FormField
               label="Dirección fiscal"

@@ -359,7 +359,8 @@ consumidores.
   `ADAPTADORES_IMPLEMENTADOS`, ADR-0044 §5
 
 El único adaptador sembrado es `csv_columnas_legales`, marcado `is_official = false`. Trae las
-columnas que PA SNAT/2011/00071 y PA 102 **nombran** —entregable hoy a un contador para revisión y
+columnas que el Reglamento de la LIVA (Decreto 206, arts. 70 a 78) exige en los libros —la PA 00071
+regula la factura, no el libro (L-11, migración 20260928180200)— **nombran** —entregable hoy a un contador para revisión y
 archivo— pero **no es el fichero que la administración tributaria exige**, y ese layout no está en
 el repositorio. Inventarlo a partir de ejemplos de internet sería inventar una obligación legal
 (CLAUDE.md §2), y un archivo con el layout equivocado se rechaza entero.
@@ -430,7 +431,7 @@ del libro; está capturado para cuando la regla exista.
   operaciones mayoritarias con consumidor final + actividad listada; el literal j obliga sin
   importar el ingreso) · `EMISION_FACTURAS.md` §2
 
-Un negocio obligado por el art. 8 **no puede** facturar por formatos libres, y el art. 49 le
+Un negocio obligado por el art. 8 **no puede** facturar por formas libres, y el art. 49 le
 prohíbe además los documentos previos. Ladino no imprime por máquina fiscal: para ese perfil,
 hoy no hay emisión legal desde Ladino.
 
@@ -948,3 +949,160 @@ que salir junto con `purchases_book` y `recompute_iva_period`, que redefine la m
 20260928120000. Si sale sin ellas, el asiento cae en un período y el libro en otro. Mientras
 tanto, el 422 se lee bien («anterior al inicio de actividades»), pero **bloquea algo que antes
 entraba**. **Mitigación:** no desplegar 130000 sin el paso de compras de K-04, o avisar al dueño.
+
+### R-56 · El worker puede adoptar `ladino_api`: su aislamiento por privilegio (ADR-0031) deja de ser total
+
+> **Estado 2026-09-29: ACEPTADO, decidido por criterio** (§2.16 de la respuesta del dueño; ADR-0074
+> §«Quién procesa el trabajo»; migración `20260928140000_product_import_jobs.sql`). El revisor verificó
+> el aislamiento y el coordinador que el GRANT es aplicable en producción (ADMIN OPTION de `postgres`
+> sobre `ladino_api`, PG 17.6).
+
+- **Severidad:** Media · **Disparador:** credenciales del worker comprometidas, o un bug del worker que
+  nombre un actor que no es el del trabajo.
+- **Dónde:** `grant ladino_api to ladino_worker with inherit false, set true` en la migración
+  20260928140000; lo usa `procesarTrabajoImportacion` (`packages/domain/src/product-import.ts`) con
+  `set local role ladino_api` dentro de cada transacción de fila.
+
+ADR-0031 aislaba al worker por PRIVILEGIO: con GRANT solo sobre outbox, idempotencia y carritos, no
+podía ni nombrar una tabla de negocio. ADR-0074 decide que la importación la procesa el worker, y
+crear un producto toca una docena de tablas (productos, precios, kardex, asientos, auditoría,
+outbox). Se eligió que el worker **adopte** `ladino_api` con el actor del trabajo en el GUC, en vez
+de repartirle GRANT tabla por tabla: la RLS y la autorización son las de la API para esa persona, y
+sin el `SET ROLE` explícito el worker sigue sin ver nada (pgTAP 014 y 082). Lo que se pierde: quien
+controle el proceso del worker puede hacer lo que la API puede, igual que quien controle la API.
+**Mitigación:** el actor sale de `product_import_jobs.created_by` (lo fija el trigger de procedencia,
+no el cliente); el SET ROLE vive en un solo sitio. **Alternativa, descartada por criterio:** procesar
+el trabajo en el proceso de la API (en segundo plano tras responder) y revocar el GRANT.
+
+
+
+### R-57 · Al desplegar ADR-0073, las empresas con IVA aceptado venden reducida y adicional, su exenta cambia de cita y el libro de ventas cambia de columnas
+
+- **Severidad:** Media · **Disparador:** aplicar las migraciones 20260928150000, 20260928150100 y
+  20260928150200 y 20260928150300 en producción. **Van en la lista «aplicar justo después del git pull»**, en la
+  misma ventana que el despliegue: la API nueva lee `tax_rule_templates`, llama a
+  `accept_general_vat` y proyecta las columnas nuevas de `sales_book_by_rate`, y con la API vieja
+  arriba los productos de reducida y adicional empezarían a venderse sin la pantalla que los explica
+- **Dónde:** `platform.seed_catalog_tax_rules` (§6 de 20260928150000), 20260928150100,
+  `platform.sales_book_by_rate`, `BOOK_GENERATOR_VERSION` 1.3.0
+
+Toda empresa con general propia vigente y en rango recibe, desde el día de la migración, reglas
+propias de reducida (8 %), adicional (su general + 15 %) y exenta con la cita del catálogo; su exenta
+«ACEPTADA por el dueño» se cierra ese día. Un producto que alguien hubiera clasificado como reducida
+o adicional, y que hoy da 409, **empieza a venderse** sin que nadie lo revise. Y el libro de ventas
+trae once columnas nuevas y su hash firma también el resumen del art. 72 (H6): reexportar un período
+ya exportado da otro hash, y la versión del generador (1.3.0) lo explica. Desde 150200, una regla
+con líneas emitidas no se retira nunca (se cierra con `effective_to`), y la aceptación del mismo día
+en que ya se facturó con la tasa anterior se rechaza (LAD97): la persona elige otra fecha. Lo emitido no cambia: cada línea conserva su regla copiada (ADR-0038).
+**Mitigación:** antes de desplegar, `select company_id, tax_category_code, count(*) from
+public.products where tax_category_code in ('gravado_reducida', 'gravado_adicional') group by 1, 2`
+en producción, y avisar a esas empresas. Y las empresas cuya categoría por omisión el catálogo no
+ofrece en ventas (desde B4, el alta simple y la importación les darían 422): `select company_id,
+default_tax_category_code from public.company_settings where default_tax_category_code not in
+(select product_tax_category from public.tax_rule_templates where offered_in_sales)`.
+**Deja de ser aceptable:** si alguna de las dos consultas devuelve filas y nadie las revisó.
+
+### R-58 · Un RIF «P» sigue clasificándose como «extranjera / no domiciliado» (pendiente del asesor)
+
+- **Severidad:** Media · **Disparador:** alta de un cliente o proveedor con RIF P sin tipo explícito
+- **Dónde:** `packages/domain/src/customers.ts` (`clasificacionPorPrefijo`),
+  `apps/api/src/routes/customers.ts` (importación) y `apps/web/src/pages/negocio/Vender.tsx` (la
+  inferencia del mostrador)
+
+La regla del dueño del 2026-09-28 dice que **P es el RIF de una persona con pasaporte**, y el
+dominio sigue infiriendo de la P «extranjera / no_domiciliado» en tres sitios. Es clasificación
+fiscal, no texto: se queda como está (revisión del coordinador, 2026-09-28) hasta que el asesor diga
+qué clasificación por omisión corresponde a un RIF P. Quien lo sepa la corrige en la ficha.
+**Pendiente del asesor:** ¿qué tipo de persona y de contribuyente corresponde por omisión a un RIF
+P (persona natural con pasaporte, domiciliada o no)?
+
+*Resuelto en la misma revisión (antes era la primera mitad de este riesgo):* el cliente que solo
+tiene pasaporte. La PA 00071 art. 13.7 admite «cédula o pasaporte» del adquirente persona natural:
+manda la norma, y el cliente acepta pasaporte. Decidido por criterio: P + 9 dígitos es RIF P;
+cualquier otro «P» + alfanumérico de 5 a 20 es pasaporte, guardado «P» + mayúsculas sin separadores
+y mostrado como hasta hoy (`P-AB1234567`). Alternativa: un selector explícito de tipo de documento.
+
+### R-61 · La retención soportada no tiene reversa: un comprobante mal cargado no se deshace (ADR-0072 §5, F-11)
+
+- **Qué:** el dueño decidió que el contador corrige y reversa (`ar.retention.correct`, sembrado en la
+  migración 20260928190000), pero el comprobante abona la factura en el mismo acto y **un cobro no
+  tiene reversa en el sistema** (`payments` append-only, `amount > 0`; ADR-0061). Reversar exige o
+  una fila de cobro negativa (cambia la semántica de `payments` y de todo Σ cobros) o excluir los
+  cobros de comprobantes anulados en `document_balance`, `document_balance_transaction`,
+  `ar_aging`, los saldos de ventas y `accounting_coverage_gaps`, más volver la factura de `paid` a
+  `issued` y reversar el asiento con un permiso nuevo en `reversar()`.
+- **Por qué no se hizo:** es semántica del dinero; el reparador paró (R9).
+- **Mientras tanto:** un comprobante erróneo se neutraliza con una nota de débito o se corrige por
+  SQL con acta. `ar.retention.correct` existe sin endpoint.
+- **Trampa para quien la construya:** el CHECK `srr_receipt_14_digits_chk` es NOT VALID, que NO
+  significa «no juzga filas viejas»: no se validó al crearlo, pero se evalúa en todo UPDATE. Marcar
+  `status = 'annulled'` en un comprobante viejo con un número de otro formato fallará con 23514 si
+  la migración de la reversa no lo prevé (p. ej. excluyendo `annulled` del CHECK).
+- **Estado:** abierto · decisión del dueño.
+
+### R-59 · Al desplegar ADR-0071, la migración se para si producción tiene controles repetidos, y los talonarios viejos dejan de emitir hasta completar la imprenta
+
+- **Severidad:** Alta · **Disparador:** aplicar 20260928160000 y 20260928160100 en producción
+- **Dónde:** bloque 0 de 20260928160000; `platform.claim_fiscal_control`; `revoke … claim_control_number … from ladino_api`
+
+Tres efectos, todos ruidosos: (1) si algún emisor ya tiene dos documentos con el mismo control, o
+rangos no anulados que se solapan, la migración FALLA con la lista (lo emitido no se renumera);
+(2) todo talonario registrado antes nace con «datos de imprenta incompletos» y emitir con él da
+409 hasta completarlos en la puesta a punto; (3) la migración revoca a `ladino_api` la función de
+consumo de ADR-0037: la API saliente no puede emitir entre la migración y el deploy (42501), así
+que van en la misma ventana. **Mitigación:** antes de aplicar, en solo lectura:
+`select company_id, control_number, count(*) from public.documents where control_number is not
+null group by 1, 2 having count(*) > 1` y el cruce de rangos del bloque 0; avisar a las empresas
+con talonario para que completen los datos de la imprenta. **Deja de ser aceptable:** aplicar la
+migración sin la consulta previa, o desplegar la API días después de la migración.
+
+### R-60 · En el papel, Ladino no sabe DÓNDE preimprime cada imprenta: la zona en blanco es genérica
+
+- **Severidad:** Media · **Disparador:** la primera empresa que imprima sobre su forma libre real
+- **Dónde:** `apps/api/src/routes/documents-pdf.ts` (`zonaPreimpresa`, `?destino=papel`); ADR-0071 §4
+
+Con `?destino=papel` el PDF deja en blanco lo que la imprenta preimprime (PA 00071 art. 31) en
+DOS franjas de posición fija: arriba (RIF del emisor y control) y tras los totales (imprenta,
+providencia, rango, fecha de elaboración). Cada imprenta compone su forma libre a su manera: si la
+casilla preimpresa de una hoja real cae fuera de esas franjas, Ladino imprimiría texto encima
+(nunca los datos preimpresos —esos no salen en el papel—, pero sí el cuerpo del documento). El
+test de la checklist mira el TEXTO del PDF, no su geometría: no lo ve. **Mitigación:** la vista
+previa sombrea las franjas para compararlas con la hoja antes de imprimir; el diálogo pide
+confirmar el control. **Deja de ser aceptable:** cuando una empresa real imprima: entonces la
+posición de la zona preimpresa pasa a ser un dato del talonario (márgenes por talonario), no un
+valor del código.
+
+### R-62 · Si la API nueva se levanta antes de 140100/140200/140300, todo listado de productos da 500
+
+> **Estado 2026-09-29: ABIERTO hasta el despliegue** (ADR-0074; migraciones
+> `20260928140100_product_import_jobs_review.sql`, `20260928140200_reference_cost_needs_its_currency.sql`
+> y `20260928140300_import_jobs_backoff_and_currency_fk.sql`).
+
+- **Severidad:** Alta durante la ventana · **Disparador:** `git pull && docker compose up -d --build`
+  con la API nueva antes de aplicar esas tres migraciones en Supabase Cloud.
+- **Dónde:** `PRODUCT_SELECT` y `PRODUCT_SELECT_P` (`apps/api/src/routes/products.ts`) leen
+  `products.reference_cost` y `reference_cost_currency`. El worker lee `product_import_jobs.next_attempt_at`.
+
+Sin las columnas, `GET /v1/products` y la ficha responden `42703 → 500`, y con ellos la caja y el
+catálogo. **Mitigación:** las tres migraciones son expand puro (columnas nullables, un índice parcial,
+una guarda y un FK sobre columnas nuevas que la app saliente no lee ni escribe). Se aplican ANTES del
+`git pull`, y la API vieja sigue funcionando con ellas puestas.
+
+### R-63 · Con el adquirente obligatorio (P-57), una factura VIEJA al «Consumidor final» no admitía NC ni ND — RESUELTO
+
+- **Severidad:** Media · **Disparador:** corregir una factura emitida antes del 2026-10-02 a un cliente de mostrador
+- **Dónde:** `packages/domain/src/forma-libre.ts`; `platform.assert_document_issuance` (LAD99, migración 20260928190400)
+
+La NC y la ND heredan el adquirente de la factura que corrigen. Si esa factura se emitió al
+«Consumidor final» de sistema (antes de la lectura conservadora del art. 13.7), la nota no se puede
+emitir: el dominio responde 422 y la base LAD99. En producción no hay clientes reales (2026-09-28)
+y en el escenario local hay que comprobarlo antes de corregir. **Mitigación:** la respuesta del
+asesor a P-57; si confirma la lectura, una vía explícita para identificar al adquirente de una
+factura vieja (acta, nunca editar la factura: regla 1). **Deja de ser aceptable:** en cuanto una
+empresa real necesite corregir una de esas facturas.
+
+**Resuelto (2026-10-02, revisión de la auditoría fiscal, A-4/A-6, decidido por criterio):** la NC y
+la ND ya no siguen el 13.7, sino «el mismo cliente y la identificación congelada de la factura que
+corrigen» (dominio y base, migración 20260928190500). La NC de una factura al «Consumidor final» se
+emite (e2e-checklist-factura, A-4; pgTAP 089).
+

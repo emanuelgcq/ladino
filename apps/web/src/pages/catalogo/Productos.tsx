@@ -3,18 +3,14 @@ import { Link } from "react-router";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Camera, PackagePlus, Pencil, Upload } from "lucide-react";
-import {
-  ImportarArchivo,
-  PLANTILLA_PRODUCTOS,
-  NOTA_FORMATO_PRODUCTOS,
-} from "../../components/importar.js";
+import { ImportarProductos } from "../../components/importar-productos.js";
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
 import { FormField } from "../../components/forms.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
 import { Button } from "../../ui/button.js";
-import { Input } from "../../ui/input.js";
+import { Input, Textarea } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
 import { Badge, type BadgeTone } from "../../ui/badge.js";
 import { Skeleton } from "../../ui/card.js";
@@ -148,17 +144,7 @@ export function Productos(): React.JSX.Element {
         }
       />
 
-      {importando && (
-        <ImportarArchivo
-          titulo="Importar productos"
-          descripcion="Descarga la plantilla, llénala en Excel o en cualquier editor, y súbela. Las filas buenas entran; las malas se explican con su número."
-          notaFormato={NOTA_FORMATO_PRODUCTOS}
-          endpoint="/v1/products/import"
-          plantilla={PLANTILLA_PRODUCTOS}
-          onCerrar={() => setImportando(false)}
-          onListo={recargar}
-        />
-      )}
+      {importando && <ImportarProductos onCerrar={() => setImportando(false)} onListo={recargar} />}
       <DataTable
         columns={columnas}
         data={productos.data?.items}
@@ -220,6 +206,7 @@ function NuevoProducto({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
     unit_code: "unidad",
     tax_category_code: "gravado_general",
     barcode: "",
+    justificacion: "",
   });
   const [error, setError] = useState<unknown>(null);
   const [guardando, setGuardando] = useState(false);
@@ -252,6 +239,10 @@ function NuevoProducto({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
           // Sin RIF no se envía: el producto nace con la clasificación de la empresa, que solo
           // contará el día que facture.
           ...(sinRif ? {} : { tax_category_code: form.tax_category_code }),
+          // Hallazgo 10: la adicional (art. 61) exige por qué el bien es suntuario; queda en el acta.
+          ...(!sinRif && form.tax_category_code === "gravado_adicional"
+            ? { tax_category_justification: form.justificacion.trim() }
+            : {}),
           ...(form.barcode.trim() === "" ? {} : { barcode: form.barcode.trim() }),
         }),
       });
@@ -335,10 +326,27 @@ function NuevoProducto({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
                   id={a.id}
                   value={form.tax_category_code}
                   onValueChange={(v) => setForm({ ...form, tax_category_code: v })}
-                  options={(catalogos.data?.clasifs ?? []).map((t) => ({
-                    value: t.code,
-                    label: t.name,
-                  }))}
+                  options={(catalogos.data?.clasifs ?? [])
+                    .filter((t) => t.offered_in_sales)
+                    .map((t) => ({
+                      value: t.code,
+                      label: t.name,
+                    }))}
+                />
+              )}
+            </FormField>
+          )}
+          {!sinRif && form.tax_category_code === "gravado_adicional" && (
+            <FormField
+              label="Por qué es suntuario"
+              required
+              hint="La alícuota adicional (LIVA art. 61) no tiene una lista con fuente: escribe la razón. Queda en el acta."
+            >
+              {(a) => (
+                <Textarea
+                  id={a.id}
+                  value={form.justificacion}
+                  onChange={(e) => setForm({ ...form, justificacion: e.target.value })}
                 />
               )}
             </FormField>
@@ -396,6 +404,8 @@ function DetalleProducto({
   });
   const sinRif = !useConFacturas();
   const [clasif, setClasif] = useState(producto.tax_category_code);
+  // Hallazgo 10: la justificación del suntuario, si se reclasifica como adicional.
+  const [justificacion, setJustificacion] = useState("");
   const [confirmandoClasif, setConfirmandoClasif] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [guardando, setGuardando] = useState(false);
@@ -435,7 +445,13 @@ function DetalleProducto({
       await llamar("/v1/products/" + producto.id + "/tax-category", {
         method: "PUT",
         headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ company_id: empresa.id, tax_category_code: clasif }),
+        body: JSON.stringify({
+          company_id: empresa.id,
+          tax_category_code: clasif,
+          ...(clasif === "gravado_adicional"
+            ? { tax_category_justification: justificacion.trim() }
+            : {}),
+        }),
       });
       toast.success("Clasificación cambiada", "Aplica a las emisiones FUTURAS.");
       onCerrar(true);
@@ -621,10 +637,12 @@ function DetalleProducto({
                       ariaLabel="Clasificación tributaria"
                       value={clasif}
                       onValueChange={setClasif}
-                      options={(clasificaciones.data ?? []).map((t) => ({
-                        value: t.code,
-                        label: t.name,
-                      }))}
+                      options={(clasificaciones.data ?? [])
+                        .filter((t) => t.offered_in_sales || t.code === clasif)
+                        .map((t) => ({
+                          value: t.code,
+                          label: t.name,
+                        }))}
                     />
                   </div>
                   <Button
@@ -635,6 +653,15 @@ function DetalleProducto({
                     Cambiar
                   </Button>
                 </div>
+                {clasif === "gravado_adicional" && clasif !== producto.tax_category_code && (
+                  <Textarea
+                    aria-label="Por qué es suntuario"
+                    placeholder="Por qué este bien es suntuario (LIVA art. 61). Queda en el acta."
+                    className="mt-2"
+                    value={justificacion}
+                    onChange={(e) => setJustificacion(e.target.value)}
+                  />
+                )}
               </div>
             ) : (
               <p className="pt-1 text-[0.8rem] text-faint-foreground">
@@ -682,6 +709,17 @@ function DetalleProducto({
               )}
             </FormField>
           </div>
+        )}
+
+        {/* El costo de referencia importado (ADR-0074, H11): solo lectura, no es el costo del kardex. */}
+        {producto.reference_cost_amount != null && producto.reference_cost_currency != null && (
+          <p className="mt-3 text-[0.85rem] text-muted-foreground">
+            Costo de referencia (importado):{" "}
+            {mostrarImporte({
+              amount: producto.reference_cost_amount,
+              currency: producto.reference_cost_currency,
+            })}
+          </p>
         )}
 
         {error !== null && (

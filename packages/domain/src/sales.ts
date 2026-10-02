@@ -51,7 +51,11 @@ import { issueStockBatchForSale, receiveStockFor, reponerSalidasDeDocumento } fr
 import { exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 import { reverseJournalEntryForAnnulment } from "./accounting.js";
+import { exigeTipoParaFacturar, type TaxpayerTypeRequiredError } from "./tipo-contribuyente.js";
 import { modoDeVenta } from "./modo-venta.js";
+import { bloquearTalonario, serieDelTalonario } from "./talonario.js";
+import { serieYNumero } from "@ladino/schemas";
+import { exigeFormaLibre, filasDeLineas } from "./forma-libre.js";
 
 /**
  * Casos de uso de VENTAS — RIGOR MÁXIMO. Aquí convergen dinero, fiscal,
@@ -74,14 +78,20 @@ export type SalesError =
   | CompanyScopeError
   | { code: "DUPLICATE"; message: string }
   | { code: "VALIDATION_FAILED"; message: string }
-  | { code: "FISCAL_NUMBERING_INVALID"; message: string }
+  | {
+      code: "FISCAL_NUMBERING_INVALID";
+      message: string;
+      /** H10 (ADR-0071): por qué, para que la pantalla dé la salida que toca. Aditivo. */
+      details?: { reason: MotivoNumeracion };
+    }
   | { code: "TAX_RULE_MISSING"; message: string }
   | { code: "EXCHANGE_RATE_MISSING"; message: string }
   | { code: "NEGATIVE_STOCK"; message: string }
   | { code: "APPEND_ONLY_VIOLATION"; message: string }
   | { code: "REGIME_KIND_NOT_ALLOWED"; message: string }
   | { code: "DOCUMENT_HAS_PAYMENTS"; message: string }
-  | { code: "INSUFFICIENT_FUNDS"; message: string };
+  | { code: "INSUFFICIENT_FUNDS"; message: string }
+  | TaxpayerTypeRequiredError;
 
 /**
  * Redondeo de la VALORACIÓN de un cobro y de su diferencial: las UNIDADES MÍNIMAS de la moneda
@@ -407,7 +417,10 @@ async function reglaIgtf(
   }
   const [gate] = await sql<
     { enabled: boolean; causes: boolean; rate: string | null; source: string | null }[]
-  >`select (c.igtf_enabled_at is not null and c.igtf_enabled_at <= ${fecha}::timestamptz)
+  >`select (c.igtf_enabled_at is not null and c.igtf_enabled_at <= ${fecha}::timestamptz
+            -- ADR-0072 §1-2: agente de percepción es quien ES especial el día del cobro, por la
+            -- vigencia de su tipo; el acta de activación sola no basta.
+            and platform.taxpayer_type_at(c.id, ${diaNegocio(fecha)}::date) = 'especial')
            as enabled,
            coalesce(i.causes, false) as causes,
            r.rate::text as rate, r.legal_source as source
@@ -597,7 +610,9 @@ const JURISDICTION = "VE";
 const TAX_CODE = "iva";
 
 const DOC_COLUMNS = `id, company_id, kind, series,
-  document_number::int as document_number, control_number::int as control_number,
+  document_number::int as document_number, control_number::int as control_number, control_identifier,
+  case when control_number is null then null
+       else control_identifier || '-' || lpad(control_number::text, 8, '0') end as control_display,
   status,
   to_char(issued_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as issued_at,
   to_char(annulled_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as annulled_at,
@@ -619,10 +634,30 @@ interface Contexto {
 
 export { modoDeVenta } from "./modo-venta.js";
 
+/**
+ * H10 (ADR-0071, decidido por criterio): el code sigue siendo FISCAL_NUMBERING_INVALID (lo
+ * asevera e2e-sales:343) y `details.reason` dice cuál es la salida. Alternativa: un code propio.
+ */
+export type MotivoNumeracion = "regime_missing" | "no_range" | "printer_data_incomplete";
+
+/** El LAD49 de claim_fiscal_control y de la emisión, con su motivo leído del mensaje. */
+function errorDeNumeracion(message: string): SalesError {
+  const reason: MotivoNumeracion | null = message.startsWith("No quedan números de control")
+    ? "no_range"
+    : message.includes("le faltan los datos de la imprenta")
+      ? "printer_data_incomplete"
+      : message.includes("no tiene régimen fiscal vigente")
+        ? "regime_missing"
+        : null;
+  return reason === null
+    ? { code: "FISCAL_NUMBERING_INVALID", message }
+    : { code: "FISCAL_NUMBERING_INVALID", message, details: { reason } };
+}
+
 function traducir(e: unknown): SalesError | null {
   const code = (e as { code?: string }).code;
   const message = (e as { message?: string }).message ?? "";
-  if (code === "LAD49") return { code: "FISCAL_NUMBERING_INVALID", message };
+  if (code === "LAD49") return errorDeNumeracion(message);
   if (code === "LAD50") {
     // El mensaje de la función se PROPAGA tal cual: dice qué jurisdicción, qué
     // fecha y qué categoría no tienen regla, y eso es lo que hace falta para
@@ -1086,12 +1121,33 @@ async function insertarDocumento(
   // social, RIF/cédula y domicilio del cliente al nacer; nunca los referencia.
   // El RIF va NORMALIZADO — la misma forma que la clave natural de customers;
   // los guiones son presentación y se ponen al enseñarlo.
-  const [contraparte] = await sql<
-    { name: string; tax_id: string | null; address: string | null }[]
-  >`
+  // A-4/A-6 (decidido por criterio): la NC y la ND identifican al adquirente EXACTAMENTE como la
+  // factura que corrigen — su identificación CONGELADA (lo vivo solo si el origen es anterior a la
+  // migración 33). Así, una factura vieja al «Consumidor final» tiene su nota.
+  const esNotaConOrigen =
+    (d.kind === "credit_note" || d.kind === "debit_note") && d.sourceDocumentId !== null;
+  const [contraparte] = esNotaConOrigen
+    ? await sql<
+        { name: string; tax_id: string | null; address: string | null; taxpayer_type: string }[]
+      >`
+        select coalesce(o.customer_name_snapshot, cu.legal_name) as name,
+               coalesce(o.customer_tax_id_snapshot,
+                        upper(regexp_replace(cu.tax_id, '[^a-zA-Z0-9]', '', 'g'))) as tax_id,
+               coalesce(o.customer_address_snapshot, cu.fiscal_address) as address,
+               coalesce(o.customer_taxpayer_type_snapshot, cu.taxpayer_type_code) as taxpayer_type
+          from public.documents o
+          join public.customers cu on cu.id = o.customer_id
+         where o.id = ${d.sourceDocumentId} and o.company_id = ${d.companyId}
+           and o.customer_id = ${d.customerId}`
+    : await sql<
+        { name: string; tax_id: string | null; address: string | null; taxpayer_type: string }[]
+      >`
     select legal_name as name,
            upper(regexp_replace(tax_id, '[^a-zA-Z0-9]', '', 'g')) as tax_id,
-           fiscal_address as address
+           fiscal_address as address,
+           -- B3 (migración 20260928170200): el tipo de contribuyente del día de la emisión,
+           -- que el libro de ventas reproduce en vez de leer el maestro vivo.
+           taxpayer_type_code as taxpayer_type
       from public.customers
      where id = ${d.customerId} and company_id = ${d.companyId}`;
   if (!contraparte) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
@@ -1119,6 +1175,7 @@ async function insertarDocumento(
        rate_timestamp, rounding_policy_id, amount_transaction_currency, functional_amount,
        subtotal_amount, tax_amount, total_amount, notes,
        customer_name_snapshot, customer_tax_id_snapshot, customer_address_snapshot,
+       customer_taxpayer_type_snapshot,
        issuer_name_snapshot, issuer_tax_id_snapshot, issuer_address_snapshot,
        issuer_branch_address_snapshot)
     values (${ctx.tenantId}, ${d.companyId}, ${d.branchId}, ${d.kind}, ${d.series},
@@ -1130,6 +1187,7 @@ async function insertarDocumento(
             ${totales.value.total.toAmountString()}, ${totFunc.toFixed(8)},
             ${subFunc.toFixed(8)}, ${taxFunc.toFixed(8)}, ${totFunc.toFixed(8)}, ${d.notes},
             ${contraparte.name}, ${contraparte.tax_id}, ${contraparte.address},
+            ${contraparte.taxpayer_type},
             ${emisor!.name}, ${emisor!.tax_id}, ${emisor!.address},
             ${sucursal?.address ?? null})
     returning ${sql.unsafe(DOC_COLUMNS)}`;
@@ -1241,6 +1299,7 @@ async function auditar(
     series: doc.series,
     document_number: doc.document_number,
     control_number: doc.control_number,
+    control_identifier: doc.control_identifier,
     customer_id: doc.customer_id,
     total_amount: doc.total_amount,
     functional_currency: doc.functional_currency,
@@ -1453,8 +1512,13 @@ export async function createInvoice(
   uow: UnitOfWork,
   input: CreateInvoiceRequest,
   bloqueo: "rechazar" | "de_contado" = "rechazar",
+  /**
+   * A-3 (decidido por criterio): el registro a posteriori de una factura de CONTINGENCIA refleja un
+   * papel que ya existe — ni el tope de la forma libre ni la exigencia del adquirente aplican.
+   */
+  registroDeContingencia = false,
 ): Promise<Result<DocumentResponse, SalesError>> {
-  return emitirVenta(uow, input, "invoice", bloqueo);
+  return emitirVenta(uow, input, "invoice", bloqueo, registroDeContingencia);
 }
 
 /**
@@ -1476,6 +1540,7 @@ async function emitirVenta(
   input: CreateInvoiceRequest,
   kind: "invoice" | "receipt",
   bloqueo: "rechazar" | "de_contado" = "rechazar",
+  registroDeContingencia = false,
 ): Promise<Result<DocumentResponse, SalesError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
@@ -1489,6 +1554,7 @@ async function emitirVenta(
       code: "FISCAL_NUMBERING_INVALID",
       message:
         "La empresa no tiene régimen fiscal vigente a esa fecha: asígnalo antes de emitir (ADR-0029).",
+      details: { reason: "regime_missing" },
     });
   }
   // EL GATE DE KIND (migración 37), dicho con palabras antes de que lo diga el
@@ -1503,6 +1569,27 @@ async function emitirVenta(
           ? "Para emitir facturas necesitas completar tus datos fiscales (el régimen actual solo emite recibos). Actívalo en Empezar."
           : "El régimen fiscal de esta empresa no emite recibos: un negocio con datos fiscales factura.",
     });
+  }
+  // A-03 (ADR-0072 §1): una empresa con RIF no factura sin tipo de contribuyente vigente en la
+  // fecha del documento. Nunca «ordinario por omisión». El recibo (sin RIF) no lo pide.
+  if (kind === "invoice") {
+    const tipo = await exigeTipoParaFacturar(sql, actor.userId, input.company_id, fecha);
+    if (!tipo.ok) return tipo;
+  }
+  // PA 00071 arts. 33 y 13.7 (auditoría fiscal 2026-10-02): sobre forma libre, la factura cabe en
+  // una forma (tope de FILAS impresas, A-2) y lleva al adquirente identificado. La contingencia
+  // refleja un papel que ya existe (A-3).
+  if (kind === "invoice" && ctx.value.numberingMode === "range" && !registroDeContingencia) {
+    const forma = await exigeFormaLibre(sql, input.company_id, {
+      clase: "factura",
+      customerId: input.customer_id,
+      filas: await filasDeLineas(
+        sql,
+        input.company_id,
+        input.lines.map((l) => l.product_id),
+      ),
+    });
+    if (!forma.ok) return forma;
   }
 
   const lista = await resolverLista(
@@ -1529,7 +1616,14 @@ async function emitirVenta(
   });
   if (!calculadas.ok) return calculadas;
 
-  const serie = input.series ?? (kind === "receipt" ? "R" : "A");
+  // E-01 (ADR-0071): con número de control, la serie la dicta el TALONARIO, nunca el servidor.
+  // El recibo (sin RIF) no tiene control y conserva su serie propia.
+  const serieDada =
+    kind === "invoice" && ctx.value.numberingMode === "range"
+      ? await serieDelTalonario(sql, input.company_id, "invoice", input.series ?? null, null)
+      : ok(input.series ?? (kind === "receipt" ? "R" : "A"));
+  if (!serieDada.ok) return serieDada;
+  const serie = serieDada.value;
   try {
     const doc = await sql.savepoint(async (sp) => {
       const creado = await insertarDocumento(sp, ctx.value, {
@@ -1554,11 +1648,16 @@ async function emitirVenta(
       // consumir un número autorizado para nada.
       const [num] = await sp<{ n: string }[]>`
         select platform.claim_document_number(${input.company_id}, ${kind}, ${serie})::text as n`;
+      // ADR-0071: el control sale del talonario de la serie, sea de la clase que sea, con su
+      // identificador de 2 dígitos (PA 00071 art. 44).
       let control: string | null = null;
+      let identificador: string | null = null;
       if (kind === "invoice" && ctx.value.numberingMode === "range") {
-        const [c] = await sp<{ n: string }[]>`
-          select platform.claim_control_number(${input.company_id}, 'invoice', ${serie})::text as n`;
+        const [c] = await sp<{ n: string; i: string }[]>`
+          select control_number::text as n, control_identifier as i
+            from platform.claim_fiscal_control(${input.company_id}, 'invoice', ${serie})`;
         control = c!.n;
+        identificador = c!.i;
       }
 
       const [emitido] = await sp<DocumentResponse[]>`
@@ -1566,6 +1665,7 @@ async function emitirVenta(
            set status = 'issued', issued_at = ${fecha},
                document_number = ${num!.n}::bigint,
                control_number = ${control}::bigint,
+               control_identifier = ${identificador},
                regime_version_id = ${ctx.value.regimeVersionId},
                rules_version = ${RULES_VERSION}
          where id = ${creado.value.id}
@@ -1629,7 +1729,7 @@ async function emitirVenta(
           sourceId: doc.value.id,
           postingDate: diaNegocio(fecha),
           postedBy: actor.userId,
-          description: `Costo de lo vendido — ${kind === "receipt" ? "Recibo" : "Factura"} ${doc.value.series}-${doc.value.document_number ?? ""}`,
+          description: `Costo de lo vendido — ${kind === "receipt" ? "Recibo" : "Factura"} ${serieYNumero(doc.value.series, doc.value.document_number ?? "")}`,
           functionalCurrency: ctx.value.functionalCurrency,
           amounts: { cost_amount: costo.value.toFixed(8) },
         });
@@ -1663,7 +1763,7 @@ async function emitirVenta(
       sourceId: doc.value.id,
       postingDate: diaNegocio(fecha),
       postedBy: actor.userId,
-      description: `${kind === "receipt" ? "Recibo" : "Factura"} ${doc.value.series}-${doc.value.document_number ?? ""}`,
+      description: `${kind === "receipt" ? "Recibo" : "Factura"} ${serieYNumero(doc.value.series, doc.value.document_number ?? "")}`,
       functionalCurrency: ctx.value.functionalCurrency,
       // Al recibo NO se le pasa impuesto (A5): no existe en su mundo, y su
       // plantilla (sales_receipt) no lo usa. El cero que el esquema obliga en la
@@ -1921,7 +2021,7 @@ export async function annulInvoice(
         sourceId: documentId,
         postingDate: diaNegocio(new Date().toISOString()),
         postedBy: actor.userId,
-        description: `Anulación del ${nombre} ${anulada!.series}-${anulada!.document_number ?? ""}: la mercancía vuelve al inventario`,
+        description: `Anulación del ${nombre} ${serieYNumero(anulada!.series, anulada!.document_number ?? "")}: la mercancía vuelve al inventario`,
         functionalCurrency: ctx.value.functionalCurrency,
         amounts: { functional_amount: repuesto.value.repuesto },
       });
@@ -2005,13 +2105,21 @@ export async function annulInvoice(
 export async function registerPayment(
   uow: UnitOfWork,
   input: RegisterPaymentRequest,
+  /** F-11: la retención soportada la carga quien tiene `ar.retention.register`, no quien cobra. */
+  permiso: "sales.payment.register" | "ar.retention.register" = "sales.payment.register",
 ): Promise<Result<RegisterPaymentResponse, SalesError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Cobrar exige un usuario real." });
   }
+  if (permiso === "ar.retention.register" && input.instrument !== "retencion_iva") {
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "El permiso de retenciones solo abona comprobantes de retención.",
+    });
+  }
   const fecha = ahora(input.paid_at);
-  const ctx = await autorizar(sql, actor.userId, input.company_id, "sales.payment.register", fecha);
+  const ctx = await autorizar(sql, actor.userId, input.company_id, permiso, fecha);
   if (!ctx.ok) return ctx;
 
   const [doc] = await sql<
@@ -2068,6 +2176,17 @@ export async function registerPayment(
   );
   if (!funcionalRedondeado.ok) {
     return err({ code: "VALIDATION_FAILED", message: funcionalRedondeado.error.message });
+  }
+
+  // ADR-0072 §5: el comprobante de retención soportada abona la divisa de la factura a la tasa
+  // DE LA FACTURA (es una fracción fija de su IVA), salvo que el comprobante diga otra cosa
+  // (`voucher_rate`, el parámetro P-30). Se lee una vez y decide el tope y el diferencial.
+  let retencionATasaFactura = false;
+  if (input.instrument === "retencion_iva" && input.supported_retention_id !== undefined) {
+    const [v] = await sql<{ ar_valuation: string }[]>`
+      select ar_valuation from public.supported_retention_receipts
+       where id = ${input.supported_retention_id} and company_id = ${input.company_id}`;
+    retencionATasaFactura = v?.ar_valuation === "invoice_rate";
   }
 
   // El saldo se CALCULA, nunca se lee de una columna.
@@ -2127,6 +2246,14 @@ export async function registerPayment(
       pendiente = tx?.saldo;
       if (input.currency === doc.transaction_currency) {
         cobrado = importe.value.amount.toFixed();
+      } else if (retencionATasaFactura) {
+        const tasaFactura = parseDecimal(doc.fx_rate);
+        cobrado = tasaFactura.ok
+          ? funcionalRedondeado.value.amount
+              .dividedBy(tasaFactura.value)
+              .toDecimalPlaces(8, 4)
+              .toFixed()
+          : undefined;
       } else {
         const [conv] = await sql<{ v: string | null }[]>`
           select round(${funcionalRedondeado.value.amount.toFixed()}::numeric
@@ -2372,7 +2499,7 @@ export async function registerPayment(
                     fx_rate_payment::text as fx_rate_payment, occurred_on::text as occurred_on`;
         diferencial = eg!;
       }
-    } else if (tasaEmision.ok) {
+    } else if (tasaEmision.ok && !retencionATasaFactura) {
       // El cobro vino en OTRA moneda (típicamente Bs contra deuda en USD): la
       // porción saldada se valora con la tasa doc→funcional del día del pago,
       // y el «funcional al pago» es lo que DE VERDAD entró — no un producto
@@ -2501,7 +2628,7 @@ export async function registerPayment(
     sourceId: pago["id"] as string,
     postingDate: diaNegocio(fecha),
     postedBy: actor.userId,
-    description: `Cobro de la factura ${docActual!.series}-${docActual!.document_number ?? ""}`,
+    description: `Cobro de la factura ${serieYNumero(docActual!.series, docActual!.document_number ?? "")}`,
     functionalCurrency: ctx.value.functionalCurrency,
     amounts: {
       functional_amount: entrado,
@@ -2589,7 +2716,7 @@ export async function registerPayment(
         sourceId: percepcion["id"] as string,
         postingDate: diaNegocio(fecha),
         postedBy: actor.userId,
-        description: `IGTF percibido en el cobro de ${docActual!.series}-${docActual!.document_number ?? ""}`,
+        description: `IGTF percibido en el cobro de ${serieYNumero(docActual!.series, docActual!.document_number ?? "")}`,
         functionalCurrency: ctx.value.functionalCurrency,
         amounts: { functional_amount: funcional.toFixed(8) },
         // Sin backlink: `igtf_perceptions` no lleva `journal_entry_id` y el
@@ -2793,7 +2920,12 @@ export async function createDirectCreditNote(
   if (!origen.ok) return origen;
 
   // Las líneas del origen que se acreditan, al precio DEL ORIGEN.
-  const lineas: { product_id: string; quantity: string; unit_price_transaction: string }[] = [];
+  const lineas: {
+    product_id: string;
+    quantity: string;
+    unit_price_transaction: string;
+    source_line_id: string;
+  }[] = [];
   for (const l of input.lines) {
     const [ol] = await sql<
       { product_id: string; quantity: string; unit_price_transaction: string }[]
@@ -2817,6 +2949,7 @@ export async function createDirectCreditNote(
       product_id: ol.product_id,
       quantity: l.quantity,
       unit_price_transaction: ol.unit_price_transaction,
+      source_line_id: l.source_line_id,
     });
   }
 
@@ -2880,7 +3013,7 @@ export async function createDirectCreditNote(
     sourceId: nc.value.id,
     postingDate: diaNegocio(fecha),
     postedBy: actor.userId,
-    description: `Nota de crédito ${nc.value.series}-${nc.value.document_number ?? ""}`,
+    description: `Nota de crédito ${serieYNumero(nc.value.series, nc.value.document_number ?? "")}`,
     functionalCurrency: ctx.value.functionalCurrency,
     amounts: {
       subtotal: nc.value.subtotal_amount,
@@ -2930,9 +3063,11 @@ export async function createDebitNote(
           product_id: l.product_id,
           quantity: l.quantity,
           unit_price_transaction: l.unit_price,
+          ...(l.source_line_id === undefined ? {} : { source_line_id: l.source_line_id }),
         })),
         fecha,
         notes: input.reason,
+        rateBasis: input.basis === "new_concept" ? "own_day" : "origin",
       }),
     );
   } catch (e) {
@@ -2954,7 +3089,7 @@ export async function createDebitNote(
     sourceId: nd.value.id,
     postingDate: diaNegocio(fecha),
     postedBy: actor.userId,
-    description: `Nota de débito ${nd.value.series}-${nd.value.document_number ?? ""}`,
+    description: `Nota de débito ${serieYNumero(nd.value.series, nd.value.document_number ?? "")}`,
     functionalCurrency: ctx.value.functionalCurrency,
     amounts: {
       subtotal: nd.value.subtotal_amount,
@@ -3050,8 +3185,10 @@ export async function confirmReturn(
     return err({ code: "VALIDATION_FAILED", message: "La devolución ya no está en borrador." });
   }
 
-  const [origen] = await sql<{ customer_id: string; price_list_id: string | null; kind: string }[]>`
-    select customer_id, price_list_id, kind from public.documents
+  const [origen] = await sql<
+    { customer_id: string; price_list_id: string | null; kind: string; series: string }[]
+  >`
+    select customer_id, price_list_id, kind, series from public.documents
      where id = ${dev.source_document_id}`;
   const lineas = await sql<
     {
@@ -3091,6 +3228,13 @@ export async function confirmReturn(
   }
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+
+  // H2 (ADR-0071): el MISMO orden de bloqueo que la venta — talonario antes que existencias. La
+  // venta toma el talonario y después descarga el kardex; si aquí se reingresara primero y se
+  // pidiera el control después, una venta y una devolución simultáneas se esperarían en cruz.
+  if (origen!.kind !== "receipt" && ctx.value.numberingMode === "range") {
+    await bloquearTalonario(sql, companyId, "credit_note", origen!.series);
+  }
 
   // 1. Reingreso al COSTO ORIGINAL. `receiveStock` recibe el costo TOTAL, así
   //    que se multiplica cantidad × costo unitario original — nunca el vigente.
@@ -3229,7 +3373,9 @@ export async function confirmReturn(
         kind: origen!.kind === "receipt" ? "receipt_return" : "credit_note",
         lineas,
         fecha,
-        notes: null,
+        // El motivo de la devolución, guardado en la nota: el PDF lo imprime y el tope de la forma
+        // libre lo cuenta (A-2) con el mismo texto.
+        notes: dev.reason,
       }),
     );
   } catch (e) {
@@ -3270,7 +3416,7 @@ export async function confirmReturn(
     sourceId: nc.value.id,
     postingDate: diaNegocio(fecha),
     postedBy: actor.userId,
-    description: `${esRecibo ? "Recibo de devolución" : "Nota de crédito"} ${nc.value.series}-${nc.value.document_number ?? ""}`,
+    description: `${esRecibo ? "Recibo de devolución" : "Nota de crédito"} ${serieYNumero(nc.value.series, nc.value.document_number ?? "")}`,
     functionalCurrency: ctx.value.functionalCurrency,
     amounts: esRecibo
       ? { subtotal: nc.value.subtotal_amount, total: nc.value.total_amount }
@@ -3314,9 +3460,24 @@ async function createInvoiceLike(
     sourceDocumentId: string;
     /** ADR-0051: el mismo camino emite la NC y la ND — cambia solo el kind. ADR-0061: y el recibo de devolución. */
     kind: "credit_note" | "debit_note" | "receipt_return";
-    lineas: readonly { product_id: string; quantity: string; unit_price_transaction: string }[];
+    /**
+     * `source_line_id` (hallazgo 3): la línea de la factura que la nota acredita. Con ella, la NC
+     * revierte el débito de ESA línea — su tasa, su categoría, su regla y su descripción
+     * congeladas —, no la condición de hoy.
+     */
+    lineas: readonly {
+      product_id: string;
+      quantity: string;
+      unit_price_transaction: string;
+      source_line_id?: string;
+    }[];
     fecha: string;
     notes: string | null;
+    /**
+     * Hallazgo 13 (§2.7, G-11): 'origin' (por omisión) = la tasa de la factura que corrige;
+     * 'own_day' = la tasa BCV del día de la nota, para una ND por un concepto nuevo.
+     */
+    rateBasis?: "origin" | "own_day";
   },
 ): Promise<Result<DocumentResponse, SalesError>> {
   const { sql } = uow;
@@ -3324,6 +3485,7 @@ async function createInvoiceLike(
     return err({
       code: "FISCAL_NUMBERING_INVALID",
       message: "La empresa no tiene régimen fiscal vigente: no puede emitir la nota.",
+      details: { reason: "regime_missing" },
     });
   }
   if (!ctx.allowedKinds.includes(d.kind)) {
@@ -3332,16 +3494,67 @@ async function createInvoiceLike(
       message: "El régimen fiscal vigente no permite emitir esta nota.",
     });
   }
+  // A-03: la NC y la ND son documentos fiscales; el recibo de devolución no.
+  if (d.kind !== "receipt_return") {
+    const tipo = await exigeTipoParaFacturar(
+      sql,
+      uow.actor.kind === "user" ? uow.actor.userId : null,
+      d.companyId,
+      d.fecha,
+    );
+    if (!tipo.ok) return tipo;
+  }
+  // PA 00071 arts. 33 y 13.7: la nota sobre forma libre también cabe en una forma y lleva al
+  // adquirente identificado (el de la factura que corrige).
+  if (d.kind !== "receipt_return" && ctx.numberingMode === "range") {
+    const forma = await exigeFormaLibre(sql, d.companyId, {
+      clase: "nota",
+      customerId: d.customerId,
+      origenId: d.sourceDocumentId,
+      filasLineas: await filasDeLineas(
+        sql,
+        d.companyId,
+        d.lineas.map((l) => l.product_id),
+      ),
+      motivo: d.notes,
+    });
+    if (!forma.ok) return forma;
+  }
   // La NOTA hereda la MONEDA Y LA TASA del documento origen, no las de hoy. Si
   // tomara la tasa de hoy, no corregiría la deuda que dice corregir:
   // quedaría un resto en bolívares que nadie debe y que nadie cobra.
   const [origen] = await sql<
-    { transaction_currency: string; fx_rate: string; rate_source: string }[]
+    { transaction_currency: string; fx_rate: string; rate_source: string; series: string }[]
   >`
-    select transaction_currency, fx_rate::text as fx_rate, rate_source
+    select transaction_currency, fx_rate::text as fx_rate, rate_source, series
       from public.documents where id = ${d.sourceDocumentId}`;
   if (!origen) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-  const tasaOrigen = parseDecimal(origen.fx_rate);
+  const rateBasis = d.rateBasis ?? "origin";
+  let tasaNota = origen.fx_rate;
+  let fuenteNota = origen.rate_source;
+  if (rateBasis === "own_day" && origen.transaction_currency !== ctx.functionalCurrency) {
+    // Hallazgo 13: el concepto nuevo es un hecho de HOY; su tasa es la BCV de su día.
+    const [hoy] = await sql<{ rate: string | null; source: string | null }[]>`
+      select f.rate::text as rate, f.source
+        from platform.rate_for(${d.companyId}, ${origen.transaction_currency},
+                               ${ctx.functionalCurrency}, ${diaNegocio(d.fecha)}::date) f`;
+    if (!hoy?.rate) {
+      return err({
+        code: "EXCHANGE_RATE_MISSING",
+        message: `No hay tasa de ${origen.transaction_currency} a ${ctx.functionalCurrency} vigente para esa fecha. Cárgala con su fuente antes de emitir.`,
+      });
+    }
+    if (!hoy.source) {
+      return err({
+        code: "EXCHANGE_RATE_MISSING",
+        message:
+          "La tasa del día de la nota no dice de dónde salió: la nota de un concepto nuevo va a la tasa BCV de su día, con su fuente. Cárgala desde el BCV y vuelve a intentar.",
+      });
+    }
+    tasaNota = hoy.rate;
+    fuenteNota = hoy.source;
+  }
+  const tasaOrigen = parseDecimal(tasaNota);
   if (!tasaOrigen.ok) {
     return err({
       code: "VALIDATION_FAILED",
@@ -3363,11 +3576,47 @@ async function createInvoiceLike(
       select name, tax_category_code from public.products where id = ${l.product_id}`;
     const [cliente] = await sql<{ taxpayer_type_code: string }[]>`
       select taxpayer_type_code from public.customers where id = ${d.customerId}`;
+    // Hallazgo 3: la NC que acredita una línea de la factura revierte SU débito, con la tasa, la
+    // categoría, la regla y la descripción congeladas en esa línea — no las de hoy. Si entre la
+    // factura y la nota cambió la alícuota o la condición del bien, la nota sigue a la factura
+    // (VALIDAR-TRIBUTARIO P-58).
+    // B-5 (decidido por criterio): la ND que CORRIGE una línea de la factura también; la ND de un
+    // concepto nuevo, o un ajuste global sin línea, va a la condición de hoy (P-58).
+    const acreditaLinea =
+      l.source_line_id !== undefined &&
+      (d.kind === "credit_note" || (d.kind === "debit_note" && rateBasis === "origin"));
+    const [deLaFactura] = acreditaLinea
+      ? await sql<
+          {
+            description: string;
+            tax_rule_id: string | null;
+            tax_rate_snapshot: string | null;
+            tax_category_snapshot: string | null;
+            operation_type: string | null;
+          }[]
+        >`
+            select description, tax_rule_id, tax_rate_snapshot::text as tax_rate_snapshot,
+                   tax_category_snapshot, operation_type
+              from public.document_lines
+             where id = ${l.source_line_id!} and document_id = ${d.sourceDocumentId}`
+      : [];
+    if (acreditaLinea && deLaFactura === undefined) {
+      return err({ code: "VALIDATION_FAILED", message: "Una línea no es del documento origen." });
+    }
+    const congelada =
+      deLaFactura !== undefined &&
+      deLaFactura.tax_rate_snapshot !== null &&
+      deLaFactura.tax_category_snapshot !== null
+        ? deLaFactura
+        : null;
     let taxRuleId: string | null = null;
     let tasa = parseDecimal("0");
     // El recibo de devolución, como el recibo, no repercute impuesto: no se
     // busca regla (sin reglas cargadas sería un 409 que no le toca).
-    if (d.kind !== "receipt_return") {
+    if (congelada !== null) {
+      taxRuleId = congelada.tax_rule_id;
+      tasa = parseDecimal(congelada.tax_rate_snapshot!);
+    } else if (d.kind !== "receipt_return") {
       try {
         const [regla] = await sql<{ tax_rule_id: string; rate: string }[]>`
           select tax_rule_id, rate::text as rate
@@ -3394,26 +3643,37 @@ async function createInvoiceLike(
     calculadas.push({
       calc: calc.value,
       productId: l.product_id,
-      description: producto!.name,
+      description: congelada?.description ?? producto!.name,
       priceListId: d.priceListId ?? "",
       unitPriceList: precio.value,
       taxRuleId,
       costSnapshot: null,
-      taxCategory: producto!.tax_category_code,
+      taxCategory: congelada?.tax_category_snapshot ?? producto!.tax_category_code,
       operationType:
-        d.kind === "receipt_return" || cliente!.taxpayer_type_code === "no_domiciliado"
-          ? null
-          : "interna",
+        congelada !== null
+          ? congelada.operation_type
+          : d.kind === "receipt_return" || cliente!.taxpayer_type_code === "no_domiciliado"
+            ? null
+            : "interna",
       // Una NOTA no mueve mercancia (ADR-0051: la NC directa corrige precio,
       // no devuelve): este camino nunca genera kardex, ni antes ni ahora.
       esInventariable: false,
     });
   }
 
+  // ADR-0071: la NC y la ND consumen el control del talonario, como la factura; su serie es la
+  // del talonario (la de la factura que corrigen, si ese talonario tiene papel). El recibo de
+  // devolución no tiene control y conserva su «D».
+  const serieDada =
+    d.kind !== "receipt_return" && ctx.numberingMode === "range"
+      ? await serieDelTalonario(sql, d.companyId, d.kind, null, origen.series)
+      : ok(d.kind === "receipt_return" ? "D" : "A");
+  if (!serieDada.ok) return serieDada;
+  const serie = serieDada.value;
   const creado = await insertarDocumento(sql, ctx, {
     companyId: d.companyId,
     kind: d.kind,
-    series: d.kind === "receipt_return" ? "D" : "A",
+    series: serie,
     customerId: d.customerId,
     vendorId: null,
     branchId: null,
@@ -3421,25 +3681,29 @@ async function createInvoiceLike(
     sourceDocumentId: d.sourceDocumentId,
     lineas: calculadas,
     fxRate: tasaOrigen.value,
-    rateSource: origen.rate_source,
+    rateSource: fuenteNota,
     transactionCurrency: origen.transaction_currency,
     notes: d.notes,
   });
   if (!creado.ok) return creado;
 
-  const serie = d.kind === "receipt_return" ? "D" : "A";
   const [num] = await sql<{ n: string }[]>`
     select platform.claim_document_number(${d.companyId}, ${d.kind}, ${serie})::text as n`;
   let control: string | null = null;
-  if (ctx.numberingMode === "range") {
-    const [c] = await sql<{ n: string }[]>`
-      select platform.claim_control_number(${d.companyId}, ${d.kind}, ${serie})::text as n`;
+  let identificador: string | null = null;
+  if (ctx.numberingMode === "range" && d.kind !== "receipt_return") {
+    const [c] = await sql<{ n: string; i: string }[]>`
+      select control_number::text as n, control_identifier as i
+        from platform.claim_fiscal_control(${d.companyId}, ${d.kind}, ${serie})`;
     control = c!.n;
+    identificador = c!.i;
   }
   const [emitida] = await sql<DocumentResponse[]>`
     update public.documents
        set status = 'issued', issued_at = ${d.fecha}, document_number = ${num!.n}::bigint,
-           control_number = ${control}::bigint, regime_version_id = ${ctx.regimeVersionId},
+           control_number = ${control}::bigint, control_identifier = ${identificador},
+           rate_basis = ${d.kind === "receipt_return" ? null : rateBasis},
+           regime_version_id = ${ctx.regimeVersionId},
            rules_version = ${RULES_VERSION}
      where id = ${creado.value.id}
     returning ${sql.unsafe(DOC_COLUMNS)}`;

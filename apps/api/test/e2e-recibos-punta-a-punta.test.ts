@@ -332,6 +332,9 @@ describe("negocio sin RIF, de punta a punta", () => {
     const especial = await pedir("PUT", "/v1/companies/taxpayer-type", {
       company_id: COMPANY,
       taxpayer_type_code: "especial",
+      // ADR-0072 §1: el contrato pide la notificación y el acta.
+      notified_on: "2026-09-24",
+      reason: "Intento de marcarse especial sin RIF",
     });
     expect(especial.status).toBe(409);
     const cuerpoEspecial = (await especial.json()) as { code: string; message: string };
@@ -352,6 +355,11 @@ describe("negocio sin RIF, de punta a punta", () => {
       range_from: "1",
       range_to: "100",
       printer_source: "Imprenta e2e",
+      printer_legal_name: "Imprenta E2E, C.A.",
+      printer_tax_id: "J-12345678-9",
+      printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+      printer_authorization_date: "2020-01-15",
+      printed_on: "2026-09-01",
     });
     expect(rango.status).toBe(409);
     expect(((await rango.json()) as { message: string }).message).toContain("talonario");

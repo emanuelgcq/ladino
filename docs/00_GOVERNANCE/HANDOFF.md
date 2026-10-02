@@ -1,3 +1,166 @@
+# Handoff — 2026-10-02 (33ª entrega) — Ola 2, primera ronda: el papel fiscal (numeración, documento, identidad, alícuotas, importación y el tipo de contribuyente)
+
+Hallazgos cerrados (35):
+- **Numeración y documento:** G-01, E-01, B-03, E-17, G-16, G-02, G-03, A-06, G-09, G-11, A-11, E-24, L-11, B-08 y E-10.
+- **Identidad:** M-05, A-08, O-04, P-02 y A-17.
+- **Alícuotas:** B-02, B-04, B-11, E-04, E-18 y L-08.
+- **Importación:** C-01, C-04 y C-05.
+- **Contribuyente especial, parte 1:** A-03, B-07, E-16, F-09, F-11 y L-12.
+
+Un solo commit, como en la ola 1: las seis familias comparten `sales.ts`, `documents-pdf.ts`, `fiscal-books.ts`, `assert_document_issuance`, el OpenAPI y los registros.
+
+**Cadena de cada familia:**
+1. reparador;
+2. revisor;
+3. arreglos;
+4. re-revisión del arreglo;
+5. arreglos.
+
+Después, **una auditoría fiscal** de la ronda entera, que salió BLOQUEADA con quince hallazgos de norma vigente. Cada arreglo pasó otra vez por revisor y por arreglos. Lo decidido por criterio va en la nota de aplicación de cada ADR, con su alternativa.
+
+**ADR:**
+- nuevos: 0071, 0072, 0073 y 0074;
+- enmendados con nota, sin reescribir su historia: 0029, 0031, 0033, 0038, 0039, 0057 y 0065.
+
+## Numeración de control (ADR-0071)
+- **El correlativo:** uno por emisor e identificador, compartido por factura, NC y ND. Exclusión de solapes e índice único sin la clase. `control_identifier` es inmutable y no se emite sin él. `claim_fiscal_control`.
+- **El talonario:**
+  - se registra con los datos de la imprenta; sin ellos no hay rango, y los viejos no emiten hasta completarlos;
+  - se anula si no emitió y se corrige con acta ligada a su transacción (`txid` y valores);
+  - la serie «contingencia…» equivale a la pertenencia a `contingency_ranges`;
+  - la serie es opcional ('' = sin serie).
+- **Errores:** `FISCAL_NUMBERING_INVALID` lleva `details.reason` (`regime_missing`, `no_range`, `printer_data_incomplete`), y la web da la salida de cada uno.
+- **Orden de bloqueo global:** advisory de clase → talonario → kardex.
+- **Notas:**
+  - la NC, y la ND que corrige una línea, toman de la línea de origen la tasa, la categoría, la regla, la descripción y el tipo de operación (P-58);
+  - la ND por un concepto nuevo va a la tasa de su día (`rate_basis`, congelada y con CHECK).
+- **Invariantes nuevos:** `control_number_collisions()` y `control_range_overlaps()`, en CLAUDE.md §3 y en `pnpm recorrido` (14 invariantes).
+
+## El papel (ADR-0071 §4 y la auditoría fiscal)
+- **Destinos del PDF:**
+  - copia de cortesía: por omisión o `cortesia`, con marca y pie en todas las páginas;
+  - `papel`: lo preimpreso en blanco;
+  - `vista`: lo preimpreso sombreado.
+- **El control:** se imprime `00-00001234`; en el cuerpo, según `print_control_number`.
+- **PA 00071 art. 33: un documento, una forma libre.**
+  - Tope en FILAS impresas (`rows_per_free_form`, 15 por omisión y 18 como máximo, medido sobre el PDF) que el dominio cuenta con la misma partición con la que el PDF imprime;
+  - un 422 al emitir y otro en `papel` como red;
+  - la contingencia registra su papel sin tope;
+  - P-55 cerrada.
+- **Arts. 26-27:** «Serie A N° 00000001».
+- **Art. 13.7:** la factura sobre forma libre identifica al adquirente (VALIDAR P-57); «Consumidor final» queda solo para recibos. La NC y la ND identifican al adquirente igual que su factura, así que una factura vieja al «Consumidor final» sigue teniendo su nota.
+- **NC y ND impresas:** la factura que corrigen (número, control, fecha y monto), el ajuste, el motivo y la tasa con su fecha.
+- **Recibo de devolución sin RIF:** con la leyenda de A-06.
+- **Leyendas:** fuera la de homologación.
+- **Nombres y citas:** «Formas libres», y RLIVA arts. 70-78 con VALIDAR-SENIAT.
+- **La caja:** «Venta lista» ofrece imprimir en la forma libre.
+- **Test:** `e2e-checklist-factura` recorre FC-01…FC-34 sobre el PDF real en tres empresas, aseverando valores.
+
+## Documento de identidad (respuesta A-08)
+- **Un solo módulo:** `packages/schemas/src/rif.ts`:
+  - estructura (bloquea);
+  - dígito verificador módulo 11 (avisa con acta);
+  - `V-12345678-9`;
+  - cédula y pasaporte del cliente (FC-07);
+  - el marcador PEND- solo lo pone el sistema.
+- **El libro reproduce el documento:**
+  - ventas lee del documento el RIF, el nombre y el tipo del adquirente (snapshot);
+  - compras, el snapshot del proveedor al registrar;
+  - el documento emitido sin RIF sigue sin RIF;
+  - el hash usa el RIF normalizado.
+- **Índices únicos normalizados:** en proveedores y en empresas.
+- **Reparación P-02, DESPUÉS del pull:** `select * from platform.tax_id_normalization_repair(false);` por la Management API (con `true` es ensayo). Es idempotente, con acta por fila, y falla con la lista ante un choque.
+
+## Alícuotas (ADR-0073)
+- **Catálogo de plataforma con fuente:** `tax_rule_templates` y `tax_exemption_literals`. La general pasa a «fuente secundaria» hasta P-44.
+- **La empresa:** acepta su general con acta (8–16,5 %) y puede cambiarla con fecha efectiva. Una regla usada por documentos se cierra, nunca se retira. El servidor aplica `offered_in_sales`.
+- **La reducida (LIVA art. 64) es lista cerrada:** el mecanismo existe y la lista nace vacía, porque no hay fuente de los literales. No se ofrece hasta P-51. Lo ya clasificado sigue vendiéndose.
+- **La adicional:** exige una justificación escrita con acta (P-60).
+- **Factura y libros:**
+  - la factura, el libro de ventas y el de compras discriminan por alícuota, con el resumen del art. 72 en la misma exportación (P-59 para compras);
+  - el control lleva su identificador en el libro;
+  - el hash firma el estado legal, no el pago ni el asiento;
+  - `BOOK_GENERATOR_VERSION` 1.3.0.
+
+## Importación (ADR-0074)
+- **El trabajo:** en segundo plano.
+- **Idempotencia:** por hash del archivo y formato, con `Idempotency-Key` obligatoria y hash canónico.
+- **Formato numérico:** declarado, con coherencia por archivo y celdas de Excel a 15 cifras.
+- **Vista previa:** con todas las filas avisadas.
+- **Errores:** solo las violaciones de datos del producto rechazan la fila; lo demás se reintenta con backoff y jitter.
+- **Costo de referencia:** se guarda con su moneda.
+- **El worker:** procesa con `SET LOCAL ROLE ladino_api`. Decidido por criterio (ADR-0074, R-56).
+
+## Tipo de contribuyente y retenciones que nos practican (ADR-0072, parte 1)
+- **El tipo:** `company_taxpayer_types` (append-only, vigencia, acta) y `platform.taxpayer_type_at`.
+- **Sin tipo vigente no se factura:** lo exigen el dominio y `platform.assert_document_issuance` (LAD98).
+  - Solo se declaran ordinario y especial.
+  - `formal` queda bloqueado hasta M-10 (PA 00071 art. 15).
+  - `no_contribuyente` se deriva de no tener RIF.
+  - Sin transición.
+  - El IGTF sigue la vigencia del tipo.
+- **Retención soportada:**
+  - 14 dígitos con AAAAMM válido;
+  - única por cliente y FACTURA (PA 000054 art. 16: el comprobante quincenal cubre varias);
+  - porciones desde el catálogo `iva_retention_portions` (fuente secundaria);
+  - abona a la tasa de la factura (P-30);
+  - la carga quien cobra (dueño, administrativo y cajero, desde la ficha de la factura) y la corrige el contador;
+  - **la reversa queda para la ola 3 (R-61).**
+- **Arreglo de paso:** `document_balance_transaction` volvía a funcionar para `authenticated`; fallaba desde la 20260912120000 con cualquier documento con cobros.
+
+## Aserciones existentes cambiadas (para el informe de ola)
+- **P-02** (codificaban la grafía tecleada):
+  - `e2e-customers.test.ts:244-246`;
+  - `e2e-company-profile.test.ts:157` y `:221`;
+  - `packages/domain/test/customers.test.ts:199`, `:204` y `:205`.
+- **§2.6 y §2.8** («el cajero carga retenciones al cobrar»):
+  - `040_named_roles_test.sql:116`, cajero 5→6;
+  - `e2e-onboarding.test.ts:164`.
+  - La del encargado (040:158) volvió a su texto de HEAD: el encargado no cobra.
+- **PA 00071 art. 13.7** (aseveraban una factura sin adquirente identificado):
+  - `e2e-sales.test.ts:904` (CONSUMIDOR → CLIENTE);
+  - `e2e-sales.test.ts:1240` (el mensaje).
+  - La regla de fiar al mostrador se sigue probando en modo recibos (`e2e-receipts`).
+- **Fixtures sin aserción:** las empresas de prueba declaran su tipo (`_tipo-de-fixture.ts` y unos 14 E2E, 13 pgTAP y `e2e-company-profile`), los talonarios llevan los datos de la imprenta y las ventas sobre forma libre van a un cliente identificado.
+- **Higiene:** los tests del worker corren en serie (`apps/worker/vitest.config.ts`), y el de importaciones limpia su outbox.
+
+## Orden de las migraciones: lo que cazó el db:reset
+Las familias trabajaron en paralelo y aplicaron sus migraciones en local con `--include-all`, fuera de orden. Al consolidar, el `db:reset` limpio encontró dos defectos:
+- la 150400 leía `documents.control_identifier`, que crea la 160000;
+- la 150600 redefinía `purchases_book` a partir de la 170200. En el orden limpio corría antes que ella, y la 170100 y la 170200 la pisaban en silencio, con lo que se perdía el reparto de la NC por tratamiento.
+
+Ninguna estaba aplicada fuera de local ni commiteada. Se RENOMBRARON, sin tocar su contenido: 150400 → **170300** y 150600 → **170400**. Sus cabeceras internas siguen nombrando el número viejo, porque el guardián no deja editar una migración existente.
+
+Para encontrar otro caso: listar las funciones redefinidas por más de una migración de la ronda y comprobar que la última en el orden limpio es la que se quería.
+
+## Preguntas al asesor nuevas o cambiadas
+P-49 a P-62 en PENDIENTES_ASESOR: RIF, la general, la reducida y la adicional, el libro de compras, la NC tras cambiar la alícuota, la serie, el adquirente sin identificar, el papel perdido, la orden de entrega y el «no sujeto» con RIF. P-55 cerrada por la norma.
+
+## Despliegue (para la sección 7)
+**Antes del pull** (expand, la API vieja las tolera):
+- `140000` a `140400`. R-62: la API nueva lee `products.reference_cost`, así que tienen que estar ANTES de levantarla;
+- `170000`;
+- `180000`, `180100`, `180200` y `180400`.
+
+**Justo después del pull** (la API vieja no las tolera):
+- `150000` a `150500`, `170300` y `170400` (R-57). Antes, la consulta de empresas con una categoría por omisión no ofrecida: la 170400 falla con la lista;
+- `160000` a `160600`. Revocan `claim_control_number` (R-59). Controles repetidos en producción: 0, consultado el 2026-09-29;
+- `170100` y `170200`. Índices normalizados; en producción, 0 choques;
+- `180300`;
+- `190000` a `190600`. Sin tipo declarado no se factura, y la NC sigue a su factura.
+
+**Después del pull:** la reparación de RIF.
+
+**El dueño, al terminar:** cada empresa declara su tipo de contribuyente, completa los datos de imprenta de su talonario e identifica al adquirente de sus facturas. No hay clientes reales: es esperado.
+
+**Token:** el de la Management API (`~/.config/ladino/supabase-token`) respondió «Unauthorized» el 2026-10-02. Hace falta uno válido para aplicar las migraciones al remoto en la entrega final.
+
+Gate: VERIFY EXIT=0, 782 pasos, vitest 1092 en 19 paquetes, pgTAP 1693 en 92 ficheros (base anterior 841 / 1380 / 76; base nueva guardada).
+
+HOMOLOGATION_IMPACT = YES: numeración de control, papel, libros de ventas y de compras, alícuotas y quién puede emitir.
+
+---
+
 # Handoff — 2026-09-28 (32ª entrega) — Ola 1 de la respuesta del dueño: el cajero vende, el dinero se mueve, el libro firma y los períodos tienen historia
 
 Hallazgos cerrados: **N-01, N-02, N-04 (G-08), B-16, C-08, K-11 · J-01 · L-01, L-02, L-06, L-07 (G-10) y la R-2 ampliada · K-01, K-02, K-03, K-04, K-05, K-06**. Un solo commit para la ola: las cuatro familias comparten ficheros (`errors.ts`, openapi, CLAUDE.md, ERROR_CATALOG, RISK_REGISTER, PENDIENTES_ASESOR), y partirlas dejaba commits intermedios que no compilan. Decidido por criterio.

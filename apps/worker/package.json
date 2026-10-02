@@ -24,6 +24,7 @@
   "dependencies": {
     "@ladino/core": "workspace:*",
     "@ladino/db": "workspace:*",
+    "@ladino/domain": "workspace:*",
     "@ladino/fiscal": "workspace:*"
   }
 }

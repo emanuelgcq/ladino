@@ -98,6 +98,10 @@ export const CompanySettingsResponse = z
     default_warehouse_id: uuid.nullable(),
     /** La lista que la caja aplica sin preferida del cliente (migración 36). NULL = heurística. */
     default_price_list_id: uuid.nullable(),
+    /** ADR-0071 §4: el control (00-00001234) también en el CUERPO del documento. Por omisión, sí. */
+    print_control_number: z.boolean(),
+    /** PA 00071 art. 33: tope de FILAS IMPRESAS de una factura, NC o ND sobre forma libre (A-2). */
+    rows_per_free_form: z.number().int(),
   })
   .strict();
 export type CompanySettingsResponse = z.infer<typeof CompanySettingsResponse>;
@@ -107,6 +111,8 @@ export const UpdateCompanySettingsRequest = z
     sells_wholesale: z.boolean().optional(),
     block_sale_without_stock: z.boolean().optional(),
     allow_unidentified_sales: z.boolean().optional(),
+    print_control_number: z.boolean().optional(),
+    rows_per_free_form: z.number().int().min(1).max(18).optional(),
     default_price_list_id: uuid.nullable().optional(),
     default_tax_category_code: z
       .string()

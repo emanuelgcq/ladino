@@ -57,3 +57,71 @@ cual: el libro, la pantalla, el CSV exportado, la planilla y el mayor dicen la m
   Tabla de invariantes: CLAUDE.md §3. Su detalle,
   documento a documento y asiento a asiento, es `platform.book_ledger_discrepancies()`, y la pantalla
   solo dice que falta un asiento cuando `accounting_coverage_gaps()` lo confirma (L-06).
+
+## Por alícuota y resumen del art. 72 (migración 20260928150000 · RESPUESTA_RECORRIDO L-08 · ADR-0073)
+
+- El libro de ventas se lee de `platform.sales_book_by_rate`: el renglón de `sales_book` (mismo
+  signo, anuladas en cero) más `base_alicuota_general`, `iva_alicuota_general`,
+  `alicuota_general`, y lo mismo para `adicional` (general + adicional) y `reducida`. Se lee de
+  la categoría **congelada** en la línea (ADR-0044 §1); el IVA de cada alícuota es total − subtotal
+  funcionales, así que las tres suman `iva_debito`.
+- El **resumen** (RLIVA art. 72) viaja en `summary` de la respuesta del libro de ventas, desde
+  `platform.sales_book_summary`: por concepto (`gravado_general`, `gravado_adicional`,
+  `gravado_reducida`, `exento`, `exonerado`, `no_sujeto`, `sin_clasificar`) y alícuota, base,
+  IVA, la parte que viene de notas (`adjustments_*`) y el número de documentos. Exportaciones: no
+  implementadas (VALIDAR-SENIAT), no aparecen.
+- `BOOK_GENERATOR_VERSION` = `fiscal-books/1.3.0`: el CSV de ventas tiene once columnas más (nueve por alícuota más `base_gravada_sin_alicuota` e
+  `iva_sin_clasificar`, migración 20260928150200) y
+  un período ya exportado da otro hash al regenerarse (RISK_REGISTER R-57).
+
+### Revisión del 2026-09-29 (migración 20260928150200, H5 y H6)
+
+- `sales_book_by_rate` trae además `base_gravada_sin_alicuota` (base gravada sin categoría
+  reconocida; debería ser cero) e `iva_sin_clasificar` (IVA de las líneas fuera de las tres
+  alícuotas: las anteriores a la migración 27, sin categoría congelada). Con ellas, en **cada
+  renglón**: Σ `base_alicuota_*` + `base_gravada_sin_alicuota` = `base_gravada`, y Σ
+  `iva_alicuota_*` + `iva_sin_clasificar` = `iva_debito`. La base de esas líneas sin categoría
+  sigue en `base_sin_clasificar` (fuera de `base_gravada`). Lo prueba el pgTAP 081b con factura, NC
+  y anulada, junto con Σ del resumen = totales del libro.
+- **El resumen del art. 72 entra en el hash** del libro de ventas exportado (`hashDelDataset`): se
+  firman los renglones y, tras el rótulo «RESUMEN (RLIVA art. 72)», las filas del resumen.
+  El CSV «columnas legales» sigue siendo solo cabecera + renglones. El resumen se descarga como
+  fichero propio de la misma generación, `resumen-art72.csv`
+  (`POST /v1/fiscal-books/runs/{id}/summary-art72`, permiso `fiscal_book.export`, idempotente): no
+  crea otra generación ni cambia el hash, y si el libro cambió desde entonces responde 422. También
+  se sirve en la respuesta del libro (`summary`) y en la pantalla.
+
+### Re-revisión del 2026-10-02 (B1)
+
+- **El hash firma el libro legal.** En ventas, `hashDelDataset` deja fuera `journal_entry_id`
+  (contabilidad) y sustituye el `status` operativo por el estado legal (`estado_legal`: «anulada» o
+  «vigente»). Cobrar una factura del período (issued → paid) o asentarla no cambia el hash.
+  `BOOK_GENERATOR_VERSION` sigue en 1.3.0 (no publicada).
+- **La exportación de ventas trae el resumen** del art. 72 de esa generación en la misma transacción y
+  respuesta (`summary_content`, `summary_filename` = `resumen-art72.csv`), y la pantalla descarga
+  los dos ficheros. La ruta hermana `POST /v1/fiscal-books/runs/{id}/summary-art72` queda para volver
+  a descargarlo: si la generación es de otra versión del generador lo dice («exporta de nuevo»), y si
+  el libro cambió de verdad, 422 «El libro de ventas cambió desde esa generación…».
+
+### Auditoría fiscal de la ronda (migración 20260928170300: hallazgos 6 y 11)
+
+- **Compras por alícuota** (P-59, lectura conservadora): el libro de compras se lee de
+  `platform.purchases_book_by_rate`, con las mismas once columnas que ventas. La categoría sale de
+  cada línea congelada; la NC recibida toma la de la línea de factura que devuelve.
+  `base_gravada_sin_alicuota` e `iva_sin_clasificar` son lo que el renglón trae y las líneas no
+  explican (cero en un documento limpio). Su resumen (`purchases_book_summary`) va en la misma
+  exportación (`resumen-art72-compras.csv`), en la respuesta del libro y en el hash.
+- **El control completo en ventas**: el libro y su CSV llevan `control_identifier` junto a
+  `control_number` (ADR-0071).
+- `BOOK_GENERATOR_VERSION` sigue en 1.3.0 (no publicada).
+
+### Revisión de los cambios fiscales (migración 20260928170400: A1, A2, F6)
+
+- **A2:** la NC recibida se reparte por el tratamiento de la línea de factura que devuelve: la que
+  devuelve lo exento resta de `base_exenta` (y de exonerada o no sujeta, igual), no de gravadas.
+  La NC sin línea de origen sigue en gravadas, como antes.
+- **A1:** el residuo de redondeo entre el renglón y sus alícuotas (menor que un céntimo) va a la
+  alícuota mayor del renglón; ya no sale como «sin alícuota» ni como fila «sin_clasificar» falsa en
+  el resumen.
+- **F6:** `unclassified_rows` cuenta también los renglones con `base_gravada_sin_alicuota` o
+  `iva_sin_clasificar` distintos de cero.

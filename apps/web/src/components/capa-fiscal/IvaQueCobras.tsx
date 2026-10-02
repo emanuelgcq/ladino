@@ -2,6 +2,28 @@ import { Check } from "lucide-react";
 import { Button } from "../../ui/button.js";
 import { Input } from "../../ui/input.js";
 import { FormField } from "../forms.js";
+import { mostrarPorcentaje } from "../../porcentaje.js";
+
+/** La general del catálogo de plataforma, tal como la manda el servidor (ADR-0073, B-11). */
+export interface IvaDelCatalogo {
+  rate: string;
+  rate_min: string;
+  rate_max: string;
+  legal_source: string;
+}
+
+/**
+ * La ayuda del porcentaje: la REFERENCIA del catálogo con su cita y el rango de la ley, leídos del
+ * servidor. Ni una cifra escrita aquí (B-11, CLAUDE.md regla 8).
+ */
+export function ayudaDelCatalogo(catalogo: IvaDelCatalogo | null): string {
+  if (catalogo === null)
+    return "El catálogo no trae una alícuota general vigente: pregúntale a tu contador.";
+  return (
+    `Hoy ${mostrarPorcentaje(catalogo.rate)} (${catalogo.legal_source}). La ley admite entre ` +
+    `${mostrarPorcentaje(catalogo.rate_min)} y ${mostrarPorcentaje(catalogo.rate_max)}.`
+  );
+}
 
 /**
  * «El IVA que cobras»: el paso de Empezar para una empresa que FACTURA. El
@@ -10,6 +32,7 @@ import { FormField } from "../forms.js";
  */
 export function IvaQueCobras({
   aceptado,
+  catalogo,
   valor,
   onValor,
   puedeAceptar,
@@ -17,6 +40,8 @@ export function IvaQueCobras({
 }: {
   /** El porcentaje ya aceptado (p. ej. «16»), o null si falta. */
   aceptado: string | null;
+  /** La referencia del catálogo con su cita, o null si no hay una vigente. */
+  catalogo: IvaDelCatalogo | null;
   valor: string;
   onValor: (v: string) => void;
   puedeAceptar: boolean;
@@ -38,17 +63,13 @@ export function IvaQueCobras({
             auditoría.
           </p>
           <div className="flex flex-wrap items-end gap-2">
-            <FormField
-              label="Porcentaje (%)"
-              hint="La alícuota general vigente la confirma tu contador (Ley de IVA; hoy 16 %)."
-            >
+            <FormField label="Porcentaje (%)" hint={ayudaDelCatalogo(catalogo)}>
               {(p) => (
                 <Input
                   {...p}
                   value={valor}
                   onChange={(e) => onValor(e.target.value)}
                   inputMode="decimal"
-                  placeholder="16"
                   className="w-28"
                 />
               )}

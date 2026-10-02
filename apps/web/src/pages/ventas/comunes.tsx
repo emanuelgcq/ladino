@@ -2,6 +2,8 @@ import { Link } from "react-router";
 import { ClipboardCheck } from "lucide-react";
 import { errorDePersona, LlamadaApiError } from "../../lib.js";
 import { useConFacturas } from "../../app/modo-venta.js";
+import { useSesion } from "../../app/session.js";
+import { motivoDeNumeracion, salidaDeNumeracion } from "./salida-numeracion.js";
 
 /**
  * Los 409 de puesta a punto NO son averías: son pasos pendientes de la
@@ -13,7 +15,7 @@ export const CODIGOS_PUESTA_A_PUNTO: Record<string, string> = {
   TAX_RULE_MISSING: "Falta la alícuota de IVA vigente (paso 1 de la puesta a punto).",
   EXCHANGE_RATE_MISSING: "Falta la tasa de cambio del día (paso 2 de la puesta a punto).",
   FISCAL_NUMBERING_INVALID:
-    "Falta régimen fiscal o rango de numeración vigente (pasos 3 y 4 de la puesta a punto).",
+    "Falta régimen fiscal o talonario de la imprenta (pasos 3 y 4 de la puesta a punto).",
   RETENTION_RULE_MISSING: "Falta la norma de retención cargada (módulo de compras).",
 };
 
@@ -39,6 +41,7 @@ const CODIGOS_SIN_RIF: Record<string, { titulo: string; ir?: { to: string; texto
 
 export function MensajeError({ error }: { error: unknown }): React.JSX.Element | null {
   const conFacturas = useConFacturas();
+  const { puede } = useSesion();
   // Sin error no hay mensaje. Quien lo pinta sin condición —Declarar IVA e
   // IGTF— mostraba un «null» rojo debajo de las pestañas nada más entrar,
   // porque `String(null)` es un texto perfectamente válido.
@@ -69,6 +72,13 @@ export function MensajeError({ error }: { error: unknown }): React.JSX.Element |
   if (error instanceof LlamadaApiError) {
     const guia = CODIGOS_PUESTA_A_PUNTO[error.body.code];
     const deQuienFactura = CODIGOS_DE_QUIEN_FACTURA[error.body.code];
+    // E-17 y H10 (ADR-0071): la salida la elige `details.reason` — puesta a punto, talonario o
+    // datos de la imprenta — y el permiso de quien lo lee: si no lo tiene, a quién pedírselo.
+    // Un solo aviso (G-16).
+    const sinControl = error.body.code === "FISCAL_NUMBERING_INVALID";
+    const salida = sinControl
+      ? salidaDeNumeracion(motivoDeNumeracion(error.body.details), puede)
+      : null;
     return (
       <div
         role="alert"
@@ -87,13 +97,24 @@ export function MensajeError({ error }: { error: unknown }): React.JSX.Element |
             <ClipboardCheck className="size-3.5" /> Ir a Empezar
           </Link>
         )}
-        {guia !== undefined && (
+        {guia !== undefined && !sinControl && (
           <Link
             to="/admin/facturacion-fiscal"
             className="mt-1.5 inline-flex items-center gap-1.5 font-medium text-accent-soft-foreground hover:underline"
           >
             <ClipboardCheck className="size-3.5" /> Ir a la puesta a punto fiscal
           </Link>
+        )}
+        {salida?.enlace && (
+          <Link
+            to={salida.enlace.to}
+            className="mt-1.5 inline-flex items-center gap-1.5 font-medium text-accent-soft-foreground hover:underline"
+          >
+            <ClipboardCheck className="size-3.5" /> {salida.enlace.texto}
+          </Link>
+        )}
+        {salida?.pedirlo === true && (
+          <p className="mt-1 text-muted-foreground">Pídeselo a quien administra.</p>
         )}
       </div>
     );

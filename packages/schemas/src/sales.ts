@@ -11,10 +11,11 @@ const uuid = z.string().uuid();
  * numeración y a la cabecera Content-Disposition del PDF — un carácter libre
  * ahí es inyección de cabeceras (auditoría 2026-09-11, M-32).
  */
+// '' = el papel no trae serie («serie si el papel la trae», RESPUESTA §2.1; ADR-0071, H11).
 const serie = z
   .string()
   .trim()
-  .regex(/^[A-Za-z0-9-]{1,30}$/, "la serie admite letras, dígitos y guion, hasta 30");
+  .regex(/^[A-Za-z0-9-]{0,30}$/, "la serie admite letras, dígitos y guion, hasta 30");
 const amount = z
   .string()
   .regex(/^\d{1,16}(\.\d{1,8})?$/, "importe decimal como string: hasta 16 enteros y 8 decimales");
@@ -177,9 +178,27 @@ export const CreateDebitNoteRequest = z
     source_document_id: uuid,
     reason: z.string().trim().min(3).max(500),
     lines: z
-      .array(z.object({ product_id: uuid, quantity, unit_price: amount }).strict())
+      .array(
+        z
+          .object({
+            product_id: uuid,
+            quantity,
+            unit_price: amount,
+            /**
+             * B-5 (aditivo): la línea de la factura que la ND corrige. Con ella, la ND va a la
+             * alícuota y condición de esa línea, como la NC; sin ella (ajuste global), a la de hoy.
+             */
+            source_line_id: uuid.optional(),
+          })
+          .strict(),
+      )
       .min(1)
       .max(200),
+    /**
+     * Hallazgo 13 (§2.7, G-11): "corrects_invoice" (por omisión) va a la tasa de la factura;
+     * "new_concept" (interés, flete) va a la tasa BCV del día de la nota. Aditivo.
+     */
+    basis: z.enum(["corrects_invoice", "new_concept"]).optional(),
   })
   .strict();
 export type CreateDebitNoteRequest = z.infer<typeof CreateDebitNoteRequest>;
@@ -232,6 +251,14 @@ export const DocumentResponse = z
     series: z.string(),
     document_number: z.number().int().nullable(),
     control_number: z.number().int().nullable(),
+    /** Los 2 dígitos del identificador del control (ADR-0071): se imprime `00-00001234`. */
+    control_identifier: z.string().nullable(),
+    /**
+     * El control como se imprime, `00-00001234` (ADR-0071 §4), vestido por el SERVIDOR: el
+     * diálogo de impresión lo enseña como «Próximo control» para que la persona confirme que la
+     * hoja de la forma libre coincide. Null si el documento no consume control.
+     */
+    control_display: z.string().nullable(),
     status: DocumentStatus,
     issued_at: z.string().datetime({ offset: true }).nullable(),
     annulled_at: z.string().datetime({ offset: true }).nullable(),
@@ -684,29 +711,115 @@ export const CustomerStatementResponse = z
   .strict();
 export type CustomerStatementResponse = z.infer<typeof CustomerStatementResponse>;
 
+/**
+ * El talonario de la imprenta (ADR-0071, enmienda ADR-0037): se registra UNA vez por empresa e
+ * identificador y sirve para factura, nota de crédito y nota de débito. `kind` ya no separa el
+ * correlativo de control: se acepta por compatibilidad y se ignora. Los datos de la imprenta son
+ * opcionales en el ESQUEMA para que su ausencia responda un 422 que diga cuál falta (lo decide la
+ * API, no el esquema compartido con los clientes: CLAUDE.md §7).
+ */
+const fechaIso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const datosImprenta = {
+  /** Razón social de la imprenta autorizada. */
+  printer_legal_name: z.string().trim().min(2).max(200),
+  /** RIF de la imprenta, con o sin guiones; la API valida la estructura y lo normaliza. */
+  printer_tax_id: z.string().trim().min(1).max(20),
+  /** Nomenclatura de la providencia que autoriza a la imprenta. */
+  printer_authorization: z.string().trim().min(3).max(100),
+  /** Fecha de esa providencia. */
+  printer_authorization_date: fechaIso,
+  /** Fecha de elaboración del talonario (la imprenta la preimprime, art. 31). */
+  printed_on: fechaIso,
+} as const;
+
 export const CreateFiscalRangeRequest = z
   .object({
     company_id: uuid,
-    kind: z.enum(["invoice", "credit_note", "debit_note", "delivery_note"]),
-    series: serie,
+    /** COMPATIBILIDAD: se ignora. Un talonario sirve a las tres clases (ADR-0071). */
+    kind: z.enum(["invoice", "credit_note", "debit_note", "delivery_note"]).optional(),
+    /** Como viene impresa; '' si el papel no trae serie. «contingencia…» es solo de la PA 102. */
+    series: serie.refine((s) => !/^contingencia/i.test(s), {
+      message:
+        "una serie «contingencia…» es del talonario de contingencia: se registra en Contingencia (PA 102)",
+    }),
+    /** Los 2 dígitos del identificador del control (PA 00071 art. 44). «00» por omisión. */
+    printer_identifier: z
+      .string()
+      .regex(/^\d{2}$/)
+      .optional(),
     range_from: z.string().regex(/^\d{1,18}$/),
     range_to: z.string().regex(/^\d{1,18}$/),
-    printer_source: z.string().trim().min(1).max(200),
+    /** COMPATIBILIDAD: el nombre libre de antes. Si falta, se usa la razón social. */
+    printer_source: z.string().trim().min(1).max(200).optional(),
+    printer_legal_name: datosImprenta.printer_legal_name.optional(),
+    printer_tax_id: datosImprenta.printer_tax_id.optional(),
+    printer_authorization: datosImprenta.printer_authorization.optional(),
+    printer_authorization_date: datosImprenta.printer_authorization_date.optional(),
+    printed_on: datosImprenta.printed_on.optional(),
     alert_threshold_pct: z.number().int().min(0).max(100).optional(),
   })
   .strict();
 export type CreateFiscalRangeRequest = z.infer<typeof CreateFiscalRangeRequest>;
 
+/** Completar los datos de la imprenta de un talonario anterior a ADR-0071 (una sola vez). */
+export const CompleteFiscalRangePrinterRequest = z
+  .object({
+    company_id: uuid,
+    ...datosImprenta,
+    /** Solo mientras el talonario no haya emitido nada (ADR-0071, H3). */
+    printer_identifier: z
+      .string()
+      .regex(/^\d{2}$/)
+      .optional(),
+  })
+  .strict();
+export type CompleteFiscalRangePrinterRequest = z.infer<typeof CompleteFiscalRangePrinterRequest>;
+
+/**
+ * Corregir los datos de la imprenta de un talonario completo (ADR-0071, H3, decidido por criterio):
+ * con motivo y acta que guarda lo anterior y lo nuevo. Lo emitido no cambia: lleva impreso lo que
+ * la imprenta preimprimió. El identificador solo si el talonario no emitió nada.
+ */
+export const CorrectFiscalRangePrinterRequest = z
+  .object({
+    company_id: uuid,
+    ...datosImprenta,
+    printer_identifier: z
+      .string()
+      .regex(/^\d{2}$/)
+      .optional(),
+    reason: z.string().trim().min(10).max(500),
+  })
+  .strict();
+export type CorrectFiscalRangePrinterRequest = z.infer<typeof CorrectFiscalRangePrinterRequest>;
+
+/** Anular un talonario que no emitió nada (ADR-0071, H3), con motivo y acta. */
+export const CancelFiscalRangeRequest = z
+  .object({ company_id: uuid, reason: z.string().trim().min(10).max(500) })
+  .strict();
+export type CancelFiscalRangeRequest = z.infer<typeof CancelFiscalRangeRequest>;
+
 export const FiscalRangeResponse = z
   .object({
     id: uuid,
-    kind: z.string(),
+    /** Histórico: null en los talonarios registrados desde ADR-0071. */
+    kind: z.string().nullable(),
     series: z.string(),
+    printer_identifier: z.string(),
     range_from: z.number().int(),
     range_to: z.number().int(),
     next_available: z.number().int(),
     status: z.enum(["active", "exhausted", "cancelled"]),
     printer_source: z.string(),
+    printer_legal_name: z.string().nullable(),
+    printer_tax_id: z.string().nullable(),
+    printer_authorization: z.string().nullable(),
+    printer_authorization_date: z.string().nullable(),
+    printed_on: z.string().nullable(),
+    /** Sin los datos de la imprenta no se emite con este talonario. */
+    printer_data_complete: z.boolean(),
+    /** Talonario de contingencia (PA 102): no es papel de la caja. */
+    is_contingency: z.boolean(),
     remaining: z.number().int(),
   })
   .strict();
@@ -824,6 +937,14 @@ export const FiscalSetupResponse = z
     /** Qué vende la empresa hoy: facturas, recibos o ninguno (migración 54). */
     sales_mode: SalesMode,
     iva_general: z.object({ rate: amount, legal_source: z.string() }).strict().nullable(),
+    /**
+     * La general del CATÁLOGO de plataforma, con su cita y el rango del art. 27 (ADR-0073,
+     * B-11): la referencia que la pantalla enseña. NULL si el catálogo no trae una vigente.
+     */
+    iva_catalog: z
+      .object({ rate: amount, rate_min: amount, rate_max: amount, legal_source: z.string() })
+      .strict()
+      .nullable(),
   })
   .strict();
 export type FiscalSetupResponse = z.infer<typeof FiscalSetupResponse>;
@@ -845,6 +966,12 @@ export const AcceptIvaGeneralRequest = z
   .object({
     /** Como fracción: "0.16" es 16%. */
     rate: z.string().regex(/^0(\.\d{1,4})?$/),
+    /**
+     * Desde qué día rige (día de Caracas, YYYY-MM-DD). Por omisión, hoy. Nunca antes de hoy: lo ya
+     * emitido conserva su regla. Sirve para cuando hoy ya se facturó con la tasa anterior
+     * (ADR-0073, H2): la nueva puede regir desde mañana.
+     */
+    effective_from: z.string().date().optional(),
   })
   .strict();
 export type AcceptIvaGeneralRequest = z.infer<typeof AcceptIvaGeneralRequest>;
@@ -852,9 +979,14 @@ export type AcceptIvaGeneralRequest = z.infer<typeof AcceptIvaGeneralRequest>;
 export const AcceptIvaGeneralResponse = z
   .object({
     rate: amount,
-    /** Cuántas reglas creó esta aceptación (0 si otra empresa ya las creó). */
+    /** Cuántas reglas creó esta aceptación (0 si la misma tasa ya regía y el catálogo estaba completo). */
     rules_created: z.number().int(),
     accepted_on: z.string().date(),
+    /**
+     * B5: falso si esa misma tasa ya regía en la fecha efectiva (no se cerró ni se abrió ninguna
+     * general). La pantalla dice «Ya regía esa alícuota» en vez de «Alícuota cambiada».
+     */
+    changed: z.boolean(),
   })
   .strict();
 export type AcceptIvaGeneralResponse = z.infer<typeof AcceptIvaGeneralResponse>;

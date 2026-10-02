@@ -18,6 +18,7 @@ import { Table, TBody, TD, TDNum, TH, THead, TR } from "../../ui/table.js";
 import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { mostrarPorcentaje } from "../../porcentaje.js";
+import { formatearDocumento } from "@ladino/schemas";
 import { esCero } from "../../components/decimal-compare.js";
 import { MensajeError } from "../ventas/comunes.js";
 import {
@@ -42,6 +43,7 @@ const ROTULO: Record<string, string> = {
   kind: "Tipo",
   series: "Serie",
   document_number: "Número",
+  control_identifier: "Identificador del control",
   control_number: "N.º de control",
   status: "Estado",
   customer_tax_id: "RIF del cliente",
@@ -57,6 +59,18 @@ const ROTULO: Record<string, string> = {
   base_sin_clasificar: "Sin clasificar",
   total_amount: "Total",
   journal_entry_id: "Asiento",
+  // L-08 (RLIVA arts. 72 y 76): base e IVA por alícuota.
+  base_alicuota_general: "Base alícuota general",
+  iva_alicuota_general: "IVA alícuota general",
+  alicuota_general: "Alícuota general",
+  base_alicuota_adicional: "Base general + adicional",
+  iva_alicuota_adicional: "IVA general + adicional",
+  alicuota_adicional: "Alícuota general + adicional",
+  base_alicuota_reducida: "Base alícuota reducida",
+  iva_alicuota_reducida: "IVA alícuota reducida",
+  alicuota_reducida: "Alícuota reducida",
+  base_gravada_sin_alicuota: "Base gravada sin alícuota",
+  iva_sin_clasificar: "IVA sin clasificar",
   // compras
   invoice_id: "Id",
   invoice_date: "Fecha de factura",
@@ -143,6 +157,14 @@ const COLUMNAS_DINERO: ReadonlySet<string> = new Set([
   "base_exonerada",
   "base_no_sujeta",
   "base_sin_clasificar",
+  "base_alicuota_general",
+  "iva_alicuota_general",
+  "base_alicuota_adicional",
+  "iva_alicuota_adicional",
+  "base_alicuota_reducida",
+  "iva_alicuota_reducida",
+  "base_gravada_sin_alicuota",
+  "iva_sin_clasificar",
   "retenido_iva",
   "retenido_islr",
   "total_amount",
@@ -170,7 +192,8 @@ function humanizar(clave: string): string {
 const LIBROS: readonly { value: BookKind; label: string }[] = [
   { value: "ventas", label: "Libro de ventas" },
   { value: "compras", label: "Libro de compras" },
-  { value: "retenciones_iva", label: "Retenciones de IVA" },
+  // L-12 (ADR-0072 §9): las que NOSOTROS practicamos, distintas de las que nos practicaron.
+  { value: "retenciones_iva", label: "Retenciones que practicamos (a proveedores)" },
   { value: "retenciones_islr", label: "Retenciones de ISLR" },
 ];
 
@@ -188,7 +211,7 @@ export function Libros(): React.JSX.Element {
     <div>
       <PageHeader
         title="Libros fiscales"
-        description="Obligación de PA 071 y PA 102. El libro se calcula desde los documentos cada vez: por eso cuadra con ellos."
+        description="Obligación del Reglamento de la LIVA (arts. 70 a 78). El libro se calcula desde los documentos cada vez: por eso cuadra con ellos."
       />
 
       <Card className="mb-4">
@@ -250,6 +273,8 @@ function Libro({
   // el servidor podía no tener implementado para este libro).
   const [formatoElegido, setFormatoElegido] = useState<string | null>(null);
   const [confirmando, setConfirmando] = useState(false);
+  // H6: la última generación exportada en esta pantalla; su resumen del art. 72 se descarga aparte.
+  const [ultimaGeneracion, setUltimaGeneracion] = useState<FiscalBookRun | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const libro = useQuery({
@@ -263,32 +288,53 @@ function Libro({
   });
   const formato = formatoElegido ?? (formatos.data ?? []).find((f) => f.implemented)?.code ?? null;
 
+  /** H6: el resumen del art. 72 de la generación recién exportada, como `resumen-art72.csv`. */
+  async function descargarResumen(): Promise<void> {
+    if (ultimaGeneracion === null) return;
+    setError(null);
+    try {
+      const r = await llamar<{ content: string; filename: string }>(
+        `/v1/fiscal-books/runs/${ultimaGeneracion.id}/summary-art72`,
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": crypto.randomUUID() },
+          body: JSON.stringify({ company_id: empresa.id }),
+        },
+      );
+      descargarCsv(r.content, r.filename);
+    } catch (e) {
+      setError(e);
+    }
+  }
+
   async function exportar(): Promise<void> {
     if (formato === null) return;
     setError(null);
     try {
-      const r = await llamar<{ content: string; filename: string; run: FiscalBookRun }>(
-        "/v1/fiscal-books/export",
-        {
-          method: "POST",
-          headers: { "Idempotency-Key": crypto.randomUUID() },
-          body: JSON.stringify({
-            company_id: empresa.id,
-            book_kind: kind,
-            period_from: desde,
-            period_to: hasta,
-            format_code: formato,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          }),
-        },
-      );
-      const blob = new Blob([r.content], { type: "text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = r.filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      const r = await llamar<{
+        content: string;
+        filename: string;
+        run: FiscalBookRun;
+        summary_content?: string;
+        summary_filename?: string;
+      }>("/v1/fiscal-books/export", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          book_kind: kind,
+          period_from: desde,
+          period_to: hasta,
+          format_code: formato,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }),
+      });
+      descargarCsv(r.content, r.filename);
+      // B1: en ventas, el resumen del art. 72 de esta misma generación viene en la respuesta.
+      if (r.summary_content !== undefined && r.summary_filename !== undefined) {
+        descargarCsv(r.summary_content, r.summary_filename);
+      }
+      setUltimaGeneracion(r.run);
       toast.success("Generación registrada", `Hash ${r.run.dataset_hash.slice(0, 16)}…`);
       await qc.invalidateQueries({ queryKey: ["generaciones", empresa.id] });
     } catch (e) {
@@ -317,6 +363,11 @@ function Libro({
           if (v === null || v === undefined)
             return <span className="text-faint-foreground">—</span>;
           if (typeof v === "boolean") return v ? "sí" : "no";
+          // El RIF llega normalizado del libro (hallazgo 1 de la revisión, 2026-09-28): se
+          // enseña como en el CSV y en el resto de Ladino, con la función compartida.
+          if (typeof v === "string" && clave.endsWith("_tax_id")) {
+            return <span className="font-mono">{formatearDocumento(v)}</span>;
+          }
           if (typeof v === "string" && VALOR_LEGIBLE[clave]?.[v] !== undefined) {
             return VALOR_LEGIBLE[clave][v];
           }
@@ -329,7 +380,7 @@ function Libro({
           }
           // La porción retenida viaja como fracción («0.75000000»): se enseña
           // como «75 %», moviendo la coma sobre el string.
-          if (typeof v === "string" && clave === "rate") {
+          if (typeof v === "string" && (clave === "rate" || clave.startsWith("alicuota_"))) {
             return (
               <span className="block text-right font-mono text-[0.82rem]">
                 {mostrarPorcentaje(v)}
@@ -407,6 +458,20 @@ function Libro({
             >
               <Download /> Exportar y registrar…
             </Button>
+            {(kind === "ventas" || kind === "compras") && (
+              <Button
+                variant="secondary"
+                disabled={ultimaGeneracion === null || ultimaGeneracion.book_kind !== kind}
+                title={
+                  ultimaGeneracion === null
+                    ? "Exporta primero el libro: el resumen es de esa generación."
+                    : undefined
+                }
+                onClick={() => void descargarResumen()}
+              >
+                <Download /> Descargar el resumen (art. 72)
+              </Button>
+            )}
           </div>
           {elegido !== undefined && !elegido.is_official && (
             <CardDescription>
@@ -440,6 +505,10 @@ function Libro({
           description: "El libro se calcula desde los documentos: sin documentos, libro vacío.",
         }}
       />
+
+      {b?.summary !== undefined && b.summary.length > 0 && (
+        <ResumenArt72 resumen={b.summary} moneda={b.currency} />
+      )}
 
       <ConfirmDialog
         open={confirmando}
@@ -720,4 +789,77 @@ function Generaciones(): React.JSX.Element {
       />
     </div>
   );
+}
+
+const CONCEPTO_DEL_RESUMEN: Record<string, string> = {
+  gravado_general: "Alícuota general",
+  gravado_adicional: "Alícuota general + adicional",
+  gravado_reducida: "Alícuota reducida",
+  exento: "Exentas",
+  exonerado: "Exoneradas",
+  no_sujeto: "No sujetas",
+  sin_clasificar: "Sin clasificar",
+};
+
+/**
+ * El resumen de los libros de ventas y de compras (RLIVA art. 72, L-08, hallazgo 6): base e IVA
+ * por alícuota, exentas,
+ * exoneradas, no sujetas y lo que viene de notas. Todas las cifras las calcula el servidor.
+ */
+function ResumenArt72({
+  resumen,
+  moneda,
+}: {
+  resumen: NonNullable<FiscalBook["summary"]>;
+  moneda: string;
+}): React.JSX.Element {
+  return (
+    <section
+      aria-label="Resumen del período"
+      className="space-y-2 rounded-md border border-border p-3"
+    >
+      <h3 className="font-medium">Resumen del período (Reglamento de la Ley de IVA, art. 72)</h3>
+      <table className="w-full text-[0.85rem]">
+        <thead>
+          <tr className="text-left text-muted-foreground">
+            <th className="font-normal">Concepto</th>
+            <th className="text-right font-normal">Alícuota</th>
+            <th className="text-right font-normal">Base</th>
+            <th className="text-right font-normal">IVA</th>
+            <th className="text-right font-normal">De ellas, por notas</th>
+          </tr>
+        </thead>
+        <tbody>
+          {resumen.map((r) => (
+            <tr key={`${r.concept}-${r.rate ?? ""}`}>
+              <td>{CONCEPTO_DEL_RESUMEN[r.concept] ?? r.concept}</td>
+              <td className="text-right font-mono">
+                {r.rate === null ? "—" : mostrarPorcentaje(r.rate)}
+              </td>
+              <td className="text-right font-mono">
+                {mostrarImporte({ amount: r.base, currency: moneda })}
+              </td>
+              <td className="text-right font-mono">
+                {mostrarImporte({ amount: r.tax, currency: moneda })}
+              </td>
+              <td className="text-right font-mono">
+                {mostrarImporte({ amount: r.adjustments_base, currency: moneda })}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+/** Descarga un CSV que ya viene serializado del servidor. */
+function descargarCsv(contenido: string, nombre: string): void {
+  const blob = new Blob([contenido], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nombre;
+  a.click();
+  URL.revokeObjectURL(url);
 }

@@ -7,7 +7,13 @@ import type {
   SetCustomerBlockedRequest,
   CustomerResponse,
 } from "@ladino/schemas";
+import { normalizarDocumento } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
+import {
+  registrarDigitoDudoso,
+  validarDocumentoCliente,
+  type DocumentoLeido,
+} from "./documento-identidad.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 
 /**
@@ -91,13 +97,23 @@ export async function createCustomer(
   if (scope.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
   }
+  // El documento: RIF o cédula, validado y NORMALIZADO aquí para todos los caminos (P-02:
+  // la administración guardaba lo tecleado y el mostrador lo compuesto). Estructura bloquea;
+  // el dígito verificador solo se registra (A-08).
+  let documento: DocumentoLeido | null = null;
+  if ((input.tax_id ?? null) !== null) {
+    const leido = validarDocumentoCliente(input.tax_id!);
+    if (!leido.ok) return leido;
+    documento = leido.value;
+  }
+  const taxId = documento?.normalizado ?? null;
   // La clasificación que la web no manda se infiere del prefijo del RIF: es
   // regla tributaria y vive aquí, no en los componentes (CLAUDE.md §2).
-  const inferido = clasificacionPorPrefijo(input.tax_id ?? null);
+  const inferido = clasificacionPorPrefijo(taxId);
   const personTypeCode = input.person_type_code ?? inferido.persona;
   const taxpayerTypeCode = input.taxpayer_type_code ?? inferido.contribuyente;
   // D-2, dicho con palabras antes de que lo diga el CHECK: sin RIF, solo persona natural.
-  if ((input.tax_id ?? null) === null && personTypeCode !== "natural") {
+  if (taxId === null && personTypeCode !== "natural") {
     return err({
       code: "VALIDATION_FAILED",
       message: "Solo una persona natural puede registrarse sin RIF.",
@@ -143,7 +159,7 @@ export async function createCustomer(
         insert into public.customers
           (tenant_id, company_id, tax_id, legal_name, trade_name, person_type_code,
            taxpayer_type_code, fiscal_address, email, phone, status, default_price_list_id)
-        values (${scope.value.tenantId}, ${input.company_id}, ${input.tax_id ?? null},
+        values (${scope.value.tenantId}, ${input.company_id}, ${taxId},
                 ${input.legal_name}, ${input.trade_name ?? null}, ${personTypeCode},
                 ${taxpayerTypeCode}, ${input.fiscal_address ?? null},
                 ${input.email ?? null}, ${input.phone ?? null}, ${input.status ?? "active"},
@@ -159,6 +175,16 @@ export async function createCustomer(
 
   // El trigger M4 ya dejó customer.tax_id_established si hubo RIF (red del
   // esquema). El caso de uso registra el ACTO: customer.created.
+  if (documento !== null) {
+    await registrarDigitoDudoso(sql, {
+      tenantId: fila.tenant_id,
+      companyId: fila.company_id,
+      aggregateType: "customer",
+      aggregateId: fila.id,
+      documento,
+      rulesVersion: RULES_VERSION,
+    });
+  }
   await auditarYPublicar(sql, fila, "customer.created", {
     tax_id: fila.tax_id,
     person_type_code: fila.person_type_code,
@@ -249,17 +275,32 @@ export async function setCustomerTaxId(
   if (scope.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
   }
+  let documento: DocumentoLeido | null = null;
+  if (input.tax_id !== null) {
+    const leido = validarDocumentoCliente(input.tax_id);
+    if (!leido.ok) return leido;
+    documento = leido.value;
+  }
+  const nuevo = documento?.normalizado ?? null;
   const [actual] = await sql<{ tax_id: string | null; person_type_code: string }[]>`
     select tax_id, person_type_code from public.customers
      where id = ${customerId} and company_id = ${input.company_id}`;
   if (!actual) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-  if (input.tax_id === null && actual.person_type_code !== "natural") {
+  if (nuevo === null && actual.person_type_code !== "natural") {
     return err({
       code: "VALIDATION_FAILED",
       message: "Solo una persona natural puede quedar sin RIF.",
     });
   }
-  if (actual.tax_id === input.tax_id) {
+  // Hallazgo 5 (revisión 2026-09-28): el MISMO documento con otra grafía (el guardado antes de
+  // la reparación P-02 puede llevar guiones) no es un cambio: ok, sin acta ni outbox.
+  if (actual.tax_id !== null && nuevo !== null && normalizarDocumento(actual.tax_id) === nuevo) {
+    const [igual] = await sql<Row[]>`
+      select ${sql.unsafe(COLUMNS)} from public.customers
+       where id = ${customerId} and company_id = ${input.company_id}`;
+    return ok(igual!);
+  }
+  if (actual.tax_id === nuevo) {
     return err({ code: "VALIDATION_FAILED", message: "El RIF ya es ese." });
   }
 
@@ -269,7 +310,7 @@ export async function setCustomerTaxId(
   try {
     fila = await sql.savepoint(async (sp) => {
       const [f] = await sp<Row[]>`
-        update public.customers set tax_id = ${input.tax_id}
+        update public.customers set tax_id = ${nuevo}
          where id = ${customerId} and company_id = ${input.company_id}
         returning ${sp.unsafe(COLUMNS)}`;
       return f!;
@@ -284,7 +325,17 @@ export async function setCustomerTaxId(
     insert into public.outbox
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
     values (${fila.tenant_id}, ${fila.company_id}, 'customer', ${fila.id}, 'customer.tax_id_changed', 1,
-            ${sql.json({ customer_id: fila.id, from: actual.tax_id, to: input.tax_id })})`;
+            ${sql.json({ customer_id: fila.id, from: actual.tax_id, to: nuevo })})`;
+  if (documento !== null) {
+    await registrarDigitoDudoso(sql, {
+      tenantId: fila.tenant_id,
+      companyId: fila.company_id,
+      aggregateType: "customer",
+      aggregateId: fila.id,
+      documento,
+      rulesVersion: RULES_VERSION,
+    });
+  }
   return ok(fila);
 }
 

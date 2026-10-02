@@ -16,9 +16,10 @@ import { useToast } from "../ui/toast.js";
 /**
  * IMPORTACIÓN MASIVA con plantilla (orden del dueño, 2026-09-08): la persona
  * descarga el CSV con los títulos correctos y UNA fila de ejemplo, lo llena,
- * y lo sube. El servidor acepta .csv (separador «;» o «,», coma decimal
- * venezolana) y .xlsx, y responde fila por fila: las buenas entran, las malas
- * se explican con su número.
+ * y lo sube. El servidor acepta .csv (separador «;» o «,») y .xlsx, y responde
+ * fila por fila: las buenas entran, las malas se explican con su número. Los
+ * PRODUCTOS van por su propio diálogo (importar-productos.tsx, ADR-0074): formato
+ * de números declarado, vista previa y trabajo en segundo plano.
  */
 
 /** Una celda CSV: comillas solo cuando hacen falta (RFC 4180). */
@@ -207,11 +208,6 @@ export const PLANTILLA_CLIENTES: { nombreArchivo: string; filas: string[][] } = 
     ],
   ],
 };
-
-export const NOTA_FORMATO_PRODUCTOS =
-  "Obligatorias: «Nombre» y «Precio». Números con coma decimal («9,50») o punto — las dos " +
-  "valen. Separador «;» o «,» (se detecta solo). «Es servicio»: sí/no. Con «Existencia» hace " +
-  "falta «Costo», por unidad y en dólares (o en Bs si «Moneda costo» lo dice). Máximo 500 filas.";
 
 export const NOTA_FORMATO_CLIENTES =
   "Obligatoria: «Nombre o razón social». El tipo se deduce del documento: V/E o vacío = " +

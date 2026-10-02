@@ -22,6 +22,11 @@ const COBRANZAS = "e2ec0000-0000-4000-8000-00000000000c";
 const RUN = Date.now().toString(36);
 /** Solo dígitos: los documentos V/J del lookup llevan número, no base36. */
 const NUM = String(Date.now());
+/**
+ * Siete dígitos por corrida para los RIF de prueba: desde A-08 (2026-09-28) el servidor exige
+ * la estructura letra + 9 dígitos, y los RIF de base36 (`J-E2E-…`) ya no son RIF.
+ */
+const D7 = NUM.slice(-7);
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -123,7 +128,7 @@ describe("clientes de extremo a extremo", () => {
   it("POST crea; el mismo RIF (otra caja) → 409 con el mensaje del dominio; natural sin RIF ×2 → 201", async () => {
     const r = await pedir("POST", "/v1/customers", GESTOR, {
       ...base,
-      tax_id: `J-E2E-${RUN}`,
+      tax_id: `J-1${D7}-1`,
       legal_name: "Cliente e2e",
     });
     expect(r.status).toBe(201);
@@ -131,7 +136,7 @@ describe("clientes de extremo a extremo", () => {
 
     const dup = await pedir("POST", "/v1/customers", GESTOR, {
       ...base,
-      tax_id: `j-e2e-${RUN}`,
+      tax_id: `j-1${D7}-1`,
       legal_name: "Duplicado",
     });
     expect(dup.status).toBe(409);
@@ -161,7 +166,7 @@ describe("clientes de extremo a extremo", () => {
       company_id: COMPANY,
       person_type_code: "juridica",
       taxpayer_type_code: "ordinario",
-      tax_id: `J-SINDIR-${RUN}`,
+      tax_id: `J-3${D7}-3`,
       legal_name: "Sin dirección, C.A.",
     });
     expect(r.status).toBe(422);
@@ -171,13 +176,13 @@ describe("clientes de extremo a extremo", () => {
   it("dos formas del mismo documento son EL MISMO cliente (clave natural normalizada)", async () => {
     const r = await pedir("POST", "/v1/customers", GESTOR, {
       ...base,
-      tax_id: `J-${NUM}-7`,
+      tax_id: `J-4${D7}-7`,
       legal_name: "Cliente del lookup, C.A.",
     });
     expect(r.status).toBe(201);
     const sinGuiones = await pedir("POST", "/v1/customers", GESTOR, {
       ...base,
-      tax_id: `J${NUM}7`,
+      tax_id: `J4${D7}7`,
       legal_name: "El mismo, sin guiones",
     });
     expect(sinGuiones.status).toBe(409);
@@ -185,7 +190,7 @@ describe("clientes de extremo a extremo", () => {
 
   it("lookup: exacto normalizado; «no existe» y «otra empresa» son EL MISMO 404", async () => {
     // Con guiones, sin guiones y en minúscula: las tres formas encuentran.
-    for (const forma of [`J-${NUM}-7`, `J${NUM}7`, `j.${NUM}.7`]) {
+    for (const forma of [`J-4${D7}-7`, `J4${D7}7`, `j.4${D7}.7`]) {
       const r = await pedir("GET", `/v1/customers/lookup?document=${forma}`, GESTOR);
       expect(r.status).toBe(200);
       const c = (await r.json()) as { legal_name: string; tax_id: string };
@@ -213,7 +218,7 @@ describe("clientes de extremo a extremo", () => {
   });
 
   it("GET con búsqueda por RIF y paginación", async () => {
-    const r = await pedir("GET", `/v1/customers?search=J-E2E-${RUN}&per_page=5`, GESTOR);
+    const r = await pedir("GET", `/v1/customers?search=J-1${D7}-1&per_page=5`, GESTOR);
     expect(r.status).toBe(200);
     const pagina = (await r.json()) as { items: { id: string }[]; total: number };
     expect(pagina.total).toBe(1);
@@ -225,20 +230,20 @@ describe("clientes de extremo a extremo", () => {
       (
         await pedir("PUT", `/v1/customers/${id}/tax-id`, GESTOR, {
           company_id: COMPANY,
-          tax_id: `J-NEW-${RUN}`,
+          tax_id: `J-2${D7}-2`,
         })
       ).status,
     ).toBe(403);
     const ok = await pedir("PUT", `/v1/customers/${id}/tax-id`, RIF, {
       company_id: COMPANY,
-      tax_id: `J-NEW-${RUN}`,
+      tax_id: `J-2${D7}-2`,
     });
     expect(ok.status).toBe(200);
     const [hecho] = await sql<{ payload: { tax_id_anterior: string; tax_id_nuevo: string } }[]>`
       select payload from public.audit_events where aggregate_id = ${id} and event_type = 'customer.tax_id_changed'`;
     expect(hecho?.payload).toMatchObject({
-      tax_id_anterior: `J-E2E-${RUN}`,
-      tax_id_nuevo: `J-NEW-${RUN}`,
+      tax_id_anterior: `J1${D7}1`,
+      tax_id_nuevo: `J2${D7}2`,
     });
   });
 
@@ -270,10 +275,13 @@ describe("clientes de extremo a extremo", () => {
     // prefijo corto de Date.now() repite en horas — dos `verify` el mismo día
     // chocaban con «ya existe» (2026-09-09).
     const marca = Date.now().toString(36);
+    // Y los documentos, en dígitos: desde A-08 el servidor exige cédula (V + hasta 8) o RIF
+    // (letra + 9); los de base36 ya no son documentos.
+    const dig = String(Date.now()).slice(-8);
     const csv =
       "RIF o cédula;Nombre o razón social;Teléfono;Correo;Dirección\r\n" +
-      `V${marca}88;Pedro Import ${marca};0414-1234567;;\r\n` +
-      `J-${marca}-0;"Construcciones Import, C.A. ${marca}";0241-8543210;pagos@paez.com.ve;"Zona Sur, galpón 4"\r\n` +
+      `V${dig};Pedro Import ${marca};0414-1234567;;\r\n` +
+      `J-${dig}-0;"Construcciones Import, C.A. ${marca}";0241-8543210;pagos@paez.com.ve;"Zona Sur, galpón 4"\r\n` +
       `;;;;\r\n` +
       `V123;;;correo-roto;\r\n`;
     const form = new FormData();

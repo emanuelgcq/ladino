@@ -3,6 +3,7 @@ import { assertServiceRole, createClient } from "@ladino/db";
 import { NullTransmitter } from "@ladino/fiscal";
 import { crearBucle } from "./loop.js";
 import { procesarLote } from "./outbox.js";
+import { procesarImportaciones } from "./importaciones.js";
 import {
   purgarCarritosPos,
   purgarIdempotencia,
@@ -72,8 +73,25 @@ async function ciclo(): Promise<void> {
         }
       : null;
   const out = await procesarLote(sql, transmitter);
-  if (out.publicados || out.reintentos || out.muertos || out.reservasPerdidas || mantenimiento) {
-    log("info", "worker.ciclo", { vuelta, out, mantenimiento });
+  // Los trabajos de importación (ADR-0074): 5 s de presupuesto por vuelta, el resto en la
+  // siguiente (H10). `en_cola` es la profundidad de la cola, la métrica de apps/worker/CLAUDE.md.
+  const importacion = await procesarImportaciones(sql, { presupuestoMs: 5_000 });
+  if (importacion.fallo !== null) {
+    log("error", "worker.importacion_fallo", {
+      trabajo: importacion.trabajo,
+      error: importacion.fallo,
+    });
+  }
+  if (
+    out.publicados ||
+    out.reintentos ||
+    out.muertos ||
+    out.reservasPerdidas ||
+    importacion.procesadas ||
+    importacion.en_cola ||
+    mantenimiento
+  ) {
+    log("info", "worker.ciclo", { vuelta, out, importacion, mantenimiento });
   }
 }
 

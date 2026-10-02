@@ -174,6 +174,8 @@ Por eso esta categoría de test se escribe aparte y a propósito. Los que ya exi
 | Venta anulada ⇒ su kardex netea a cero | `annulled_stock_gaps()` | ventas ↔ inventario (ADR-0061) |
 | Libro fiscal = mayor + cola | `book_ledger_reconciliation()` | fiscal ↔ contabilidad (L-02) |
 | Caja de tesorería = su subcuenta contable, propia y hoja | `treasury_ledger_gaps()` | tesorería ↔ contabilidad (ADR-0070) |
+| Ningún control repetido por emisor e identificador | `control_number_collisions()` | ventas ↔ talonario (ADR-0071) |
+| Ningún talonario pisa a otro | `control_range_overlaps()` | talonario ↔ papel de la imprenta (ADR-0071) |
 
 **Al cerrar un módulo, la pregunta no es «¿pasan sus tests?» sino «¿qué invariante cruza este
 módulo con los anteriores, y quién lo mira?».** Si la respuesta es «nadie», ese es el trabajo que
@@ -371,7 +373,7 @@ pendientes), libros y declaraciones de IVA, percepción de IGTF y la puesta a pu
 `SPRINT_0_BOOTSTRAP.md` es historia.
 
 Antes de tocar algo: `docs/00_GOVERNANCE/HANDOFF.md` (la entrega más reciente arriba),
-`docs/00_GOVERNANCE/ADR_INDEX.md` (70 ADR) y `docs/02_COMPLIANCE/REGULATORY_STATUS.md`. La
+`docs/00_GOVERNANCE/ADR_INDEX.md` (74 ADR) y `docs/02_COMPLIANCE/REGULATORY_STATUS.md`. La
 homologación de software (PA SNAT/2024/000121) fue **derogada** por la PA SNAT/2026/00084
 sin sustituta: lo que gobierna la emisión es la PA 00071 (forma libre + imprenta autorizada)
 y la PA 102 (imprenta digital). Los `VALIDAR-SENIAT` / `VALIDAR-TRIBUTARIO` abiertos están en

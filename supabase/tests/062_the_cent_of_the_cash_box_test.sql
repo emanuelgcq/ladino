@@ -36,6 +36,19 @@ values ('USD', 'VES', 842.2067, 'prueba-62', platform.caracas_day(now()), now(),
 -- F1: USD 25,52 emitida HOY a 842,2067. Su total funcional se congeló sumando los renglones
 -- ya redondeados (PER_LINE): 21.493,12, no 25,52 × 842,2067 = 21.493,114984.
 -- F2: USD 10 emitida a 800 (la tasa se movió desde entonces). F3: en bolívares.
+-- ADR-0072 §1 (migración 20260928190100): el montaje declara el tipo de contribuyente de sus
+-- empresas con RIF; sin tipo vigente la base no deja emitir factura, NC ni ND (LAD98).
+insert into public.company_taxpayer_types
+  (tenant_id, company_id, taxpayer_type_code, effective_from, notified_on, reason, rules_version)
+select c.tenant_id, c.id,
+       case when c.taxpayer_type_code in ('ordinario', 'especial', 'formal')
+            then c.taxpayer_type_code else 'ordinario' end,
+       '2000-01-01', case when c.taxpayer_type_code = 'especial' then '2000-01-01'::date end,
+       'Montaje pgTAP: el tipo que declara la empresa de prueba', 'pgtap'
+  from public.companies c
+ where c.created_at = now() and upper(btrim(c.tax_id)) not like 'PEND-%'
+   and not exists (select 1 from public.company_taxpayer_types h where h.company_id = c.id);
+
 insert into public.documents
   (id, tenant_id, company_id, kind, series, customer_id, document_number, control_number,
    status, issued_at, regime_version_id, rules_version,

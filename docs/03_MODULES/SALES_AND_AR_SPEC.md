@@ -56,3 +56,14 @@ order: draft→confirmed→partially_fulfilled→fulfilled/cancelled. AR: open�
 - Fiscal
 - Accounting
 - Treasury
+
+## Numeración de control (ADR-0071, 2026-09-28)
+
+Enmienda ADR-0037. Un talonario por empresa e identificador (`fiscal_number_ranges`, `kind` NULL en
+los nuevos) sirve a factura, NC y ND; `platform.claim_fiscal_control(empresa, clase, serie)` devuelve
+identificador y control del talonario de la serie, exige los datos de la imprenta (LAD49) y habla en
+español. `documents.control_identifier` acompaña a `control_number` (CHECK: los dos o ninguno;
+inmutable al emitir). La serie de la venta y de la nota la resuelve `serieDelTalonario`
+(`packages/domain/src/talonario.ts`). Invariantes con respuesta cero:
+`platform.control_number_collisions()` y `platform.control_range_overlaps()` (migración
+20260928160100). Detalle y límites en `docs/02_COMPLIANCE/EMISION_FACTURAS.md` §3-ter.

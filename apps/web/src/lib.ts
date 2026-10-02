@@ -130,6 +130,9 @@ export interface Product {
   is_composed: boolean;
   template_id?: string | null;
   attributes?: Record<string, string> | null;
+  /** Costo de referencia importado (ADR-0074, H11): informativo, no es el costo del kardex. */
+  reference_cost_amount?: string | null;
+  reference_cost_currency?: string | null;
 }
 export interface PriceList {
   id: string;
@@ -223,6 +226,8 @@ export interface TaxCategory {
   code: string;
   name: string;
   description: string;
+  /** Si el catálogo de alícuotas con fuente la ofrece en ventas (ADR-0073): lo decide el servidor. */
+  offered_in_sales: boolean;
 }
 
 /** Una sola salida de sesión aunque diez consultas reciban 401 a la vez. */
@@ -889,6 +894,16 @@ export interface FiscalBook {
   rows: Record<string, unknown>[];
   /** Renglones con base que el sistema NO puede clasificar. Se enseñan, no se reparten. */
   unclassified_rows: number;
+  /** Solo en ventas: el resumen del art. 72 del RLIVA, calculado en el servidor (L-08). */
+  summary?: {
+    concept: string;
+    rate: string | null;
+    base: string;
+    tax: string;
+    adjustments_base: string;
+    adjustments_tax: string;
+    documents: number;
+  }[];
 }
 export interface BookReconciliation {
   period_from: string;

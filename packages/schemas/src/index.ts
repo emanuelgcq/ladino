@@ -28,6 +28,11 @@ export {
   ProductSimpleResponse,
   ImportProductsRowResult,
   ImportProductsResponse,
+  ImportNumberFormat,
+  ProductImportRow,
+  ProductImportPreviewResponse,
+  ProductImportJobRowResult,
+  ProductImportJobResponse,
   UpdateProductRequest,
   SetProductTaxCategoryRequest,
   ProductResponse,
@@ -115,6 +120,9 @@ export {
   AgingResponse,
   CustomerStatementResponse,
   CreateFiscalRangeRequest,
+  CompleteFiscalRangePrinterRequest,
+  CorrectFiscalRangePrinterRequest,
+  CancelFiscalRangeRequest,
   FiscalRangeResponse,
   CreateExchangeRateRequest,
   RegisterContingencyRangeRequest,
@@ -240,6 +248,8 @@ export {
   ExportFiscalBookRequest,
   FiscalBookRunResponse,
   ExportFiscalBookResponse,
+  ExportSalesBookSummaryRequest,
+  ExportSalesBookSummaryResponse,
   ListFiscalBookRunsResponse,
 } from "./fiscal-books.js";
 export {
@@ -263,7 +273,35 @@ export {
   IgtfInstrumentResponse,
   IgtfStatusResponse,
   SetCompanyTaxpayerTypeRequest,
+  SetCompanyTaxpayerTypeResponse,
+  CompanyTaxpayerTypeCode,
+  CompanyTaxpayerTypePeriod,
+  CompanyTaxpayerTypeResponse,
   IgtfPerceptionResponse,
   ListIgtfPerceptionsResponse,
   PosIgtfPreviewResponse,
 } from "./igtf.js";
+
+// El documento de identidad: una sola función para normalizar, validar y mostrar (A-08, M-05).
+export {
+  LETRAS_RIF,
+  MARCADOR_SIN_RIF,
+  esMarcadorSinRif,
+  normalizarDocumento,
+  digitoVerificadorRif,
+  leerRif,
+  leerDocumentoCliente,
+  avisoDigitoRif,
+  formatearDocumento,
+} from "./rif.js";
+export type { LetraRif, DigitoRif, LecturaDocumento } from "./rif.js";
+
+// El número de un documento con su serie, igual en todas partes (ADR-0071, H11).
+export { serieYNumero, serieYNumeroImpreso } from "./documento-numero.js";
+export {
+  CARACTERES_FILA_DESCRIPCION,
+  CARACTERES_FILA_MOTIVO,
+  partirEnFilas,
+  filasDeDescripcion,
+  filasDelMotivo,
+} from "./forma-libre.js";

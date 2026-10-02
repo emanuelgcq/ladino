@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatearDocumento } from "@ladino/schemas";
 import { useNavigate, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { BarChart, Bar, XAxis, ResponsiveContainer, Cell } from "recharts";
@@ -81,7 +82,7 @@ export function Cuentas(): React.JSX.Element {
       setCliente({
         id: c.id,
         label: c.legal_name,
-        ...(c.tax_id === null ? {} : { detalle: c.tax_id }),
+        ...(c.tax_id === null ? {} : { detalle: formatearDocumento(c.tax_id) }),
       });
     }
   }, [precargado.data, cliente]);
@@ -121,7 +122,7 @@ export function Cuentas(): React.JSX.Element {
             return r.items.map((c) => ({
               id: c.id,
               label: c.legal_name,
-              ...(c.tax_id === null ? {} : { detalle: c.tax_id }),
+              ...(c.tax_id === null ? {} : { detalle: formatearDocumento(c.tax_id) }),
             }));
           }}
         />

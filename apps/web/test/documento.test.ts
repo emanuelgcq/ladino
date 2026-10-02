@@ -29,3 +29,14 @@ describe("formatearDocumento", () => {
     expect(formatearDocumento("")).toBe("");
   });
 });
+
+/**
+ * M-05 (recorrido 2026-09-24): un V o E de NUEVE dígitos es un RIF, no una cédula. Antes se
+ * agrupaba con puntos («V-123.456.789») en Mi empresa y en el membrete de la factura.
+ */
+describe("formatearDocumento — RIF de persona natural (M-05)", () => {
+  it("V y E de 9 dígitos salen como RIF, con el dígito verificador separado", () => {
+    expect(formatearDocumento("V123456789")).toBe("V-12345678-9");
+    expect(formatearDocumento("E123456789")).toBe("E-12345678-9");
+  });
+});

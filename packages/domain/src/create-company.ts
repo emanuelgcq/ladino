@@ -3,6 +3,7 @@ import type { UnitOfWork } from "@ladino/db";
 import type { CreateCompanyRequest, CompanyResponse } from "@ladino/schemas";
 import { tenantVisible } from "./tenant-visibility.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
+import { registrarDigitoDudoso, validarRif, type DocumentoLeido } from "./documento-identidad.js";
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -26,11 +27,15 @@ import { companyScope, type CompanyScopeError } from "./company-scope.js";
  */
 export const RULES_VERSION = "domain-s0.5";
 
+/** El marcador que genera el registro (onboarding.ts): `PEND-` + 10 hex del tenant. */
+const MARCADOR_GENERADO = /^PEND-[0-9A-F]{10}$/;
+
 export type CreateCompanyError =
   | { code: "NOT_FOUND"; message: string }
   | { code: "PERMISSION_REQUIRED"; message: string }
   | { code: "TENANT_SUSPENDED"; message: string }
-  | { code: "DUPLICATE"; message: string };
+  | { code: "DUPLICATE"; message: string }
+  | { code: "VALIDATION_FAILED"; message: string };
 
 interface CompanyRow {
   id: string;
@@ -50,9 +55,15 @@ interface CompanyRow {
   activity_start_date: string | null;
 }
 
+/**
+ * `interno.sinRif` lo pasa SOLO el registro (onboarding.ts) para la empresa sin RIF: entonces
+ * `tax_id` es el marcador que el propio registro generó. Por la entrada (POST /v1/companies) el
+ * marcador no llega nunca, en ninguna caja (hallazgo 2 de la revisión, 2026-09-28).
+ */
 export async function createCompany(
   uow: UnitOfWork,
   input: CreateCompanyRequest,
+  interno: { readonly sinRif?: true } = {},
 ): Promise<Result<CompanyResponse, CreateCompanyError>> {
   const { sql, actor } = uow;
 
@@ -143,6 +154,21 @@ export async function createCompany(
     });
   }
 
+  // El RIF: estructura validada y NORMALIZADO (A-08, P-02). El marcador PEND- solo entra por
+  // el parámetro interno del registro y con la forma EXACTA que el registro genera; tecleado,
+  // `validarRif` lo rechaza con su propio mensaje. El dígito que no cuadra se acepta y se registra.
+  let documento: DocumentoLeido | null = null;
+  if (interno.sinRif === true) {
+    if (!MARCADOR_GENERADO.test(input.tax_id)) {
+      throw new Error(`createCompany: marcador interno con forma inesperada: ${input.tax_id}`);
+    }
+  } else {
+    const leido = validarRif(input.tax_id);
+    if (!leido.ok) return leido;
+    documento = leido.value;
+  }
+  const taxId = documento?.normalizado ?? input.tax_id;
+
   // ── 5. CALCULAR (puro) ────────────────────────────────────────────────────
   // Aquí no hay cálculo monetario: no-op DECLARADO. En un módulo con dinero,
   // este paso invoca packages/money|accounting con reglas versionadas y SIN
@@ -175,11 +201,13 @@ export async function createCompany(
           (tenant_id, legal_name, trade_name, tax_id, fiscal_address,
            business_type, phone, whatsapp, city, state)
         values (${input.tenant_id}, ${input.legal_name}, ${input.trade_name ?? null},
-                ${input.tax_id}, ${input.fiscal_address ?? null},
+                ${taxId}, ${input.fiscal_address ?? null},
                 ${input.business_type ?? null}, ${input.phone ?? null},
                 ${input.whatsapp ?? null}, ${input.city ?? null}, ${input.state ?? null})
         returning id, tenant_id, legal_name, trade_name, tax_id, fiscal_address,
-                  business_type, phone, whatsapp, city, state, status, taxpayer_type_code,
+                  business_type, phone, whatsapp, city, state, status,
+                  -- ADR-0072 §1: el tipo vigente hoy por la única lectura, no la columna espejo.
+                  platform.taxpayer_type_at(id, platform.caracas_day(now())) as taxpayer_type_code,
                   activity_start_date::text as activity_start_date,
                   -- ISO 8601 explícito: el texto por defecto de timestamptz usa
                   -- espacio y offset corto, y depender del parseo laxo de Date
@@ -258,6 +286,17 @@ export async function createCompany(
       (${fila.tenant_id}, ${fila.id}, 'company', ${fila.id}, 'company.created',
        'user', now(), ${RULES_VERSION},
        ${sql.json({ legal_name: fila.legal_name, tax_id: fila.tax_id })})`;
+
+  if (documento !== null) {
+    await registrarDigitoDudoso(sql, {
+      tenantId: fila.tenant_id,
+      companyId: fila.id,
+      aggregateType: "company",
+      aggregateId: fila.id,
+      documento,
+      rulesVersion: RULES_VERSION,
+    });
+  }
 
   // ── 9. OUTBOX ─────────────────────────────────────────────────────────────
   // En LA MISMA transacción: si el commit falla, no hay evento huérfano.

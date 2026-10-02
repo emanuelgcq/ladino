@@ -1,10 +1,13 @@
+import { formatearDocumento } from "@ladino/schemas";
+
 /**
  * LA REGLA (dueño, 2026-09-16): **si tienes RIF, das facturas; si NO tienes RIF, das
  * recibos.** Con RIF se ve todo lo fiscal, con su lenguaje técnico. Sin RIF: recibos,
  * lenguaje sencillo, y nada de IVA, alícuota ni nada fiscal.
  *
- * Módulo HOJA a propósito (sin imports): lo usan la sesión, el menú y las pantallas, y
- * ninguno de ellos puede importarse al revés.
+ * Módulo HOJA a propósito (sin imports de la web): lo usan la sesión, el menú y las pantallas,
+ * y ninguno de ellos puede importarse al revés. Solo importa el formateador compartido del
+ * documento (@ladino/schemas), que no depende de nada de la web.
  *
  * La pantalla decide con el RIF de la empresa, que ya viene en la sesión: no espera a
  * ninguna consulta, así que un campo de IVA no puede asomarse «mientras carga». Una empresa
@@ -17,9 +20,12 @@ export function tieneRif(empresa: { readonly tax_id: string }): boolean {
   return rif !== "" && !rif.startsWith("PEND-");
 }
 
-/** Lo que se enseña bajo el nombre de una empresa: su RIF, o que todavía no lo tiene. */
+/**
+ * Lo que se enseña bajo el nombre de una empresa: su RIF CON GUIONES (O-04: «Elige la empresa»
+ * y «Cambiar de empresa» enseñaban el crudo «J405551234»), o que todavía no lo tiene.
+ */
 export function rifParaMostrar(empresa: { readonly tax_id: string }): string {
-  return tieneRif(empresa) ? empresa.tax_id : "Sin RIF";
+  return tieneRif(empresa) ? formatearDocumento(empresa.tax_id) : "Sin RIF";
 }
 
 /**

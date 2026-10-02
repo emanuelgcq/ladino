@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { RULES_VERSION } from "@ladino/domain";
 import { buildApp } from "../src/app.js";
+import { digitoVerificadorRif } from "@ladino/schemas";
 
 /**
  * EXTREMO A EXTREMO, POR EL CAMINO DE PRODUCCIÓN. La petición entra con un JWT
@@ -51,7 +52,14 @@ async function tokenDe(sub: string, expiraEn = "1h"): Promise<string> {
 // RIFs únicos por corrida: las companies creadas NO se pueden borrar entre
 // corridas (audit_events_company_fk es NO ACTION — F-9, conservación).
 const RUN = Date.now().toString(36);
-const rif = (n: number): string => `J-E2E-${RUN}-${n}`;
+// Desde A-08 (2026-09-28) el RIF exige letra + 9 dígitos: seis por corrida + dos del caso, y el
+// dígito verificador CORRECTO — uno que no cuadra deja un acta más (tax_id_check_digit_mismatch)
+// y el camino feliz cuenta las escrituras de la transacción.
+const D6 = String(Date.now()).slice(-6);
+const rif = (n: number): string => {
+  const base = `J${D6}${String(n).padStart(2, "0")}`;
+  return `${base}${digitoVerificadorRif(base)}`;
+};
 
 async function crear(opts: {
   token?: string | null;

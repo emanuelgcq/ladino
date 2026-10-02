@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
  * LO LEGAL DE LA FACTURA, de extremo a extremo (PA 00071 y PA 102):
@@ -114,6 +115,7 @@ beforeAll(async () => {
                                            functional_currency_code, taxpayer_type_code)
              values (${COMPANY}, ${TENANT}, ${`J-E2ELEG-${RUN}`}, 'Legal Trece Cinco, C.A.',
                      'VES', 'ordinario')`;
+    await declararTipoDeFixture(tx, COMPANY);
     await tx`insert into public.warehouses (id, tenant_id, company_id, code, name)
              values (${W1}, ${TENANT}, ${COMPANY}, 'E2E-LW1', 'Principal')`;
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values
@@ -199,6 +201,11 @@ beforeAll(async () => {
     range_from: "1",
     range_to: "500",
     printer_source: "Imprenta E2E legal",
+    printer_legal_name: "Imprenta E2E, C.A.",
+    printer_tax_id: "J-12345678-9",
+    printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+    printer_authorization_date: "2020-01-15",
+    printed_on: "2026-09-01",
   });
 });
 

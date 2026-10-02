@@ -1,5 +1,5 @@
 import { err, ok, type Result } from "@ladino/core";
-import type { UnitOfWork } from "@ladino/db";
+import type { TransactionSql, UnitOfWork } from "@ladino/db";
 import { parseDecimal } from "@ladino/money";
 import type {
   CreateProductRequest,
@@ -120,6 +120,15 @@ export async function createProduct(
       message: "La clasificación tributaria no existe o está inactiva.",
     });
   }
+  const ofrecida = await clasificacionOfrecidaEnVentas(sql, clasificacionPedida);
+  if (!ofrecida.ok) return ofrecida;
+  const detalle = await detalleDeClasificacion(
+    sql,
+    clasificacionPedida,
+    input.reduced_rate_literal,
+    input.tax_category_justification,
+  );
+  if (!detalle.ok) return detalle;
 
   // 5. CALCULAR: sin dinero aquí. Versión de reglas para la auditoría.
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
@@ -131,11 +140,11 @@ export async function createProduct(
       const [creada] = await sp<ProductRow[]>`
         insert into public.products
           (tenant_id, company_id, sku, name, kind, unit_code, tax_category_code, category_id,
-           barcode, status)
+           barcode, status, reduced_rate_literal_code)
         values (${scope.value.tenantId}, ${input.company_id}, ${input.sku}, ${input.name},
                 ${input.kind}, ${input.unit_code}, ${cat.code},
                 ${input.category_id ?? null}, ${input.barcode ?? null},
-                ${input.status ?? "active"})
+                ${input.status ?? "active"}, ${detalle.value.literal})
         returning ${sp.unsafe(PRODUCT_COLUMNS)},
                   to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
       return creada!;
@@ -161,7 +170,18 @@ export async function createProduct(
        actor_type, occurred_at, rules_version, payload)
     values (${fila.tenant_id}, ${fila.company_id}, 'product', ${fila.id}, 'product.created',
             'user', now(), ${RULES_VERSION},
-            ${sql.json({ sku: fila.sku, kind: fila.kind, tax_category_code: fila.tax_category_code })})`;
+            ${sql.json({
+              sku: fila.sku,
+              kind: fila.kind,
+              tax_category_code: fila.tax_category_code,
+              // Hallazgo 10: el literal del art. 64 o la justificación del suntuario, en el acta.
+              ...(detalle.value.literal === null
+                ? {}
+                : { reduced_rate_literal: detalle.value.literal }),
+              ...(detalle.value.justificacion === null
+                ? {}
+                : { justification: detalle.value.justificacion }),
+            })})`;
   await sql`
     insert into public.outbox
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
@@ -277,12 +297,32 @@ export async function setProductTaxCategory(
       message: "La clasificación tributaria no existe o está inactiva.",
     });
   }
+  // A5: si la categoría NO cambia, no se le vuelve a exigir nada (ni que esté ofrecida, ni su
+  // literal, ni su justificación): se conserva lo que ya tenía, literal incluido.
+  const [actual] = await sql<{ tax_category_code: string; literal: string | null }[]>`
+    select tax_category_code, reduced_rate_literal_code as literal
+      from public.products where id = ${productId} and company_id = ${input.company_id}`;
+  const sinCambio = actual?.tax_category_code === input.tax_category_code;
+  if (!sinCambio) {
+    const ofrecida = await clasificacionOfrecidaEnVentas(sql, input.tax_category_code);
+    if (!ofrecida.ok) return ofrecida;
+  }
+  const detalle = sinCambio
+    ? ok({ literal: actual?.literal ?? null, justificacion: null })
+    : await detalleDeClasificacion(
+        sql,
+        input.tax_category_code,
+        input.reduced_rate_literal,
+        input.tax_category_justification,
+      );
+  if (!detalle.ok) return detalle;
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
   const [fila] = await sql<(ProductRow & { anterior: string })[]>`
     update public.products p
-       set tax_category_code = ${input.tax_category_code}
+       set tax_category_code = ${input.tax_category_code},
+           reduced_rate_literal_code = ${detalle.value.literal}
       from (select id, tax_category_code as anterior from public.products
              where id = ${productId} and company_id = ${input.company_id}) previa
      where p.id = previa.id
@@ -302,7 +342,16 @@ export async function setProductTaxCategory(
        actor_type, occurred_at, rules_version, payload)
     values (${fila.tenant_id}, ${fila.company_id}, 'product', ${fila.id},
             'product.tax_category_set', 'user', now(), ${RULES_VERSION},
-            ${sql.json({ from: fila.anterior, to: input.tax_category_code })})`;
+            ${sql.json({
+              from: fila.anterior,
+              to: input.tax_category_code,
+              ...(detalle.value.literal === null
+                ? {}
+                : { reduced_rate_literal: detalle.value.literal }),
+              ...(detalle.value.justificacion === null
+                ? {}
+                : { justification: detalle.value.justificacion }),
+            })})`;
   await sql`
     insert into public.outbox
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
@@ -619,7 +668,7 @@ export async function createProductSimple(
  * `price_list.manage`: quien da de alta un producto le pone su precio
  * (ADR-0068 §1, B-16; y la importación, que pasa por aquí fila a fila, C-08).
  */
-async function ponerPrecioEnLista(
+export async function ponerPrecioEnLista(
   uow: UnitOfWork,
   companyId: string,
   funcional: string,
@@ -628,57 +677,18 @@ async function ponerPrecioEnLista(
   precio: MoneyInput,
 ): Promise<Result<PriceItemResponse, ProductError>> {
   const { sql } = uow;
-  // El precio «detal» va a la lista PREDETERMINADA de la caja (migración 36)
-  // cuando el dueño la fijó y su moneda coincide: el alta simple escribe
-  // donde /vender lee. Sin el dato —o en otra moneda—, la variante por nombre
-  // de siempre.
-  if (base === "detal") {
-    const [predeterminada] = await sql<{ id: string; currency_code: string }[]>`
-      select l.id, l.currency_code
-        from public.company_settings cs
-        join public.price_lists l on l.id = cs.default_price_list_id
-       where cs.company_id = ${companyId} and l.status = 'active'`;
-    if (predeterminada !== undefined && predeterminada.currency_code === precio.currency) {
-      const puestoDirecto = await setPriceForProduct(uow, predeterminada.id, {
-        company_id: companyId,
-        product_id: productId,
-        amount: precio.amount,
-        effective_from: new Date().toISOString(),
-      });
-      if (!puestoDirecto.ok) {
-        if (
-          puestoDirecto.error.code === "PERMISSION_REQUIRED" ||
-          puestoDirecto.error.code === "NOT_FOUND"
-        ) {
-          return err({ code: puestoDirecto.error.code, message: puestoDirecto.error.message });
-        }
-        return err({ code: "VALIDATION_FAILED", message: puestoDirecto.error.message });
-      }
-      return ok(puestoDirecto.value);
-    }
-  }
-  // El nombre base («detal»/«mayor») es de la moneda en que la lista NACIÓ: en
-  // una empresa vieja, la funcional; en una nueva, USD (createCompany). Si el
-  // precio viene en otra moneda, va a la variante «detal VES» / «detal USD».
-  const [base_] = await sql<{ currency_code: string }[]>`
-    select currency_code from public.price_lists
-     where company_id = ${companyId} and name = ${base} and status = 'active'`;
-  const monedaBase = base_?.currency_code ?? funcional;
-  const nombre = precio.currency === monedaBase ? base : `${base} ${precio.currency}`;
-  const [lista] = await sql<{ id: string; currency_code: string }[]>`
-    select id, currency_code from public.price_lists
-     where company_id = ${companyId} and name = ${nombre} and status = 'active'`;
-  let listaId = lista?.id;
-  if (lista !== undefined && lista.currency_code !== precio.currency) {
+  const destino = await listaDeDestino(sql, companyId, funcional, base, precio.currency);
+  if (destino.monedaLista !== null && destino.monedaLista !== precio.currency) {
     return err({
       code: "VALIDATION_FAILED",
-      message: `La lista «${nombre}» vive en ${lista.currency_code} y el precio vino en ${precio.currency}.`,
+      message: `La lista «${destino.nombre}» vive en ${destino.monedaLista} y el precio vino en ${precio.currency}.`,
     });
   }
-  if (listaId === undefined) {
+  let listaId = destino.id;
+  if (listaId === null) {
     const creada = await createPriceListForProduct(uow, {
       company_id: companyId,
-      name: nombre,
+      name: destino.nombre,
       currency_code: precio.currency,
     });
     if (!creada.ok) {
@@ -702,4 +712,135 @@ async function ponerPrecioEnLista(
     return err({ code: "VALIDATION_FAILED", message: puesto.error.message });
   }
   return ok(puesto.value);
+}
+
+/**
+ * La lista de DESTINO de un precio «detal»/«mayor» en la moneda pedida — la única copia de esa
+ * lógica, la usan `ponerPrecioEnLista` (para escribir) y la importación (para saber si el precio
+ * «ya era ese», ADR-0074 A1: comparar contra CUALQUIER lista de la moneda daba por bueno un
+ * precio de mayor igual al de la fila).
+ *
+ *   · «detal» va a la lista PREDETERMINADA de la caja (migración 36) cuando el dueño la fijó y
+ *     su moneda coincide: el alta simple escribe donde /vender lee;
+ *   · si no, a la lista por nombre. El nombre base («detal»/«mayor») es de la moneda en que la
+ *     lista NACIÓ (en una empresa vieja, la funcional; en una nueva, USD); en otra moneda, la
+ *     variante «detal VES» / «detal USD».
+ *
+ * `id` null: la lista no existe todavía y se crearía con `nombre`. `monedaLista` es la moneda
+ * de la lista encontrada, para que el llamante rechace una lista de otra moneda.
+ */
+export async function listaDeDestino(
+  sql: TransactionSql,
+  companyId: string,
+  funcional: string,
+  base: "detal" | "mayor",
+  moneda: string,
+): Promise<{ id: string | null; nombre: string; monedaLista: string | null }> {
+  if (base === "detal") {
+    const [predeterminada] = await sql<{ id: string; name: string; currency_code: string }[]>`
+      select l.id, l.name, l.currency_code
+        from public.company_settings cs
+        join public.price_lists l on l.id = cs.default_price_list_id
+       where cs.company_id = ${companyId} and l.status = 'active'`;
+    if (predeterminada !== undefined && predeterminada.currency_code === moneda) {
+      return { id: predeterminada.id, nombre: predeterminada.name, monedaLista: moneda };
+    }
+  }
+  const [base_] = await sql<{ currency_code: string }[]>`
+    select currency_code from public.price_lists
+     where company_id = ${companyId} and name = ${base} and status = 'active'`;
+  const monedaBase = base_?.currency_code ?? funcional;
+  const nombre = moneda === monedaBase ? base : `${base} ${moneda}`;
+  const [lista] = await sql<{ id: string; currency_code: string }[]>`
+    select id, currency_code from public.price_lists
+     where company_id = ${companyId} and name = ${nombre} and status = 'active'`;
+  return { id: lista?.id ?? null, nombre, monedaLista: lista?.currency_code ?? null };
+}
+
+/**
+ * H3 (ADR-0073): el servidor aplica `offered_in_sales`. Una clasificación sin plantilla vigente
+ * del catálogo de alícuotas ofrecida en ventas (`no_sujeto`, pendiente de fuente; `exonerado`,
+ * solo importación) no se asigna a un producto: la pantalla ya no la ofrece, y la API tampoco la
+ * acepta por otro camino. El día de Caracas decide la vigencia.
+ */
+export async function clasificacionOfrecidaEnVentas(
+  sql: TransactionSql,
+  codigo: string,
+): Promise<Result<true, { code: "VALIDATION_FAILED"; message: string }>> {
+  const [ofrecida] = await sql<{ ok: boolean }[]>`
+    select exists (
+      select 1 from public.tax_rule_templates t
+       where t.product_tax_category = ${codigo} and t.offered_in_sales
+         and t.effective_from <= (now() at time zone 'America/Caracas')::date
+         and (t.effective_to is null
+              or t.effective_to > (now() at time zone 'America/Caracas')::date)) as ok`;
+  if (ofrecida?.ok !== true) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        `La clasificación «${codigo}» no se ofrece en ventas: el catálogo de alícuotas no la trae ` +
+        "con fuente vigente para vender (ADR-0073). Elige otra, o pídele a tu contador que la revise.",
+    });
+  }
+  return ok(true);
+}
+
+/**
+ * Hallazgo 10 (ADR-0073): lo que cada clasificación exige además de estar ofrecida.
+ *   · `gravado_reducida`: un literal de la LISTA CERRADA del art. 64 (`tax_reduced_rate_literals`).
+ *     La lista nace vacía —nadie la trajo con fuente—, así que hoy no se puede clasificar nada como
+ *     reducida, y el mensaje lo dice (PENDIENTES_ASESOR P-51).
+ *   · `gravado_adicional`: el art. 61 no tiene lista con fuente; se exige por qué el bien es suntuario,
+ *     y la justificación queda en el acta (P-60).
+ * Lo demás no lleva ni literal ni justificación: si vienen, no se guardan.
+ */
+async function detalleDeClasificacion(
+  sql: TransactionSql,
+  codigo: string,
+  literal: string | undefined,
+  justificacion: string | undefined,
+): Promise<
+  Result<
+    { literal: string | null; justificacion: string | null },
+    { code: "VALIDATION_FAILED"; message: string }
+  >
+> {
+  if (codigo === "gravado_reducida") {
+    if (literal === undefined) {
+      const [lista] = await sql<{ n: number }[]>`
+        select count(*)::int as n from public.tax_reduced_rate_literals`;
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          "La alícuota reducida es una lista cerrada de bienes (LIVA art. 64): indica el literal del " +
+          "bien. " +
+          ((lista?.n ?? 0) === 0
+            ? "La lista todavía no está cargada con su fuente: pídesela a tu contador " +
+              "(VALIDAR-TRIBUTARIO, PENDIENTES_ASESOR P-51)."
+            : "Elige uno de la lista."),
+      });
+    }
+    const [hay] = await sql<{ code: string }[]>`
+      select code from public.tax_reduced_rate_literals where code = ${literal}`;
+    if (!hay) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `El literal «${literal}» no está en la lista cerrada del art. 64 de la LIVA.`,
+      });
+    }
+    return ok({ literal, justificacion: null });
+  }
+  if (codigo === "gravado_adicional") {
+    if (justificacion === undefined) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          "La alícuota adicional (LIVA art. 61) grava bienes suntuarios y no hay una lista con fuente " +
+          "(VALIDAR-TRIBUTARIO, PENDIENTES_ASESOR P-60): escribe la justificación de por qué este " +
+          "bien es suntuario; queda en el acta.",
+      });
+    }
+    return ok({ literal: null, justificacion });
+  }
+  return ok({ literal: null, justificacion: null });
 }

@@ -4,6 +4,10 @@
 - **Fecha:** 2026-08-24
 - **Impacto fiscal:** NO
 - **Enmienda a:** ADR-0025 §9 («la RLS no protege a la API») — deja de ser cierto por diseño.
+- **Enmendado por:** ADR-0074 §«Quién procesa el trabajo» (2026-09-29) — `ladino_worker` puede
+  adoptar `ladino_api` (`SET ROLE`, sin heredar) dentro de la transacción de cada fila de un trabajo
+  de importación. Sin el `SET ROLE` explícito sigue sin poder nombrar una tabla de negocio. Riesgo:
+  RISK_REGISTER R-56.
 
 ## Contexto
 

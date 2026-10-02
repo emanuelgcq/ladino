@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
  * MEDIDOR DE ROUND-TRIPS — herramienta temporal, NO es un test de verdad.
@@ -112,6 +113,7 @@ beforeAll(async () => {
                (id, tenant_id, tax_id, legal_name, functional_currency_code, taxpayer_type_code)
              values (${COMPANY}, ${TENANT}, ${`J-MED-${RUN}`}, 'Empresa medicion',
                      'VES', 'ordinario')`;
+    await declararTipoDeFixture(tx, COMPANY);
     await tx`insert into public.warehouses (id, tenant_id, company_id, code, name)
              values (${W1}, ${TENANT}, ${COMPANY}, 'MED-W1', 'Principal')`;
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope)
@@ -196,6 +198,11 @@ beforeAll(async () => {
     range_from: "1",
     range_to: "500",
     printer_source: "Imprenta medicion",
+    printer_legal_name: "Imprenta E2E, C.A.",
+    printer_tax_id: "J-12345678-9",
+    printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+    printer_authorization_date: "2020-01-15",
+    printed_on: "2026-09-01",
   });
   if (rango.status !== 201) throw new Error(`rango: ${rango.status}`);
   const plan = await pedir("POST", "/v1/accounts/import-template", {

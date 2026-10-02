@@ -59,6 +59,19 @@ values ('aaaa0046-0000-4000-8000-00000000d001', 'aaaa0046-0000-4000-8000-0000000
         'unidad', 'gravado_general');
 
 -- Ventas de FEBRERO 2026: factura 100+16 y NC 25+4 (neto débitos 12).
+-- ADR-0072 §1 (migración 20260928190100): el montaje declara el tipo de contribuyente de sus
+-- empresas con RIF; sin tipo vigente la base no deja emitir factura, NC ni ND (LAD98).
+insert into public.company_taxpayer_types
+  (tenant_id, company_id, taxpayer_type_code, effective_from, notified_on, reason, rules_version)
+select c.tenant_id, c.id,
+       case when c.taxpayer_type_code in ('ordinario', 'especial', 'formal')
+            then c.taxpayer_type_code else 'ordinario' end,
+       '2000-01-01', case when c.taxpayer_type_code = 'especial' then '2000-01-01'::date end,
+       'Montaje pgTAP: el tipo que declara la empresa de prueba', 'pgtap'
+  from public.companies c
+ where c.created_at = now() and upper(btrim(c.tax_id)) not like 'PEND-%'
+   and not exists (select 1 from public.company_taxpayer_types h where h.company_id = c.id);
+
 insert into public.documents
   (id, tenant_id, company_id, kind, series, customer_id, document_number, control_number,
    status, issued_at, regime_version_id, rules_version, transaction_currency,
@@ -71,14 +84,23 @@ values
    timestamptz '2026-02-10 15:00:00-04',
    (select regime_version_id from platform.regime_at('aaaa0046-0000-4000-8000-0000000000a1',
                                                      timestamptz '2026-02-10 15:00:00-04')),
-   'test-046', 'VES', 'VES', 1, 'identidad', 116, 116, 100, 16, 116),
+   'test-046', 'VES', 'VES', 1, 'identidad', 116, 116, 100, 16, 116);
+-- La NC corrige ESA factura: identifica al adquirente como ella (decidido por criterio, migración
+-- 20260928190500), así que lleva su origen.
+insert into public.documents
+  (id, tenant_id, company_id, kind, series, customer_id, document_number, control_number,
+   status, issued_at, regime_version_id, rules_version, transaction_currency,
+   functional_currency, fx_rate, rate_source, amount_transaction_currency, functional_amount,
+   subtotal_amount, tax_amount, total_amount, source_document_id)
+values
   ('aaaa0046-0000-4000-8000-00000000f002', 'aaaa0046-0000-4000-8000-00000000000a',
    'aaaa0046-0000-4000-8000-0000000000a1', 'credit_note', 'A',
    'aaaa0046-0000-4000-8000-00000000c001', 4602, 4602, 'issued',
    timestamptz '2026-02-15 15:00:00-04',
    (select regime_version_id from platform.regime_at('aaaa0046-0000-4000-8000-0000000000a1',
                                                      timestamptz '2026-02-15 15:00:00-04')),
-   'test-046', 'VES', 'VES', 1, 'identidad', 29, 29, 25, 4, 29);
+   'test-046', 'VES', 'VES', 1, 'identidad', 29, 29, 25, 4, 29,
+   'aaaa0046-0000-4000-8000-00000000f001');
 insert into public.document_lines
   (id, tenant_id, company_id, document_id, line_number, product_id, description, quantity,
    unit_price_transaction, unit_price_functional, tax_rate_snapshot, tax_amount,

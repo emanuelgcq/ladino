@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
  * LA CUENTA DE EFECTIVO SALE DE LA CAJA REAL (ADR-0060 §4, migración 56).
@@ -105,6 +106,7 @@ beforeAll(async () => {
                                            functional_currency_code, taxpayer_type_code)
              values (${COMPANY}, ${TENANT}, ${`J-CAJA-${RUN}`}, 'Bodega caja real', 'VES',
                      'ordinario')`;
+    await declararTipoDeFixture(tx, COMPANY);
     await tx`insert into public.warehouses (id, tenant_id, company_id, code, name)
              values (${W1}, ${TENANT}, ${COMPANY}, 'E2E-CRW1', 'Local')`;
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values

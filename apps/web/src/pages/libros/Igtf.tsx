@@ -15,7 +15,6 @@ import { useToast } from "../../ui/toast.js";
 import { mostrarImporte } from "../../money.js";
 import { mostrarPorcentaje } from "../../porcentaje.js";
 import { MensajeError } from "../ventas/comunes.js";
-import { ConfirmDialog } from "../../components/ConfirmDialog.js";
 import { errorDePersona, type IgtfPerceptions, type IgtfStatus } from "../../lib.js";
 import { quincenaLocal } from "../../fechas.js";
 
@@ -123,8 +122,6 @@ function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.E
   const [acta, setActa] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [enviando, setEnviando] = useState(false);
-  const [confirmandoEspecial, setConfirmandoEspecial] = useState(false);
-  const [clasificando, setClasificando] = useState(false);
 
   async function activar(): Promise<void> {
     setError(null);
@@ -144,39 +141,8 @@ function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.E
     }
   }
 
-  /**
-   * La CLASIFICACIÓN de la empresa (2026-09-10). Activar el IGTF exige ser
-   * sujeto pasivo especial, y hasta ahora, si no lo eras, el botón fallaba con
-   * un mensaje y NO había pantalla en toda la aplicación donde corregirlo: el
-   * endpoint existía sin puerta. La puerta va aquí, que es donde se topa uno
-   * con el requisito.
-   */
-  async function marcarEspecial(): Promise<void> {
-    setError(null);
-    setClasificando(true);
-    setConfirmandoEspecial(false);
-    try {
-      await llamar("/v1/companies/taxpayer-type", {
-        method: "PUT",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ company_id: empresa.id, taxpayer_type_code: "especial" }),
-      });
-      toast.success(
-        "Empresa clasificada como sujeto pasivo especial",
-        "Queda en la auditoría con su valor anterior. Ya puedes activar la percepción.",
-      );
-      await qc.invalidateQueries({ queryKey: ["igtf-status", empresa.id] });
-      // La empresa de la sesión (`useSesion().empresa`) no vive en una query
-      // de TanStack — la carga session.tsx por su cuenta y no expone una
-      // recarga—, así que no hay clave que invalidar: el `taxpayer_type` nuevo
-      // se verá en la sesión al recargarla. Lo que esta pantalla necesita
-      // (`igtf-status`) sí se invalida arriba.
-    } catch (e) {
-      setError(e);
-    } finally {
-      setClasificando(false);
-    }
-  }
+  // E-16 (ADR-0072 §1): el tipo VIGENTE HOY lo sirve el servidor en la empresa de la sesión.
+  const esEspecial = empresa.taxpayer_type_code === "especial";
 
   return (
     <Card>
@@ -202,34 +168,24 @@ function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.E
           </p>
         ) : (
           <>
-            <div className="rounded-md border border-border bg-surface-muted px-3 py-2">
-              <p className="text-[0.88rem]">
-                ¿El SENIAT designó a esta empresa <strong>sujeto pasivo especial</strong> y aún no
-                está marcada así en Ladino?
+            {esEspecial ? (
+              <p className="rounded-md bg-warning-soft px-3 py-2 text-[0.88rem] text-warning-soft-foreground">
+                <strong>Eres sujeto pasivo especial y no estás percibiendo IGTF.</strong> Cada pago
+                en divisas que recibas debería llevar su IGTF
+                {/* La alícuota la sirve el servidor (regla con fuente), nunca escrita aquí. */}
+                {estado?.rate != null ? ` (${mostrarPorcentaje(estado.rate)})` : ""}. Actívala abajo
+                con el acta.
               </p>
-              {/* Con confirmación: cambia la clasificación tributaria de la empresa (IVA de
-                  compras, retenciones, IGTF) y antes bastaba un toque (QA 2026-09-15, h. 72). */}
-              <Button
-                variant="secondary"
-                className="mt-2"
-                onClick={() => setConfirmandoEspecial(true)}
-                disabled={clasificando || enviando}
-              >
-                {clasificando ? "Guardando…" : "Marcarla como sujeto pasivo especial"}
-              </Button>
-              <ConfirmDialog
-                open={confirmandoEspecial}
-                onOpenChange={setConfirmandoEspecial}
-                title="Marcar la empresa como sujeto pasivo especial"
-                confirmLabel="Sí, el SENIAT la designó"
-                onConfirm={marcarEspecial}
-              >
-                Solo si el SENIAT te notificó la designación. Cambia la clasificación tributaria de
-                la empresa: desde ese momento percibe IGTF (cuando actives la percepción) y actúa
-                como agente de retención en sus compras. Queda en la auditoría con el valor
-                anterior; si fue un error, se corrige desde Configuración → Datos fiscales.
-              </ConfirmDialog>
-            </div>
+            ) : (
+              <div className="rounded-md border border-border bg-surface-muted px-3 py-2">
+                <p className="text-[0.88rem]">
+                  ¿El SENIAT designó a esta empresa <strong>sujeto pasivo especial</strong>?
+                  Decláralo en <strong>Configuración → Mi empresa → Tipo de contribuyente</strong>{" "}
+                  con la fecha de notificación de la providencia; después vuelve aquí a activar la
+                  percepción.
+                </p>
+              </div>
+            )}
             <FormField label="Por qué esta empresa percibe (queda en la auditoría)">
               {(a) => (
                 <Textarea
@@ -241,10 +197,7 @@ function Activacion({ estado }: { estado: IgtfStatus | undefined }): React.JSX.E
                 />
               )}
             </FormField>
-            <Button
-              onClick={() => void activar()}
-              disabled={enviando || clasificando || acta.trim().length < 10}
-            >
+            <Button onClick={() => void activar()} disabled={enviando || acta.trim().length < 10}>
               <ShieldCheck className="mr-2 h-4 w-4" />
               Activar la percepción
             </Button>

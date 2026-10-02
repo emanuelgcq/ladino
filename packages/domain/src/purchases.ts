@@ -31,7 +31,9 @@ import type {
 import { RULES_VERSION } from "./create-company.js";
 import { fechaContableDe } from "./fecha-contable.js";
 import { clasificacionPorPrefijo } from "./customers.js";
+import { registrarDigitoDudoso, validarRif, type DocumentoLeido } from "./documento-identidad.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
+import { tipoVigente } from "./tipo-contribuyente.js";
 import { receiveStockFor, revalueStock, revalorizar } from "./inventory.js";
 import { exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
@@ -72,7 +74,6 @@ const JURISDICTION = "VE";
 interface Contexto {
   readonly tenantId: string;
   readonly functionalCurrency: string;
-  readonly companyTaxpayerType: string | null;
 }
 
 function traducir(e: unknown): PurchaseError | null {
@@ -120,14 +121,12 @@ async function autorizar(
       });
     }
   }
-  const [cfg] = await sql<{ moneda: string; tipo: string | null }[]>`
-    select functional_currency_code as moneda, taxpayer_type_code as tipo
-      from public.companies where id = ${companyId}`;
+  const [cfg] = await sql<{ moneda: string }[]>`
+    select functional_currency_code as moneda from public.companies where id = ${companyId}`;
   if (!cfg) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   return ok({
     tenantId: scope.value.tenantId,
     functionalCurrency: cfg.moneda,
-    companyTaxpayerType: cfg.tipo,
   });
 }
 
@@ -281,6 +280,15 @@ export async function createSupplier(
         "Un proveedor nacional necesita RIF: sin él no se puede llevar al libro de compras ni practicarle retención.",
     });
   }
+  // El RIF del proveedor nacional: estructura validada y NORMALIZADO (A-08, P-02); el dígito
+  // verificador que no cuadra se acepta y queda en la auditoría.
+  let documento: DocumentoLeido | null = null;
+  if (!extranjero) {
+    const leido = validarRif(input.tax_id!);
+    if (!leido.ok) return leido;
+    documento = leido.value;
+  }
+  const taxId = documento?.normalizado ?? null;
   // Sin tipo de persona o de contribuyente, se INFIEREN del prefijo del RIF (la misma regla
   // que los clientes, ADR-0033). La compra simple solo pide nombre y RIF, y el servidor
   // respondía 422 con cualquier formato: una bodega no podía registrar ni una compra
@@ -290,7 +298,7 @@ export async function createSupplier(
   let personType = input.person_type_code ?? null;
   let taxpayerType = input.taxpayer_type_code ?? null;
   if (!extranjero && (personType === null || taxpayerType === null)) {
-    const inferida = clasificacionPorPrefijo(input.tax_id ?? null);
+    const inferida = clasificacionPorPrefijo(taxId);
     personType ??= inferida.persona;
     taxpayerType ??=
       inferida.contribuyente === "consumidor_final" ? "ordinario" : inferida.contribuyente;
@@ -305,7 +313,7 @@ export async function createSupplier(
            person_type_code, taxpayer_type_code, fiscal_address, email, phone,
            payment_terms_days)
         values (${ctx.value.tenantId}, ${input.company_id},
-                ${extranjero ? null : (input.tax_id ?? null)}, ${input.legal_name},
+                ${taxId}, ${input.legal_name},
                 ${input.trade_name ?? null}, ${input.supplier_kind},
                 ${extranjero ? null : personType},
                 ${extranjero ? null : taxpayerType},
@@ -329,6 +337,16 @@ export async function createSupplier(
         supplier_kind: fila.supplier_kind,
       },
     );
+    if (documento !== null) {
+      await registrarDigitoDudoso(sql, {
+        tenantId: ctx.value.tenantId,
+        companyId: input.company_id,
+        aggregateType: "supplier",
+        aggregateId: fila.id,
+        documento,
+        rulesVersion: RULES_VERSION,
+      });
+    }
     return ok(fila);
   } catch (e) {
     const conocido = traducir(e);
@@ -865,7 +883,10 @@ export async function registerSupplierInvoice(
    * no se configura: ofrecerlo como opción invitaría a marcarlo mal, y
    * marcarlo mal cambia el costo de todo lo comprado.
    */
-  if (ctx.value.companyTaxpayerType === null) {
+  // El tipo VIGENTE EN LA FECHA DE LA FACTURA, por la única lectura (ADR-0072 §1): una compra
+  // fechada antes de un cambio se lee con el tipo de entonces.
+  const tipoEmpresa = await tipoVigente(sql, input.company_id, input.invoice_date);
+  if (tipoEmpresa === null) {
     return err({
       code: "VALIDATION_FAILED",
       message:
@@ -879,9 +900,7 @@ export async function registerSupplierInvoice(
   // abierta para que el asesor lo confirme con su artículo.
   // Y sin documento no hay crédito fiscal que recuperar, sea cual sea el contribuyente: el
   // costo entra entero al inventario (rama `if_tax_not_recoverable` del preset, ADR-0066 §2).
-  const ivaRecuperable =
-    conSoporte &&
-    (ctx.value.companyTaxpayerType === "ordinario" || ctx.value.companyTaxpayerType === "especial");
+  const ivaRecuperable = conSoporte && (tipoEmpresa === "ordinario" || tipoEmpresa === "especial");
 
   const tasa = await tasaA(
     sql,
@@ -986,7 +1005,7 @@ export async function registerSupplierInvoice(
            posted_at, tax_is_recoverable, fiscal_support, transaction_currency,
            functional_currency, fx_rate,
            rate_source, rate_timestamp, rounding_policy_id, rules_version, notes,
-           accounting_date)
+           accounting_date, supplier_tax_id_snapshot, supplier_name_snapshot)
         values (${ctx.value.tenantId}, ${input.company_id}, ${input.supplier_id},
                 ${input.purchase_order_id ?? null}, ${input.supplier_document_number ?? null},
                 ${input.supplier_control_number ?? null}, ${input.supplier_document_ref ?? null},
@@ -995,7 +1014,14 @@ export async function registerSupplierInvoice(
                 ${ctx.value.functionalCurrency},
                 ${tasa.value.rate.toFixed()}, ${tasa.value.source}, now(), ${POLICY.id},
                 ${RULES_VERSION}, ${input.notes ?? null},
-                ${fechaContable === input.invoice_date ? null : fechaContable}::date)
+                ${fechaContable === input.invoice_date ? null : fechaContable}::date,
+                -- El proveedor COMO ERA al registrar la factura (hallazgo 1 de la revisión
+                -- 2026-09-28, migración 20260928170100): el libro de compras reproduce el
+                -- documento, no el maestro vivo.
+                (select s.tax_id from public.suppliers s
+                  where s.id = ${input.supplier_id} and s.company_id = ${input.company_id}),
+                (select s.legal_name from public.suppliers s
+                  where s.id = ${input.supplier_id} and s.company_id = ${input.company_id}))
         returning id`;
 
       let n = 0;

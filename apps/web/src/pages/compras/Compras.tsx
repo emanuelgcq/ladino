@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { formatearDocumento } from "@ladino/schemas";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { PackageCheck, Plus, ShieldAlert, Trash2 } from "lucide-react";
@@ -838,7 +839,12 @@ function NuevaOrden(): React.JSX.Element {
                   return r.items.map((s) => ({
                     id: s.id,
                     label: s.legal_name,
-                    detalle: s.supplier_kind === "extranjero" ? "extranjero" : (s.tax_id ?? ""),
+                    detalle:
+                      s.supplier_kind === "extranjero"
+                        ? "extranjero"
+                        : s.tax_id === null
+                          ? ""
+                          : formatearDocumento(s.tax_id),
                   }));
                 }}
               />
@@ -1081,7 +1087,7 @@ function CuentasPorPagar(): React.JSX.Element {
               return r.items.map((s) => ({
                 id: s.id,
                 label: s.legal_name,
-                detalle: s.tax_id ?? "extranjero",
+                detalle: s.tax_id === null ? "extranjero" : formatearDocumento(s.tax_id),
               }));
             }}
           />
@@ -2346,7 +2352,7 @@ function NuevoProveedor({
       onCerrar({
         id: r.id,
         label: r.legal_name,
-        detalle: r.tax_id ?? "extranjero",
+        detalle: r.tax_id === null ? "extranjero" : formatearDocumento(r.tax_id),
       });
     } catch (e) {
       setError(e);

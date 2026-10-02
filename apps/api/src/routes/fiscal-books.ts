@@ -1,7 +1,7 @@
 import type { Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql, type TransactionSql } from "@ladino/db";
-import { BookKind, ExportFiscalBookRequest } from "@ladino/schemas";
-import { readFiscalBook, exportFiscalBook } from "@ladino/domain";
+import { BookKind, ExportFiscalBookRequest, ExportSalesBookSummaryRequest } from "@ladino/schemas";
+import { readFiscalBook, exportFiscalBook, exportSalesBookSummary } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
 
@@ -165,6 +165,33 @@ export function fiscalBooksRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
     const r = await withTransaction(sql, actor, (uow) => exportFiscalBook(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
+  });
+
+  /**
+   * H6 (ADR-0073): el resumen del art. 72 de una generación del libro de ventas, como fichero propio
+   * (`resumen-art72.csv`). Mismo permiso (fiscal_book.export) e idempotencia que la exportación;
+   * no crea otra generación ni cambia el hash firmado.
+   */
+  app.post("/v1/fiscal-books/runs/:id/summary-art72", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = ExportSalesBookSummaryRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    if (companyId !== parsed.data.company_id) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "El company_id del cuerpo no coincide con X-Company-Id.",
+      });
+    }
+    const runId = c.req.param("id");
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) {
+      throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    }
+    const { actor } = c.get("ladino.auth");
+    const res = await withTransaction(sql, actor, (uow) =>
+      exportSalesBookSummary(uow, { company_id: companyId, run_id: runId }),
+    );
+    if (!res.ok) throw new DominioError(res.error);
+    return c.json(res.value, 201);
   });
 
   /**

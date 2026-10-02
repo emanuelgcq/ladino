@@ -68,7 +68,8 @@ export function companiesRoutes(
         select id, tenant_id, legal_name, trade_name, tax_id, fiscal_address,
                activity_start_date::text as activity_start_date,
                business_type, phone, whatsapp, city, state, logo_path, status,
-               taxpayer_type_code,
+               -- ADR-0072 §1: el tipo VIGENTE HOY por la única lectura, no la columna espejo.
+               platform.taxpayer_type_at(id, platform.caracas_day(now())) as taxpayer_type_code,
                to_char(created_at at time zone 'utc',
                        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at
           from public.companies

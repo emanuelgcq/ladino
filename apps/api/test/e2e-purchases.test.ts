@@ -4,6 +4,7 @@ import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
  * Compras de extremo a extremo con JWT real, como `ladino_api`.
@@ -109,6 +110,7 @@ beforeAll(async () => {
                (id, tenant_id, tax_id, legal_name, functional_currency_code, taxpayer_type_code)
              values (${COMPANY}, ${TENANT}, ${`J-E2ECMP-${RUN}`}, 'Empresa e2e compras', 'VES',
                      'ordinario')`;
+    await declararTipoDeFixture(tx, COMPANY);
     await tx`insert into public.warehouses (id, tenant_id, company_id, code, name) values
              (${W1}, ${TENANT}, ${COMPANY}, 'E2E-CW1', 'Principal'),
              (${W2}, ${TENANT}, ${COMPANY}, 'E2E-CW2', 'Sin binding')`;
@@ -127,7 +129,8 @@ beforeAll(async () => {
              (${ROL_COMPRAS}, 'retention.receipt.issue'),
              (${ROL_COMPRAS}, 'inventory.move'),
              (${ROL_COMPRAS}, 'fx.rate.manage'),
-             (${ROL_COMPRAS}, 'ap.read')`;
+             (${ROL_COMPRAS}, 'ap.read'),
+             (${ROL_COMPRAS}, 'fiscal_book.export')`;
     await tx`insert into public.memberships (id, tenant_id, user_id) values
              (${MEM_COMPRADOR}, ${TENANT}, ${COMPRADOR}),
              (${MEM_MIRON}, ${TENANT}, ${MIRON})`;
@@ -176,6 +179,21 @@ afterAll(async () => {
   await sqlApi.end();
 });
 
+let HASH_COMPRAS_ANTES = "";
+/** B1: exporta el libro de compras de hoy y devuelve el hash de la generación. */
+async function exportarCompras(): Promise<string> {
+  const r = await pedir("POST", "/v1/fiscal-books/export", COMPRADOR, {
+    company_id: COMPANY,
+    book_kind: "compras",
+    period_from: HOY,
+    period_to: HOY,
+    format_code: "csv_columnas_legales",
+    timezone: "America/Caracas",
+  });
+  expect(r.status).toBe(201);
+  return ((await r.json()) as { run: { dataset_hash: string } }).run.dataset_hash;
+}
+
 describe("compras de extremo a extremo", () => {
   it("un proveedor nacional sin RIF se rechaza; el extranjero se acepta sin él", async () => {
     const malo = await pedir("POST", "/v1/suppliers", COMPRADOR, {
@@ -187,7 +205,7 @@ describe("compras de extremo a extremo", () => {
 
     const bueno = await pedir("POST", "/v1/suppliers", COMPRADOR, {
       company_id: COMPANY,
-      tax_id: `J-PROV-${RUN}`,
+      tax_id: `J-5${String(Date.now()).slice(-7)}-0`,
       legal_name: "Proveedor nacional e2e",
       supplier_kind: "nacional",
       person_type_code: "juridica",
@@ -746,6 +764,11 @@ describe("compras de extremo a extremo", () => {
     expect(n.balance).toBe("36960.00000000");
   });
 
+  it("B1 en compras (ADR-0073): exportar el libro antes de pagar, para comparar su hash", async () => {
+    HASH_COMPRAS_ANTES = await exportarCompras();
+    expect(HASH_COMPRAS_ANTES).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("el pago cancela el NETO: lo retenido ya se le debía al fisco desde el registro", async () => {
     const facturas = await pedir("GET", "/v1/supplier-invoices?status=posted", COMPRADOR);
     const lista = (await facturas.json()) as { items: Record<string, string>[] };
@@ -786,6 +809,10 @@ describe("compras de extremo a extremo", () => {
     expect(cuerpo.retention_receipt).not.toBeNull();
     expect(cuerpo.retention_receipt!["receipt_number"]).toBe(1);
     expect(cuerpo.retention_receipt!["total_retained"]).toBe("4800.00000000");
+  });
+
+  it("B1 en compras: pagar la factura del período no cambia el hash del libro de compras", async () => {
+    expect(await exportarCompras()).toBe(HASH_COMPRAS_ANTES);
   });
 
   it("anular el comprobante conserva su correlativo y el siguiente no reutiliza el hueco", async () => {
@@ -1108,5 +1135,20 @@ describe("compras de extremo a extremo", () => {
     expect(r.status).toBe(422);
     const cuerpo = (await r.json()) as { message: string };
     expect(cuerpo.message).toMatch(/sin factura no practica retención/i);
+  });
+});
+
+describe("hallazgo 1 (revisión 2026-09-28): la factura guarda el proveedor como se registró", () => {
+  it("cada factura del proveedor nacional lleva el snapshot de su RIF y su razón social", async () => {
+    const filas = await sql<
+      { snap_rif: string | null; snap_nombre: string | null; rif: string; nombre: string }[]
+    >`
+      select i.supplier_tax_id_snapshot as snap_rif, i.supplier_name_snapshot as snap_nombre,
+             s.tax_id as rif, s.legal_name as nombre
+        from public.supplier_invoices i
+        join public.suppliers s on s.id = i.supplier_id
+       where i.supplier_id = ${PROV}`;
+    expect(filas.length).toBeGreaterThan(0);
+    for (const f of filas) expect([f.snap_rif, f.snap_nombre]).toEqual([f.rif, f.nombre]);
   });
 });

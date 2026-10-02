@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql } from "@ladino/db";
 import {
@@ -5,6 +6,8 @@ import {
   CreateProductSimpleRequest,
   UpdateProductRequest,
   SetProductTaxCategoryRequest,
+  ImportNumberFormat,
+  type ProductImportRow,
 } from "@ladino/schemas";
 import {
   createProduct,
@@ -12,10 +15,16 @@ import {
   updateProduct,
   setProductTaxCategory,
   setProductImage,
+  interpretarFilasProductos,
+  anotarCodigosExistentes,
+  guardarCostoReferencia,
+  crearTrabajoImportacion,
+  leerTrabajoImportacion,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { CTX } from "../middleware/context.js";
 import { leerMatriz } from "../csv.js";
+import { idempotencyMiddleware } from "../middleware/idempotency.js";
 import { subirObjeto, firmarUrls } from "../storage.js";
 import type { StorageConfig } from "../config.js";
 
@@ -57,6 +66,7 @@ const PRODUCT_SELECT = `id, tenant_id, company_id, sku, name, kind, status,
   unit_code, tax_category_code, category_id, barcode, image_path,
   is_composed, tracks_lots, tracks_serials, is_manufactured, tracks_expiry,
   template_id, attributes,
+  reference_cost::text as reference_cost_amount, reference_cost_currency,
   to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
 
 /** El mismo select, con el alias `p.` del listado (los joins de la cuadrícula). */
@@ -64,6 +74,7 @@ const PRODUCT_SELECT_P = `p.id, p.tenant_id, p.company_id, p.sku, p.name, p.kind
   p.unit_code, p.tax_category_code, p.category_id, p.barcode, p.image_path,
   p.is_composed, p.tracks_lots, p.tracks_serials, p.is_manufactured, p.tracks_expiry,
   p.template_id, p.attributes,
+  p.reference_cost::text as reference_cost_amount, p.reference_cost_currency,
   to_char(p.created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
 
 const BUCKET_IMAGENES = "product-images";
@@ -326,15 +337,16 @@ export function productsRoutes(
   });
 
   /**
-   * IMPORT de Excel (Fase C): un archivo con Nombre y Precio por fila alcanza;
-   * lo demás tiene default. Cada fila es SU PROPIA transacción — el import es
-   * parcial por diseño: las buenas entran, las malas se explican con su número
-   * de fila en voz de persona, y nadie repite un archivo entero por una celda.
-   * Los importes se leen como TEXTO de la celda, nunca como el float de Excel.
+   * El archivo y el formato de números de una subida multipart (ADR-0074). El formato lo declara
+   * la persona; por omisión, el venezolano (coma decimal, punto de miles). Devuelve la matriz de
+   * celdas-texto y el sha256 del archivo, que es la llave del trabajo.
    */
-  app.post("/v1/products/import", async (c) => {
-    const { companyId } = requireCompany(c);
-    const { actor } = c.get("ladino.auth");
+  async function leerSubida(c: Context): Promise<{
+    matriz: string[][];
+    formato: ImportNumberFormat;
+    hash: string;
+    nombre: string;
+  }> {
     const cuerpo = await c.req.parseBody();
     const archivo = cuerpo["file"];
     if (!(archivo instanceof File)) {
@@ -343,63 +355,81 @@ export function productsRoutes(
         message: "Manda el archivo (.csv o .xlsx) en el campo `file` (multipart/form-data).",
       });
     }
-
-    // CSV o Excel, el MISMO camino (2026-09-08): todo se aplana a una matriz
-    // de celdas-texto y el resto del handler no sabe de dónde vino.
-    const matriz = await leerMatriz(archivo);
-    if (matriz.length < 2) {
+    const crudo = cuerpo["number_format"];
+    const formato = ImportNumberFormat.safeParse(
+      typeof crudo === "string" && crudo !== "" ? crudo : "comma_decimal",
+    );
+    if (!formato.success) {
       throw new DominioError({
         code: "VALIDATION_FAILED",
-        message: "El archivo no tiene filas de productos: la primera fila son los títulos.",
+        message: "`number_format` es «comma_decimal» (1.234,50) o «dot_decimal» (1,234.50).",
       });
     }
-    if (matriz.length > 501) {
-      throw new DominioError({
-        code: "VALIDATION_FAILED",
-        message: "Máximo 500 productos por archivo. Divide el archivo y sube las partes.",
-      });
-    }
+    const bytes = new Uint8Array(await archivo.arrayBuffer());
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    // CSV o Excel, el MISMO camino: todo se aplana a una matriz de celdas-texto. Las celdas
+    // NUMÉRICAS de un .xlsx se escriben en el formato declarado (C-01: el 0,125 de Excel no es 125).
+    const matriz = await leerMatriz(archivo, formato.data);
+    return {
+      matriz,
+      formato: formato.data,
+      hash,
+      nombre: archivo.name || "archivo",
+    };
+  }
 
-    // El encabezado, normalizado sin acentos ni mayúsculas: la persona escribe
-    // «Código de barras» o «codigo barras» y las dos valen.
-    const normalizar = (s: string): string =>
-      s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
-    const columnas = new Map<string, number>();
-    matriz[0]!.forEach((celda, i) => {
-      columnas.set(normalizar(celda), i);
-    });
-    const col = (...nombres: string[]): number | undefined => {
-      for (const n of nombres) {
-        const c2 = columnas.get(n);
-        if (c2 !== undefined) return c2;
+  function interpretar(
+    matriz: string[][],
+    formato: ImportNumberFormat,
+  ): { filas: ProductImportRow[]; sospechoso: ImportNumberFormat | null } {
+    const r = interpretarFilasProductos(matriz, formato);
+    if (!r.ok) throw new DominioError(r.error);
+    return { filas: r.value.filas, sospechoso: r.value.formatoSospechoso };
+  }
+
+  /**
+   * El hash CANÓNICO de una subida para la idempotencia (H4): sha256 de los bytes del ARCHIVO más
+   * el formato declarado — no del multipart crudo, cuyo boundary cambia en cada reenvío.
+   */
+  const idempotenciaSubida = idempotencyMiddleware({
+    sql,
+    canonicalHash: async (c) => {
+      const cuerpo = await c.req.parseBody();
+      const archivo = cuerpo["file"];
+      const formato = typeof cuerpo["number_format"] === "string" ? cuerpo["number_format"] : "";
+      const h = createHash("sha256");
+      if (archivo instanceof File) {
+        h.update(
+          createHash("sha256")
+            .update(new Uint8Array(await archivo.arrayBuffer()))
+            .digest("hex"),
+        );
       }
-      return undefined;
-    };
-    const colNombre = col("nombre", "producto", "descripcion");
-    const colPrecio = col("precio", "precio detal", "pvp");
-    if (colNombre === undefined || colPrecio === undefined) {
+      return h
+        .update("\n")
+        .update(formato || "comma_decimal")
+        .digest();
+    },
+  });
+
+  /**
+   * IMPORT de Excel (Fase C), el camino SÍNCRONO de siempre. Desde ADR-0074 interpreta con el
+   * formato declarado (C-01) y devuelve los avisos por fila (C-05), pero corre dentro de la
+   * petición: por eso admite hasta MAX_FILAS_SINCRONAS filas, lejos de los 30 s de la API (C-04).
+   * Lo grande va por el trabajo (/v1/products/import/jobs), que es lo que usa la web.
+   */
+  const MAX_FILAS_SINCRONAS = 50;
+  app.post("/v1/products/import", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const { matriz, formato } = await leerSubida(c);
+    if (matriz.length > MAX_FILAS_SINCRONAS + 1) {
       throw new DominioError({
         code: "VALIDATION_FAILED",
-        message: "El archivo necesita al menos las columnas «Nombre» y «Precio» en la fila 1.",
+        message: `Por esta vía, máximo ${MAX_FILAS_SINCRONAS} productos por archivo. Para más, usa la importación en segundo plano.`,
       });
     }
-    const colMoneda = col("moneda", "moneda precio");
-    const colSku = col("codigo", "sku");
-    const colBarras = col("codigo de barras", "codigo barras", "barras", "ean");
-    const colCategoria = col("categoria");
-    const colExistencia = col("existencia", "cantidad", "stock");
-    const colCosto = col("costo", "costo unitario");
-    const colMonedaCosto = col("moneda costo", "moneda del costo");
-    const colServicio = col("es servicio", "servicio");
-
-    const AMOUNT_RE = /^\d{1,16}(\.\d{1,8})?$/;
-    const leerImporte = (texto: string): string | null => {
-      let t = texto.trim().replace(/\s/g, "");
-      // «2,50» y «1.234,56» son la coma decimal venezolana; «2.50» ya está bien.
-      if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(t)) t = t.replace(/\./g, "").replace(",", ".");
-      else if (/^\d+,\d+$/.test(t)) t = t.replace(",", ".");
-      return AMOUNT_RE.test(t) ? t : null;
-    };
+    const { filas } = interpretar(matriz, formato);
 
     interface FilaResultado {
       row: number;
@@ -408,114 +438,152 @@ export function productsRoutes(
       product_id?: string;
       sku?: string;
       name?: string;
+      warnings?: string[];
     }
     const resultados: FilaResultado[] = [];
-
-    for (let i = 1; i < matriz.length; i++) {
-      const fila = matriz[i]!;
-      const n = i + 1; // número de fila HUMANO (1 = títulos), como en el Excel
-      const texto = (columna: number | undefined): string =>
-        columna === undefined ? "" : (fila[columna] ?? "").trim();
-
-      const nombre = texto(colNombre);
-      const precioCrudo = texto(colPrecio);
-      if (nombre === "" && precioCrudo === "") continue; // fila vacía: se ignora
-
-      if (nombre === "") {
-        resultados.push({ row: n, status: "error", message: "Falta el nombre del producto." });
-        continue;
-      }
-      const precio = leerImporte(precioCrudo);
-      if (precio === null) {
+    for (const f of filas) {
+      const avisos = f.warnings.length === 0 ? {} : { warnings: f.warnings };
+      if (f.status === "rejected") {
         resultados.push({
-          row: n,
+          row: f.row,
           status: "error",
-          name: nombre,
-          message: `El precio no se entiende («${precioCrudo || "vacío"}»). Escribe solo el número, por ejemplo 2,50.`,
+          message: f.message ?? "Fila rechazada.",
+          ...(f.name === undefined ? {} : { name: f.name }),
+          ...avisos,
         });
         continue;
       }
-      const moneda = (texto(colMoneda) || "USD").toUpperCase();
-      if (!/^[A-Z]{3}$/.test(moneda)) {
-        resultados.push({
-          row: n,
-          status: "error",
-          name: nombre,
-          message: `La moneda «${texto(colMoneda)}» no se entiende. El precio va en dólares (USD).`,
-        });
-        continue;
-      }
-
-      const esServicio = /^(si|sí|x|true|1)$/i.test(texto(colServicio));
-      const existenciaCruda = texto(colExistencia);
-      const costoCrudo = texto(colCosto);
-      let inicial: { quantity: string; unit_cost: { amount: string; currency: string } } | null =
-        null;
-      if (!esServicio && existenciaCruda !== "") {
-        const cantidad = leerImporte(existenciaCruda);
-        if (cantidad === null || !/[1-9]/.test(cantidad)) {
-          resultados.push({
-            row: n,
-            status: "error",
-            name: nombre,
-            message: `La existencia no se entiende («${existenciaCruda}»).`,
-          });
-          continue;
-        }
-        const costo = leerImporte(costoCrudo);
-        if (costo === null) {
-          resultados.push({
-            row: n,
-            status: "error",
-            name: nombre,
-            message: `Para cargar existencia hace falta el costo unitario, y «${costoCrudo || "vacío"}» no se entiende.`,
-          });
-          continue;
-        }
-        // Como el precio, el costo va en dólares si la fila no dice otra cosa (QA 2026-09-15,
-        // h. 2 y 44: el costo se pedía en Bs y el precio en USD). «Bs» se acepta como VES.
-        const monedaCostoCruda = (texto(colMonedaCosto) || "USD").toUpperCase();
-        const monedaCosto = /^BS\.?$/.test(monedaCostoCruda) ? "VES" : monedaCostoCruda;
-        inicial = { quantity: cantidad, unit_cost: { amount: costo, currency: monedaCosto } };
-      }
-
-      const skuTexto = texto(colSku);
-      const barrasTexto = texto(colBarras);
-      const categoriaTexto = texto(colCategoria);
-
       // Cada fila en SU transacción: la fila mala no arrastra a las buenas.
-      const r = await withTransaction(sql, actor, (uow) =>
-        createProductSimple(uow, {
+      const r = await withTransaction(sql, actor, async (uow) => {
+        const creado = await createProductSimple(uow, {
           company_id: companyId,
-          name: nombre,
-          price: { amount: precio, currency: moneda },
-          ...(esServicio ? { is_service: true } : {}),
-          ...(inicial === null ? {} : { initial_stock: inicial }),
-          ...(skuTexto === "" ? {} : { sku: skuTexto }),
-          ...(barrasTexto === "" ? {} : { barcode: barrasTexto }),
-          ...(categoriaTexto === "" ? {} : { category_name: categoriaTexto }),
-        }),
-      );
+          name: f.name!,
+          price: f.price!,
+          ...(f.is_service === true ? { is_service: true } : {}),
+          ...(f.initial_stock ? { initial_stock: f.initial_stock } : {}),
+          ...(f.sku === undefined ? {} : { sku: f.sku }),
+          ...(f.barcode === undefined ? {} : { barcode: f.barcode }),
+          ...(f.category_name === undefined ? {} : { category_name: f.category_name }),
+        });
+        // El costo de referencia se GUARDA en el producto (H11), también por esta vía.
+        if (creado.ok && f.reference_cost) {
+          await guardarCostoReferencia(uow, companyId, creado.value.product.id, f.reference_cost);
+        }
+        return creado;
+      });
       if (r.ok) {
         resultados.push({
-          row: n,
+          row: f.row,
           status: "creado",
           product_id: r.value.product.id,
           sku: r.value.product.sku,
-          name: nombre,
+          name: f.name!,
+          ...avisos,
         });
       } else {
-        resultados.push({ row: n, status: "error", name: nombre, message: r.error.message });
+        resultados.push({
+          row: f.row,
+          status: "error",
+          name: f.name!,
+          message: r.error.message,
+          ...avisos,
+        });
       }
     }
 
     const created = resultados.filter((r) => r.status === "creado").length;
     return c.json(
-      { total: resultados.length, created, failed: resultados.length - created, rows: resultados },
+      {
+        total: resultados.length,
+        created,
+        failed: resultados.length - created,
+        rows: resultados,
+      },
       201,
     );
   });
 
+  /**
+   * VISTA PREVIA (ADR-0074, C-05): las diez primeras filas COMO SE VAN A GUARDAR, con sus avisos,
+   * y todas las rechazadas con su número y su motivo. No escribe nada.
+   */
+  app.post("/v1/products/import/preview", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const { matriz, formato, hash, nombre } = await leerSubida(c);
+    const interpretadas = interpretar(matriz, formato);
+    // La verdad sobre los códigos que ya existen: solo cambia el precio (H1).
+    const anotadas = await withTransaction(sql, actor, (uow) =>
+      anotarCodigosExistentes(uow, companyId, interpretadas.filas),
+    );
+    if (!anotadas.ok) throw new DominioError(anotadas.error);
+    const filas = anotadas.value;
+    const rechazadas = filas.filter((f) => f.status === "rejected");
+    return c.json(
+      {
+        number_format: formato,
+        file_name: nombre,
+        file_hash: hash,
+        total: filas.length,
+        ready: filas.length - rechazadas.length,
+        rejected: rechazadas.length,
+        rows: filas.slice(0, 10),
+        rejected_rows: rechazadas,
+        warned_rows: filas.filter((f) => f.warnings.length > 0),
+        suspected_format: interpretadas.sospechoso,
+      },
+      200,
+    );
+  });
+
+  /**
+   * CONFIRMAR (ADR-0074, C-04): la petición SOLO crea el trabajo y lo devuelve (202); el worker
+   * lo procesa. El mismo archivo con el mismo formato devuelve el trabajo existente (200,
+   * `reused: true`): la llave es el hash, garantizada por el único del esquema. EXIGE y HONRA
+   * `Idempotency-Key` (regla 4, H4), con el hash canónico del archivo: la misma llave con el mismo
+   * archivo reenviado devuelve la misma respuesta; con otro archivo, 409 IDEMPOTENCY_KEY_REUSED.
+   */
+  app.post("/v1/products/import/jobs", idempotenciaSubida, async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const { matriz, formato, hash, nombre } = await leerSubida(c);
+    const { filas } = interpretar(matriz, formato);
+    if (filas.length === 0) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "El archivo no tiene filas de productos: la primera fila son los títulos.",
+      });
+    }
+    const r = await withTransaction(sql, actor, (uow) =>
+      crearTrabajoImportacion(uow, {
+        company_id: companyId,
+        file_name: nombre,
+        file_hash: hash,
+        number_format: formato,
+        filas,
+      }),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, r.value.reused ? 200 : 202);
+  });
+
+  /** El progreso y el informe del trabajo. La web lo consulta mientras el worker avanza. */
+  app.get("/v1/products/import/jobs/:id", async (c) => {
+    const { companyId } = requireCompany(c);
+    const id = c.req.param("id");
+    if (!UUID_RE.test(id)) {
+      throw new DominioError({
+        code: "NOT_FOUND",
+        message: "Recurso no encontrado.",
+      });
+    }
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      leerTrabajoImportacion(uow, companyId, id),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
   /** El ALTA SIMPLE de la Fase C: nombre + precio (+ stock inicial) en un paso. */
   app.post("/v1/products/simple", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);

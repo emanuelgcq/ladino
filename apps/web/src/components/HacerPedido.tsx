@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { formatearDocumento } from "@ladino/schemas";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { useSesion } from "../app/session.js";
@@ -84,7 +85,7 @@ export function HacerPedido({
       return r.items.map((s) => ({
         id: s.id,
         label: s.legal_name,
-        ...(s.tax_id === null ? {} : { detalle: s.tax_id }),
+        ...(s.tax_id === null ? {} : { detalle: formatearDocumento(s.tax_id) }),
       }));
     },
     [llamar],

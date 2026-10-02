@@ -32,7 +32,17 @@
 
 ### Abiertas y no derivadas de la 121
 
-9. `VALIDAR-SENIAT`: **formato del RIF** — estructura, prefijos admitidos y dígito verificador.
+9. ~~`VALIDAR-SENIAT`: **formato del RIF** — estructura, prefijos admitidos y dígito verificador.~~
+   **CERRADA por el dueño el 2026-09-28** (RESPUESTA_RECORRIDO A-08 y M-05): «RIF: letra (V, E,
+   J, G, P, C) + 8 dígitos + 1 dígito verificador; se acepta con o sin guiones, se guarda
+   normalizado (`V123456789`) y se muestra `V-12345678-9`. Se valida la estructura (bloquea) y el
+   dígito verificador con el algoritmo de módulo 11 que usa el portal del SENIAT (avisa, no
+   bloquea, y registra la excepción). Fuente: PA 0080 no fija grafía; la del certificado del SENIAT
+   lleva guiones.» Algoritmo y RIF de prueba en `docs/02_COMPLIANCE/EMISION_FACTURAS.md` §5 n.º 3.
+   La validación vive en el SERVIDOR (`packages/domain/src/documento-identidad.ts`) con la función
+   compartida `packages/schemas/src/rif.ts`; el contrato Zod sigue sin regex, y Postgres sin CHECK.
+   Queda abierta solo la letra **C** (su valor en el módulo 11): `PENDIENTES_ASESOR.md` P-49.
+   Texto original de la pregunta, conservado:
    Necesario para el mapeo numeral→campo→validación del Art. 7 de PA 102. Reforzado por
    PA SNAT/2026/00080, que reforma el RIF: deja de caducar, pero debe actualizarse ante cambios de
    datos. **Hasta la respuesta: ningún regex de RIF, ni en Postgres ni en Zod.**

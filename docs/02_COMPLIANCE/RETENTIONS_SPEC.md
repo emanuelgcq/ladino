@@ -46,7 +46,40 @@ siguiente (P-26, cerrada el 2026-09-28; H-04). Hoy se emite al pagar, con el per
 - conservar versión de regla;
 - reversión mediante documento/proceso permitido, no delete.
 
+## Retenciones que nos practicaron (clientes) — ADR-0072 §5 (F-01, F-09, F-11)
+
+Nombres (L-12): «Retenciones que practicamos (a proveedores)» son las nuestras como agente;
+«Retenciones que nos practicaron (clientes)» son los comprobantes que un cliente-agente nos entrega.
+
+- Se cargan en Bs contra la factura (o ND), con número de **14 dígitos** (AAAAMM + 8, PA
+  SNAT/2025/000054) **único por cliente y factura** (`srr_unique_receipt_per_document`: un
+  comprobante quincenal cubre varias facturas, art. 16; la porción se valida factura por
+  factura); el prefijo AAAAMM es un año y un mes válidos. Las porciones admisibles (75 %, 100 %)
+  salen del catálogo `iva_retention_portions` (PA 000054 arts. 4-5, vigencia desde 01-08-2025),
+  vigente a `retained_on`. **VALIDAR-SENIAT:** los arts. 4 y 5 vienen de una reproducción no oficial
+  (`source_status = fuente_secundaria`); la vigencia sí tiene fuente (ADR-0065, REGULATORY_STATUS).
+  Con un IVA de Bs 0,02 o menos, manda la porción que dice el comprobante si cabe en la tolerancia.
+  El prefijo AAAAMM se valida también en la base (`srr_receipt_period_prefix_chk`, NOT VALID: se
+  evalúa en todo UPDATE). (CHECK `srr_receipt_14_digits_chk`,
+  NOT VALID: no se validó sobre las filas existentes al crearlo, **pero se evalúa en TODO INSERT y en
+  TODO UPDATE de cualquier fila**. Trampa para la reversa de la ola 3: anular un comprobante viejo con
+  otro formato de número dará 23514 si su migración no lo resuelve).
+- El monto es el **75 % o el 100 % del IVA en Bs de la factura** (± Bs 0,01); si no, 422 legible
+  con las dos cifras esperadas. La porción indicada debe coincidir.
+- Abona la CxC **a la tasa de la factura**, sin diferencial (`ar_valuation = invoice_rate`;
+  `platform.document_balance_transaction` la salda a `documents.fx_rate`). La alternativa —la tasa
+  del día del comprobante— es el parámetro `company_settings.retention_received_voucher_rate`,
+  apagado (P-30, VALIDAR-TRIBUTARIO). Los comprobantes cargados antes quedan `voucher_rate`.
+- Permisos: `ar.retention.register` (dueño, administrativo, cajero: quien cobra, §2.6; el encargado
+  no cobra, §2.8 — migración 20260928190600) para cargar;
+  `ar.retention.correct` (contador, dueño) para corregir. **La reversa NO está construida**: ver
+  RISK_REGISTER R-61 (decisión pendiente del dueño).
+
 ## Fuentes normativas (verificadas 2026-09-12)
+
+- **PA SNAT/2022/000013** (G.O. 42.339, 17-03-2022) — los sujetos pasivos especiales como agentes
+  de percepción del IGTF (ver IGTF_SPEC.md). Se cita aquí porque el tipo `especial`, con su fecha
+  de notificación y su vigencia (ADR-0072 §1), decide a la vez la retención y la percepción.
 
 - **PA SNAT/2025/000054** — agentes de retención de IVA. Vigente desde el 01/08/2025; deroga la
   PA SNAT/2015/0049. Mantiene el 75 % general y el 100 % para los supuestos listados. Es la

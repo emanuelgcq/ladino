@@ -26,6 +26,19 @@ export const CreateProductRequest = z
      * cobra IVA y su pantalla no la pregunta (regla del dueño, 2026-09-16).
      */
     tax_category_code: z.string().regex(CODE_RE).optional(),
+    /**
+     * Hallazgo 10 (ADR-0073): la reducida es una LISTA CERRADA de bienes (LIVA art. 64). Clasificar
+     * como `gravado_reducida` exige el literal del bien (`tax_reduced_rate_literals`).
+     */
+    reduced_rate_literal: z
+      .string()
+      .regex(/^64(\.[0-9a-z]+)+$/)
+      .optional(),
+    /**
+     * Hallazgo 10: la adicional del art. 61 (suntuarios) no tiene lista con fuente; clasificar como
+     * `gravado_adicional` exige por qué el bien es suntuario. Queda en el acta.
+     */
+    tax_category_justification: z.string().trim().min(10).max(500).optional(),
     category_id: uuid.optional(),
     barcode: z.string().trim().min(1).max(64).optional(),
     /**
@@ -59,6 +72,19 @@ export const SetProductTaxCategoryRequest = z
   .object({
     company_id: uuid,
     tax_category_code: z.string().regex(CODE_RE),
+    /**
+     * Hallazgo 10 (ADR-0073): la reducida es una LISTA CERRADA de bienes (LIVA art. 64). Clasificar
+     * como `gravado_reducida` exige el literal del bien (`tax_reduced_rate_literals`).
+     */
+    reduced_rate_literal: z
+      .string()
+      .regex(/^64(\.[0-9a-z]+)+$/)
+      .optional(),
+    /**
+     * Hallazgo 10: la adicional del art. 61 (suntuarios) no tiene lista con fuente; clasificar como
+     * `gravado_adicional` exige por qué el bien es suntuario. Queda en el acta.
+     */
+    tax_category_justification: z.string().trim().min(10).max(500).optional(),
   })
   .strict();
 export type SetProductTaxCategoryRequest = z.infer<typeof SetProductTaxCategoryRequest>;
@@ -102,6 +128,9 @@ export const ProductResponse = z
     price_equivalent_amount: AmountString.nullable().optional(),
     price_equivalent_currency: z.string().nullable().optional(),
     stock_quantity: z.string().nullable().optional(),
+    /** Costo de referencia importado (ADR-0074, H11): informativo, no es el costo del kardex. */
+    reference_cost_amount: AmountString.nullable().optional(),
+    reference_cost_currency: z.string().nullable().optional(),
   })
   .strict();
 export type ProductResponse = z.infer<typeof ProductResponse>;
@@ -249,6 +278,8 @@ export const ImportProductsRowResult = z
     product_id: uuid.optional(),
     sku: z.string().optional(),
     name: z.string().optional(),
+    /** Avisos de la fila (ADR-0074, C-05): lo que se ignoró o se leyó distinto, nunca en silencio. */
+    warnings: z.array(z.string()).optional(),
   })
   .strict();
 export type ImportProductsRowResult = z.infer<typeof ImportProductsRowResult>;
@@ -262,3 +293,106 @@ export const ImportProductsResponse = z
   })
   .strict();
 export type ImportProductsResponse = z.infer<typeof ImportProductsResponse>;
+
+// ── La importación como TRABAJO (ADR-0074; C-01, C-04, C-05) ────────────────
+
+/**
+ * El formato de los NÚMEROS del archivo, declarado por la persona (C-01). Por omisión, el de
+ * Venezuela: coma decimal y punto de miles («1.234,50»). Una celda ambigua bajo el formato
+ * elegido («0.500» con coma decimal: ¿0,5 o 500?) se rechaza con su fila y el motivo.
+ */
+export const ImportNumberFormat = z.enum(["comma_decimal", "dot_decimal"]);
+export type ImportNumberFormat = z.infer<typeof ImportNumberFormat>;
+
+/** Una fila INTERPRETADA: exactamente lo que se va a guardar, con sus avisos. */
+export const ProductImportRow = z
+  .object({
+    /** Número de FILA del archivo (contando el encabezado como 1). */
+    row: z.number().int(),
+    status: z.enum(["ready", "rejected"]),
+    /** El motivo del rechazo, en voz de persona. Solo con `rejected`. */
+    message: z.string().optional(),
+    warnings: z.array(z.string()),
+    name: z.string().optional(),
+    sku: z.string().optional(),
+    barcode: z.string().optional(),
+    category_name: z.string().optional(),
+    is_service: z.boolean().optional(),
+    price: MoneyInput.optional(),
+    initial_stock: z
+      .object({ quantity: AmountString, unit_cost: MoneyInput })
+      .strict()
+      .nullable()
+      .optional(),
+    /** El costo sin existencia (o de un servicio): se acepta como referencia, con aviso. */
+    reference_cost: MoneyInput.nullable().optional(),
+    /**
+     * El código ya existe en la empresa: la fila solo actualiza el precio (y el costo de
+     * referencia); ni la existencia ni el nombre cambian (H1). Lo pone la vista previa.
+     */
+    updates_existing: z.boolean().optional(),
+  })
+  .strict();
+export type ProductImportRow = z.infer<typeof ProductImportRow>;
+
+export const ProductImportPreviewResponse = z
+  .object({
+    number_format: ImportNumberFormat,
+    file_name: z.string(),
+    /** sha256 del archivo: la llave del trabajo al confirmar. */
+    file_hash: z.string(),
+    total: z.number().int(),
+    ready: z.number().int(),
+    rejected: z.number().int(),
+    /** Las diez primeras filas, como se van a guardar. */
+    rows: z.array(ProductImportRow),
+    /** TODAS las filas rechazadas, con su número y su motivo. */
+    rejected_rows: z.array(ProductImportRow),
+    /** TODAS las filas con aviso, también las que no caben en las diez primeras (H5). */
+    warned_rows: z.array(ProductImportRow),
+    /**
+     * El formato que el archivo PARECE usar cuando alguna celda solo se entiende con el contrario
+     * al declarado (H6); null si el archivo es coherente con lo declarado.
+     */
+    suspected_format: ImportNumberFormat.nullable(),
+  })
+  .strict();
+export type ProductImportPreviewResponse = z.infer<typeof ProductImportPreviewResponse>;
+
+export const ProductImportJobRowResult = z
+  .object({
+    row: z.number().int(),
+    status: z.enum(["created", "updated", "rejected"]),
+    message: z.string().optional(),
+    warnings: z.array(z.string()),
+    name: z.string().optional(),
+    sku: z.string().optional(),
+    product_id: uuid.optional(),
+    reference_cost: MoneyInput.nullable().optional(),
+  })
+  .strict();
+export type ProductImportJobRowResult = z.infer<typeof ProductImportJobRowResult>;
+
+export const ProductImportJobResponse = z
+  .object({
+    id: uuid,
+    company_id: uuid,
+    file_name: z.string(),
+    file_hash: z.string(),
+    number_format: ImportNumberFormat,
+    status: z.enum(["pending", "running", "done", "failed"]),
+    total_rows: z.number().int(),
+    processed_rows: z.number().int(),
+    created_count: z.number().int(),
+    updated_count: z.number().int(),
+    rejected_count: z.number().int(),
+    /** El informe fila por fila, en el orden en que se procesaron. */
+    report: z.array(ProductImportJobRowResult),
+    last_error: z.string().nullable(),
+    created_at: z.string(),
+    finished_at: z.string().nullable(),
+    /** true si el archivo ya tenía trabajo y se devolvió el existente (C-04). */
+    reused: z.boolean(),
+  })
+  .strict();
+export type ProductImportJobResponse = z.infer<typeof ProductImportJobResponse>;

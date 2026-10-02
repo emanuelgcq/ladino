@@ -12,6 +12,7 @@ import {
   CreateRetentionRuleRequest,
   RegisterArrivalRequest,
   ClosePurchaseOrderRequest,
+  normalizarDocumento,
 } from "@ladino/schemas";
 import {
   createSupplier,
@@ -115,6 +116,7 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
     const search = c.req.query("search")?.trim() ?? "";
+    const buscado = normalizarDocumento(search);
     const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 20) || 20, 1), 100);
     const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
@@ -131,7 +133,12 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
       const filtro =
         search === ""
           ? tx``
-          : tx`and (coalesce(tax_id, '') ilike ${`%${search}%`} or legal_name ilike ${`%${search}%`})`;
+          : // P-02 «en todos los caminos»: el documento también se compara NORMALIZADO por los
+            // dos lados, así «J40555123» encuentra «J-40555123-4» y al revés.
+            tx`and (coalesce(tax_id, '') ilike ${`%${search}%`} or legal_name ilike ${`%${search}%`}
+                 or (${buscado} <> ''
+                     and upper(regexp_replace(coalesce(tax_id, ''), '[^a-zA-Z0-9]', '', 'g'))
+                         like ${`%${buscado}%`}))`;
       return tx<Record<string, unknown>[]>`
         select id, company_id, tax_id, legal_name, trade_name, supplier_kind, person_type_code,
                taxpayer_type_code, fiscal_address, email, phone, status,

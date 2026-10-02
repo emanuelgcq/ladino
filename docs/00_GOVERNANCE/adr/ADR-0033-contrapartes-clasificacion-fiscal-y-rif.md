@@ -71,3 +71,16 @@ direcciones (dos sin RIF conviven; dos con el mismo no), jurídica sin RIF recha
 sin permiso → LAD36 y con permiso → fila de auditoría con **el valor anterior asertado por el
 dato**, aislamiento por company, variantes rotas (sin el índice el duplicado entra; sin el trigger
 el cambio no deja rastro). Dominio y E2E como `ladino_api` con la segregación de permisos.
+
+## Enmienda — 2026-09-28 (no reescribe lo anterior)
+
+La validación de estructura del RIF se decidió en la respuesta del dueño A-08, 2026-09-28; ver
+OPEN_QUESTIONS #9. Lo que este ADR dejaba fuera por VALIDAR-SENIAT («el formato del RIF no se
+valida») queda así: la estructura (letra V, E, J, G, P o C + 8 dígitos + 1 verificador) la valida
+el SERVIDOR y bloquea; el dígito verificador (módulo 11) solo avisa y deja acta; todo camino guarda
+el documento normalizado. El cliente se identifica con RIF, cédula o pasaporte (decidido por
+criterio, PA 00071 art. 13.7). La inferencia de «P → extranjera / no domiciliado» de este ADR NO
+cambia: la regla del dueño dice que P es el RIF de una persona con pasaporte, y la clasificación
+fiscal que le corresponde queda pendiente del asesor (RISK_REGISTER R-58). Código:
+`packages/schemas/src/rif.ts`, `packages/domain/src/documento-identidad.ts`; esquema: migraciones
+20260928170000 y 20260928170100.

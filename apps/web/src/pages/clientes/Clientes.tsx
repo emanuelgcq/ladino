@@ -34,6 +34,7 @@ import { compararImportes, esCero } from "../../components/decimal-compare.js";
 import { errorDePersona } from "../../lib.js";
 import type { Customer, CodeCatalog, PriceList } from "../../lib.js";
 import { sufijoDeArchivo } from "../../app/rif.js";
+import { avisoDigitoRif, formatearDocumento } from "@ladino/schemas";
 import { useConFacturas } from "../../app/modo-venta.js";
 
 /** La fila con la deuda funcional de HOY que calcula el servidor (ADR-0047). */
@@ -109,7 +110,8 @@ export function Clientes(): React.JSX.Element {
       {
         id: "rif",
         header: conFacturas ? "RIF" : "Cédula o RIF",
-        accessorFn: (c) => c.tax_id ?? "—",
+        // Vestido con la función compartida (P-02): el crudo «J408887776» no se enseña.
+        accessorFn: (c) => (c.tax_id === null ? "—" : formatearDocumento(c.tax_id)),
         cell: (c) => <span className="font-mono text-[0.84rem]">{c.getValue<string>()}</span>,
       },
       { id: "nombre", header: conFacturas ? "Razón social" : "Nombre", accessorKey: "legal_name" },
@@ -353,6 +355,12 @@ function NuevoCliente({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Rea
               />
             )}
           </FormField>
+          {/* El dígito verificador solo avisa: el servidor acepta y lo registra (A-08). */}
+          {avisoDigitoRif(form.tax_id) !== null && (
+            <p role="status" className="text-[0.85rem] text-warning-soft-foreground">
+              {avisoDigitoRif(form.tax_id)}
+            </p>
+          )}
           <FormField label={conFacturas ? "Razón social / nombre" : "Nombre"} required>
             {(a) => (
               <Input
@@ -567,11 +575,15 @@ function DetalleCliente({
         <DialogDescription>
           {conFacturasFicha ? (
             <>
-              <span className="font-mono">{cliente.tax_id ?? "sin RIF"}</span> ·{" "}
-              {cliente.person_type_code} · {cliente.taxpayer_type_code}
+              <span className="font-mono">
+                {cliente.tax_id === null ? "sin RIF" : formatearDocumento(cliente.tax_id)}
+              </span>{" "}
+              · {cliente.person_type_code} · {cliente.taxpayer_type_code}
             </>
           ) : (
-            <span className="tabular-nums">{cliente.tax_id ?? "Sin cédula"}</span>
+            <span className="tabular-nums">
+              {cliente.tax_id === null ? "Sin cédula" : formatearDocumento(cliente.tax_id)}
+            </span>
           )}
         </DialogDescription>
         <div className="mt-1">
@@ -750,8 +762,9 @@ function DetalleCliente({
           confirmLabel="Cambiar el RIF"
           onConfirm={cambiarRif}
         >
-          De «{cliente.tax_id ?? "—"}» a «{rif.trim() === "" ? "—" : rif.trim()}». La identidad
-          fiscal de una contraparte no se edita a la ligera: exige permiso propio y queda
+          De «{cliente.tax_id === null ? "—" : formatearDocumento(cliente.tax_id)}» a «
+          {rif.trim() === "" ? "—" : formatearDocumento(rif.trim())}». La identidad fiscal de una
+          contraparte no se edita a la ligera: exige permiso propio y queda
           <strong> auditada con el valor anterior</strong>.
         </ConfirmDialog>
 

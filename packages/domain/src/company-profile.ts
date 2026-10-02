@@ -8,7 +8,9 @@ import type {
   SetMyProfileRequest,
 } from "@ladino/schemas";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
+import { normalizarDocumento } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
+import { registrarDigitoDudoso, validarRif } from "./documento-identidad.js";
 
 /**
  * MI EMPRESA y la POLÍTICA DE RIF EN TRES NIVELES (registro premium, PARTE 4).
@@ -212,7 +214,7 @@ export async function correctCompanyTaxId(
 async function cambiarRif(
   uow: UnitOfWork,
   companyId: string,
-  taxId: string,
+  taxIdCrudo: string,
   reason: string | null,
   esCorreccion: boolean,
 ): Promise<Result<{ tax_id: string }, CompanyProfileError>> {
@@ -228,8 +230,18 @@ async function cambiarRif(
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
   }
 
+  // A-17 y A-08: solo un RIF con estructura (nunca el marcador PEND-, que ocultaría la capa
+  // fiscal de una empresa que factura), y se guarda NORMALIZADO. El dígito verificador que no
+  // cuadra se acepta y queda en la auditoría.
+  const leido = validarRif(taxIdCrudo);
+  if (!leido.ok) return leido;
+  const documento = leido.value;
+  const taxId = documento.normalizado;
+
   const actual = await perfilActual(sql, companyId);
-  if (actual.tax_id === taxId) return ok({ tax_id: taxId });
+  // Hallazgo 5: el MISMO RIF con otra grafía (el guardado antes de la reparación P-02 puede
+  // llevar guiones) no es un cambio: ok, sin escribir — ni acta ni outbox.
+  if (normalizarDocumento(actual.tax_id) === taxId) return ok({ tax_id: actual.tax_id });
 
   const esPrimero = actual.tax_id.startsWith("PEND-");
   if (!esPrimero && !esCorreccion && (await tieneDocumentos(sql, companyId))) {
@@ -258,6 +270,15 @@ async function cambiarRif(
     }
     throw e;
   }
+
+  await registrarDigitoDudoso(sql, {
+    tenantId: scope.value.tenantId,
+    companyId,
+    aggregateType: "company",
+    aggregateId: companyId,
+    documento,
+    rulesVersion: RULES_VERSION,
+  });
 
   // El acta con el valor anterior YA la escribió el trigger de la migración
   // 20 (company.tax_id_changed). La corrección deja ADEMÁS su propia acta con

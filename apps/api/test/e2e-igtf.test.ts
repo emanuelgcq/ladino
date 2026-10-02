@@ -4,6 +4,7 @@ import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
  * IGTF de extremo a extremo (migración 46) — RIGOR MÁXIMO.
@@ -139,6 +140,7 @@ beforeAll(async () => {
                (id, tenant_id, tax_id, legal_name, functional_currency_code, taxpayer_type_code)
              values (${COMPANY}, ${TENANT}, ${`J-IGT-${RUN}`}, 'Empresa e2e igtf',
                      'VES', 'ordinario')`;
+    await declararTipoDeFixture(tx, COMPANY);
     await tx`insert into public.warehouses (id, tenant_id, company_id, code, name)
              values (${W1}, ${TENANT}, ${COMPANY}, 'E2E-IW1', 'Principal')`;
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope)
@@ -229,6 +231,11 @@ beforeAll(async () => {
     range_from: "1",
     range_to: "500",
     printer_source: "Imprenta E2E igtf",
+    printer_legal_name: "Imprenta E2E, C.A.",
+    printer_tax_id: "J-12345678-9",
+    printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+    printer_authorization_date: "2020-01-15",
+    printed_on: "2026-09-01",
   });
   if (rango.status !== 201) throw new Error(`rango: ${rango.status} ${await rango.text()}`);
   const plan = await pedir("POST", "/v1/accounts/import-template", {
@@ -277,6 +284,9 @@ describe("IGTF — la activación es una designación, no una moneda", () => {
     const clas = await pedir("PUT", "/v1/companies/taxpayer-type", {
       company_id: COMPANY,
       taxpayer_type_code: "especial",
+      // ADR-0072 §1: el especial se declara con su notificación y acta (contrato nuevo).
+      notified_on: HOY,
+      reason: "Providencia de calificación de prueba",
     });
     expect(clas.status).toBe(200);
 
@@ -750,10 +760,46 @@ describe("IGTF — los bordes", () => {
     });
   });
 
+  it("ADR-0072 §1: la percepción sigue la VIGENCIA del tipo — ordinario desde mañana, el cobro de mañana no percibe", async () => {
+    const manana = diaCaracas(1);
+    const decl = await pedir("PUT", "/v1/companies/taxpayer-type", {
+      company_id: COMPANY,
+      taxpayer_type_code: "ordinario",
+      effective_from: manana,
+      reason: "Pierde la calificación desde mañana (prueba)",
+    });
+    expect(decl.status).toBe(200);
+    // Hoy sigue siendo especial: el acta de activación no se toca.
+    expect(((await decl.json()) as { igtf_disabled: boolean }).igtf_disabled).toBe(false);
+
+    const doc = await facturar("1");
+    const hoy = await pedir("POST", "/v1/payments", {
+      company_id: COMPANY,
+      document_id: doc["id"],
+      currency: "USD",
+      amount: "2.00",
+      instrument: "zelle",
+    });
+    expect(hoy.status).toBe(201);
+    expect(((await hoy.json()) as CobroHecho).igtf).not.toBeNull();
+
+    const delDiaSiguiente = await pedir("POST", "/v1/payments", {
+      company_id: COMPANY,
+      document_id: doc["id"],
+      currency: "USD",
+      amount: "2.00",
+      instrument: "zelle",
+      paid_at: `${manana}T16:00:00.000Z`,
+    });
+    expect(delDiaSiguiente.status).toBe(201);
+    expect(((await delDiaSiguiente.json()) as CobroHecho).igtf).toBeNull();
+  });
+
   it("dejar de ser especial APAGA la percepción en el mismo acto", async () => {
     const r = await pedir("PUT", "/v1/companies/taxpayer-type", {
       company_id: COMPANY,
       taxpayer_type_code: "ordinario",
+      reason: "Deja de ser especial (prueba)",
     });
     expect(r.status).toBe(200);
     expect(((await r.json()) as { igtf_disabled: boolean }).igtf_disabled).toBe(true);

@@ -90,6 +90,9 @@ import {
   AgingResponse,
   CustomerStatementResponse,
   CreateFiscalRangeRequest,
+  CompleteFiscalRangePrinterRequest,
+  CorrectFiscalRangePrinterRequest,
+  CancelFiscalRangeRequest,
   FiscalRangeResponse,
   CreateExchangeRateRequest,
   CreateSupplierRequest,
@@ -144,6 +147,8 @@ import {
   BookFormatAdapterResponse,
   ExportFiscalBookRequest,
   ExportFiscalBookResponse,
+  ExportSalesBookSummaryRequest,
+  ExportSalesBookSummaryResponse,
   ListFiscalBookRunsResponse,
   RegisterSupportedRetentionRequest,
   RegisterSupportedRetentionResponse,
@@ -158,11 +163,16 @@ import {
   IgtfInstrumentResponse,
   IgtfStatusResponse,
   SetCompanyTaxpayerTypeRequest,
+  SetCompanyTaxpayerTypeResponse,
+  CompanyTaxpayerTypeResponse,
   ListIgtfPerceptionsResponse,
   PosIgtfPreviewResponse,
   CreateProductSimpleRequest,
   ProductSimpleResponse,
   ImportProductsResponse,
+  ImportNumberFormat,
+  ProductImportPreviewResponse,
+  ProductImportJobResponse,
   NegocioResumenResponse,
   ConvertResponse,
   CompanySettingsResponse,
@@ -424,7 +434,24 @@ export function buildOpenApiDocument(): object {
     CreateProductSimpleRequest,
   );
   const productoSimple = registry.register("ProductSimpleResponse", ProductSimpleResponse);
+  const SUBIDA_IMPORTACION = z.object({
+    file: z.string().openapi({ format: "binary" }),
+    number_format: ImportNumberFormat.optional().openapi({
+      description:
+        "Formato de los números del archivo. Por omisión «comma_decimal» (el venezolano: " +
+        "1.234,50). Una celda ambigua bajo el formato elegido («0.500» con coma decimal) " +
+        "se rechaza con su fila y el motivo (ADR-0074, C-01).",
+    }),
+  });
   const importProductos = registry.register("ImportProductsResponse", ImportProductsResponse);
+  const previaImportacion = registry.register(
+    "ProductImportPreviewResponse",
+    ProductImportPreviewResponse,
+  );
+  const trabajoImportacion = registry.register(
+    "ProductImportJobResponse",
+    ProductImportJobResponse,
+  );
   const actualizarProducto = registry.register("UpdateProductRequest", UpdateProductRequest);
   const setTaxCat = registry.register("SetProductTaxCategoryRequest", SetProductTaxCategoryRequest);
   const crearLista = registry.register("CreatePriceListRequest", CreatePriceListRequest);
@@ -647,13 +674,74 @@ export function buildOpenApiDocument(): object {
       body: {
         content: {
           "multipart/form-data": {
-            schema: z.object({ file: z.string().openapi({ format: "binary" }) }),
+            schema: z.object({
+              file: z.string().openapi({ format: "binary" }),
+              number_format: ImportNumberFormat.optional().openapi({
+                description:
+                  "Formato de los números del archivo. Por omisión «comma_decimal» (el venezolano: " +
+                  "1.234,50). Una celda ambigua bajo el formato elegido («0.500» con coma decimal) " +
+                  "se rechaza con su fila y el motivo (ADR-0074, C-01).",
+              }),
+            }),
           },
         },
       },
     },
     responses: {
-      201: okJson(importProductos, "El resultado fila por fila."),
+      201: okJson(importProductos, "El resultado fila por fila, con avisos."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/products/import/preview",
+    summary: "Vista previa de una importación: las diez primeras filas como se van a guardar",
+    description:
+      "Multipart con `file` y `number_format` opcional. No escribe nada. Devuelve las diez " +
+      "primeras filas INTERPRETADAS con sus avisos (la existencia de un servicio se ignora con " +
+      "aviso; el costo sin existencia se acepta como costo de referencia) y TODAS las rechazadas " +
+      "con su número de fila y el motivo (ADR-0074, C-01 y C-05).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "multipart/form-data": { schema: SUBIDA_IMPORTACION } } },
+    },
+    responses: {
+      200: okJson(previaImportacion, "Las filas interpretadas y las rechazadas."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/products/import/jobs",
+    summary: "Confirmar una importación: crea el TRABAJO que el worker procesa",
+    description:
+      "Multipart con `file` y `number_format` opcional. La petición solo crea el trabajo (202). " +
+      "El mismo archivo con el mismo formato devuelve el trabajo existente (200, `reused: true`): " +
+      "la llave es el sha256 del archivo. Exige `Idempotency-Key` con hash canónico (archivo + formato): la misma llave con otro archivo da 409 IDEMPOTENCY_KEY_REUSED. Dentro del trabajo, el código del producto es la llave: " +
+      "si ya existe, la fila actualiza su precio en vez de duplicar (ADR-0074, C-04).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader.extend({ "Idempotency-Key": z.string().max(255) }),
+      body: { content: { "multipart/form-data": { schema: SUBIDA_IMPORTACION } } },
+    },
+    responses: {
+      202: okJson(trabajoImportacion, "El trabajo nuevo, pendiente."),
+      200: okJson(trabajoImportacion, "El trabajo que ya existía para ese archivo."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/products/import/jobs/{id}",
+    summary: "Progreso e informe de un trabajo de importación",
+    description:
+      "Estado (pending, running, done, failed), filas procesadas y el informe fila por fila: " +
+      "creadas, actualizadas y rechazadas con el motivo (ADR-0074, C-04).",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, params: z.object({ id: z.string().uuid() }) },
+    responses: {
+      200: okJson(trabajoImportacion, "El trabajo con su progreso y su informe."),
       ...erroresComunes,
     },
   });
@@ -882,7 +970,14 @@ export function buildOpenApiDocument(): object {
     "/v1/tax-categories",
     "Clasificaciones tributarias activas (global, VALIDAR-TRIBUTARIO)",
     z.array(
-      z.object({ code: z.string(), name: z.string(), description: z.string(), status: z.string() }),
+      z.object({
+        code: z.string(),
+        name: z.string(),
+        description: z.string(),
+        status: z.string(),
+        /** Si el catálogo de alícuotas con fuente la ofrece en ventas (ADR-0073). */
+        offered_in_sales: z.boolean(),
+      }),
     ),
     false,
   );
@@ -1378,6 +1473,15 @@ export function buildOpenApiDocument(): object {
   const estadoCuenta = registry.register("CustomerStatementResponse", CustomerStatementResponse);
   const crearRango = registry.register("CreateFiscalRangeRequest", CreateFiscalRangeRequest);
   const rango = registry.register("FiscalRangeResponse", FiscalRangeResponse);
+  const completarImprenta = registry.register(
+    "CompleteFiscalRangePrinterRequest",
+    CompleteFiscalRangePrinterRequest,
+  );
+  const corregirImprenta = registry.register(
+    "CorrectFiscalRangePrinterRequest",
+    CorrectFiscalRangePrinterRequest,
+  );
+  const anularTalonario = registry.register("CancelFiscalRangeRequest", CancelFiscalRangeRequest);
   const crearTasa = registry.register("CreateExchangeRateRequest", CreateExchangeRateRequest);
 
   registry.registerPath({
@@ -1641,10 +1745,11 @@ export function buildOpenApiDocument(): object {
     path: "/v1/fiscal/iva-general",
     summary: "ACEPTAR la alícuota general del IVA (permiso tax.rules.manage)",
     description:
-      "Ladino no afirma la alícuota: la declara y la acepta LA PERSONA. Crea —si no existen— " +
-      "las reglas generales (gravado a la alícuota aceptada, exento a cero; venta y compra) " +
-      "con el acta de aceptación como `legal_source`, y siempre deja el acta en la auditoría. " +
-      "VALIDAR-TRIBUTARIO: confirmar contra la Ley de IVA vigente antes de producción.",
+      "La persona acepta la general desde el catálogo con fuente (ADR-0073): solo dentro del " +
+      "rango del art. 27 (8–16,5 %); el 0 % y lo que caiga fuera se rechazan con 422. Otra tasa " +
+      "cierra la vigencia de la anterior y abre otra desde hoy (B-02); la misma tasa no crea " +
+      "nada. Completa la reducida, la exenta y la adicional desde el catálogo, con su cita. " +
+      "Siempre deja el acta en la auditoría.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader.extend({ "Idempotency-Key": z.string().max(255) }),
@@ -1765,19 +1870,24 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "get",
     path: "/v1/documents/{id}/pdf",
-    summary: "El PDF del documento — formato libre, y lo dice en el pie",
+    summary: "El PDF del documento: copia de cortesía, papel sobre la forma libre o vista previa",
     description:
-      "VALIDAR-SENIAT: layout NO homologado, con la marca visible en el pie. Imprime lo " +
-      "PERSISTIDO — los snapshots congelados de emisor y cliente (R-05, migraciones 33-34), " +
-      "importes exactos vestidos, la tasa del día de emisión citada, ANULADA en rojo si " +
-      "aplica. Del art. 13 de PA 00071: fecha en ocho dígitos (13.6), «(E)» en líneas " +
-      "exentas/exoneradas/no sujetas (13.9), leyenda de copia (13.13, `copia=1`) y ambas " +
-      "monedas con tipo de cambio (13.14).",
+      "ADR-0071 §4. Sin `destino`, la COPIA DE CORTESÍA (no es la factura: lo dice). " +
+      "`destino=papel` imprime sobre la forma libre y deja en blanco lo que la imprenta " +
+      "preimprime (PA 00071 art. 31); `destino=vista` lo sombrea. `copia=1` añade «SIN " +
+      "DERECHO A CRÉDITO FISCAL» (13.13), la única leyenda legal. Imprime lo PERSISTIDO: los " +
+      "snapshots de emisor y cliente, fecha en ocho dígitos (13.6), «(E)» en líneas exentas, " +
+      "exoneradas o no sujetas (13.8), base e IVA por alícuota (13.10-11), ambas monedas con " +
+      "tipo de cambio (13.14); la NC y la ND citan su factura, su motivo y la tasa de la factura. " +
+      "El recibo y el recibo de devolución no tienen copia fiscal (422).",
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({ id: z.string().uuid() }),
       headers: companyHeader,
-      query: z.object({ copia: z.enum(["1"]).optional() }),
+      query: z.object({
+        copia: z.enum(["1"]).optional(),
+        destino: z.enum(["cortesia", "papel", "vista"]).optional(),
+      }),
     },
     responses: {
       200: { description: "El PDF (application/pdf)." },
@@ -2065,14 +2175,57 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "post",
     path: "/v1/fiscal-number-ranges",
-    summary: "Cargar un rango autorizado (permiso fiscal.range.manage)",
-    description: "El rango viene de la imprenta digital con su autorización; aquí no se inventa.",
+    summary: "Registrar el talonario de la imprenta (permiso fiscal.range.manage)",
+    description:
+      "ADR-0071: un talonario por empresa e identificador sirve para factura, NC y ND. Sin los datos de la imprenta (razón social, RIF, providencia y su fecha, fecha de elaboración) responde 422; si pisa otro rango del mismo identificador, 409.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: idemHeader,
       body: { content: { "application/json": { schema: crearRango } } },
     },
-    responses: { 201: okJson(rango, "Rango cargado."), ...erroresComunes },
+    responses: { 201: okJson(rango, "Talonario registrado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal-number-ranges/{id}/printer",
+    summary: "Completar los datos de la imprenta de un talonario anterior (fiscal.range.manage)",
+    description:
+      "Una sola vez: los datos de la imprenta de un talonario completo no se reescriben (409). Hasta completarlos, emitir con ese talonario responde 409.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: z.object({ id: z.string().uuid() }),
+      body: { content: { "application/json": { schema: completarImprenta } } },
+    },
+    responses: { 200: okJson(rango, "Datos de la imprenta completados."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal-number-ranges/{id}/printer-correction",
+    summary: "Corregir los datos de la imprenta con motivo y acta (fiscal.range.manage)",
+    description:
+      "ADR-0071 (H3, decidido por criterio; alternativa: solo anular y registrar de nuevo). Permitido siempre: lo emitido lleva impreso lo que la imprenta preimprimió y no cambia. El acta fiscal.range.printer_corrected guarda lo anterior y lo nuevo. El identificador solo cambia si el talonario no emitió nada (409).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: z.object({ id: z.string().uuid() }),
+      body: { content: { "application/json": { schema: corregirImprenta } } },
+    },
+    responses: { 200: okJson(rango, "Datos de la imprenta corregidos."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal-number-ranges/{id}/cancel",
+    summary: "Anular un talonario que no emitió nada, con motivo y acta (fiscal.range.manage)",
+    description:
+      "ADR-0071 (H3). Solo si el talonario no emitió ningún documento; si emitió, 409 legible. Deja el acta fiscal.range.cancelled.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: z.object({ id: z.string().uuid() }),
+      body: { content: { "application/json": { schema: anularTalonario } } },
+    },
+    responses: { 200: okJson(rango, "Talonario anulado."), ...erroresComunes },
   });
   registry.registerPath({
     method: "get",
@@ -2086,7 +2239,7 @@ export function buildOpenApiDocument(): object {
         z.array(
           z.object({
             range_id: z.string().uuid(),
-            kind: z.string(),
+            kind: z.string().nullable(),
             series: z.string(),
             remaining: z.number().int(),
             total: z.number().int(),
@@ -3170,6 +3323,14 @@ export function buildOpenApiDocument(): object {
   const adaptador = registry.register("BookFormatAdapterResponse", BookFormatAdapterResponse);
   const exportarLibro = registry.register("ExportFiscalBookRequest", ExportFiscalBookRequest);
   const libroExportado = registry.register("ExportFiscalBookResponse", ExportFiscalBookResponse);
+  const pedirResumen = registry.register(
+    "ExportSalesBookSummaryRequest",
+    ExportSalesBookSummaryRequest,
+  );
+  const resumenExportado = registry.register(
+    "ExportSalesBookSummaryResponse",
+    ExportSalesBookSummaryResponse,
+  );
   const generaciones = registry.register("ListFiscalBookRunsResponse", ListFiscalBookRunsResponse);
   const periodoQuery = z.object({ from: z.string(), to: z.string() });
 
@@ -3226,6 +3387,26 @@ export function buildOpenApiDocument(): object {
     responses: {
       201: okJson(libroExportado, "El libro, su serialización y el rastro."),
       409: errorRef("El adaptador de formato no tiene implementación cargada."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/fiscal-books/runs/{id}/summary-art72",
+    summary:
+      "El resumen del art. 72 del RLIVA de una generación del libro de ventas (permiso fiscal_book.export)",
+    description:
+      "Devuelve `resumen-art72.csv` de una generación ya exportada del libro de ventas (H6, " +
+      "ADR-0073). No crea otra generación ni cambia el hash firmado; si el libro cambió desde " +
+      "entonces, 422 y hay que volver a exportar.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: z.object({ id: z.string().uuid() }),
+      body: { content: { "application/json": { schema: pedirResumen } } },
+    },
+    responses: {
+      201: okJson(resumenExportado, "El resumen serializado y la generación a la que pertenece."),
       ...erroresComunes,
     },
   });
@@ -3426,12 +3607,29 @@ export function buildOpenApiDocument(): object {
     responses: { 200: okJson(percepcionesIgtf, "Las percepciones."), ...erroresComunes },
   });
   registry.registerPath({
+    method: "get",
+    path: "/v1/companies/taxpayer-type",
+    summary: "Tipo de contribuyente vigente hoy y su historia (ADR-0072 §1)",
+    description:
+      "`current` es null cuando la empresa tiene RIF y no ha declarado tipo: no factura hasta " +
+      "declararlo (TAXPAYER_TYPE_REQUIRED). Nunca «ordinario por omisión».",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: okJson(
+        registry.register("CompanyTaxpayerTypeResponse", CompanyTaxpayerTypeResponse),
+        "El tipo vigente y la historia append-only.",
+      ),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
     method: "put",
     path: "/v1/companies/taxpayer-type",
-    summary: "Clasificación fiscal de la empresa (permiso company.settings.manage)",
+    summary: "Declara el tipo de contribuyente de la empresa (permiso company.settings.manage)",
     description:
-      "Con auditoría del valor anterior. Si deja de ser `especial` con el IGTF activo, la " +
-      "percepción se apaga en el mismo acto: un no-SPE no es agente de percepción.",
+      "Abre una VIGENCIA nueva con acta (ADR-0072 §1): el especial exige la fecha de " +
+      "notificación de la providencia y rige desde ella salvo `effective_from`. Si hoy deja de " +
+      "ser `especial` con el IGTF activo, la percepción se apaga en el mismo acto.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: idemHeader,
@@ -3439,8 +3637,8 @@ export function buildOpenApiDocument(): object {
     },
     responses: {
       200: okJson(
-        z.object({ taxpayer_type_code: z.string(), igtf_disabled: z.boolean() }).strict(),
-        "La clasificación, como quedó.",
+        registry.register("SetCompanyTaxpayerTypeResponse", SetCompanyTaxpayerTypeResponse),
+        "La declaración, como quedó.",
       ),
       ...erroresComunes,
     },

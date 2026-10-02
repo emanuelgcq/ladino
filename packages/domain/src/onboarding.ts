@@ -3,6 +3,7 @@ import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork } from "@ladino/db";
 import type { OnboardBusinessRequest, OnboardBusinessResponse } from "@ladino/schemas";
 import { createCompany, RULES_VERSION } from "./create-company.js";
+import { validarRif } from "./documento-identidad.js";
 import { importChartTemplate, importJournalTemplates } from "./accounting.js";
 
 /**
@@ -80,6 +81,12 @@ export async function onboardBusiness(
   // del tenant — determinista, único, y honesto en su prefijo. /empezar
   // recoge el RIF real cuando exista (PA SNAT/2026/00080: hoy es digital).
   const conRif = input.tax_id !== undefined && input.tax_id !== null && input.tax_id.trim() !== "";
+  // Con RIF, un RIF de verdad: el marcador PEND- lo pone el sistema, nunca quien se registra
+  // (A-17). La estructura y la normalización las hace createCompany (A-08, P-02).
+  if (conRif) {
+    const leido = validarRif(input.tax_id!);
+    if (!leido.ok) return leido;
+  }
   const taxId = conRif
     ? input.tax_id!.trim()
     : `PEND-${tenantId.replace(/-/g, "").slice(0, 10).toUpperCase()}`;
@@ -94,21 +101,32 @@ export async function onboardBusiness(
         "Con RIF, la razón social y la dirección fiscal son obligatorias: son las que salen en tus facturas.",
     });
   }
+  // ADR-0072 §1. Antes de escribir nada: un err tras escribir se commitearía igual.
+  if (!conRif && input.taxpayer !== undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Un negocio sin RIF no es contribuyente del IVA: no declara tipo de contribuyente.",
+    });
+  }
 
-  const empresa = await createCompany(uow, {
-    tenant_id: tenantId,
-    // Con RIF: la razón social LEGAL es legal_name y el nombre comercial va a
-    // trade_name. Sin RIF: el nombre del negocio ocupa ambos papeles.
-    legal_name: conRif ? input.legal_name! : input.business_name,
-    trade_name: input.business_name,
-    tax_id: taxId,
-    ...(input.fiscal_address === undefined ? {} : { fiscal_address: input.fiscal_address }),
-    ...(input.business_type === undefined ? {} : { business_type: input.business_type }),
-    ...(input.phone === undefined ? {} : { phone: input.phone }),
-    ...(input.whatsapp === undefined ? {} : { whatsapp: input.whatsapp }),
-    ...(input.city === undefined ? {} : { city: input.city }),
-    ...(input.state === undefined ? {} : { state: input.state }),
-  });
+  const empresa = await createCompany(
+    uow,
+    {
+      tenant_id: tenantId,
+      // Con RIF: la razón social LEGAL es legal_name y el nombre comercial va a
+      // trade_name. Sin RIF: el nombre del negocio ocupa ambos papeles.
+      legal_name: conRif ? input.legal_name! : input.business_name,
+      trade_name: input.business_name,
+      tax_id: taxId,
+      ...(input.fiscal_address === undefined ? {} : { fiscal_address: input.fiscal_address }),
+      ...(input.business_type === undefined ? {} : { business_type: input.business_type }),
+      ...(input.phone === undefined ? {} : { phone: input.phone }),
+      ...(input.whatsapp === undefined ? {} : { whatsapp: input.whatsapp }),
+      ...(input.city === undefined ? {} : { city: input.city }),
+      ...(input.state === undefined ? {} : { state: input.state }),
+    },
+    conRif ? {} : { sinRif: true },
+  );
   if (!empresa.ok) return empresa;
   const companyId = empresa.value.id;
   // Sin fecha, la columna toma su omisión: el día del alta en Caracas (migración 20260928130000).
@@ -116,6 +134,24 @@ export async function onboardBusiness(
     await sql`
       update public.companies set activity_start_date = ${input.activity_start_date}::date
        where id = ${companyId}`;
+  }
+
+  // ── 2-quater. EL TIPO DE CONTRIBUYENTE, SI EL REGISTRO LO DECLARÓ (ADR-0072 §1, A-03) ──
+  // Primera vigencia de la historia append-only, con acta del registro. El especial rige desde la
+  // notificación; los demás, desde el inicio de actividades. Sin RIF no se declara: la empresa es
+  // no_contribuyente por hecho (platform.taxpayer_type_at).
+  if (input.taxpayer !== undefined) {
+    const t = input.taxpayer;
+    await sql`
+      insert into public.company_taxpayer_types
+        (tenant_id, company_id, taxpayer_type_code, effective_from, notified_on, reason,
+         rules_version, actor_id)
+      select ${tenantId}, ${companyId}, ${t.taxpayer_type_code},
+             coalesce(${t.effective_from ?? t.notified_on ?? null}::date, c.activity_start_date,
+                      platform.caracas_day(now())),
+             ${t.notified_on ?? null}::date, 'Declarado por el dueño en el registro',
+             ${RULES_VERSION}, ${actor.userId}
+        from public.companies c where c.id = ${companyId}`;
   }
 
   // ── 2-ter. SIN RIF, LA EMPRESA NACE VENDIENDO CON RECIBOS ─────────────────

@@ -17,7 +17,7 @@ razones independientes, cada una suficiente por sí sola.
 | Régimen | Norma |
 |---|---|
 | Sin emisión fiscal (solo ERP administrativo y contable) | ninguna |
-| Formatos libres | PA SNAT/2011/00071 |
+| Formas libres (código `formatos_libres`) | PA SNAT/2011/00071 arts. 6 num. 2 y 31 |
 | Digital vía imprenta autorizada | PA 102 |
 | Máquina fiscal | PA SNAT/2018/0141 |
 | Con transmisión al SENIAT | la norma esperada (no publicada) |

@@ -5,6 +5,7 @@ import {
   UpdateCustomerRequest,
   SetCustomerTaxIdRequest,
   SetCustomerBlockedRequest,
+  normalizarDocumento,
 } from "@ladino/schemas";
 import {
   createCustomer,
@@ -63,12 +64,21 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const sinSistema = c.req.query("exclude_system") === "1";
     const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 20) || 20, 1), 100);
     const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
+    // P-02: el documento se compara también NORMALIZADO por los dos lados (la misma expresión
+    // del único customers_company_tax_id_uidx): «J40888777» encuentra «J-40888777-6» y al revés.
+    const buscado = normalizarDocumento(search);
     const filas = await withTransaction(sql, actor, ({ sql: tx }) => {
+      const porDocumento =
+        buscado === ""
+          ? tx``
+          : tx`or upper(regexp_replace(coalesce(cu.tax_id, ''), '[^a-zA-Z0-9]', '', 'g'))
+                    like ${comoPatron(buscado)} escape '\\'`;
       const filtro =
         search === ""
           ? tx``
           : tx`and (coalesce(cu.tax_id, '') ilike ${comoPatron(search)} escape '\\'
-                 or cu.legal_name ilike ${comoPatron(search)} escape '\\')`;
+                 or cu.legal_name ilike ${comoPatron(search)} escape '\\'
+                 ${porDocumento})`;
       // ADR-0047: la deuda se enseña VALORADA HOY — la del lunes, preguntada
       // el viernes, vale viernes. document_debt_today ancla en la moneda del
       // documento y convierte con la tasa del día.

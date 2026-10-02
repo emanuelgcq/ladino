@@ -35,7 +35,7 @@ La cuenta exacta depende de chart mapping de empresa.
 
 | Condición (2.5) | Valor | Cita | Estado de la fuente |
 |---|---|---|---|
-| `gravado_general` | 16 % | LIVA art. 27 (rango 8–16,5 %, lo fija el **Ejecutivo**) + **Decreto N.º 4.079, G.O. 41.788 del 26-12-2019**, rige desde el 01-01-2020. **No** la Ley de Presupuesto. | verificado (Acceso a la Justicia); sin decreto posterior hallado |
+| `gravado_general` | 16 % | LIVA art. 27 (rango 8–16,5 %, lo fija el **Ejecutivo**) + **Decreto N.º 4.079, G.O. 41.788 del 26-12-2019**, rige desde el 01-01-2020. **No** la Ley de Presupuesto. | fuente secundaria (Acceso a la Justicia; sin decreto posterior hallado) hasta archivar la Gaceta (P-44, migración 20260928170300) |
 | `reducida` | 8 % | LIVA **art. 64** (art. 63 antes de la reforma 2020) | numeración en 3 fuentes secundarias; bienes alcanzados **pendiente de fuente** |
 | `adicional_suntuario` | 16 % + 15 % | LIVA art. 61 | fuente secundaria |
 | recargo por divisas (art. 62) | 5–25 % | LIVA arts. 27 y 62; art. 71 (30 días) | **NO se siembra**: sin decreto que lo active (no hallado a 2026-09-28) |
@@ -107,3 +107,43 @@ insumos.
 - **Retención de IVA**: PA SNAT/2025/000054 — ver `RETENTIONS_SPEC.md`.
 - Texto primario en Gaceta pendiente de archivar en `EXPEDIENTE_TECNICO.md`
   (**VALIDAR-TRIBUTARIO**).
+
+## Implementación (ADR-0073, migraciones 20260928150000 y 20260928150100)
+
+- **Catálogo de plataforma** `public.tax_rule_templates`: una fila por condición con norma,
+  artículo, Gaceta, vigencia y estado de la fuente, copiada de la tabla de arriba. No son reglas:
+  `resolve_tax` no las lee y `tax_rules` sigue naciendo vacía (ADR-0038).
+  - `gravado_general`: 16 % de referencia, rango 8–16,5 %, se **acepta** por empresa;
+  - `gravado_reducida` (la «reducida» de la respuesta del dueño): 8 %, art. 64;
+  - `gravado_adicional` (la «adicional_suntuario»): 15 % **sumado** a la general de la empresa;
+  - `exento`: 0 %, arts. 17-19;
+  - `exonerado`: solo importación (Decreto 5.196, hasta el 31-12-2026), **no** se ofrece en ventas;
+  - `no_sujeto` y la adicional del art. 62: **no se siembran** (pendiente de fuente / sin decreto).
+  Se reutilizan los códigos de `product_tax_categories` (migración 16): `gravado_reducida` y
+  `gravado_adicional` son la «reducida» y la «adicional_suntuario» de la respuesta del dueño.
+- **Cesta básica** `public.tax_exemption_literals`: los 21 literales del art. 18.1, «fuente
+  secundaria» (PENDIENTES_ASESOR P-52).
+- **Aceptación** `platform.accept_general_vat(empresa, tasa, fecha)`: 0 % y fuera de rango → LAD97;
+  otra tasa cierra la vigencia de la general y la adicional en la fecha efectiva y abre otra; la
+  misma tasa no crea nada. Completa, como reglas propias con la cita del catálogo, la reducida, la
+  exenta y la adicional (`platform.seed_catalog_tax_rules`). El trigger
+  `tax_rules_02_general_in_range` impide una general propia fuera de rango por cualquier camino.
+- **La interfaz** lee la referencia del catálogo de `GET /v1/fiscal/setup` (`iva_catalog`) y
+  ofrece al clasificar solo lo que el catálogo ofrece en ventas (`offered_in_sales` de
+  `GET /v1/tax-categories`). Ninguna cifra en la web (B-11).
+- **La factura** discrimina base e IVA por alícuota con su porcentaje, «Exento (E)», «Exonerado (E)» y
+  «No sujeto (E)», y sus columnas van sin IVA con subtotal = suma de la columna (FC-08, FC-10, FC-11,
+  FC-31). **El libro de ventas** trae base e IVA por alícuota y el resumen del art. 72 del RLIVA
+  (`REPORTING_AND_FISCAL_BOOKS.md`). **La declaración** ya sumaba por alícuota
+  (`recompute_iva_period`, `detalle`).
+
+### Auditoría fiscal de la ronda (migración 20260928170300)
+
+- **La reducida es una lista cerrada** (LIVA art. 64): clasificar como `gravado_reducida` exige el
+  literal del bien (`products.reduced_rate_literal_code` → `tax_reduced_rate_literals`). La lista
+  **nace vacía** (bienes alcanzados: pendiente de fuente, P-51); mientras lo esté, la reducida no se
+  ofrece al clasificar.
+- **La adicional** (art. 61) exige una justificación escrita con acta (P-60).
+- **La general** pasa a «fuente secundaria» hasta que P-44 se cierre con la Gaceta archivada; se
+  sigue ofreciendo (nada filtra por «verificada»).
+- **El libro de compras** trae base e IVA por alícuota y su resumen (P-59, lectura conservadora).

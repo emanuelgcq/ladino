@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { digitoVerificadorRif } from "@ladino/schemas";
 import { createClient, withTransaction, type UnitOfWork } from "@ladino/db";
 import {
   createCustomer,
@@ -23,6 +24,15 @@ const GESTOR = "c0c0c0c0-0000-4000-8000-00000000000a"; // customer.manage
 const RIF = "c0c0c0c0-0000-4000-8000-00000000000b"; // customer.tax_id.manage
 const COBRANZAS = "c0c0c0c0-0000-4000-8000-00000000000c"; // customer.block
 const RUN = Date.now().toString(36);
+/**
+ * RIF de prueba válidos y únicos por corrida: desde A-08 (2026-09-28) el caso de uso exige letra +
+ * 9 dígitos, y con el dígito verificador CORRECTO no hay acta de excepción que altere el conteo.
+ */
+const D7 = String(Date.now()).slice(-7);
+const rifDePrueba = (n: number): string => {
+  const base = `J${n}${D7}`;
+  return `${base}${digitoVerificadorRif(base)}`;
+};
 
 let sql: ReturnType<typeof createClient>;
 let sqlApi: ReturnType<typeof createClient>;
@@ -78,7 +88,7 @@ const base = {
 
 describe("createCustomer", () => {
   it("camino feliz: crea; el trigger deja tax_id_established y el caso de uso customer.created", async () => {
-    const r = await como(GESTOR, (uow) => createCustomer(uow, { ...base, tax_id: `J-${RUN}-1` }));
+    const r = await como(GESTOR, (uow) => createCustomer(uow, { ...base, tax_id: rifDePrueba(1) }));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.value.status).toBe("active");
@@ -91,10 +101,14 @@ describe("createCustomer", () => {
   });
 
   it("REEJECUCIÓN DIRECTA: el mismo RIF muere en el único parcial con el mensaje del caso de uso", async () => {
-    const input = { ...base, tax_id: `J-${RUN}-DUP` };
+    const input = { ...base, tax_id: rifDePrueba(2) };
     expect((await como(GESTOR, (uow) => createCustomer(uow, input))).ok).toBe(true);
     const segunda = await como(GESTOR, (uow) =>
-      createCustomer(uow, { ...input, tax_id: `j-${RUN}-dup`, legal_name: "Otro nombre" }),
+      createCustomer(uow, {
+        ...input,
+        tax_id: rifDePrueba(2).toLowerCase(),
+        legal_name: "Otro nombre",
+      }),
     );
     expect(segunda.ok).toBe(false);
     if (segunda.ok) return;
@@ -136,7 +150,7 @@ describe("createCustomer", () => {
     const sinDireccion = await como(GESTOR, (uow) =>
       createCustomer(uow, {
         ...baseSinDireccion,
-        tax_id: `J-${RUN}-SD`,
+        tax_id: rifDePrueba(3),
         legal_name: `Sin dirección ${RUN}, C.A.`,
       }),
     );
@@ -145,10 +159,10 @@ describe("createCustomer", () => {
   });
 
   it("sin customer.manage → PERMISSION_REQUIRED; clasificación fuera del catálogo → VALIDATION_FAILED", async () => {
-    const r = await como(RIF, (uow) => createCustomer(uow, { ...base, tax_id: `J-${RUN}-P` }));
+    const r = await como(RIF, (uow) => createCustomer(uow, { ...base, tax_id: rifDePrueba(4) }));
     expect(!r.ok && r.error.code).toBe("PERMISSION_REQUIRED");
     const v = await como(GESTOR, (uow) =>
-      createCustomer(uow, { ...base, tax_id: `J-${RUN}-V`, taxpayer_type_code: "inventado" }),
+      createCustomer(uow, { ...base, tax_id: rifDePrueba(5), taxpayer_type_code: "inventado" }),
     );
     expect(!v.ok && v.error.code).toBe("VALIDATION_FAILED");
   });
@@ -157,7 +171,7 @@ describe("createCustomer", () => {
 describe("segregación: RIF y bloqueo", () => {
   let id: string;
   beforeAll(async () => {
-    const r = await como(GESTOR, (uow) => createCustomer(uow, { ...base, tax_id: `J-${RUN}-SEG` }));
+    const r = await como(GESTOR, (uow) => createCustomer(uow, { ...base, tax_id: rifDePrueba(6) }));
     if (!r.ok) throw new Error("fixture");
     id = r.value.id;
   });
@@ -175,20 +189,20 @@ describe("segregación: RIF y bloqueo", () => {
 
   it("setCustomerTaxId: gestor → 403; usuario con customer.tax_id.manage → ok y el VALOR ANTERIOR queda auditado", async () => {
     const gestor = await como(GESTOR, (uow) =>
-      setCustomerTaxId(uow, id, { company_id: COMPANY, tax_id: `J-${RUN}-NEW` }),
+      setCustomerTaxId(uow, id, { company_id: COMPANY, tax_id: rifDePrueba(7) }),
     );
     expect(!gestor.ok && gestor.error.code).toBe("PERMISSION_REQUIRED");
 
     const rif = await como(RIF, (uow) =>
-      setCustomerTaxId(uow, id, { company_id: COMPANY, tax_id: `J-${RUN}-NEW` }),
+      setCustomerTaxId(uow, id, { company_id: COMPANY, tax_id: rifDePrueba(7) }),
     );
-    expect(rif.ok && rif.value.tax_id).toBe(`J-${RUN}-NEW`);
+    expect(rif.ok && rif.value.tax_id).toBe(rifDePrueba(7));
 
     const [hecho] = await sql<{ payload: { tax_id_anterior: string; tax_id_nuevo: string } }[]>`
       select payload from public.audit_events
        where aggregate_id = ${id} and event_type = 'customer.tax_id_changed'`;
-    expect(hecho?.payload.tax_id_anterior).toBe(`J-${RUN}-SEG`);
-    expect(hecho?.payload.tax_id_nuevo).toBe(`J-${RUN}-NEW`);
+    expect(hecho?.payload.tax_id_anterior).toBe(rifDePrueba(6));
+    expect(hecho?.payload.tax_id_nuevo).toBe(rifDePrueba(7));
     const [n] = await sql<{ n: number }[]>`
       select count(*)::int as n from public.audit_events
        where aggregate_id = ${id} and event_type = 'customer.tax_id_changed'`;

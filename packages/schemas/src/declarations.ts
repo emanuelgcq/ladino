@@ -42,8 +42,16 @@ export const RegisterSupportedRetentionRequest = z
     customer_id: uuid,
     /** La factura NUESTRA afectada por la retención. */
     document_id: uuid,
-    /** El número del comprobante TAL COMO EL AGENTE LO EMITIÓ. */
-    receipt_number: z.string().trim().min(1).max(40),
+    /** El número del comprobante TAL COMO EL AGENTE LO EMITIÓ: 14 dígitos, AAAAMM + 8 (PA SNAT/2025/000054; ADR-0072 §5). */
+    receipt_number: z
+      .string()
+      .trim()
+      .regex(/^[0-9]{14}$/, "el comprobante tiene 14 dígitos: AAAAMM y 8 de secuencia")
+      // El prefijo AAAAMM es un año y un mes válidos (hallazgo 5).
+      .refine(
+        (v) => /^(19|20)[0-9]{2}(0[1-9]|1[0-2])/.test(v),
+        "el comprobante empieza por AAAAMM: un año y un mes válidos",
+      ),
     /** Cuándo nos retuvieron: la fecha que asigna la retención a su período. */
     retained_on: fecha,
     base: amount.refine((v) => /[1-9]/.test(v), "la base debe ser mayor que cero"),

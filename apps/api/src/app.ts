@@ -88,6 +88,8 @@ export function buildApp(cfg: AppConfig): Hono {
       c.req.method === "POST" &&
       ((c.req.path.startsWith("/v1/products/") && c.req.path.endsWith("/image")) ||
         c.req.path === "/v1/products/import" ||
+        c.req.path === "/v1/products/import/preview" ||
+        c.req.path === "/v1/products/import/jobs" ||
         c.req.path === "/v1/expenses/attachment" ||
         c.req.path === "/v1/companies/logo");
     // El Context de un `app.use("*")` colapsa su tercer genérico a `any`; los

@@ -38,3 +38,9 @@ select 'INFORME money_landing_gaps (no es invariante)', count(*)::text from plat
 -- mes: una NC de agosto que el libro sumara se vería igual que una de septiembre.
 select 'book_ledger_reconciliation toda la historia (conceptos que NO cuadran)', count(*)::text
   from platform.book_ledger_reconciliation(:'cid', date '1900-01-01', date '2999-12-31') where not cuadra;
+-- G-01 (ADR-0071): un número de control no se repite en la empresa e identificador, sea factura, NC o ND
+-- (PA 00071 art. 44), y ningún talonario vivo pisa otro. Migración 20260928160100.
+select 'control_number_collisions (controles repetidos)', count(*)::text
+  from platform.control_number_collisions() where company_id = :'cid';
+select 'control_range_overlaps (talonarios que se pisan)', count(*)::text
+  from platform.control_range_overlaps() where company_id = :'cid';

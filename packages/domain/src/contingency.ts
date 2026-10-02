@@ -129,15 +129,22 @@ export async function registerContingencyInvoice(
   }
 
   // La emisión COMPLETA: kardex, impuestos, numeración, contabilidad, libros.
-  const emitida = await createInvoice(uow, {
-    company_id: input.company_id,
-    customer_id: input.customer_id,
-    warehouse_id: input.warehouse_id,
-    series: rango.series,
-    issued_at: input.issued_at,
-    lines: input.lines,
-    ...(input.price_list_id === undefined ? {} : { price_list_id: input.price_list_id }),
-  });
+  const emitida = await createInvoice(
+    uow,
+    {
+      company_id: input.company_id,
+      customer_id: input.customer_id,
+      warehouse_id: input.warehouse_id,
+      series: rango.series,
+      issued_at: input.issued_at,
+      lines: input.lines,
+      ...(input.price_list_id === undefined ? {} : { price_list_id: input.price_list_id }),
+    },
+    "rechazar",
+    // A-3 (decidido por criterio): el papel de contingencia ya existe; registrarlo no le aplica el
+    // tope de la forma libre ni la exigencia del adquirente (la base tampoco: 20260928190500).
+    true,
+  );
   if (!emitida.ok) return emitida;
   const doc = emitida.value;
 

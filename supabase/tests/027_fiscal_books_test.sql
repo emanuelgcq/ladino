@@ -174,6 +174,19 @@ $$, '23505', null,
 -- ── 6. EL LIBRO DE VENTAS ───────────────────────────────────────────────────
 -- Cuatro documentos a propósito: uno normal, uno anulado, uno de otro mes y un
 -- borrador. Y una línea SIN tratamiento, que es el pasado que no se adivina.
+-- ADR-0072 §1 (migración 20260928190100): el montaje declara el tipo de contribuyente de sus
+-- empresas con RIF; sin tipo vigente la base no deja emitir factura, NC ni ND (LAD98).
+insert into public.company_taxpayer_types
+  (tenant_id, company_id, taxpayer_type_code, effective_from, notified_on, reason, rules_version)
+select c.tenant_id, c.id,
+       case when c.taxpayer_type_code in ('ordinario', 'especial', 'formal')
+            then c.taxpayer_type_code else 'ordinario' end,
+       '2000-01-01', case when c.taxpayer_type_code = 'especial' then '2000-01-01'::date end,
+       'Montaje pgTAP: el tipo que declara la empresa de prueba', 'pgtap'
+  from public.companies c
+ where c.created_at = now() and upper(btrim(c.tax_id)) not like 'PEND-%'
+   and not exists (select 1 from public.company_taxpayer_types h where h.company_id = c.id);
+
 insert into public.documents
   (id, tenant_id, company_id, kind, series, customer_id, document_number, control_number,
    status, issued_at, regime_version_id, rules_version,

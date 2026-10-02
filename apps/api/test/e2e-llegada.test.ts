@@ -4,6 +4,7 @@ import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
 import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
+import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
  * LA LLEGADA DE MERCANCÍA, DE EXTREMO A EXTREMO (ADR-0066).
@@ -121,6 +122,7 @@ beforeAll(async () => {
                (id, tenant_id, tax_id, legal_name, functional_currency_code, taxpayer_type_code)
              values (${COMPANY}, ${TENANT}, ${`J-LLEG-${RUN}`}, 'Bodega de la llegada', 'VES',
                      'ordinario')`;
+    await declararTipoDeFixture(tx, COMPANY);
     await tx`insert into public.warehouses (id, tenant_id, company_id, code, name)
              values (${W1}, ${TENANT}, ${COMPANY}, 'LLEG-W1', 'Depósito')`;
     await tx`insert into public.suppliers

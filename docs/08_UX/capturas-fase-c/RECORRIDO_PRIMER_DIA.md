@@ -71,14 +71,14 @@ cuando el servidor confirma cada uno:
    libres pero con la advertencia del art. 8 (PA 00071) a la vista, remitiendo al contador.
    Después:
    - **¿Vas a dar facturas?** Las opciones llegan del servidor **con su norma citada**
-     (formatos libres: Providencia Administrativa SNAT/2011/00071, G.O. 39.795). Se elige
+     (formas libres: Providencia Administrativa SNAT/2011/00071, G.O. 39.795). Se elige
      una vez; cambiarla después es un acto del mundo de administración.
    - **El IVA que cobras.** Ladino **no fija el porcentaje**: lo escribe la persona y lo
      acepta con un botón que dice lo que hace («Acepto este porcentaje»). Queda registrado
      en la auditoría con su usuario y la fecha, y la regla creada lleva como fuente el acta
      de esa aceptación, marcada VALIDAR-TRIBUTARIO hasta que un humano la confirme contra
      la ley vigente. Ni la pantalla ni la base de datos inventan una gaceta.
-   - **El talonario de la imprenta** (solo formatos libres): del número, al número, serie
+   - **El talonario de la imprenta** (solo formas libres): del número, al número, serie
      e imprenta — los datos que ya vienen impresos en el papel.
 
 Con los cuatro en verde: «¡Listo! Tu negocio ya puede vender» → **Ir a vender**.

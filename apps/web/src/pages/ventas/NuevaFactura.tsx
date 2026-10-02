@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
-import { CreateInvoiceRequest } from "@ladino/schemas";
+import { CreateInvoiceRequest, formatearDocumento, filasDeDescripcion } from "@ladino/schemas";
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DualMoney } from "../../components/DualMoney.js";
@@ -75,6 +75,13 @@ export function NuevaFactura(): React.JSX.Element {
         "/v1/price-lists",
       ),
   });
+  // PA 00071 art. 33: una factura ocupa UNA forma libre; el tope de líneas es un ajuste del
+  // negocio. Se avisa ANTES de emitir; el servidor lo exige igual (422).
+  const ajustes = useQuery({
+    queryKey: ["ajustes", empresa.id],
+    queryFn: () => llamar<{ rows_per_free_form: number }>("/v1/company-settings"),
+  });
+  const topeLineas = ajustes.data?.rows_per_free_form ?? 15;
   const almacenes = useQuery({
     queryKey: ["almacenes", empresa.id],
     // Solo los activos: un depósito apagado no recibe ni despacha (migración 60).
@@ -135,6 +142,17 @@ export function NuevaFactura(): React.JSX.Element {
     if (cliente === null) errores["cliente"] = "Elige el cliente.";
     if (conAlmacen && almacenId === "") errores["almacen"] = "Elige el almacén que despacha.";
     if (lineas.every((l) => l.producto === null)) errores["lineas"] = "Añade al menos un producto.";
+    // A-2: FILAS IMPRESAS, partidas con la misma regla que el servidor y el PDF (aviso: el servidor
+    // decide con la cuenta exacta, que sabe qué línea es exenta).
+    const filas = lineas.reduce(
+      (n, l) => (l.producto === null ? n : n + filasDeDescripcion(l.producto.label, false).length),
+      0,
+    );
+    if (conAlmacen && filas > topeLineas) {
+      errores["lineas"] =
+        `No cabe en una forma libre: divide la venta en varias facturas (máximo ${topeLineas} ` +
+        `filas impresas; esta ocupa ${filas}).`;
+    }
     // El MISMO esquema Zod del contrato (packages/schemas), reutilizado aquí.
     const parsed = CreateInvoiceRequest.safeParse(
       conAlmacen ? { ...(cuerpo() as object), warehouse_id: almacenId } : undefined,
@@ -240,7 +258,7 @@ export function NuevaFactura(): React.JSX.Element {
                       return r.items.map((c) => ({
                         id: c.id,
                         label: c.legal_name,
-                        ...(c.tax_id === null ? {} : { detalle: c.tax_id }),
+                        ...(c.tax_id === null ? {} : { detalle: formatearDocumento(c.tax_id) }),
                       }));
                     }}
                   />

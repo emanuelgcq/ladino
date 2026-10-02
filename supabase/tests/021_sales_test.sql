@@ -192,6 +192,19 @@ select set_config('ladino.actor_id', 'aaaa0021-0000-4000-8000-0000000000a1', tru
 select set_config('ladino.rules_version', 'test-021', true);
 
 -- Documento borrador (sin número, sin control): es lo único que un draft puede ser.
+-- ADR-0072 §1 (migración 20260928190100): el montaje declara el tipo de contribuyente de sus
+-- empresas con RIF; sin tipo vigente la base no deja emitir factura, NC ni ND (LAD98).
+insert into public.company_taxpayer_types
+  (tenant_id, company_id, taxpayer_type_code, effective_from, notified_on, reason, rules_version)
+select c.tenant_id, c.id,
+       case when c.taxpayer_type_code in ('ordinario', 'especial', 'formal')
+            then c.taxpayer_type_code else 'ordinario' end,
+       '2000-01-01', case when c.taxpayer_type_code = 'especial' then '2000-01-01'::date end,
+       'Montaje pgTAP: el tipo que declara la empresa de prueba', 'pgtap'
+  from public.companies c
+ where c.created_at = now() and upper(btrim(c.tax_id)) not like 'PEND-%'
+   and not exists (select 1 from public.company_taxpayer_types h where h.company_id = c.id);
+
 insert into public.documents
   (id, tenant_id, company_id, kind, series, customer_id, price_list_id,
    transaction_currency, functional_currency, fx_rate, rate_source,
@@ -214,7 +227,7 @@ select throws_ok(
 -- issued CON control_number: vive.
 select lives_ok(
   $$ update public.documents
-        set status = 'issued', issued_at = now(), document_number = 1, control_number = 2000,
+        set status = 'issued', issued_at = now(), document_number = 1, control_number = 2000, control_identifier = '00',
             regime_version_id = 'aaaa0021-0000-4000-8000-00000000e100', rules_version = 'test-021'
       where id = 'aaaa0021-0000-4000-8000-00000000f001' $$,
   'con número de control del rango autorizado, la emisión vive');

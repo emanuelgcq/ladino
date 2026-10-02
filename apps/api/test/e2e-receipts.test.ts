@@ -31,6 +31,8 @@ const COMPANY = crypto.randomUUID();
 const W1 = crypto.randomUUID();
 const DUENO = crypto.randomUUID();
 const CONSUMIDOR = crypto.randomUUID();
+/** PA 00071 art. 13.7 (P-57): con facturas, la caja vende a un cliente IDENTIFICADO. */
+const IDENTIFICADO = crypto.randomUUID();
 const ROL = crypto.randomUUID();
 const RUN = Date.now().toString(36);
 const HOY = diaCaracas();
@@ -139,6 +141,10 @@ beforeAll(async () => {
                                            person_type_code, taxpayer_type_code, is_system)
              values (${CONSUMIDOR}, ${TENANT}, ${COMPANY}, 'Consumidor final', 'natural',
                      'consumidor_final', true)`;
+    await tx`insert into public.customers (id, tenant_id, company_id, tax_id, legal_name,
+                                           person_type_code, taxpayer_type_code)
+             values (${IDENTIFICADO}, ${TENANT}, ${COMPANY}, 'V12345678', 'María Pérez',
+                     'natural', 'consumidor_final')`;
     const [p] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                    tax_category_code)
@@ -260,6 +266,24 @@ describe("modo recibos", () => {
     expect(huecos[0]!.n).toBe("0");
   });
 
+  it("A-1 · en modo recibos, fiar al «Consumidor final» se rechaza con la regla de fiar, y no deja recibo", async () => {
+    const [antes] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.documents where company_id = ${COMPANY}`;
+    const r = await pedir("POST", "/v1/pos/sales", {
+      company_id: COMPANY,
+      warehouse_id: W1,
+      lines: [{ product_id: PROD, quantity: "1" }],
+    });
+    expect(r.status).toBe(422);
+    // El mensaje EXACTO de la regla de fiar (sales.ts): con facturas, el rechazo del adquirente
+    // (art. 13.7) llega antes; en modo recibos, esta regla es la única que lo cubre.
+    expect(((await r.json()) as { message: string }).message).toBe(
+      "Una venta de mostrador se cobra completa. Para fiar, identifica al cliente.",
+    );
+    const [despues] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.documents where company_id = ${COMPANY}`;
+    expect(despues!.n).toBe(antes!.n);
+  });
   it("el PDF dice RECIBO y «Documento no fiscal», sin RIF del emisor", async () => {
     const r = await pedir("GET", `/v1/documents/${RECIBO_1}/pdf`);
     expect(r.status).toBe(200);
@@ -295,6 +319,12 @@ describe("modo recibos", () => {
     // 2. Lo fiscal que ahora sí hace falta: regla general (con el lock de
     //    siempre) y el rango de la imprenta, arrancando donde el dueño dijo.
     await sql.begin(async (tx) => {
+      // ADR-0072 §1: para facturar, el tipo de contribuyente declarado con su vigencia (el
+      // fixture conserva el marcador del RIF; la declaración va por SQL como el resto del montaje).
+      await tx`insert into public.company_taxpayer_types
+                 (tenant_id, company_id, taxpayer_type_code, effective_from, reason, rules_version)
+               values (${TENANT}, ${COMPANY}, 'ordinario', '2000-01-01',
+                       'Fixture E2E: llega el RIF y declara su tipo', 'e2e')`;
       await tx`select pg_advisory_xact_lock(hashtext('ladino-e2e-tax-rules'))`;
       await tx`
         insert into public.tax_rules
@@ -317,6 +347,11 @@ describe("modo recibos", () => {
           range_from: "500",
           range_to: "600",
           printer_source: "Imprenta E2E recibos",
+          printer_legal_name: "Imprenta E2E, C.A.",
+          printer_tax_id: "J-12345678-9",
+          printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+          printer_authorization_date: "2020-01-15",
+          printed_on: "2026-09-01",
         })
       ).status,
     ).toBe(201);
@@ -327,6 +362,7 @@ describe("modo recibos", () => {
     const v = await pedir("POST", "/v1/pos/sales", {
       company_id: COMPANY,
       warehouse_id: W1,
+      customer_id: IDENTIFICADO,
       series: "A",
       lines: [{ product_id: PROD, quantity: "2" }],
       payments: [{ instrument: "efectivo_bs", amount: "116.00000000", currency: "VES" }],
@@ -351,6 +387,9 @@ describe("modo recibos", () => {
     const otro = await pedir("POST", "/v1/pos/sales", {
       company_id: COMPANY,
       warehouse_id: W1,
+      // Identificado (art. 13.7, P-57): si no, el 422 del adquirente llegaría antes que el 409
+      // de numeración que este paso quiere ver.
+      customer_id: IDENTIFICADO,
       series: "R",
       lines: [{ product_id: PROD, quantity: "1" }],
     });
@@ -368,6 +407,7 @@ describe("modo recibos", () => {
     const v = await pedir("POST", "/v1/pos/sales", {
       company_id: COMPANY,
       warehouse_id: W1,
+      customer_id: IDENTIFICADO,
       series: "A",
       lines: [{ product_id: PROD, quantity: "1" }],
       payments: [

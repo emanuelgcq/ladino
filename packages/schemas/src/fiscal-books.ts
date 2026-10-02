@@ -43,6 +43,8 @@ export const SalesBookRow = z
     kind: z.string(),
     series: z.string(),
     document_number: z.number().int().nullable(),
+    /** H11 (ADR-0071): el identificador del control, que con el número forma el control completo. */
+    control_identifier: z.string().nullable(),
     control_number: z.number().int().nullable(),
     /** `annulled` SÍ aparece: el correlativo se consumió y el libro lo registra. */
     status: z.string(),
@@ -56,6 +58,27 @@ export const SalesBookRow = z
     total_amount: z.string(),
     /** NULL = pendiente en la cola de ADR-0042, no «sin contabilizar por error». */
     journal_entry_id: uuid.nullable(),
+    /**
+     * L-08 (RLIVA arts. 72 y 76, ADR-0073): base e IVA POR ALÍCUOTA, leídos de la categoría
+     * congelada en la línea. La alícuota (fracción) es NULL si el documento no tiene líneas de
+     * esa categoría.
+     */
+    base_alicuota_general: z.string(),
+    iva_alicuota_general: z.string(),
+    alicuota_general: z.string().nullable(),
+    base_alicuota_adicional: z.string(),
+    iva_alicuota_adicional: z.string(),
+    alicuota_adicional: z.string().nullable(),
+    base_alicuota_reducida: z.string(),
+    iva_alicuota_reducida: z.string(),
+    alicuota_reducida: z.string().nullable(),
+    /**
+     * H5: lo que no cae en ninguna de las tres alícuotas. Base gravada sin categoría reconocida
+     * (debería ser cero) e IVA de las líneas sin categoría congelada (anteriores a la migración
+     * 27). Con ellas, Σ por alícuota = base_gravada e iva_debito en cada renglón.
+     */
+    base_gravada_sin_alicuota: z.string(),
+    iva_sin_clasificar: z.string(),
   })
   .strict();
 export type SalesBookRow = z.infer<typeof SalesBookRow>;
@@ -93,6 +116,21 @@ export const PurchasesBookRow = z
      */
     booked_on: z.string(),
     received_late: z.boolean(),
+    /**
+     * Hallazgo 6 (RLIVA arts. 72 y 75, P-59): base e IVA POR ALÍCUOTA de la compra, leídos de la
+     * categoría congelada en la línea; y lo que las líneas no explican.
+     */
+    base_alicuota_general: z.string(),
+    iva_alicuota_general: z.string(),
+    alicuota_general: z.string().nullable(),
+    base_alicuota_adicional: z.string(),
+    iva_alicuota_adicional: z.string(),
+    alicuota_adicional: z.string().nullable(),
+    base_alicuota_reducida: z.string(),
+    iva_alicuota_reducida: z.string(),
+    alicuota_reducida: z.string().nullable(),
+    base_gravada_sin_alicuota: z.string(),
+    iva_sin_clasificar: z.string(),
   })
   .strict();
 export type PurchasesBookRow = z.infer<typeof PurchasesBookRow>;
@@ -162,7 +200,34 @@ export const FiscalBookResponse = z
      * la pantalla pueda avisar sin recorrer las filas, y para que quede en el
      * hash de la exportación.
      */
+    /**
+     * F6: incluye los renglones con base gravada sin alícuota o IVA sin clasificar distintos de
+     * cero.
+     */
     unclassified_rows: z.number().int(),
+    /**
+     * Solo en los libros de VENTAS y de COMPRAS (hallazgo 6, P-59): el resumen del art. 72 del
+     * RLIVA (L-08, ADR-0073). Una fila
+     * por concepto (`gravado_general`, `gravado_adicional`, `gravado_reducida`, `exento`,
+     * `exonerado`, `no_sujeto`, `sin_clasificar`) y alícuota; `adjustments_*` es la parte que
+     * viene de notas de crédito (en negativo), de débito y, en compras, de ajustes de período
+     * anterior.
+     */
+    summary: z
+      .array(
+        z
+          .object({
+            concept: z.string(),
+            rate: z.string().nullable(),
+            base: z.string(),
+            tax: z.string(),
+            adjustments_base: z.string(),
+            adjustments_tax: z.string(),
+            documents: z.number().int(),
+          })
+          .strict(),
+      )
+      .optional(),
   })
   .strict();
 export type FiscalBookResponse = z.infer<typeof FiscalBookResponse>;
@@ -295,9 +360,29 @@ export const ExportFiscalBookResponse = z
     content: z.string(),
     content_type: z.string(),
     filename: z.string(),
+    /** Solo en ventas y compras (B1): el resumen del art. 72 de esta generación y su fichero. */
+    summary_content: z.string().optional(),
+    summary_filename: z.string().optional(),
   })
   .strict();
 export type ExportFiscalBookResponse = z.infer<typeof ExportFiscalBookResponse>;
+
+/** El resumen del art. 72 de una generación del libro de ventas (H6, ADR-0073). */
+export const ExportSalesBookSummaryRequest = z.object({ company_id: uuid }).strict();
+export type ExportSalesBookSummaryRequest = z.infer<typeof ExportSalesBookSummaryRequest>;
+
+export const ExportSalesBookSummaryResponse = z
+  .object({
+    run_id: uuid,
+    /** El hash firmado de la generación: el mismo antes y después de pedir el resumen. */
+    dataset_hash: z.string(),
+    /** `resumen-art72.csv`: rótulo «RESUMEN (RLIVA art. 72)», cabeceras y filas. */
+    content: z.string(),
+    content_type: z.string(),
+    filename: z.string(),
+  })
+  .strict();
+export type ExportSalesBookSummaryResponse = z.infer<typeof ExportSalesBookSummaryResponse>;
 
 export const ListFiscalBookRunsResponse = z
   .object({ runs: z.array(FiscalBookRunResponse) })

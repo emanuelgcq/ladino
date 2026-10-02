@@ -96,11 +96,15 @@ async function agregar(roleKey: string, sub: string, correo: string) {
   return r;
 }
 
-/** Una venta de contado de UNA unidad, pagada en USD exacto. */
+/**
+ * Una venta de contado de UNA unidad, pagada en USD exacto. A un cliente IDENTIFICADO: sobre forma
+ * libre la factura no va al «Consumidor final» (PA 00071 art. 13.7, P-57).
+ */
 async function venderContado(sub: string) {
   return pedir("POST", "/v1/pos/sales", sub, {
     company_id: COMPANY,
     warehouse_id: DEPOSITO,
+    customer_id: CLIENTE,
     lines: [{ product_id: PRODUCTO, quantity: "1" }],
     payments: [{ instrument: "efectivo_usd", currency: "USD", amount: TOTAL_USD }],
   });
@@ -172,6 +176,8 @@ describe("una venta por cada oficio", () => {
         .padStart(6, "7")}-1`,
       legal_name: `Bodega Oficios ${RUN}, C.A.`,
       fiscal_address: "Calle 20 con carrera 21, Barquisimeto, Lara",
+      // ADR-0072 §1: con RIF, el registro declara el tipo; sin él no se factura.
+      taxpayer: { taxpayer_type_code: "ordinario" },
     });
     expect(r.status).toBe(201);
     const f = (await r.json()) as { company_id: string; warehouse_id: string };
@@ -192,6 +198,11 @@ describe("una venta por cada oficio", () => {
       range_from: "1",
       range_to: "100",
       printer_source: "Imprenta E2E oficios, autorización de prueba",
+      printer_legal_name: "Imprenta E2E, C.A.",
+      printer_tax_id: "J-12345678-9",
+      printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+      printer_authorization_date: "2020-01-15",
+      printed_on: "2026-09-01",
       alert_threshold_pct: 50,
     });
     expect(rango.status).toBe(201);

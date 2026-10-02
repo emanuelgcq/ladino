@@ -1,9 +1,9 @@
 import { z } from "zod";
 
 /**
- * Contratos del maestro de clientes (migración 18, ADR-0033). El RIF es texto
- * SIN formato (VALIDAR-SENIAT, OPEN_QUESTIONS 9): la forma solo acota
- * longitud y trim. Nullable únicamente para persona natural (lo exige el
+ * Contratos del maestro de clientes (migración 18, ADR-0033). En el contrato,
+ * el documento solo acota longitud y trim; desde A-08 (2026-09-28) el caso de
+ * uso exige RIF o cédula y lo guarda normalizado (./rif.ts, leerDocumentoCliente). Nullable únicamente para persona natural (lo exige el
  * esquema; el caso de uso lo dice antes con un mensaje).
  */
 const uuid = z.string().uuid();

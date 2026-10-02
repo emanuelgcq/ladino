@@ -11,6 +11,7 @@ import type {
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { registerPayment, type SalesError } from "./sales.js";
+import { parseDecimal, type Decimal } from "@ladino/money";
 
 /**
  * DECLARACIONES DE IVA (migración 46) — RIGOR MÁXIMO.
@@ -58,7 +59,9 @@ export async function registerSupportedRetention(
       message: "Registrar una retención soportada exige un usuario real.",
     });
   }
-  const scope = await companyScope(sql, actor.userId, input.company_id, "sales.payment.register");
+  // F-11 (ADR-0072 §5): la carga quien COBRA — el cliente entrega el comprobante al pagar —, con
+  // su permiso propio. Ya no basta `sales.payment.register`.
+  const scope = await companyScope(sql, actor.userId, input.company_id, "ar.retention.register");
   if (!scope.ok) return scope;
   if (scope.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
@@ -67,8 +70,11 @@ export async function registerSupportedRetention(
   // La factura afectada: nuestra, del agente que retiene, y viva. El estado
   // `issued` lo re-exige registerPayment; aquí se valida lo que él no mira —
   // que el CLIENTE del comprobante sea el de la factura.
-  const [doc] = await sql<{ customer_id: string; kind: string; functional_currency: string }[]>`
-    select customer_id, kind, functional_currency from public.documents
+  const [doc] = await sql<
+    { customer_id: string; kind: string; functional_currency: string; tax_amount: string }[]
+  >`
+    select customer_id, kind, functional_currency, tax_amount::text as tax_amount
+      from public.documents
      where id = ${input.document_id} and company_id = ${input.company_id}`;
   if (!doc) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   if (doc.customer_id !== input.customer_id) {
@@ -84,6 +90,69 @@ export async function registerSupportedRetention(
     });
   }
 
+  /**
+   * EL MONTO ES UNA FRACCIÓN DEL IVA DE LA FACTURA (ADR-0072 §5; PA SNAT/2025/000054): el 75 %
+   * o el 100 % del IVA en bolívares del documento, con ± Bs 0,01 de tolerancia por el redondeo
+   * del agente. Lo que no es ninguno de los dos no es una retención de IVA de esta factura.
+   */
+  const iva = parseDecimal(doc.tax_amount);
+  const monto = parseDecimal(input.amount);
+  const porcionDada = parseDecimal(input.rate);
+  // ± Bs 0,01: el redondeo del agente (respuesta del dueño, §2.6). No es una norma.
+  const tolerancia = parseDecimal("0.01");
+  if (!iva.ok || !monto.ok || !porcionDada.ok || !tolerancia.ok) {
+    return err({ code: "VALIDATION_FAILED", message: "Importes no interpretables." });
+  }
+  // Las porciones admisibles son DATO con norma y vigencia (regla 8, hallazgo 5): las vigentes a la
+  // fecha del comprobante, del catálogo de plataforma.
+  const filas = await sql<{ portion: string; legal_norm: string; legal_article: string }[]>`
+    select portion::text as portion, legal_norm, legal_article
+      from public.iva_retention_portions
+     where effective_from <= ${input.retained_on}::date
+       and (effective_to is null or effective_to > ${input.retained_on}::date)
+     order by portion`;
+  const porciones: Decimal[] = [];
+  for (const f of filas) {
+    const p = parseDecimal(f.portion);
+    if (p.ok) porciones.push(p.value);
+  }
+  if (porciones.length === 0) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `No hay porciones de retención de IVA con norma vigente al ${input.retained_on}: revisa la fecha del comprobante.`,
+    });
+  }
+  const cabe = (p: Decimal) =>
+    monto.value.minus(iva.value.times(p)).abs().lessThanOrEqualTo(tolerancia.value);
+  // B4: con un IVA diminuto (≤ Bs 0,02) varias porciones caben en la tolerancia. Manda primero la
+  // que dice el comprobante, si cabe; después, las demás del catálogo.
+  const indicada = porciones.find((p) => p.equals(porcionDada.value));
+  const porcion = indicada !== undefined && cabe(indicada) ? indicada : porciones.find(cabe);
+  const bs = (d: Decimal) => d.toDecimalPlaces(2, 4).toFixed(2).replace(".", ",");
+  if (porcion === undefined) {
+    const opciones = porciones
+      .map((p) => `el ${p.times(100).toFixed(0)} % (Bs ${bs(iva.value.times(p))})`)
+      .join(" o ");
+    const fuente = filas[0] === undefined ? "" : ` (${filas[0].legal_norm})`;
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        `El monto retenido debe ser ${opciones} del IVA de la factura${fuente}, y el comprobante ` +
+        `dice Bs ${bs(monto.value)}. Revisa el monto o la factura elegida.`,
+    });
+  }
+  if (!porcionDada.value.equals(porcion)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `El monto es el ${porcion.times(100).toFixed(0)} % del IVA de la factura y la porción indicada no coincide.`,
+    });
+  }
+  // Con qué tasa abona: la de la factura, salvo el parámetro P-30 de la empresa (apagado).
+  const [ajuste] = await sql<{ voucher: boolean }[]>`
+    select coalesce((select retention_received_voucher_rate from public.company_settings
+                      where company_id = ${input.company_id}), false) as voucher`;
+  const valoracion = ajuste?.voucher === true ? "voucher_rate" : "invoice_rate";
+
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
   let comprobante;
@@ -92,10 +161,11 @@ export async function registerSupportedRetention(
       const [fila] = await sp<Record<string, unknown>[]>`
         insert into public.supported_retention_receipts
           (tenant_id, company_id, customer_id, document_id, receipt_number, retained_on,
-           base, rate, amount, functional_currency)
+           base, rate, amount, functional_currency, ar_valuation)
         values (${scope.value.tenantId}, ${input.company_id}, ${input.customer_id},
                 ${input.document_id}, ${input.receipt_number}, ${input.retained_on}::date,
-                ${input.base}, ${input.rate}, ${input.amount}, ${doc.functional_currency})
+                ${input.base}, ${input.rate}, ${input.amount}, ${doc.functional_currency},
+                ${valoracion})
         returning id, customer_id, document_id, receipt_number, retained_on::text as retained_on,
                   base::text as base, rate::text as rate, amount::text as amount,
                   functional_currency, status, annul_reason,
@@ -108,7 +178,7 @@ export async function registerSupportedRetention(
     if (code === "23505") {
       return err({
         code: "DUPLICATE",
-        message: `El comprobante ${input.receipt_number} de ese agente ya está registrado.`,
+        message: `El comprobante ${input.receipt_number} de ese cliente ya está cargado contra esa factura. Un comprobante quincenal se carga una vez por cada factura que cubre.`,
       });
     }
     if (code === "23514") {
@@ -126,15 +196,19 @@ export async function registerSupportedRetention(
   // 'ar.retention_applied' y genera su asiento (Dr IVA retenido por cobrar /
   // Cr cuentas por cobrar). Un segundo camino que escribiera payments a mano
   // acabaría divergiendo de este.
-  const pago = await registerPayment(uow, {
-    company_id: input.company_id,
-    document_id: input.document_id,
-    currency: doc.functional_currency,
-    amount: input.amount,
-    instrument: "retencion_iva",
-    reference: input.receipt_number,
-    supported_retention_id: comprobante["id"] as string,
-  });
+  const pago = await registerPayment(
+    uow,
+    {
+      company_id: input.company_id,
+      document_id: input.document_id,
+      currency: doc.functional_currency,
+      amount: input.amount,
+      instrument: "retencion_iva",
+      reference: input.receipt_number,
+      supported_retention_id: comprobante["id"] as string,
+    },
+    "ar.retention.register",
+  );
   if (!pago.ok) return pago;
 
   return ok({

@@ -52,3 +52,11 @@ describe("sin RIF, recibos", () => {
     expect(fuente).toContain("useConFacturas");
   });
 });
+
+/** O-04: el selector de empresas enseñaba el RIF crudo; ahora, con guiones, como el resto. */
+describe("rifParaMostrar — O-04", () => {
+  it("el RIF normalizado se enseña con guiones", () => {
+    expect(rifParaMostrar({ tax_id: "J405551234" })).toBe("J-40555123-4");
+    expect(rifParaMostrar({ tax_id: "V123456789" })).toBe("V-12345678-9");
+  });
+});

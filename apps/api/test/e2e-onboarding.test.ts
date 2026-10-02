@@ -153,12 +153,15 @@ describe("onboarding y miembros de extremo a extremo", () => {
     };
     expect(miembro.assignments.some((a) => a.role_key === "cashier")).toBe(true);
 
-    // La cajera ve EXACTAMENTE sus 5 permisos: vende y cobra, no ve el dinero.
+    // La cajera ve EXACTAMENTE sus 6 permisos: vende y cobra, no ve el dinero. El sexto,
+    // `ar.retention.register`, lo decidió el dueño (ADR-0072 §5, F-11): quien cobra carga el
+    // comprobante de retención que el cliente entrega al pagar.
     const permisos = await pedir("GET", "/v1/me/permissions", CAJERA);
     const { permissions } = (await permisos.json()) as { permissions: string[] };
     expect(permissions.sort()).toEqual(
       [
         "ar.read",
+        "ar.retention.register",
         "customer.manage",
         "sales.invoice.issue",
         "sales.payment.register",

@@ -34,8 +34,17 @@ async function venderUno(correo, empresa, nombre) {
     lines: [{ product_id: producto, quantity: "1" }],
   });
   afirmar(cot.status === 200, `la cotización dio ${cot.status}: ${cot.texto.slice(0, 200)}`);
+  // La factura sobre forma libre identifica al adquirente (PA 00071 art. 13.7, ola 2): el
+  // «Consumidor final» es solo para recibos. Un cliente del escenario con documento.
+  const [cliente] = await sql`
+    select id from public.customers
+     where company_id = ${EMPRESAS[empresa]} and not is_system and tax_id is not null
+       and upper(tax_id) not like 'PEND-%'
+     order by created_at limit 1`;
+  afirmar(cliente, `no hay cliente identificado en ${empresa}`);
   return pedir(correo, empresa, "POST", "/v1/pos/sales", {
     company_id: EMPRESAS[empresa],
+    customer_id: cliente.id,
     warehouse_id: deposito,
     lines: [{ product_id: producto, quantity: "1" }],
     // En bolívares: el efectivo en divisa causa IGTF en E3 (contribuyente especial) y el total

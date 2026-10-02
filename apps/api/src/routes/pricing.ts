@@ -180,8 +180,24 @@ export function catalogRoutes(app: Hono, sql: Sql): void {
       sql,
       actor,
       ({ sql: tx }) => tx`
-        select code, name, description, status from public.product_tax_categories
-         where status = 'active' order by code`,
+        -- offered_in_sales: si el catálogo con fuente la OFRECE en ventas (ADR-0073). Lo
+        -- pendiente de fuente (no_sujeto) y lo exonerado de importación salen en false, y la
+        -- pantalla no los ofrece al clasificar un producto.
+        select c.code, c.name, c.description, c.status,
+               exists (
+             select 1 from public.tax_rule_templates t
+              where t.product_tax_category = c.code and t.offered_in_sales
+                and t.effective_from <= (now() at time zone 'America/Caracas')::date
+                and (t.effective_to is null
+                     or t.effective_to > (now() at time zone 'America/Caracas')::date))
+               -- Hallazgo 10: la reducida es una lista cerrada (LIVA art. 64); sin literales
+               -- cargados con fuente no hay nada que elegir.
+               and (c.code <> 'gravado_reducida'
+                    or exists (select 1 from public.tax_reduced_rate_literals))
+                 as offered_in_sales
+          from public.product_tax_categories c
+         where c.status = 'active'
+         order by c.code`,
     );
     return c.json(filas, 200);
   });

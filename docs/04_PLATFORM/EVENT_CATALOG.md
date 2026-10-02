@@ -9,6 +9,18 @@
 - fiscal.contingency.started
 - fiscal.contingency.ended
 
+## Talonario de la imprenta (ADR-0071) — actas en `audit_events`, `aggregate_type = fiscal_number_range`
+- fiscal.range.registered — el talonario con su identificador, tramo y datos de la imprenta
+- fiscal.range.printer_completed — los datos de la imprenta de un talonario anterior, una vez
+- fiscal.range.printer_corrected — **CONTRATO con el trigger** `assert_range_printer_frozen`
+  (migración 20260928160400): `payload.txid = pg_current_xact_id()` de la transacción que corrige,
+  `payload.antes` y `payload.despues` (este último, idéntico a la fila escrita), y `payload.reason`.
+  El id del acta viaja en el GUC `ladino.range_printer_correction`. Cambiar la forma del payload
+  cierra la corrección: se cambia a la vez en `corregirImprenta` y en el trigger.
+- fiscal.range.cancelled — motivo y tramo; solo un talonario que no emitió nada
+- fiscal_number_range.tax_id_check_digit_mismatch — el RIF de la imprenta con un dígito verificador
+  que no cuadra (se acepta y se anota, P-49); la convención `<agregado>.tax_id_check_digit_mismatch`
+
 ## Accounting
 - journal.posted
 - journal.reversed
@@ -170,6 +182,9 @@ Emitidos por los casos de uso de `packages/domain` (products.ts, pricing.ts), `s
   bucket, nunca una URL firmada). Las miniaturas 400/96 se generan AL SUBIR, en la API —
   desviación declarada del «worker» de la spec de fase: mismo resultado, sin un consumidor
   nuevo de outbox; si el volumen lo pide, ese es el disparador para moverlo
+- product.import_job.created — ADR-0074, A7: SOLO auditoría (audit_events, no outbox). El payload
+  lleva `{file_name, file_hash (sha256), number_format, row_count}`. La reutilización del mismo
+  archivo (200 `reused`) no lo emite: no se crea nada
 - price_list.created
 - price.set — el payload lleva `{amount (string), currency, effective_from, effective_to}`;
   el autocierre del período anterior NO emite evento propio: es consecuencia del mismo hecho
@@ -181,6 +196,21 @@ Clientes (migración 18, ADR-0033) — casos de uso de `customers.ts`, `schema_v
 - customer.tax_id_changed — lo escribe el **trigger M4** con `{tax_id_anterior, tax_id_nuevo,
   legal_name}`; el caso de uso `setCustomerTaxId` NO lo duplica en `audit_events`: emite solo el
   evento de outbox del mismo nombre (la misma partición que `company.tax_id_established`)
+
+El documento de identidad (A-08, P-02 — 2026-09-28), solo en `audit_events`, sin outbox:
+
+- `<agregado>.tax_id_check_digit_mismatch` — `<agregado>` ∈ {`company`, `customer`,
+  `supplier`}. Lo escribe el caso de uso (`registrarDigitoDudoso`,
+  `packages/domain/src/documento-identidad.ts`) en la misma transacción del alta o del cambio,
+  cuando el RIF tiene la estructura pero el dígito verificador (módulo 11 del SENIAT) no cuadra: se
+  acepta y queda la excepción. Payload `{tax_id, check_digit_ok: false, digito_recibido,
+  digito_esperado, regla: "modulo11-seniat"}`. Actor `user`. Con la letra C no se escribe (no hay
+  regla: PENDIENTES_ASESOR P-49).
+- `<agregado>.tax_id_normalized` — `<agregado>` ∈ {`company`, `customer`, `supplier`}. Lo escribe
+  la reparación P-02 (`platform.tax_id_normalization_repair`, migraciones 20260928170000 y
+  20260928170100), uno por fila cuyo documento cambió de grafía. Payload `{from, to, reparacion:
+  "P-02"}`. Actor `system`, `rules_version` `repair-p02`. En empresas y clientes el trigger M4
+  deja además su `*.tax_id_changed`: son dos hechos (el cambio y su porqué).
 
 Los demás eventos de esta sección se añaden **cuando exista el caso de uso que los emite**, no por
 anticipado: la política de qué se audita está diferida con dueño y disparador en `RISK_REGISTER.md`

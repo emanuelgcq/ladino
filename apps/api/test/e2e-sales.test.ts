@@ -4,6 +4,7 @@ import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
 import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
+import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
  * Ventas de extremo a extremo con JWT real, como `ladino_api`.
@@ -123,6 +124,7 @@ beforeAll(async () => {
     await tx`insert into public.companies (id, tenant_id, tax_id, legal_name, functional_currency_code)
              values (${COMPANY}, ${TENANT}, 'J-E2EVTA', 'Empresa e2e ventas', 'VES')
              on conflict (id) do nothing`;
+    await declararTipoDeFixture(tx, COMPANY);
     await tx`insert into public.warehouses (id, tenant_id, company_id, code, name)
              values (${W1}, ${TENANT}, ${COMPANY}, 'E2E-VW1', 'Principal')
              on conflict (id) do nothing`;
@@ -368,6 +370,11 @@ describe("ventas de extremo a extremo", () => {
       range_from: "1000",
       range_to: "1002",
       printer_source: "Imprenta E2E, autorización de prueba",
+      printer_legal_name: "Imprenta E2E, C.A.",
+      printer_tax_id: "J-12345678-9",
+      printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+      printer_authorization_date: "2020-01-15",
+      printed_on: "2026-09-01",
       alert_threshold_pct: 50,
     });
     expect(rango.status).toBe(201);
@@ -464,6 +471,11 @@ describe("ventas de extremo a extremo", () => {
       range_from: "5000",
       range_to: "5100",
       printer_source: "Imprenta E2E, segundo rango",
+      printer_legal_name: "Imprenta E2E, C.A.",
+      printer_tax_id: "J-12345678-9",
+      printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+      printer_authorization_date: "2020-01-15",
+      printed_on: "2026-09-01",
     });
     const emitida = await pedir("POST", "/v1/invoices", VENDEDOR, {
       company_id: COMPANY,
@@ -628,6 +640,11 @@ describe("ventas de extremo a extremo", () => {
       range_from: "700",
       range_to: "799",
       printer_source: "Imprenta E2E, rango de notas de crédito",
+      printer_legal_name: "Imprenta E2E, C.A.",
+      printer_tax_id: "J-12345678-9",
+      printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+      printer_authorization_date: "2020-01-15",
+      printed_on: "2026-09-01",
     });
     expect(rangoNc.status).toBe(201);
 
@@ -847,12 +864,20 @@ describe("ventas de extremo a extremo", () => {
       range_from: "9000",
       range_to: "9100",
       printer_source: "Imprenta E2E, rango del POS",
+      printer_legal_name: "Imprenta E2E, C.A.",
+      printer_tax_id: "J-12345678-9",
+      printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+      printer_authorization_date: "2020-01-15",
+      printed_on: "2026-09-01",
     });
 
     const clave = crypto.randomUUID(); // el sale_id del CLIENTE
+    // PA 00071 art. 13.7 (P-57, auditoría fiscal 2026-10-02): sobre forma libre la factura va a un
+    // cliente IDENTIFICADO; el «Consumidor final» de sistema es solo para recibos.
     const venta = {
       company_id: COMPANY,
       warehouse_id: W1,
+      customer_id: CLIENTE,
       series: "C",
       lines: [{ product_id: PROD, quantity: "1" }],
       payments: [{ instrument: "efectivo_usd", amount: "120.00000000", currency: "USD" }],
@@ -876,7 +901,7 @@ describe("ventas de extremo a extremo", () => {
       balance: string;
     };
     expect(v.document["status"]).toBe("paid");
-    expect(v.document["customer_id"]).toBe(CONSUMIDOR);
+    expect(v.document["customer_id"]).toBe(CLIENTE);
     // Total 116 USD; entregó 120 → se aplican 116 y el VUELTO son 4, del servidor.
     expect(v.payments[0]!.payment["amount"]).toBe("116.00000000");
     expect(v.change).toEqual({ amount: "4.00000000", currency: "USD" });
@@ -1209,8 +1234,10 @@ describe("ventas de extremo a extremo", () => {
       lines: [{ product_id: PROD, quantity: "1" }],
     });
     expect(sinPagos.status).toBe(422);
+    // Con facturas, el «Consumidor final» ya no recibe una factura (art. 13.7, P-57): el rechazo
+    // llega antes que la regla de fiar. La regla de fiar al mostrador sigue viva en modo recibos.
     expect(((await sinPagos.json()) as { message: string }).message).toContain(
-      "identifica al cliente",
+      "el «Consumidor final» es solo para recibos",
     );
 
     const pagoCorto = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
@@ -1276,6 +1303,7 @@ describe("ventas de extremo a extremo", () => {
     const venta = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
       company_id: COMPANY,
       warehouse_id: W1,
+      customer_id: CLIENTE,
       series: "C",
       cart_id: CARRITO,
       lines: [{ product_id: PROD, quantity: "2" }],
@@ -1329,6 +1357,11 @@ describe("ventas de extremo a extremo", () => {
       range_from: "1",
       range_to: "100",
       printer_source: "Imprenta E2E, rango de notas de débito",
+      printer_legal_name: "Imprenta E2E, C.A.",
+      printer_tax_id: "J-12345678-9",
+      printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+      printer_authorization_date: "2020-01-15",
+      printed_on: "2026-09-01",
     });
 
     const base = await pedir("POST", "/v1/pos/sales", VENDEDOR, {

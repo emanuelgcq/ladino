@@ -12,17 +12,12 @@ import { requireCompany } from "./products.js";
  *   · leer el catálogo de regímenes (cada uno con SU norma citada, sembrada
  *     en la migración 21) y el vigente de la empresa;
  *   · asignar el régimen — una vez: cambiarlo después es un acto de /admin;
- *   · ACEPTAR la alícuota general del IVA. Ladino NO la afirma: la declara y
- *     la acepta LA PERSONA, con su nombre y su fecha en la auditoría y en el
- *     `legal_source` de la regla. VALIDAR-TRIBUTARIO: la cifra aceptada debe
- *     confirmarse contra la Ley de IVA vigente antes de producción — por eso
- *     el texto de la regla lo dice, en vez de citar una gaceta que este
- *     repositorio no tiene verificada (docs/02_COMPLIANCE/IVA_SPEC.md: «no
- *     fijar 16% en código»).
- *
- * `tax_rules` es GLOBAL (por jurisdicción, no por empresa — ADR-0038): la
- * aceptación crea las reglas UNA vez por instancia; las empresas siguientes
- * solo dejan su acta de aceptación en la auditoría.
+ *   · ACEPTAR la alícuota general del IVA desde el CATÁLOGO con fuente
+ *     (ADR-0073, que concilia ADR-0038 y ADR-0057): la persona la acepta dentro
+ *     del rango del art. 27 que trae el catálogo, con su acta; la regla es de
+ *     la empresa. Lo demás (reducida, exenta, adicional) es ley y viene del
+ *     catálogo con su cita. Aceptar otra tasa cierra la vigencia de la anterior
+ *     (B-02). La lógica vive en `platform.accept_general_vat`.
  */
 
 async function exigePermiso(
@@ -73,11 +68,23 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
            and (effective_to is null or effective_to > (now() at time zone 'America/Caracas')::date)
          -- La propia antes que la de la plataforma (ADR-0057).
          order by (company_id is not null) desc, priority desc limit 1`;
+      // La REFERENCIA del catálogo con su cita (B-11): la web la enseña, nunca la escribe.
+      const [catalogo] = await tx<
+        { rate: string; rate_min: string; rate_max: string; legal_source: string }[]
+      >`
+        select rate::text as rate, rate_min::text as rate_min, rate_max::text as rate_max,
+               legal_source
+          from public.tax_rule_templates
+         where jurisdiction = 'VE' and tax_code = 'iva' and product_tax_category = 'gravado_general'
+           and requires_acceptance
+           and effective_from <= (now() at time zone 'America/Caracas')::date
+           and (effective_to is null or effective_to > (now() at time zone 'America/Caracas')::date)`;
       return {
         regimes: regimenes,
         current_regime: vigente?.regime_code ?? null,
         sales_mode: modo,
         iva_general: iva ?? null,
+        iva_catalog: catalogo ?? null,
       };
     });
     return c.json(cuerpo, 200);
@@ -167,15 +174,18 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
   });
 
   /**
-   * La ACEPTACIÓN de la alícuota general. Crea —si no existen— las reglas
-   * GENERALES (taxpayer NULL): gravado a la alícuota aceptada y exento a
-   * cero, para venta y para compra. Siempre deja el acta en la auditoría.
+   * La ACEPTACIÓN de la alícuota general (B-02, ADR-0073). La base valida el
+   * rango, cierra la vigencia de una general distinta y completa el catálogo;
+   * aquí van el permiso y el acta, que se escribe siempre.
    */
   app.post("/v1/fiscal/iva-general", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);
     const parsed = AcceptIvaGeneralRequest.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) throw new ValidacionError(parsed.error.issues);
     const { actor } = c.get("ladino.auth");
+    // LAD97 (ADR-0073): la base rechaza una general fuera del catálogo con un mensaje que dice
+    // POR QUÉ (0 %, o fuera de 8–16,5 %). La tabla de SQLSTATE daría el genérico; aquí se lleva el
+    // de la base. Fuera de la transacción: postgres.js rechaza begin() con el error original.
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
       const userId = await exigePermiso(
         tx,
@@ -191,52 +201,67 @@ export function fiscalSetupRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
       const [dia] = await tx<{ hoy: string }[]>`
         select (now() at time zone 'America/Caracas')::date::text as hoy`;
       const hoy = dia!.hoy;
-      const fuente =
-        // Sin el UUID del usuario en el texto: la pantalla lo mostraba crudo (QA 2026-09-15, h. 59).
-        // Quién aceptó queda en created_by de cada regla y en la auditoría.
-        `Alícuota declarada y ACEPTADA por el dueño el ${hoy} desde el asistente ` +
-        `de puesta a punto. VALIDAR-TRIBUTARIO: confirmar contra la Ley de IVA vigente antes ` +
-        `de producción (docs/02_COMPLIANCE/IVA_SPEC.md).`;
-
-      // Concurrencia: el mismo advisory lock que usan las semillas de reglas.
-      await tx`select pg_advisory_xact_lock(hashtext('ladino-e2e-tax-rules'))`;
-      let creadas = 0;
-      for (const [categoria, tasa] of [
-        ["gravado_general", parsed.data.rate],
-        ["exento", "0"],
-      ] as const) {
-        for (const tipo of ["sale", "purchase"] as const) {
-          // Las reglas son DE ESTA EMPRESA (ADR-0057): que otra empresa de la
-          // instancia ya las tenga no exime a esta de aceptar las suyas.
-          const r = await tx`
-            insert into public.tax_rules
-              (tenant_id, company_id, jurisdiction, tax_code, taxpayer_type,
-               product_tax_category, rate, effective_from, legal_source, priority,
-               transaction_type)
-            select ${empresa!.tenant_id}, ${companyId}, 'VE', 'iva', null, ${categoria},
-                   ${tasa}::numeric, (now() at time zone 'America/Caracas')::date, ${fuente}, 5,
-                   ${tipo}
-             where not exists (
-               select 1 from public.tax_rules
-                where company_id = ${companyId}
-                  and jurisdiction = 'VE' and tax_code = 'iva' and taxpayer_type is null
-                  and product_tax_category = ${categoria} and transaction_type = ${tipo}
-                  and status = 'active')`;
-          creadas += r.count;
-        }
+      // Desde qué día rige: el que elige la persona, nunca antes de hoy (reinterpretaría lo ya
+      // emitido con la regla anterior). Las fechas YYYY-MM-DD se comparan como texto.
+      const desde = parsed.data.effective_from ?? hoy;
+      if (desde < hoy) {
+        throw new DominioError({
+          code: "VALIDATION_FAILED",
+          message: `La alícuota no puede regir antes de hoy (${hoy}): lo ya facturado conserva la suya.`,
+        });
       }
+      // La aceptación la hace la BASE (ADR-0073, B-02): valida el rango del catálogo (art. 27;
+      // el 0 % se rechaza con LAD97), cierra la vigencia de una general distinta y abre otra desde
+      // hoy, y completa desde el catálogo la reducida, la exenta y la adicional con su cita.
+      const [acepta] = await tx<
+        {
+          rules_created: number;
+          rules_closed: number;
+          previous_rate: string | null;
+          legal_source: string;
+          changed: boolean;
+        }[]
+      >`
+        -- B5: «cambió» lo decide la base, comparando numeric con numeric (la tasa que regía en la
+        -- fecha efectiva contra la aceptada), no un string en TypeScript.
+        select rules_created, rules_closed, previous_rate::text as previous_rate, legal_source,
+               (previous_rate is distinct from ${parsed.data.rate}::numeric) as changed
+          from platform.accept_general_vat(${companyId}, ${parsed.data.rate}::numeric, ${desde}::date)`;
+      const creadas = acepta!.rules_created;
 
-      // El ACTA: quién aceptó qué, cuándo, para esta empresa. Queda aunque las
-      // reglas ya existieran (esta misma empresa las aceptó antes).
+      // El ACTA: quién aceptó qué, cuándo, para esta empresa, y qué había antes. Queda aunque
+      // la tasa sea la misma que ya regía (esta misma empresa la aceptó antes).
       await tx`
         insert into public.audit_events
           (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
            actor_type, occurred_at, rules_version, payload)
         values (${empresa!.tenant_id}, ${companyId}, 'company', ${companyId},
                 'fiscal.iva.accepted', 'user', now(), ${RULES_VERSION},
-                ${tx.json({ rate: parsed.data.rate, accepted_by: userId, accepted_on: hoy })})`;
+                ${tx.json({
+                  rate: parsed.data.rate,
+                  previous_rate: acepta!.previous_rate,
+                  effective_from: desde,
+                  rules_created: creadas,
+                  rules_closed: acepta!.rules_closed,
+                  legal_source: acepta!.legal_source,
+                  accepted_by: userId,
+                  accepted_on: hoy,
+                })})`;
 
-      return { rate: parsed.data.rate, rules_created: creadas, accepted_on: hoy };
+      return {
+        rate: parsed.data.rate,
+        rules_created: creadas,
+        accepted_on: hoy,
+        changed: acepta!.changed,
+      };
+    }).catch((e: unknown) => {
+      if ((e as { code?: string }).code === "LAD97") {
+        throw new DominioError({
+          code: "VALIDATION_FAILED",
+          message: (e as { message?: string }).message ?? "Alícuota general no válida.",
+        });
+      }
+      throw e;
     });
     return c.json(cuerpo, 201);
   });

@@ -87,6 +87,23 @@ export async function pedir(correo, empresa, metodo, ruta, cuerpo) {
   return { status: r.status, json, texto };
 }
 
+/** Un GET que devuelve BYTES (un PDF): `pedir` lo leería como texto UTF-8 y lo estropearía. */
+export async function pedirBytes(correo, empresa, ruta) {
+  const token = await new SignJWT({ role: "authenticated" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(await idDe(correo))
+    .setIssuer(EMISOR)
+    .setAudience("authenticated")
+    .setIssuedAt()
+    .setExpirationTime("10m")
+    .sign(SECRETO);
+  const r = await app.request(ruta, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}`, "X-Company-Id": EMPRESAS[empresa] ?? empresa },
+  });
+  return { status: r.status, bytes: Buffer.from(await r.arrayBuffer()) };
+}
+
 export function afirmar(condicion, mensaje) {
   if (!condicion) throw new Error(mensaje);
 }

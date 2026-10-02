@@ -4,12 +4,14 @@ import { z } from "zod";
  * Contratos de `POST /v1/companies` — la fuente única de la que sale el
  * OpenAPI (ADR-0004, ADR-0015). Lo que no está aquí no existe en el contrato.
  *
- * ⚠ SOBRE `tax_id` (el RIF): SIN REGEX, y es una PROHIBICIÓN, no una omisión.
- * El formato del RIF no está en docs/02_COMPLIANCE/ con fuente normativa
- * citada (OPEN_QUESTIONS #9, VALIDAR-SENIAT). Ponerlo aquí sería PEOR que en
- * un CHECK de Postgres: el esquema Zod se comparte con los clientes, y un
- * regex aquí es un cliente decidiendo una regla fiscal (CLAUDE.md §7).
- * Lo defendible sin fuente: no vacío y cota de longitud. Nada más.
+ * SOBRE `tax_id` (el RIF): el CONTRATO sigue sin regex — no vacío y cota de
+ * longitud. Desde el 2026-09-28 (OPEN_QUESTIONS #9 cerrada por el dueño, A-08) la
+ * estructura del RIF SÍ se valida, pero en el SERVIDOR, en el caso de uso
+ * (packages/domain documento-identidad.ts), con la función compartida
+ * `leerRif` de ./rif.ts: 422 con un mensaje legible, y el dígito verificador
+ * que no cuadra se acepta y se registra. No va en Zod a propósito: el contrato
+ * no cambia, y la decisión la toma el servidor, no el cliente que comparte este
+ * esquema (CLAUDE.md §7).
  */
 /** Los campos de PERFIL del negocio (registro premium, migración 43). */
 const perfilCampos = {
@@ -178,6 +180,28 @@ export const OnboardBusinessRequest = z
      * Opcional: por omisión, el día del alta en Caracas. No puede ser futura.
      */
     activity_start_date: z.string().date().optional(),
+    /**
+     * ADR-0072 §1 (A-03): con RIF, el registro pregunta el tipo de contribuyente. Opcional en el
+     * contrato: sin él la empresa nace sin tipo y NO factura hasta declararlo (nunca «ordinario
+     * por omisión»). El especial exige la fecha de notificación de la providencia.
+     */
+    taxpayer: z
+      .object({
+        taxpayer_type_code: z.enum(["ordinario", "especial"]),
+        notified_on: z.string().date().optional(),
+        effective_from: z.string().date().optional(),
+      })
+      .strict()
+      .refine((v) => v.taxpayer_type_code !== "especial" || v.notified_on !== undefined, {
+        message: "el contribuyente especial exige la fecha de notificación de la providencia",
+        path: ["notified_on"],
+      })
+      // Alta ordinaria con notified_on: 422 legible, no un 23514 de la base.
+      .refine((v) => v.taxpayer_type_code === "especial" || v.notified_on === undefined, {
+        message: "la fecha de notificación es solo de la calificación como contribuyente especial",
+        path: ["notified_on"],
+      })
+      .optional(),
   })
   .strict();
 export type OnboardBusinessRequest = z.infer<typeof OnboardBusinessRequest>;

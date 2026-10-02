@@ -22,8 +22,12 @@ import {
   IncluyeIgtf,
   SUFIJO_CON_IGTF,
 } from "../../components/capa-fiscal/Igtf.js";
-import { errorDePersona } from "../../lib.js";
+import { errorDePersona, LlamadaApiError } from "../../lib.js";
+import { MensajeError } from "../ventas/comunes.js";
+import { talonariosConPapel, type Talonario } from "../setup/Talonario.js";
 import { abrirPdf as abrirPdfApi } from "../../pdf.js";
+import { filasDeDescripcion } from "@ladino/schemas";
+import { ImprimirFormaLibre } from "../../components/ImprimirFormaLibre.js";
 import {
   cotizarPos,
   previsualizarCobro,
@@ -117,6 +121,8 @@ interface Venta {
     kind: string;
     series: string;
     document_number: number | null;
+    /** El control ya vestido por el servidor, `00-00001234` (ADR-0071 §4). */
+    control_display: string | null;
     status: string;
     functional_currency: string;
   };
@@ -336,6 +342,7 @@ function VenderDeEmpresa(): React.JSX.Element {
         block_sale_without_stock: boolean;
         allow_unidentified_sales: boolean;
         default_warehouse_id: string | null;
+        rows_per_free_form: number;
       }>("/v1/company-settings"),
   });
   // Quien da recibos (la regla de app/rif.ts): el POS es el MISMO; cambia el documento, y
@@ -565,7 +572,19 @@ function VenderDeEmpresa(): React.JSX.Element {
   // permite vender sin identificar. El servidor exige cliente en TODOS los modos
   // cuando el ajuste está apagado, y antes la caja lo daba por resuelto y el cobro
   // terminaba en 422.
-  const permiteSinIdentificar = ajustes.data?.allow_unidentified_sales ?? true;
+  // PA 00071 art. 13.7 (pregunta abierta al asesor, P-57; lectura conservadora): la FACTURA sobre
+  // forma libre lleva al adquirente identificado; «Venta sin identificar» queda solo para los
+  // recibos. El servidor lo exige igual, también en la base.
+  const permiteSinIdentificar = modoRecibos && (ajustes.data?.allow_unidentified_sales ?? true);
+  // PA 00071 art. 33: una factura ocupa UNA forma libre. Se avisa ANTES de cobrar.
+  // A-2: el tope cuenta FILAS IMPRESAS, partidas con la MISMA regla que el servidor y el PDF. Aquí
+  // es un aviso (sin saber qué línea es exenta); el servidor decide con la cuenta exacta (422).
+  const topeLineas = ajustes.data?.rows_per_free_form ?? 15;
+  const filasImpresas = activa.lineas.reduce(
+    (n, l) => n + filasDeDescripcion(l.nombre, false).length,
+    0,
+  );
+  const excedeForma = !modoRecibos && filasImpresas > topeLineas;
   const clienteResuelto =
     (modoRecibos && permiteSinIdentificar) || activa.cliente !== null || activa.sinIdentificar;
 
@@ -582,7 +601,8 @@ function VenderDeEmpresa(): React.JSX.Element {
     cotizacion.data !== undefined &&
     !cotizacion.isFetching &&
     deposito !== null &&
-    clienteResuelto;
+    clienteResuelto &&
+    !excedeForma;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "F2" && puedeCobrar) {
@@ -730,7 +750,7 @@ function VenderDeEmpresa(): React.JSX.Element {
             opcional={modoRecibos}
             cliente={activa.cliente}
             sinIdentificar={activa.sinIdentificar}
-            permiteSinIdentificar={ajustes.data?.allow_unidentified_sales ?? true}
+            permiteSinIdentificar={permiteSinIdentificar}
             onCliente={(c) => {
               tocar(activa.id, (x) => ({ ...x, cliente: c, sinIdentificar: false }));
               buscarRef.current?.focus();
@@ -878,11 +898,21 @@ function VenderDeEmpresa(): React.JSX.Element {
                 ) : null}
               </>
             )}
+            {excedeForma && (
+              <p
+                role="alert"
+                className="rounded-md bg-warning-soft px-3 py-2 text-[0.85rem] text-warning-soft-foreground"
+              >
+                No cabe en una forma libre: divide la venta en varias facturas (máximo {topeLineas}{" "}
+                filas impresas; esta ocupa {filasImpresas}).
+              </p>
+            )}
             <Button
               variant="primary"
               size="lg"
               className="h-12 w-full text-[1.05rem]"
               disabled={
+                excedeForma ||
                 activa.lineas.length === 0 ||
                 !cotizacion.data ||
                 // Mientras se recotiza, el total en pantalla es el ANTERIOR
@@ -1420,6 +1450,40 @@ function Cobrar({
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [pagos, setPagos] = useState<PagoElegido[]>([]);
+  // E-01 (ADR-0071): la serie la dicta el TALONARIO. Con uno solo, el servidor lo usa; con
+  // varios, la caja elige y recuerda el último (por empresa, en este equipo).
+  const conFacturas = useConFacturas();
+  const talonarios = useQuery({
+    queryKey: ["talonarios-caja", empresa.id],
+    enabled: conFacturas,
+    staleTime: 60_000,
+    queryFn: () => llamar<Talonario[]>("/v1/fiscal-number-ranges"),
+  });
+  const seriesConPapel = [
+    ...new Set(talonariosConPapel(talonarios.data ?? []).map((r) => r.series)),
+  ];
+  const claveSerie = `ladino.talonario.${empresa.id}`;
+  const [serieElegida, setSerieElegida] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(claveSerie);
+    } catch {
+      return null;
+    }
+  });
+  const serieVenta =
+    seriesConPapel.length > 1
+      ? serieElegida !== null && seriesConPapel.includes(serieElegida)
+        ? serieElegida
+        : seriesConPapel[0]
+      : undefined;
+  function elegirSerie(v: string): void {
+    setSerieElegida(v);
+    try {
+      localStorage.setItem(claveSerie, v);
+    } catch {
+      /* sin almacenamiento, se elige cada vez */
+    }
+  }
   // El paso de confirmación del FIADO: la consecuencia dicha antes de emitir.
   const [fiando, setFiando] = useState(false);
   // La llave de idempotencia de la venta es el id de la CUENTA que cierra:
@@ -1589,6 +1653,7 @@ function Cobrar({
           company_id: empresa.id,
           warehouse_id: deposito,
           cart_id: cartId,
+          ...(serieVenta === undefined ? {} : { series: serieVenta }),
           ...(clienteId === null ? {} : { customer_id: clienteId }),
           lines: lineas,
           payments: pagos.map((p) => ({
@@ -1603,7 +1668,11 @@ function Cobrar({
         }),
       }),
     onSuccess: (v) => onVendida(v),
-    onError: (e) => toast.error("No se pudo cobrar", errorDePersona(e)),
+    // E-17: sin números de control el aviso va DENTRO del cobro, con su camino (enlace o a quién
+    // pedírselo); un toast encima sería el segundo aviso (G-16).
+    onError: (e) => {
+      if (!sinControl(e)) toast.error("No se pudo cobrar", errorDePersona(e));
+    },
   });
 
   if (fiando) {
@@ -1781,6 +1850,26 @@ function Cobrar({
         </div>
 
         <div className="space-y-2 border-t border-border px-5 py-3">
+          {serieVenta !== undefined && (
+            <FormField label="Talonario">
+              {(a) => (
+                // '' es «sin serie» (H11); el select no admite un valor vacío, así que viaja
+                // con una marca que nunca es una serie válida.
+                <SimpleSelect
+                  id={a.id}
+                  value={serieVenta === "" ? SIN_SERIE : serieVenta}
+                  onValueChange={(v) => elegirSerie(v === SIN_SERIE ? "" : v)}
+                  options={seriesConPapel.map((x) => ({
+                    value: x === "" ? SIN_SERIE : x,
+                    label: x === "" ? "Sin serie" : `Serie ${x}`,
+                  }))}
+                />
+              )}
+            </FormField>
+          )}
+          {vender.error !== null && sinControl(vender.error) && (
+            <MensajeError error={vender.error} />
+          )}
           <Button
             variant="primary"
             size="lg"
@@ -1813,6 +1902,14 @@ function Cobrar({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** La marca del talonario sin serie en el selector de la caja (una serie nunca lleva «_»). */
+const SIN_SERIE = "_sin_serie_";
+
+/** ¿El cobro se paró porque no quedan números de control? (E-17) */
+function sinControl(e: unknown): boolean {
+  return e instanceof LlamadaApiError && e.body.code === "FISCAL_NUMBERING_INVALID";
 }
 
 function PagoFila({
@@ -1906,6 +2003,11 @@ function VentaLista({
   const { empresa } = useSesion();
   const toast = useToast();
   const esRecibo = venta.document.kind === "receipt";
+  // H14 (decidido por criterio, §2.1): una FACTURA ofrece también imprimirse sobre la forma libre,
+  // con el mismo diálogo del detalle; el recibo no (no es fiscal). WhatsApp no se repone (E-06).
+  const [imprimiendo, setImprimiendo] = useState(false);
+  const formaLibre =
+    venta.document.kind === "invoice" && typeof venta.document.control_display === "string";
   // Sin número asignado no se inventa un «00000000»: se dice.
   const numero =
     venta.document.document_number === null
@@ -1969,13 +2071,31 @@ function VentaLista({
               </p>
             </div>
           )}
+          {formaLibre && (
+            <Button variant="secondary" className="w-full" onClick={() => setImprimiendo(true)}>
+              <Printer /> Imprimir en la forma libre
+            </Button>
+          )}
           <Button variant="secondary" className="w-full" onClick={() => void abrirPdf()}>
-            <Printer /> Imprimir
+            {formaLibre ? (
+              "PDF de cortesía"
+            ) : (
+              <>
+                <Printer /> Imprimir
+              </>
+            )}
           </Button>
           <Button variant="primary" size="lg" className="h-12 w-full" onClick={onNueva} autoFocus>
             Nueva venta
           </Button>
         </div>
+        {imprimiendo && (
+          <ImprimirFormaLibre
+            documentId={venta.document.id}
+            controlDisplay={venta.document.control_display}
+            onClose={() => setImprimiendo(false)}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );

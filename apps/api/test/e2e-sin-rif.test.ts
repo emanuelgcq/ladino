@@ -111,7 +111,7 @@ describe("sin RIF, recibos: nada de IVA ni de domicilio fiscal", () => {
   it("un cliente empresa se registra sin «domicilio fiscal»: un recibo no lo imprime", async () => {
     const r = await pedir(SIN_RIF, "/v1/customers", {
       company_id: SIN_RIF,
-      tax_id: `J${RUN.length}0${Date.now() % 100000000}`,
+      tax_id: `J80${String(Date.now()).slice(-7)}`,
       legal_name: "Abasto La Esquina",
     });
     expect(r.status).toBe(201);
@@ -120,7 +120,7 @@ describe("sin RIF, recibos: nada de IVA ni de domicilio fiscal", () => {
   it("VARIANTE ROTA: con RIF, el mismo cliente sigue exigiendo la dirección de la factura", async () => {
     const r = await pedir(CON_RIF, "/v1/customers", {
       company_id: CON_RIF,
-      tax_id: `J${RUN.length}1${Date.now() % 100000000}`,
+      tax_id: `J81${String(Date.now()).slice(-7)}`,
       legal_name: "Constructora Formal",
     });
     expect(r.status).toBe(422);

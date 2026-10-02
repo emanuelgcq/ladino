@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { formatearDocumento } from "@ladino/schemas";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FilePlus2, FileSpreadsheet, Printer } from "lucide-react";
 import { useSesion } from "../../app/session.js";
@@ -110,6 +111,16 @@ function Paginador({
  *     lo dice y la pantalla lo repite: un cero puesto en silencio produciría
  *     una cuota falsa.
  */
+/** F-09: el mes calendario de una fecha `AAAA-MM-DD` (fecha civil, sin instante ni zona). */
+function mesDe(fecha: string): { from: string; to: string } {
+  const [a, m] = fecha.split("-").map(Number) as [number, number];
+  const ultimo = new Date(Date.UTC(a, m, 0)).getUTCDate();
+  return {
+    from: `${fecha.slice(0, 7)}-01`,
+    to: `${fecha.slice(0, 7)}-${String(ultimo).padStart(2, "0")}`,
+  };
+}
+
 function mesAnterior(): { from: string; to: string } {
   // El mes anterior del día de CARACAS, no del día UTC (CLAUDE.md §3).
   const m = mesLocalAnterior();
@@ -139,7 +150,8 @@ export function Declaraciones(): React.JSX.Element {
       <Tabs defaultValue="periodo">
         <TabsList className="mb-3">
           <TabsTab value="periodo">El período</TabsTab>
-          <TabsTab value="retenciones">Retenciones que nos hicieron</TabsTab>
+          {/* L-12 (ADR-0072 §9): el nombre dice de quién es la retención. */}
+          <TabsTab value="retenciones">Retenciones que nos practicaron (clientes)</TabsTab>
           <TabsTab value="calendario">Vencimientos</TabsTab>
         </TabsList>
         <TabsPanel value="periodo">
@@ -148,7 +160,13 @@ export function Declaraciones(): React.JSX.Element {
         <TabsPanel value="retenciones">
           {/* La clave reinicia la página al cambiar el período: la página 3 de
               un período no es la página 3 de otro. */}
-          <Retenciones key={`${rango.from}_${rango.to}`} desde={rango.from} hasta={rango.to} />
+          <Retenciones
+            key={`${rango.from}_${rango.to}`}
+            desde={rango.from}
+            hasta={rango.to}
+            // F-09: tras cargar, la lista salta al período del comprobante recién cargado.
+            onCargado={(fecha) => setRango(mesDe(fecha))}
+          />
         </TabsPanel>
         <TabsPanel value="calendario">
           <Calendario />
@@ -486,7 +504,15 @@ function Periodo({ desde, hasta }: { desde: string; hasta: string }): React.JSX.
   );
 }
 
-function Retenciones({ desde, hasta }: { desde: string; hasta: string }): React.JSX.Element {
+function Retenciones({
+  desde,
+  hasta,
+  onCargado,
+}: {
+  desde: string;
+  hasta: string;
+  onCargado: (fecha: string) => void;
+}): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const [pagina, setPagina] = useState(1);
   // El servidor pagina (default 50) y manda `total`: sin paginador, la fila 51
@@ -503,7 +529,7 @@ function Retenciones({ desde, hasta }: { desde: string; hasta: string }): React.
   if (retenciones.isError) {
     return (
       <div className="space-y-4">
-        <CargarRetencion />
+        <CargarRetencion onCargado={onCargado} />
         <FalloDeCarga error={retenciones.error} reintentar={() => void retenciones.refetch()} />
       </div>
     );
@@ -512,10 +538,10 @@ function Retenciones({ desde, hasta }: { desde: string; hasta: string }): React.
 
   return (
     <div className="space-y-4">
-      <CargarRetencion />
+      <CargarRetencion onCargado={onCargado} />
       <Card>
         <CardHeader>
-          <CardTitle>Retenciones de IVA que nos practicaron</CardTitle>
+          <CardTitle>Retenciones que nos practicaron (clientes)</CardTitle>
           <CardDescription>
             Los comprobantes que entregan los clientes que son agentes de retención. Cargar uno
             abona la factura afectada por su importe exacto: no entra dinero en caja, pero el
@@ -579,13 +605,25 @@ function Retenciones({ desde, hasta }: { desde: string; hasta: string }): React.
  * vigente de retenciones de IVA (PA SNAT/2025/000054); qué artículo fija cada
  * porcentaje lo confirma el asesor, y por eso el texto de ayuda no lo inventa.
  */
-function CargarRetencion(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+/**
+ * Cargar el comprobante de retención que el cliente entrega al pagar (ADR-0072 §5, F-11). Vive
+ * donde se COBRA (DetalleFactura, con la factura ya elegida) y aquí; lo carga quien tiene
+ * `ar.retention.register` — el contador ya no ve el botón para recibir un 403.
+ */
+export function CargarRetencion({
+  onCargado,
+  inicial,
+}: {
+  onCargado: (fecha: string) => void;
+  /** Desde la ficha de la factura: el cliente y la factura ya elegidos. */
+  inicial?: { cliente: EntityOption; factura: EntityOption };
+}): React.JSX.Element | null {
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const qc = useQueryClient();
   const [abierto, setAbierto] = useState(false);
-  const [cliente, setCliente] = useState<EntityOption | null>(null);
-  const [factura, setFactura] = useState<EntityOption | null>(null);
+  const [cliente, setCliente] = useState<EntityOption | null>(inicial?.cliente ?? null);
+  const [factura, setFactura] = useState<EntityOption | null>(inicial?.factura ?? null);
   const [numero, setNumero] = useState("");
   const [fecha, setFecha] = useState(() => hoyLocal());
   const [base, setBase] = useState("");
@@ -595,8 +633,8 @@ function CargarRetencion(): React.JSX.Element {
   const [enviando, setEnviando] = useState(false);
 
   function limpiar(): void {
-    setCliente(null);
-    setFactura(null);
+    setCliente(inicial?.cliente ?? null);
+    setFactura(inicial?.factura ?? null);
     setNumero("");
     setBase("");
     setMonto("");
@@ -627,6 +665,7 @@ function CargarRetencion(): React.JSX.Element {
       await qc.invalidateQueries({ queryKey: ["iva-periodos", empresa.id] });
       limpiar();
       setAbierto(false);
+      onCargado(fecha);
     } catch (e) {
       setError(e);
     } finally {
@@ -641,11 +680,12 @@ function CargarRetencion(): React.JSX.Element {
     importeValido(base.trim().replace(",", ".")) &&
     importeValido(monto.trim().replace(",", "."));
 
+  if (!puede("ar.retention.register")) return null;
   if (!abierto) {
     return (
       <Button variant="secondary" onClick={() => setAbierto(true)}>
         <FilePlus2 className="mr-2 h-4 w-4" />
-        Cargar un comprobante
+        Cargar un comprobante de retención
       </Button>
     );
   }
@@ -679,7 +719,7 @@ function CargarRetencion(): React.JSX.Element {
                   return r.items.map((c) => ({
                     id: c.id,
                     label: c.legal_name,
-                    ...(c.tax_id === null ? {} : { detalle: c.tax_id }),
+                    ...(c.tax_id === null ? {} : { detalle: formatearDocumento(c.tax_id) }),
                   }));
                 }}
               />
@@ -964,7 +1004,7 @@ function CargarVencimiento(): React.JSX.Element {
                 onValueChange={setObligacion}
                 options={[
                   { value: "iva", label: "Declaración de IVA" },
-                  { value: "ret_iva", label: "Retenciones de IVA" },
+                  { value: "ret_iva", label: "Retenciones que practicamos (a proveedores)" },
                   { value: "igtf", label: "IGTF percibido" },
                   { value: "islr", label: "ISLR" },
                 ]}

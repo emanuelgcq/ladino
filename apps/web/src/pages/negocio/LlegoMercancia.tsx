@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { formatearDocumento } from "@ladino/schemas";
 import { useNavigate, useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, ClipboardList, Package, Plus, Trash2, Truck, User } from "lucide-react";
@@ -246,7 +247,7 @@ export function LlegoMercancia(): React.JSX.Element {
       return r.items.map((s) => ({
         id: s.id,
         label: s.legal_name,
-        ...(s.tax_id === null ? {} : { detalle: s.tax_id }),
+        ...(s.tax_id === null ? {} : { detalle: formatearDocumento(s.tax_id) }),
       }));
     },
     [llamar],

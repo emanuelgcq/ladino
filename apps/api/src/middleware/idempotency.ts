@@ -67,6 +67,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export interface IdempotencyConfig {
   readonly sql: Sql;
   readonly ttlHours?: number;
+  /**
+   * Hash CANÓNICO de la petición, para las rutas cuyo cuerpo crudo no es estable entre
+   * reintentos: un multipart lleva un boundary aleatorio, y el mismo archivo reenviado tendría
+   * otro hash (ADR-0074, H4). Sin él, el hash es el de los bytes crudos, como siempre.
+   */
+  readonly canonicalHash?: (c: Context) => Promise<Buffer>;
 }
 
 interface Reserva {
@@ -118,8 +124,10 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
     const { actor } = c.get("ladino.auth");
     const ctx = c.get("ladino.ctx");
     const companyId = ctx.companyId;
-    const bytes = new Uint8Array(await c.req.arrayBuffer());
-    const cuerpo = hashCuerpo(bytes);
+    // Con hash canónico NO se leen los bytes crudos: Hono no sabe rehacer un formData desde un
+    // arrayBuffer ya consumido (pierde el content-type), y el handler no podría leer el archivo.
+    const bytes = cfg.canonicalHash ? null : new Uint8Array(await c.req.arrayBuffer());
+    const cuerpo = bytes === null ? await cfg.canonicalHash!(c) : hashCuerpo(bytes);
     const endpoint = `${c.req.method} ${c.req.path}`;
 
     // El alcance de la clave exige tenant (regla 5 de CLAUDE.md). En las
@@ -129,7 +137,7 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
     // la AUTORIZACIÓN sobre ese tenant no es asunto de este middleware: la
     // hace el caso de uso, que responderá 404/403 y dejará la clave `failed`.
     let tenantId = ctx.tenantId;
-    if (tenantId === null) {
+    if (tenantId === null && bytes !== null) {
       try {
         const json = JSON.parse(new TextDecoder().decode(bytes)) as { tenant_id?: unknown };
         if (typeof json.tenant_id === "string") tenantId = json.tenant_id;

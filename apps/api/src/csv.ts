@@ -9,7 +9,7 @@
  *     comilla escapada (RFC 4180);
  *   · BOM de UTF-8 al inicio, retornos \r\n o \n;
  *   · los NÚMEROS no se interpretan aquí: cada celda sale como TEXTO y quien
- *     importa decide («2,50» es coma decimal — la resuelve leerImporte).
+ *     importa decide con el formato DECLARADO (ADR-0074: leerNumeroDeclarado, en el dominio).
  */
 
 import { DominioError } from "./middleware/errors.js";
@@ -91,7 +91,10 @@ export function pareceCsv(nombre: string, bytes: Uint8Array): boolean {
  * el handler de importación no sabe de dónde vino. Los importes se leen como
  * el texto de la celda, nunca como el float de Excel.
  */
-export async function leerMatriz(archivo: File): Promise<string[][]> {
+export async function leerMatriz(
+  archivo: File,
+  formatoNumeros?: "comma_decimal" | "dot_decimal",
+): Promise<string[][]> {
   const bytes = new Uint8Array(await archivo.arrayBuffer());
   if (pareceCsv(archivo.name, bytes)) {
     return parseCsv(new TextDecoder("utf-8").decode(bytes));
@@ -111,7 +114,32 @@ export async function leerMatriz(archivo: File): Promise<string[][]> {
     const fila: string[] = [];
     const row = hoja.getRow(n);
     for (let col = 1; col <= hoja.columnCount; col++) {
-      fila.push(String(row.getCell(col).text ?? ""));
+      const celda = row.getCell(col);
+      // Una celda NUMÉRICA de Excel es un número, no un texto con formato: con el formato de
+      // números declarado (ADR-0074, C-01) se escribe en ESE formato, para que «0,125» no se lea
+      // como 125. String() da la representación más corta que reproduce el número tecleado.
+      // Una celda con FÓRMULA (también la compartida) guarda su último resultado en `result`:
+      // si es numérico, se trata igual que un número (H7).
+      const valor: unknown = celda.value;
+      const numero =
+        typeof valor === "number"
+          ? valor
+          : typeof valor === "object" &&
+              valor !== null &&
+              "result" in valor &&
+              typeof (valor as { result?: unknown }).result === "number"
+            ? (valor as { result: number }).result
+            : null;
+      // A3, decidido por criterio: el número que la persona VE en Excel. Excel enseña 15 cifras
+      // significativas, así que el ruido binario de una fórmula (19,99 × 1,16 = 23,188399999999998)
+      // o de una suma (0,1 + 0,2) se representa con esas 15: «23.1884», «0.3». Alternativa
+      // descartada: rechazar la celda con ruido.
+      if (formatoNumeros !== undefined && numero !== null) {
+        const texto = String(Number(numero.toPrecision(15)));
+        fila.push(formatoNumeros === "comma_decimal" ? texto.replace(".", ",") : texto);
+      } else {
+        fila.push(String(celda.text ?? ""));
+      }
     }
     matriz.push(fila);
   }

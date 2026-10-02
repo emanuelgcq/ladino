@@ -50,12 +50,8 @@ select is(
 -- la NC A-1 y la factura A-1 terminarían con el MISMO 00000001 impreso.
 -- CONDUCTA FINAL decidida (sección 2.1): esto se RECHAZA — un solo
 -- correlativo por emisor e identificador, sin importar la clase.
-select todo(
-  'G-01: fiscal_number_ranges no tiene ninguna defensa contra el solape entre '
-  'clases (ni dentro de la misma clase). Se cierra con una constraint de '
-  'exclusión sobre (company_id, printer_source_identifier, [range_from,range_to]) '
-  'que ignore `kind`, sin tocar esta aserción.',
-  1);
+-- G-01 cerrado por 20260928160000_one_control_sequence_per_issuer.sql (ADR-0071):
+-- el todo() se quitó sin tocar la aserción.
 select throws_ok($$
   insert into public.fiscal_number_ranges
     (tenant_id, company_id, kind, series, range_from, range_to, next_available, printer_source)

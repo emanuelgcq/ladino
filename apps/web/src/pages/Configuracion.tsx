@@ -33,14 +33,19 @@ export function Configuracion(): React.JSX.Element {
 
   const ajustes = useQuery({
     queryKey: ["ajustes", empresa.id],
-    queryFn: () => llamar<{ allow_unidentified_sales: boolean }>("/v1/company-settings"),
+    queryFn: () =>
+      llamar<{ allow_unidentified_sales: boolean; print_control_number: boolean }>(
+        "/v1/company-settings",
+      ),
   });
   const cambiar = useMutation({
-    mutationFn: (v: boolean) =>
+    mutationFn: (
+      cambio: { allow_unidentified_sales: boolean } | { print_control_number: boolean },
+    ) =>
       llamar("/v1/company-settings", {
         method: "PUT",
         headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ allow_unidentified_sales: v }),
+        body: JSON.stringify(cambio),
       }),
     onSuccess: () => {
       toast.success("Guardado");
@@ -139,7 +144,7 @@ export function Configuracion(): React.JSX.Element {
                 id="cfg-sin-identificar"
                 checked={ajustes.data.allow_unidentified_sales}
                 disabled={cambiar.isPending}
-                onCheckedChange={(v: boolean) => cambiar.mutate(v)}
+                onCheckedChange={(v: boolean) => cambiar.mutate({ allow_unidentified_sales: v })}
                 aria-label="Permitir ventas sin identificar al cliente"
               />
             ) : ajustes.isError ? (
@@ -157,6 +162,41 @@ export function Configuracion(): React.JSX.Element {
           </div>
         </CardContent>
       </Card>
+
+      {/* ADR-0071 §4: solo quien factura tiene forma libre. */}
+      {conRif && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Impresión en la forma libre</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="cfg-control-impreso">
+                  Imprimir el número de control en el cuerpo de la factura
+                </Label>
+                <CardDescription>
+                  La imprenta ya trae el número de control preimpreso en cada hoja, y Ladino nunca
+                  lo imprime encima. Encendido, lo repite junto al número de la factura (como
+                  00-00001234), para encontrarlo de un vistazo. Apagado o encendido, queda
+                  registrado en el documento.
+                </CardDescription>
+              </div>
+              {ajustes.data !== undefined ? (
+                <Switch
+                  id="cfg-control-impreso"
+                  checked={ajustes.data.print_control_number}
+                  disabled={cambiar.isPending}
+                  onCheckedChange={(v: boolean) => cambiar.mutate({ print_control_number: v })}
+                  aria-label="Imprimir el número de control en el cuerpo de la factura"
+                />
+              ) : (
+                <Skeleton className="h-5 w-9 shrink-0 rounded-full" aria-label="Cargando" />
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

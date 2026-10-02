@@ -3,8 +3,26 @@
 > Fuente: PA SNAT/2011/00071 (G.O. 39.795, 08-11-2011), texto leído en
 > https://tributos.ivecofi.net/informacion/legislacion/providencias/pa-2011-71, verificado el
 > 2026-09-28 (reproducción no oficial). Los ID son **estables**: un test los recorrerá sobre el
-> PDF real de cada clase de documento (decisión 2.4 del dueño, 2026-09-28). Ese test se escribe
-> en la ola 2, con el modelo del PDF nuevo; hoy solo existe el del control único (pgTAP 075). La columna «Origen» distingue lo que exige la
+> PDF real de cada clase de documento (decisión 2.4 del dueño, 2026-09-28). Ese test existe
+> desde la ola 2: `apps/api/test/e2e-checklist-factura.test.ts`, sobre el PDF de la factura, la NC,
+> la ND, el recibo y el recibo de devolución de tres empresas (con RIF y especial en USD, con RIF
+> ordinaria en Bs con el control apagado en el cuerpo, sin RIF). **Qué mira en cada destino:**
+> - **cortesía** (sin destino): FC-01 a FC-08, FC-10 a FC-12, FC-14 a FC-16, FC-23 a FC-26, FC-28 a
+>   FC-32, con VALORES (subtotal, total, total en USD, tasa, total sin IVA de una línea), y la marca de
+>   cortesía en cada página;
+> - **papel** (`?destino=papel`): FC-01, FC-02, FC-05 (sin el RIF del emisor, que es preimpreso), FC-06
+>   a FC-08, FC-10 a FC-13, FC-17, FC-18 (lo preimpreso en blanco), FC-23 a FC-25 y el control en el
+>   cuerpo según el ajuste;
+> - **vista** (`?destino=vista`): FC-03, FC-04, FC-15, FC-16 y FC-18 (lo preimpreso, sombreado).
+> **Qué NO mira en el PDF:** FC-09 (el fixture no lleva recargos ni descuentos en la factura; en las
+> notas lo cubre FC-25), FC-19 (conservación: el append-only), FC-20 (pgTAP 080), FC-22 (es el mismo
+> bloque corrido sobre la NC y la ND), FC-33 (familia G-10) y la GEOMETRÍA (dónde cae cada cosa en la
+> hoja: R-60). FC-27 (IGTF del SPE) queda `todo` hasta E-03. **FC-34** (art. 33) se prueba al emitir
+> (16 filas → 422; 15 líneas de 200 caracteres → 422; tope configurable) y en el papel (un documento de varias páginas → 422). **FC-07** se
+> recorre también con el cliente de mostrador: sin identificar, la factura no se emite (P-57); con nombre
+> y cédula, el PDF los imprime; con pasaporte, el rótulo dice «Pasaporte». El número impreso lleva
+> «Serie T N° …» (arts. 26-27).
+> La columna «Origen» distingue lo que exige la
 > **norma** de lo que añade una **decisión del dueño**: un fallo de «norma» es incumplimiento; un
 > fallo de «decisión» es un defecto de producto.
 > Ladino emite sobre **formas libres** (art. 6 num. 2 y art. 31). Lo que la imprenta preimprime
@@ -18,7 +36,7 @@
 | FC-02 | 13.2 | Numeración consecutiva y única | norma | Ladino | número presente; correlativo sin huecos por serie |
 | FC-03 | 13.3 | Número de control preimpreso | norma | imprenta (forma libre) | Ladino registra el control; la vista previa lo sombrea; el PDF de cortesía lo muestra con identificador (FC-29) |
 | FC-04 | 13.4 | Rango de control asignado: «desde el N° … hasta el N° …» | norma | imprenta | registrado en el talonario; no se sobreimprime |
-| FC-05 | 13.5 | Nombre o razón social, domicilio fiscal y RIF del emisor | norma | Ladino (en forma libre la imprenta preimprime solo el RIF, art. 31) | los tres presentes, del snapshot; RIF con la grafía de FC-26 |
+| FC-05 | 13.5 | Nombre o razón social, domicilio fiscal y RIF del emisor | norma | Ladino (en forma libre la imprenta preimprime solo el RIF, art. 31) | los tres presentes, del snapshot; RIF con la grafía de FC-30 |
 | FC-06 | 13.6 | Fecha de emisión en 8 dígitos | norma | Ladino | `dd/mm/aaaa` |
 | FC-07 | 13.7 | Adquirente: nombre o razón social y RIF; persona natural sin uso tributario: cédula o pasaporte | norma | Ladino | RIF (o cédula o pasaporte) presente |
 | FC-08 | 13.8 | Descripción de la venta o servicio con cantidad y monto; **«(E)»** junto a lo exento, exonerado o no sujeto | norma | Ladino | cada línea con cantidad y monto; toda línea de tratamiento 0 lleva «(E)» |
@@ -62,3 +80,4 @@
 | FC-31 | Columnas coherentes: precio unitario sin IVA, total de línea sin IVA, subtotal = suma de la columna, IVA por alícuota, total | decisión 2.4 / E-10 (desarrolla 13.8-13.12) |
 | FC-32 | El PDF descargado o enviado lleva «Copia de cortesía · La factura válida es la impresa en forma libre con control N° …» | decisión 2.3 (el PDF no es factura: la factura digital solo existe por la PA 102) |
 | FC-33 | «Anulación» como ajuste del 13.9 solo si el documento no salió del establecimiento (G-10); todo lo demás es NC | decisión G-10 (sobre arts. 13.9, 22 y 36) |
+| FC-34 | Cada factura, NC o ND sobre forma libre ocupa UNA forma; si no cabe, se emiten varios documentos (PA 00071 art. 33). Ladino: tope de FILAS IMPRESAS por empresa (por omisión 15, máximo 18), 422 al emitir, y el papel rechaza lo que pase de una página | norma (art. 33) + decisión por criterio, opción (a) |

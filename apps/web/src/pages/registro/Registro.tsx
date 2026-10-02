@@ -16,6 +16,7 @@ import {
 import { API_URL } from "../../lib.js";
 import { LogoLadino } from "../../components/LogoLadino.js";
 import { Button } from "../../ui/button.js";
+import { avisoDigitoRif, LETRAS_RIF, leerRif } from "@ladino/schemas";
 import { formatearDocumento } from "../negocio/comunes.js";
 import { hoyLocal } from "../../fechas.js";
 
@@ -54,6 +55,7 @@ type Paso =
   | "rif-numero"
   | "razon"
   | "direccion"
+  | "tipo"
   | "logo"
   | "contacto"
   | "tu"
@@ -67,14 +69,19 @@ const PASOS: readonly Paso[] = [
   "rif-numero",
   "razon",
   "direccion",
+  "tipo",
   "logo",
   "contacto",
   "tu",
   "resumen",
 ];
 
-/** Los prefijos del RIF: J/G empresa y gobierno, V/E persona, P pasaporte. */
-const PREFIJOS_RIF = ["J", "V", "E", "G", "P"] as const;
+/**
+ * Las seis letras del RIF, de la función compartida (A-08; regla del dueño del 2026-09-28):
+ * J jurídica, G gobierno, V/E persona natural, P persona con pasaporte, C. J primero: es la
+ * que más se registra.
+ */
+const PREFIJOS_RIF = ["J", ...LETRAS_RIF.filter((l) => l !== "J")] as const;
 
 const RUBROS: {
   code: string;
@@ -137,6 +144,10 @@ interface Datos {
   duenoCedula: string;
   /** ADR-0069 §3 (K-05): inicio de actividades, YYYY-MM-DD. Vacío = hoy. */
   inicioActividades: string;
+  /** ADR-0072 §1 (A-03): con RIF, el tipo de contribuyente. Vacío = sin declarar (no factura). */
+  tipoContribuyente: "" | "ordinario" | "especial";
+  /** Si es especial: la fecha de notificación de la providencia, YYYY-MM-DD. */
+  notificadoEspecial: string;
 }
 
 const DATOS_VACIOS: Datos = {
@@ -155,6 +166,8 @@ const DATOS_VACIOS: Datos = {
   duenoNombre: "",
   inicioActividades: "",
   duenoCedula: "",
+  tipoContribuyente: "",
+  notificadoEspecial: "",
 };
 
 // ── El borrador en sessionStorage ────────────────────────────────────────────
@@ -265,7 +278,7 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
       "nombre",
       "rubro",
       "rif",
-      ...(conRif ? (["rif-numero", "razon", "direccion"] as Paso[]) : []),
+      ...(conRif ? (["rif-numero", "razon", "direccion", "tipo"] as Paso[]) : []),
       "logo",
       "contacto",
       "tu",
@@ -305,8 +318,23 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
       setAviso("Necesitamos el número del RIF.");
       return;
     }
+    // La estructura la decide el servidor (422); aquí se avisa antes con la MISMA función.
+    if (paso === "rif-numero" && !leerRif(`${d.prefijoRif}${d.numeroRif}`).valido) {
+      setAviso(
+        "El RIF lleva nueve dígitos después de la letra, como en el certificado: J-40123456-7.",
+      );
+      return;
+    }
     if (paso === "razon" && d.razonSocial.trim().length < 3) {
       setAviso("Necesitamos la razón social, como aparece en el RIF.");
+      return;
+    }
+    if (paso === "tipo" && d.tipoContribuyente === "") {
+      setAviso("Dinos qué tipo de contribuyente eres: sin eso no se puede facturar.");
+      return;
+    }
+    if (paso === "tipo" && d.tipoContribuyente === "especial" && d.notificadoEspecial === "") {
+      setAviso("Necesitamos la fecha en que te notificaron la providencia.");
       return;
     }
     if (paso === "direccion" && d.direccion.trim().length < 5) {
@@ -356,6 +384,16 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
                 tax_id: rifNormalizado,
                 legal_name: d.razonSocial.trim(),
                 fiscal_address: d.direccion.trim(),
+                ...(d.tipoContribuyente === ""
+                  ? {}
+                  : {
+                      taxpayer: {
+                        taxpayer_type_code: d.tipoContribuyente,
+                        ...(d.tipoContribuyente === "especial"
+                          ? { notified_on: d.notificadoEspecial }
+                          : {}),
+                      },
+                    }),
               }
             : {}),
           ...(d.rubro === null ? {} : { business_type: d.rubro }),
@@ -628,6 +666,15 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
                 {formatearDocumento(rifNormalizado)}
               </p>
             )}
+            {/* El dígito verificador solo AVISA: se puede seguir (regla del dueño, A-08). */}
+            {avisoDigitoRif(rifNormalizado) !== null && (
+              <p
+                role="status"
+                className="mt-2 text-center text-[0.9rem] text-warning-soft-foreground"
+              >
+                {avisoDigitoRif(rifNormalizado)}
+              </p>
+            )}
           </Pregunta>
         )}
 
@@ -660,6 +707,63 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
               placeholder="Av. Bolívar, local 7, Valencia, Carabobo"
               etiqueta="Dirección fiscal"
             />
+          </Pregunta>
+        )}
+
+        {/* A-03 (ADR-0072 §1): con RIF, el tipo de contribuyente se pregunta al alta. «Formal» no
+            se ofrece mientras su periodicidad esté pendiente de fuente (P-38). */}
+        {paso === "tipo" && (
+          <Pregunta
+            titulo="¿Qué tipo de contribuyente eres?"
+            ayuda="Lo dice tu RIF; si dudas, confírmalo con tu contador. Sin esto no se puede facturar."
+            aviso={aviso}
+            onSeguir={avanzar}
+          >
+            <div
+              className="flex flex-col gap-3"
+              role="radiogroup"
+              aria-label="Tipo de contribuyente"
+            >
+              {(
+                [
+                  [
+                    "ordinario",
+                    "Ordinario",
+                    "Cobras el impuesto en tus facturas y declaras cada mes.",
+                  ],
+                  [
+                    "especial",
+                    "Especial",
+                    "Te notificaron por providencia que eres contribuyente especial.",
+                  ],
+                ] as const
+              ).map(([valor, titulo, detalle]) => (
+                <label key={valor} className="flex cursor-pointer gap-3 rounded-lg border p-3">
+                  <input
+                    type="radio"
+                    name="tipo-contribuyente"
+                    checked={d.tipoContribuyente === valor}
+                    onChange={() => pon("tipoContribuyente", valor)}
+                  />
+                  <span>
+                    <strong>{titulo}</strong>
+                    <span className="block text-sm opacity-80">{detalle}</span>
+                  </span>
+                </label>
+              ))}
+              {d.tipoContribuyente === "especial" && (
+                <label className="flex flex-col gap-1 text-sm">
+                  Fecha en que te notificaron la providencia
+                  <input
+                    type="date"
+                    className="rounded-md border px-3 py-2"
+                    value={d.notificadoEspecial}
+                    max={hoyLocal()}
+                    onChange={(e) => pon("notificadoEspecial", e.target.value)}
+                  />
+                </label>
+              )}
+            </div>
           </Pregunta>
         )}
 

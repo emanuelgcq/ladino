@@ -3,6 +3,7 @@ import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Dialog as BaseDialog } from "@base-ui-components/react/dialog";
 import { CornerDownLeft, Package, Sparkles, Users } from "lucide-react";
+import { formatearDocumento } from "@ladino/schemas";
 import { cn } from "../ui/cn.js";
 import { useSesion } from "./session.js";
 import { NAV_NEGOCIO, NAV_ADMIN, type NavItem } from "./nav.js";
@@ -99,7 +100,8 @@ export function CommandPalette({
       id: `cliente:${c.id}`,
       tipo: "cliente",
       etiqueta: c.legal_name,
-      ...(c.tax_id === null ? {} : { detalle: c.tax_id }),
+      // El documento vestido con la función compartida (P-02): antes, el crudo.
+      ...(c.tax_id === null ? {} : { detalle: formatearDocumento(c.tax_id) }),
       icono: <Users className="size-4 text-muted-foreground" />,
       to: mostrador ? "/clientes" : "/admin/clientes",
     }));

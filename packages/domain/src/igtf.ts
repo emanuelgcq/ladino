@@ -4,12 +4,14 @@ import type {
   EnableIgtfRequest,
   SetIgtfInstrumentRequest,
   SetCompanyTaxpayerTypeRequest,
+  SetCompanyTaxpayerTypeResponse,
   IgtfStatusResponse,
   IgtfInstrumentResponse,
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { exigeEmpresaQueFactura } from "./modo-venta.js";
+import { emitidosDesde, tipoVigente } from "./tipo-contribuyente.js";
 
 /**
  * IGTF — activación y configuración por empresa (migración 46).
@@ -103,8 +105,10 @@ export async function enableIgtf(
   const factura = await exigeEmpresaQueFactura(sql, input.company_id, "Percibir IGTF");
   if (!factura.ok) return factura;
 
+  // El tipo VIGENTE HOY por la única lectura (ADR-0072 §1): la columna ya no es la verdad.
   const [empresa] = await sql<{ taxpayer_type_code: string | null; enabled: boolean }[]>`
-    select taxpayer_type_code, igtf_enabled_at is not null as enabled
+    select platform.taxpayer_type_at(id, platform.caracas_day(now())) as taxpayer_type_code,
+           igtf_enabled_at is not null as enabled
       from public.companies where id = ${input.company_id}`;
   if (empresa?.taxpayer_type_code !== "especial") {
     return err({
@@ -165,51 +169,143 @@ export async function setIgtfInstrument(
 }
 
 /**
- * La clasificación fiscal de LA EMPRESA (cierra H-6: la semilla de producción
- * la puso por SQL porque este endpoint no existía). Con auditoría del valor
- * anterior, como el RIF. Si deja de ser `especial` con el IGTF activo, la
- * percepción SE APAGA en el mismo acto: un no-SPE no es agente de percepción,
- * y seguir percibiendo sería cobrar un impuesto sin designación.
+ * Declara el tipo de contribuyente de LA EMPRESA (ADR-0072 §1; A-03, B-07). Cada declaración
+ * abre una VIGENCIA nueva en la historia append-only, con acta, autor y versión de reglas: nunca
+ * sobrescribe (antes era un UPDATE de la columna, y «especial» regía desde que se guardaba).
+ *
+ * Desde cuándo rige, si no se dice: el especial, desde la notificación de la providencia; los
+ * demás, desde el inicio de actividades si es la primera declaración (lo que la empresa ya era),
+ * y desde hoy si cambia una anterior. Una fecha distinta se declara explícita y el acta la explica.
+ *
+ * Ya no exige el «modo facturas» (A-03): el tipo se declara ANTES de la primera factura, y es
+ * justo lo que la facturación pide. Si hoy deja de ser `especial` con el IGTF activo, la
+ * percepción SE APAGA en el mismo acto: un no-SPE no es agente de percepción.
  */
 export async function setCompanyTaxpayerType(
   uow: UnitOfWork,
   input: SetCompanyTaxpayerTypeRequest,
-): Promise<Result<{ taxpayer_type_code: string; igtf_disabled: boolean }, IgtfError>> {
+): Promise<Result<SetCompanyTaxpayerTypeResponse, IgtfError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
     return err({
       code: "PERMISSION_REQUIRED",
-      message: "Cambiar la clasificación fiscal exige un usuario real.",
+      message: "Declarar el tipo de contribuyente exige un usuario real.",
     });
   }
   const scope = await companyScope(sql, actor.userId, input.company_id, "company.settings.manage");
   if (!scope.ok) return scope;
   if (scope.value.companyStatus === "suspended") {
-    return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
+    return err({
+      code: "COMPANY_SUSPENDED",
+      message: "La empresa está suspendida.",
+    });
   }
-  // Marcarse sujeto pasivo ESPECIAL es de quien factura (A7). Las demás
-  // clasificaciones no abren nada fiscal y se aceptan en cualquier modo.
-  if (input.taxpayer_type_code === "especial") {
-    const factura = await exigeEmpresaQueFactura(
-      sql,
-      input.company_id,
-      "Marcarse contribuyente especial",
-    );
-    if (!factura.ok) return factura;
+  const tipo = input.taxpayer_type_code;
+  // Decidido por criterio (ADR-0072, nota de aplicación): no_contribuyente se DERIVA de no tener
+  // RIF y nunca se declara. VALIDAR-TRIBUTARIO en PENDIENTES_ASESOR.
+  if (tipo === "no_contribuyente") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "«No contribuyente» no se declara: es lo que es un negocio sin RIF. Con RIF, declara si eres ordinario o especial.",
+    });
   }
-  const [antes] = await sql<{ taxpayer_type_code: string | null; enabled: boolean }[]>`
-    select taxpayer_type_code, igtf_enabled_at is not null as enabled
-      from public.companies where id = ${input.company_id}`;
-  const apagaIgtf = antes?.enabled === true && input.taxpayer_type_code !== "especial";
+  // Hallazgo 8 (PA 00071 art. 15; M-10, P-38): el contribuyente formal no se declara ni emite
+  // hasta construir su periodicidad y sus documentos.
+  if (tipo === "formal") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "«Formal» todavía no se puede declarar: Ladino no lleva aún su periodicidad ni sus documentos (M-10). Si tu negocio es formal, consúltalo con tu asesor antes de facturar.",
+    });
+  }
+  if (tipo === "especial" && input.notified_on === undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "El contribuyente especial rige desde la notificación de la providencia: indica su fecha.",
+    });
+  }
+  if (tipo !== "especial" && input.notified_on !== undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "La fecha de notificación es solo de la calificación como contribuyente especial.",
+    });
+  }
+  const [emp] = await sql<
+    {
+      hoy: string;
+      inicio: string;
+      tiene: boolean;
+      enabled: boolean;
+      sin_rif: boolean;
+    }[]
+  >`
+    select platform.caracas_day(now())::text as hoy,
+           coalesce(c.activity_start_date, platform.caracas_day(now()))::text as inicio,
+           exists (select 1 from public.company_taxpayer_types h where h.company_id = c.id)
+             as tiene,
+           c.igtf_enabled_at is not null as enabled,
+           upper(btrim(c.tax_id)) like 'PEND-%' as sin_rif
+      from public.companies c where c.id = ${input.company_id}`;
+  if (!emp) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  // Sin RIF no hay inscripción en el IVA: la empresa es no contribuyente por hecho (D-01).
+  // Mismo código y salida que el gate de modo que había antes (409): lo que falta es el RIF y la
+  // facturación, no un dato del cuerpo.
+  if (emp.sin_rif) {
+    return err({
+      code: "REGIME_KIND_NOT_ALLOWED",
+      message:
+        "Un negocio sin RIF no es contribuyente del IVA: registra tu RIF en Mi empresa y activa la facturación en Empezar; después declara el tipo.",
+    });
+  }
+  const antes = await tipoVigente(sql, input.company_id, emp.hoy);
+  const desde =
+    input.effective_from ??
+    (tipo === "especial" ? input.notified_on! : emp.tiene ? emp.hoy : emp.inicio);
+
+  /**
+   * RETROACTIVO (decidido por criterio, ADR-0072 nota de aplicación; norma primero: la
+   * calificación rige desde la notificación, diga lo que diga el sistema). Se admite con acta, y
+   * si ya hay documentos fiscales emitidos desde esa fecha, la respuesta y el acta dicen cuántos:
+   * NO se reemiten, y hay que consultar al asesor. Alternativa descartada: prohibir fechas
+   * anteriores al último documento emitido.
+   */
+  const emitidos = await emitidosDesde(sql, input.company_id, desde);
+  const aviso =
+    emitidos > 0
+      ? `Desde el ${desde} ya hay ${emitidos} documento(s) fiscal(es) emitido(s) con el tipo anterior. ` +
+        "No se reemiten: consulta a tu asesor si hace falta corregirlos."
+      : null;
+
   await sql`
-    update public.companies
-       set taxpayer_type_code = ${input.taxpayer_type_code}
-           ${apagaIgtf ? sql`, igtf_enabled_at = null` : sql``}
-     where id = ${input.company_id}`;
+    insert into public.company_taxpayer_types
+      (tenant_id, company_id, taxpayer_type_code, effective_from, notified_on, reason,
+       rules_version, actor_id)
+    values (${scope.value.tenantId}, ${input.company_id}, ${tipo}, ${desde}::date,
+            ${input.notified_on ?? null}::date, ${input.reason}, ${RULES_VERSION},
+            ${actor.userId})`;
+  const ahora = await tipoVigente(sql, input.company_id, emp.hoy);
+  const apagaIgtf = emp.enabled && ahora !== "especial";
+  if (apagaIgtf) {
+    await sql`update public.companies set igtf_enabled_at = null where id = ${input.company_id}`;
+  }
   await auditarConfig(sql, scope.value.tenantId, input.company_id, "company.taxpayer_type.set", {
-    previous: antes?.taxpayer_type_code ?? null,
-    new: input.taxpayer_type_code,
+    previous: antes,
+    new: tipo,
+    effective_from: desde,
+    notified_on: input.notified_on ?? null,
+    reason: input.reason,
     igtf_disabled: apagaIgtf,
+    documents_issued_since: emitidos,
+    retroactive_warning: aviso,
   });
-  return ok({ taxpayer_type_code: input.taxpayer_type_code, igtf_disabled: apagaIgtf });
+  return ok({
+    taxpayer_type_code: tipo,
+    effective_from: desde,
+    notified_on: input.notified_on ?? null,
+    igtf_disabled: apagaIgtf,
+    documents_issued_since: emitidos,
+    retroactive_warning: aviso,
+  });
 }

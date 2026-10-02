@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
  * DECLARACIONES DE IVA de extremo a extremo (migración 46).
@@ -35,6 +36,8 @@ const ROL = crypto.randomUUID();
 const MEM = crypto.randomUUID();
 const ASIG = crypto.randomUUID();
 const RUN = Date.now().toString(36);
+// ADR-0072 §5: el comprobante tiene 14 dígitos (AAAAMM + 8).
+const COMPROBANTE = `202609${String(Date.now()).slice(-8)}`;
 const HOY = diaCaracas();
 const AYER = diaCaracas(-1);
 const MANANA = diaCaracas(1);
@@ -89,12 +92,15 @@ beforeAll(async () => {
                (id, tenant_id, tax_id, legal_name, functional_currency_code, taxpayer_type_code)
              values (${COMPANY}, ${TENANT}, ${`J-DEC-${RUN}`}, 'Empresa e2e declaraciones',
                      'VES', 'ordinario')`;
+    await declararTipoDeFixture(tx, COMPANY);
     await tx`insert into public.warehouses (id, tenant_id, company_id, code, name)
              values (${W1}, ${TENANT}, ${COMPANY}, 'E2E-DW1', 'Principal')`;
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope)
              values (${ROL}, null, ${`e2edecl_${RUN}`}, 'Contador declaraciones e2e', true)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
              (${ROL}, 'sales.invoice.issue'), (${ROL}, 'sales.payment.register'),
+             -- F-11 (ADR-0072 §5): cargar el comprobante tiene su permiso propio.
+             (${ROL}, 'ar.retention.register'),
              -- Emitir GENERA el kardex, así que el permiso de inventario
              -- acompaña al de emisión (igual que en el E2E de libros).
              (${ROL}, 'inventory.move'),
@@ -172,6 +178,11 @@ beforeAll(async () => {
     range_from: "1",
     range_to: "500",
     printer_source: "Imprenta E2E declaraciones",
+    printer_legal_name: "Imprenta E2E, C.A.",
+    printer_tax_id: "J-12345678-9",
+    printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+    printer_authorization_date: "2020-01-15",
+    printed_on: "2026-09-01",
   });
   if (rango.status !== 201) throw new Error(`rango: ${rango.status} ${await rango.text()}`);
 
@@ -213,7 +224,7 @@ describe("retenciones soportadas — el comprobante abona la factura", () => {
       company_id: COMPANY,
       customer_id: AGENTE,
       document_id: FACTURA1,
-      receipt_number: `AG-${RUN}-0001`,
+      receipt_number: COMPROBANTE,
       retained_on: AYER,
       base: "320.00",
       rate: "0.75",
@@ -251,7 +262,7 @@ describe("retenciones soportadas — el comprobante abona la factura", () => {
       company_id: COMPANY,
       customer_id: AGENTE,
       document_id: FACTURA1,
-      receipt_number: `AG-${RUN}-0001`,
+      receipt_number: COMPROBANTE,
       retained_on: AYER,
       base: "320.00",
       rate: "0.75",

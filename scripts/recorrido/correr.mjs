@@ -41,7 +41,7 @@ const EMPRESAS = {
 };
 const BLOQUES = "ABCDEFGHIJKLMNOP".split("");
 /** Filas de invariante (no INFORME) que `invariantes.sql` devuelve por empresa: súbela al añadir una. */
-const INVARIANTES_ESPERADOS = 12;
+const INVARIANTES_ESPERADOS = 14;
 const ESQUEMAS = ["public", "platform", "auth", "storage", "supabase_migrations"];
 
 function correr(cmd, args, { entrada, silencioso = false } = {}) {
@@ -147,6 +147,15 @@ export function restaurar() {
     correr("npx", ["supabase", "migration", "up", "--local"], { silencioso: true }),
     "supabase migration up",
   );
+  // Correcciones del escenario que necesitan el esquema NUEVO (p. ej. reclasificar un producto con
+  // una columna que añade una migración): solo si el fichero existe.
+  const post = path.join(RAIZ, "scripts", "recorrido", "corregir-escenario-post.sql");
+  if (fs.existsSync(post)) {
+    obligatorio(
+      psql(fs.readFileSync(post, "utf8"), "supabase_admin"),
+      "corregir-escenario-post.sql",
+    );
+  }
   // La semilla local (solo las contraseñas de ladino_api y ladino_worker): el reset fue sin ella.
   obligatorio(
     psql(fs.readFileSync(path.join(RAIZ, "supabase", "seed.sql"), "utf8"), "supabase_admin"),
@@ -164,6 +173,12 @@ export function restaurar() {
       silencioso: true,
     }),
     "reparación ADR-0070 (subcuentas de tesorería)",
+  );
+  obligatorio(
+    correr(process.execPath, [path.join(RAIZ, "scripts", "reparar", "p-02-rif-normalizado.mjs")], {
+      silencioso: true,
+    }),
+    "reparación P-02 (RIF normalizado)",
   );
   const docs = psql("select count(*) from public.documents").stdout.trim();
   console.log(`✓ escenario restaurado (${docs} documentos)`);
