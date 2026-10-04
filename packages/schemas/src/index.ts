@@ -87,6 +87,8 @@ export {
   UpdateCustomerRequest,
   SetCustomerTaxIdRequest,
   SetCustomerBlockedRequest,
+  SetCustomerCreditLimitRequest,
+  SetCustomerTaxpayerTypeRequest,
   CustomerResponse,
   ListCustomersResponse,
 } from "./customers.js";
@@ -175,6 +177,7 @@ export {
   LandedCostResponse,
   RetentionReceiptResponse,
   SupplierPaymentResponse,
+  SupplierPaymentPreviewResponse,
   ApAgingResponse,
   SupplierStatementResponse,
   ListPurchaseOrdersResponse,
@@ -234,6 +237,8 @@ export {
   ListPaymentMethodsResponse,
   AccountingOutcome,
   RegisterExpenseRequest,
+  ExpenseInvoice,
+  ExpensePreviewResponse,
   CreateTreasuryTransferRequest,
   TreasuryTransferResponse,
   ExpenseResponse,
@@ -251,6 +256,9 @@ export {
 } from "./treasury.js";
 export {
   NegocioResumenResponse,
+  NegocioTasaResponse,
+  TasaDelDia,
+  MotivoSinTotal,
   ConvertResponse,
   CompanySettingsResponse,
   UpdateCompanySettingsRequest,

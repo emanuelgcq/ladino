@@ -5,6 +5,8 @@ import {
   UpdateCustomerRequest,
   SetCustomerTaxIdRequest,
   SetCustomerBlockedRequest,
+  SetCustomerCreditLimitRequest,
+  SetCustomerTaxpayerTypeRequest,
   normalizarDocumento,
 } from "@ladino/schemas";
 import {
@@ -12,6 +14,8 @@ import {
   updateCustomer,
   setCustomerTaxId,
   setCustomerBlocked,
+  setCustomerCreditLimit,
+  setCustomerTaxpayerType,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -22,12 +26,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const COLUMNS = `id, tenant_id, company_id, tax_id, legal_name, trade_name, person_type_code,
   taxpayer_type_code, fiscal_address, email, phone, status, default_price_list_id,
+  credit_limit_usd::text as credit_limit_usd,
   to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
 
 /** El mismo select con alias `cu.` (el join de deuda del listado de Fase C). */
 const COLUMNS_CU = `cu.id, cu.tenant_id, cu.company_id, cu.tax_id, cu.legal_name, cu.trade_name,
   cu.person_type_code, cu.taxpayer_type_code, cu.fiscal_address, cu.email, cu.phone, cu.status,
-  cu.default_price_list_id, cu.is_system,
+  cu.default_price_list_id, cu.credit_limit_usd::text as credit_limit_usd, cu.is_system,
   to_char(cu.created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
 
 function comoPatron(termino: string): string {
@@ -63,6 +68,28 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     // `exclude_system=1`: sin el Consumidor final de sistema. El mundo del negocio no lo lista y
     // su «Mostrando 1 de 2» contaba una fila que nunca enseña (QA de pantalla 2026-09-15, h. 22).
     const sinSistema = c.req.query("exclude_system") === "1";
+    // P-05: «Te deben…» lleva a la lista ORDENADA por deuda. El orden es del servidor (la lista se
+    // pagina aquí); un valor desconocido, o pedir el orden por deuda sin pedir la deuda, es 422:
+    // caer en silencio al orden por nombre enseñaría una lista «ordenada» que no lo está.
+    const orden = c.req.query("sort") ?? "name";
+    if (
+      orden !== "name" &&
+      orden !== "debt_desc" &&
+      orden !== "debt_asc" &&
+      orden !== "overdue_desc" &&
+      orden !== "overdue_asc"
+    ) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "«sort» debe ser name, debt_desc, debt_asc, overdue_desc u overdue_asc.",
+      });
+    }
+    if (orden !== "name" && !conDeuda) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "Ordenar por deuda exige pedirla: añade with_debt=1.",
+      });
+    }
     const porPagina = Math.min(Math.max(Number(c.req.query("per_page") ?? 20) || 20, 1), 100);
     const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     // P-02: el documento se compara también NORMALIZADO por los dos lados (la misma expresión
@@ -94,11 +121,39 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
           // por documento que esta consulta tenía vive ahora DENTRO de la función (20261003210000
           // §7.3), para las cuatro pantallas a la vez. H12: sin tasa de hoy y con deuda en divisa
           // la cifra va en null — la lista no se cae y la pantalla dice «falta la tasa de hoy».
+          // P-05: y lo VENCIDO de esa deuda (platform.customer_overdue_today: la misma función de
+          // deuda, sobre los documentos cuyo vencimiento ya pasó, en el día de Caracas). Sin filas
+          // = nada vencido = «0.00». Si alguna moneda no se puede valorar hoy, null con su motivo
+          // (`sin_tasa`): nunca un 0 que diría que está al día.
           tx`left join lateral (
               select round(platform.customer_debt_today(cu.company_id, cu.id), 2)::text as debt
-            ) deuda on true`
+            ) deuda on true
+            left join lateral (
+              select case when bool_or(o.nominal is null or o.functional_today is null) then null
+                          else round(coalesce(sum(o.functional_today), 0), 2)::text end as overdue,
+                     case when bool_or(o.nominal is null or o.functional_today is null)
+                          then 'sin_tasa' end as overdue_reason
+                from platform.customer_overdue_today(cu.company_id, cu.id) o
+            ) vencido on true`
         : tx``;
-      const deudaCol = conDeuda ? ", deuda.debt" : "";
+      const deudaCol = conDeuda ? ", deuda.debt, vencido.overdue, vencido.overdue_reason" : "";
+      // Lo que NO se pudo valorar hoy (debt null: debe, y falta la tasa) va ARRIBA en los dos
+      // sentidos: no es cero ni es la mayor, es lo primero que hay que mirar. El desempate, el
+      // orden de siempre.
+      const ordenSql =
+        orden === "debt_desc"
+          ? tx`(deuda.debt is null) desc, deuda.debt::numeric desc, cu.legal_name, cu.id`
+          : orden === "debt_asc"
+            ? tx`(deuda.debt is null) desc, deuda.debt::numeric asc, cu.legal_name, cu.id`
+            : orden === "overdue_desc"
+              ? // P-05: lo vencido sin valorar, arriba (es lo primero que hay que mirar); después
+                // por vencido y, a igual vencido, por deuda total; el desempate, el nombre.
+                tx`(vencido.overdue_reason is not null) desc, vencido.overdue::numeric desc,
+                   (deuda.debt is null) desc, deuda.debt::numeric desc, cu.legal_name, cu.id`
+              : orden === "overdue_asc"
+                ? tx`(vencido.overdue_reason is not null) desc, vencido.overdue::numeric asc,
+                     cu.legal_name, cu.id`
+                : tx`cu.legal_name, cu.id`;
       return tx<Record<string, unknown>[]>`
         select ${tx.unsafe(COLUMNS_CU)} ${tx.unsafe(deudaCol)},
                count(*) over ()::int as total
@@ -106,7 +161,7 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
           ${deudaJoin}
          where cu.company_id = ${companyId} ${filtro}
            ${sinSistema ? tx`and not cu.is_system` : tx``}
-         order by cu.legal_name, cu.id
+         order by ${ordenSql}
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
     });
     const total = filas.length > 0 ? (filas[0]!["total"] as number) : 0;
@@ -339,6 +394,37 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     coherente(companyId, parsed.data.company_id);
     const { actor } = c.get("ladino.auth");
     const r = await withTransaction(sql, actor, (uow) => setCustomerBlocked(uow, id, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
+
+  // E-09: el límite de fiado. Endpoint y permiso propios (customers.credit.set); el trigger del
+  // esquema es la red y escribe el acta.
+  app.put("/v1/customers/:id/credit-limit", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const id = idValido(c.req.param("id"));
+    const parsed = SetCustomerCreditLimitRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      setCustomerCreditLimit(uow, id, parsed.data),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
+
+  // E-14: la clasificación fiscal del cliente, fuera de la edición rutinaria.
+  app.put("/v1/customers/:id/taxpayer-type", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const id = idValido(c.req.param("id"));
+    const parsed = SetCustomerTaxpayerTypeRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      setCustomerTaxpayerType(uow, id, parsed.data),
+    );
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 200);
   });

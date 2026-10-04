@@ -28,6 +28,9 @@ try {
   throw e;
 }
 
+// El build que dirán las actas (A-16). Lo pone el despliegue; sin él, se dice que no se declaró.
+const BUILD = process.env["LADINO_BUILD"]?.trim() || undefined;
+
 const sql = createClient(cfg.databaseUrl);
 
 // ADR-0031: si el DATABASE_URL trae un rol con SUPERUSER/BYPASSRLS, toda la
@@ -47,6 +50,7 @@ const app = buildApp({
   rateLimitPorMinuto: cfg.rateLimitPorMinuto,
   requestTimeoutMs: cfg.requestTimeoutMs,
   corsOrigin: cfg.corsOrigin,
+  build: BUILD,
 });
 
 const server = serve({ fetch: app.fetch, port: cfg.port, hostname: "0.0.0.0" }, () => {

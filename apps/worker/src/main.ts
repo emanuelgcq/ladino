@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { assertServiceRole, createClient } from "@ladino/db";
+import { assertServiceRole, createClient, withOrigin } from "@ladino/db";
 import { NullTransmitter } from "@ladino/fiscal";
 import { crearBucle } from "./loop.js";
 import { procesarLote } from "./outbox.js";
@@ -100,8 +100,14 @@ async function ciclo(): Promise<void> {
  * tests (R-10 cerrado): latido solo tras vuelta sana, suicidio ruidoso al 5.º
  * fallo seguido, plazo por ciclo. Aquí queda solo el CABLEADO real.
  */
+// A-16: el worker dice su propio canal. Toda acta que escriba una vuelta lo lleva.
+const ORIGEN_WORKER = {
+  channel: "worker",
+  appBuild: `worker@${process.env["LADINO_BUILD"]?.trim() || "sin-declarar"}`,
+} as const;
+
 const maquina = crearBucle({
-  ciclo,
+  ciclo: () => withOrigin(ORIGEN_WORKER, ciclo),
   latir: () => writeFileSync(latido, String(Date.now())),
   log,
   salir: (codigo) => process.exit(codigo),

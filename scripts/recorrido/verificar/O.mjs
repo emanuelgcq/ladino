@@ -154,4 +154,39 @@ c.caso(
   },
 );
 
+// O-05 (ola 4): una empresa se distingue de otra. El selector, la cabecera y «Elige la empresa»
+// enseñan el logo que ya existe o, sin logo, la inicial sobre un color DERIVADO del id de la
+// empresa (no se guarda: sin tabla ni columna nueva). Lógica y fuente, no pantalla (ver arriba).
+c.caso(
+  "O-05 (lógica, no pantalla)",
+  "E2 y E3 llevan insignia distinta y estable; la lista de empresas trae el logo; las tres vistas la pintan",
+  async () => {
+    const fs = await import("node:fs");
+    const m = await import(
+      pathToFileURL(path.join(RAIZ, "apps", "web", "src", "app", "empresa-color.ts")).href
+    );
+    const r = await pedir(PERSONAS.duenoE2E3, null, "GET", "/v1/companies");
+    const e2 = r.json.find((e) => e.id === EMPRESAS.E2);
+    const e3 = r.json.find((e) => e.id === EMPRESAS.E3);
+    afirmar(e2 && e3, "el dueño no ve E2 y E3");
+    // El logo que ya existe viaja en la lista (firmado o null): la insignia no pide nada más.
+    afirmar("logo_url" in e2 && "logo_url" in e3, "la lista de empresas no trae logo_url");
+    const c2 = m.colorDeEmpresa(e2.id);
+    const c3 = m.colorDeEmpresa(e3.id);
+    afirmar(/^hsl\(\d{1,3} 55% 30%\)$/.test(c2), `color de E2: «${c2}»`);
+    afirmar(c2 === m.colorDeEmpresa(e2.id), "el color de E2 no es estable");
+    afirmar(c2 !== c3, `E2 y E3 comparten color (${c2})`);
+    afirmar(m.inicialDeEmpresa(e2).length === 1, "la inicial de E2 no es una letra");
+    const leer = (...p) => fs.readFileSync(path.join(RAIZ, "apps", "web", "src", ...p), "utf8");
+    for (const f of ["shell.tsx", "session.tsx"]) {
+      afirmar(leer("app", f).includes("<InsigniaEmpresa"), `${f} no pinta la insignia`);
+    }
+    const insignia = leer("components", "InsigniaEmpresa.tsx");
+    afirmar(
+      insignia.includes("logo_url") && insignia.includes("colorDeEmpresa"),
+      "la insignia no usa el logo o el color derivado",
+    );
+  },
+);
+
 export default c.correr;

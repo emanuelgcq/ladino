@@ -1,3 +1,4 @@
+import { leerCantidad } from "../../components/forms.js";
 import { diaLocal } from "../../fechas.js";
 /**
  * Fechas RELATIVAS para el mundo del negocio (PARTE 16): «hoy», «ayer»,
@@ -29,7 +30,10 @@ export function fechaRelativa(iso: string): string {
  * STRINGS. Ni un float toca el porcentaje que la persona acepta.
  */
 export function porcentajeAFraccion(p: string): string | null {
-  const limpio = p.trim().replace(",", ".");
+  // F-06: el lector único de porcentajes y cantidades; aquí solo se acota la forma.
+  const leido = leerCantidad(p);
+  if (!leido.ok) return null;
+  const limpio = leido.cantidad;
   if (!/^\d{1,2}(\.\d{1,2})?$/.test(limpio)) return null;
   const [ent = "0", dec = ""] = limpio.split(".");
   const fraccion = `0.${ent.padStart(2, "0")}${dec}`.replace(/0+$/, "").replace(/\.$/, "");

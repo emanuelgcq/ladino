@@ -310,6 +310,32 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
                : tx`document_id = ${id} and debit_note_id is null`
            }
          order by occurred_at, id`;
+      // E-22 (P-05): una venta CON SALDO lo dice en su papel. El saldo es el de la única función
+      // de deuda (ADR-0075 §5) A LA FECHA EN QUE SE IMPRIME, y el vencimiento, el de
+      // platform.document_due_day (el acordado o, sin él, el día de la emisión). Solo factura y
+      // recibo emitidos: un documento pagado o anulado no trae fila con `debe`.
+      const [credito] =
+        (doc["kind"] === "invoice" || doc["kind"] === "receipt") && doc["status"] === "issued"
+          ? await tx<
+              {
+                currency: string;
+                nominal: string | null;
+                functional_today: string | null;
+                rate_date: string;
+                debe: boolean;
+                due_on: string;
+              }[]
+            >`
+        select dd.currency, dd.nominal::text as nominal,
+               round(dd.functional_today, platform.currency_minor_units(dd.functional_currency))::text
+                 as functional_today,
+               to_char(dd.rate_date, 'YYYY-MM-DD') as rate_date,
+               (dd.nominal is null or dd.nominal > 0) as debe,
+               to_char(platform.document_due_day(d.due_date, d.issued_at), 'YYYY-MM-DD') as due_on
+          from public.documents d
+         cross join lateral platform.document_debt(${companyId}, d.id) dd
+         where d.id = ${id} and d.company_id = ${companyId}`
+          : [];
       return {
         doc,
         lineas,
@@ -318,12 +344,13 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
         talonario: talonario ?? null,
         origen: origen ?? null,
         igtf,
+        credito: credito !== undefined && credito.debe ? credito : null,
       };
     });
     if (datos === null) {
       throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
     }
-    const { doc, lineas, alicuotas, subtotalColumna, talonario, origen, igtf } = datos;
+    const { doc, lineas, alicuotas, subtotalColumna, talonario, origen, igtf, credito } = datos;
     // El recibo y el recibo de devolución no son documentos fiscales (ADR-0050, ADR-0061).
     const esRecibo = doc["kind"] === "receipt" || doc["kind"] === "receipt_return";
     const esNota = doc["kind"] === "credit_note" || doc["kind"] === "debit_note";
@@ -680,6 +707,32 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
           { width: 284, align: "right" },
         );
       }
+    }
+
+    // ── La venta a crédito lo dice (E-22, P-05) ──────────────────────────────
+    // Tres leyendas NO fiscales: no cambian base, IVA ni numeración. Van en el recibo (no es
+    // forma libre) y en la copia de cortesía de la factura. NO van en `papel` ni en `vista` de
+    // la factura: el tope de filas de la forma libre (PA 00071 art. 33) está medido contra este
+    // cuerpo, y tres renglones más podrían sacar de la hoja una factura que hoy cabe justa.
+    if (credito !== null && (esRecibo || destino === "cortesia")) {
+      pdf.moveDown(0.5);
+      const derecha = { width: 284, align: "right" as const };
+      pdf.font("Helvetica-Bold").fontSize(10).text("A CRÉDITO", 280, pdf.y, derecha);
+      pdf.font("Helvetica").fontSize(9);
+      // La deuda se debe en la moneda del documento (ADR-0047): el nominal primero. Sin tasa de
+      // hoy no se inventa el equivalente; sin nominal calculable se dice, nunca «0».
+      const saldo =
+        credito.nominal === null
+          ? "no se puede calcular hoy (falta una tasa)"
+          : credito.currency === funcional
+            ? `${funcionalVestida} ${vestirImporte(credito.nominal)}`
+            : `${credito.currency} ${vestirImporte(credito.nominal)}` +
+              (credito.functional_today === null
+                ? ""
+                : ` · ${funcionalVestida} ${vestirImporte(credito.functional_today)} a la tasa ` +
+                  `del ${fechaLegible(credito.rate_date)}`);
+      pdf.text(`Saldo pendiente: ${saldo}`, 280, pdf.y, derecha);
+      pdf.text(`Vence: ${fechaLegible(credito.due_on)}`, 280, pdf.y, derecha);
     }
 
     // ── Lo que preimprime la imprenta abajo (art. 31; 13.4, 13.15, 13.16) ──

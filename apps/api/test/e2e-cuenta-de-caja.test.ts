@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture, venceDeFixture } from "./_fiado-de-fixture.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
@@ -139,6 +140,8 @@ beforeAll(async () => {
                                            person_type_code, taxpayer_type_code)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, 'Vecino Pedro', 'natural',
                      'consumidor_final')`;
+    // E-09: esta empresa de prueba fía (permiso y límite), como lo declararía una real.
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
     await tx`insert into public.suppliers
                (id, tenant_id, company_id, tax_id, legal_name, supplier_kind, person_type_code,
                 taxpayer_type_code)
@@ -257,6 +260,7 @@ describe("la cuenta de efectivo sale de la caja real del movimiento", () => {
       warehouse_id: W1,
       customer_id: CLIENTE,
       lines: [{ product_id: SERVICIO, quantity: "1" }],
+      due_date: venceDeFixture(),
     });
     expect(venta.status).toBe(201);
     const recibo = ((await venta.json()) as { document: { id: string } }).document.id;

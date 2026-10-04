@@ -3,6 +3,8 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture } from "./_fiado-de-fixture.js";
+import { borrarTasasOficiales, sembrarTasaOficial } from "./_tasa-oficial.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
@@ -36,6 +38,9 @@ const ROL = crypto.randomUUID();
 const MEM = crypto.randomUUID();
 const ASIG = crypto.randomUUID();
 const RUN = Date.now().toString(36);
+// La regla del fiado (R-82.1) mide el límite en USD: facturar a crédito necesita la tasa oficial
+// del día también cuando la factura va en bolívares. En una base limpia no hay ninguna.
+const FUENTE_TASA_FIADO = `BCV e2e-fiscal-declarations-fiado-${RUN}`;
 // ADR-0072 §5: el comprobante tiene 14 dígitos (AAAAMM + 8).
 const COMPROBANTE = `202609${String(Date.now()).slice(-8)}`;
 const HOY = diaCaracas();
@@ -99,6 +104,7 @@ beforeAll(async () => {
   sqlApi = createClient(URL_API);
   app = buildApp({ sql: sqlApi, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
   await sql`insert into auth.users (id) values (${CONTADOR}) on conflict (id) do nothing`;
+  await sembrarTasaOficial(sql, { rate: "40", rate_date: HOY, source: FUENTE_TASA_FIADO });
 
   await sql.begin(async (tx) => {
     await tx`select set_config('ladino.actor_id', ${CONTADOR}, true)`;
@@ -140,6 +146,8 @@ beforeAll(async () => {
                 taxpayer_type_code)
              values (${AGENTE}, ${TENANT}, ${COMPANY}, ${`J-AGE-${RUN}`}, 'Agente e2e',
                      'juridica', 'especial')`;
+    // R-82.1: la factura de administración nace fiada — la empresa de prueba declara que fía.
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
 
     const [p] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
@@ -216,6 +224,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await borrarTasasOficiales(sql, FUENTE_TASA_FIADO);
   await sql.end();
   await sqlApi.end();
 });

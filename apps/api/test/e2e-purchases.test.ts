@@ -485,6 +485,63 @@ describe("compras de extremo a extremo", () => {
     expect(((await lc.json()) as { code: string }).code).toBe("EXCHANGE_RATE_MISSING");
   });
 
+  it("una tasa VENCIDA no es la tasa del día: fuera del margen el gasto en dólares se para y dice de qué día falta (regla 8, migración 20261004195900)", async () => {
+    // Hay tasa oficial, pero de 8 días antes de la fecha del gasto: con el margen sembrado (7)
+    // ya no es «la tasa del día». Antes `rate_for` la servía con cualquier antigüedad y el gasto
+    // se costeaba a esa tasa sin avisar. Fechas de 2021: nadie más siembra tasas allí.
+    await sembrarTasaOficial(sql, {
+      rate: "3.00000000",
+      source: `${FUENTE_TASA} margen`,
+      rate_date: "2021-05-03",
+    });
+    const [regla] = await sql<{ margen: number; borde: string | null; fuera: string | null }[]>`
+      select (select value::int from platform.parameters
+               where key = 'official_rate_max_age_days') as margen,
+             platform.rate_at(${COMPANY}, 'USD', 'VES', '2021-05-10')::text as borde,
+             platform.rate_at(${COMPANY}, 'USD', 'VES', '2021-05-11')::text as fuera`;
+    expect(regla!.margen).toBe(7);
+    // En el borde exacto (7 días) la tasa rige; un día después, no.
+    expect(Number(regla!.borde)).toBe(3);
+    expect(regla!.fuera).toBeNull();
+
+    // Su PROPIO proveedor: el test no depende de los anteriores del fichero (aislado, `PROV`
+    // está vacío y la recepción respondía un 422 que no decía por qué).
+    const prov = await pedir("POST", "/v1/suppliers", COMPRADOR, {
+      company_id: COMPANY,
+      legal_name: `Proveedor de la tasa vencida ${RUN}`,
+      supplier_kind: "nacional",
+    });
+    expect(prov.status, await prov.clone().text()).toBe(201);
+    const proveedor = ((await prov.json()) as { id: string }).id;
+
+    const rec = await pedir("POST", "/v1/goods-receipts", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_id: proveedor,
+      warehouse_id: W1,
+      currency: "VES",
+      lines: [{ product_id: PROD_A, quantity: "1", unit_price: "100", unit_weight: "1" }],
+    });
+    expect(rec.status, await rec.clone().text()).toBe(201);
+    const recepcion = (await rec.json()) as { id: string };
+    const lc = await pedir("POST", "/v1/landed-costs", COMPRADOR, {
+      company_id: COMPANY,
+      goods_receipt_id: recepcion.id,
+      concept: "Flete en dólares con la tasa vencida",
+      allocation_method: "by_units",
+      amount: "10",
+      currency: "USD",
+      incurred_on: "2021-05-11",
+    });
+    expect(lc.status, await lc.clone().text()).toBe(409);
+    const e = (await lc.json()) as { code: string; message: string };
+    expect(e.code).toBe("EXCHANGE_RATE_MISSING");
+    // El mensaje, no solo el código (CLAUDE.md §3): dice el DÍA que falta, el del hecho. Y como
+    // es un día PASADO no manda a Mi dinero, que solo trae la tasa publicada hoy (ADR-0064).
+    expect(e.message).toBe(
+      "No hay tasa BCV guardada para el 11/05/2021. Fecha la operación en un día con tasa, o escribe a soporte para cargar la oficial de ese día.",
+    );
+  });
+
   it("el prorrateo por PESO falla si a una línea le falta el peso, en vez de repartir mal", async () => {
     const rec = await pedir("POST", "/v1/goods-receipts", COMPRADOR, {
       company_id: COMPANY,
@@ -561,6 +618,17 @@ describe("compras de extremo a extremo", () => {
         priority: 50,
       });
       expect(regla.status).toBe(201);
+      // RESPUESTA §2.15: cargar una regla fiscal deja acta, con lo que se cargó y su fuente. Lo
+      // que solo produce el caso de uso del dominio: el acta de ESTA regla, no la fila.
+      const cargada = (await regla.clone().json()) as { id: string };
+      const [acta] = await sql<{ fuente: string; rate: string; version: string }[]>`
+        select payload->>'legal_source' as fuente, payload->>'rate' as rate,
+               rules_version as version
+          from public.audit_events
+         where company_id = ${COMPANY} and event_type = 'retention.rule.created'
+           and aggregate_id = ${cargada.id}`;
+      expect(acta).toMatchObject({ fuente: FUENTE_REGLA, rate: "0.75" });
+      expect(acta?.version).toMatch(/^\d+\.\d+\.\d+\+[0-9a-f]{16}$/);
     }
 
     const r = await pedir("POST", "/v1/supplier-invoices", COMPRADOR, {
@@ -1157,5 +1225,155 @@ describe("hallazgo 1 (revisión 2026-09-28): la factura guarda el proveedor como
        where i.supplier_id = ${PROV}`;
     expect(filas.length).toBeGreaterThan(0);
     for (const f of filas) expect([f.snap_rif, f.snap_nombre]).toEqual([f.rif, f.nombre]);
+  });
+});
+
+describe("una lista de cuentas por pagar nunca se cae (migración 20261004200000)", () => {
+  it("con la última tasa a 8 días, el estado de cuenta y la antigüedad responden: lo pagado en 0, lo debido «sin_tasa» con su nominal", async () => {
+    const FUENTE = `${FUENTE_TASA} cxp`;
+    // La factura en dólares se registra con tasa de hoy; después la tasa «envejece».
+    await sembrarTasaOficial(sql, { rate: "40.00000000", source: FUENTE, rate_date: HOY });
+
+    const crearProveedor = async (nombre: string, n: number): Promise<string> => {
+      const r = await pedir("POST", "/v1/suppliers", COMPRADOR, {
+        company_id: COMPANY,
+        tax_id: `J-6${n}${String(Date.now()).slice(-6)}-0`,
+        legal_name: `${nombre} ${RUN}`,
+        supplier_kind: "nacional",
+        person_type_code: "juridica",
+        taxpayer_type_code: "ordinario",
+      });
+      expect(r.status, await r.clone().text()).toBe(201);
+      return ((await r.json()) as { id: string }).id;
+    };
+    const facturar = async (proveedor: string, numero: string): Promise<string> => {
+      const r = await pedir("POST", "/v1/supplier-invoices", COMPRADOR, {
+        company_id: COMPANY,
+        supplier_id: proveedor,
+        supplier_document_number: numero,
+        supplier_control_number: `00-${String(Date.now()).slice(-7)}`,
+        invoice_date: HOY,
+        currency: "USD",
+        lines: [{ product_id: PROD_A, quantity: "1", unit_price: "100" }],
+      });
+      expect(r.status, await r.clone().text()).toBe(201);
+      return ((await r.json()) as { id: string }).id;
+    };
+
+    const alDia = await crearProveedor("Proveedor al día", 1);
+    const debido = await crearProveedor("Proveedor al que se debe", 2);
+    const pagada = await facturar(alDia, `CXP-${RUN}-P`);
+    await facturar(debido, `CXP-${RUN}-D`);
+
+    // La del proveedor al día se paga entera, en su moneda.
+    const [saldo] = await sql<{ s: string }[]>`
+      select platform.supplier_invoice_balance(${COMPANY}, ${pagada})::text as s`;
+    const pago = await pedir("POST", "/v1/supplier-payments", COMPRADOR, {
+      company_id: COMPANY,
+      supplier_invoice_id: pagada,
+      gross_amount: saldo!.s,
+      currency: "USD",
+      instrument: "zelle",
+      reference: `ZELLE-${RUN}`,
+      allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
+    });
+    expect(pago.status, await pago.clone().text()).toBe(201);
+    expect(((await pago.json()) as { invoice_status: string }).invoice_status).toBe("paid");
+
+    // La tasa envejece: se apartan las oficiales de los últimos 7 días (y las de fecha
+    // posterior) y queda una de hace 8. `exchange_rates` es global: los ficheros corren en serie
+    // (vitest.config) y lo apartado se repone al final, pase lo que pase.
+    const HACE_8 = diaCaracas(-8);
+    const apartadas = await sql<
+      { rate: string; source: string; rate_date: string; rate_timestamp: string }[]
+    >`
+      delete from public.exchange_rates
+       where company_id is null and from_currency = 'USD' and to_currency = 'VES'
+         and rate_date > ${HACE_8}::date
+      returning rate::text as rate, source, rate_date::text as rate_date,
+                rate_timestamp::text as rate_timestamp`;
+    try {
+      await sembrarTasaOficial(sql, { rate: "39.00000000", source: FUENTE, rate_date: HACE_8 });
+      // La precondición, medida: hay una oficial guardada y NO es la tasa del día de hoy.
+      const [pre] = await sql<{ margen: number; hoy: string | null; guardadas: number }[]>`
+        select (select value::int from platform.parameters
+                 where key = 'official_rate_max_age_days') as margen,
+               platform.rate_at(${COMPANY}, 'USD', 'VES', ${HOY}::date)::text as hoy,
+               (select count(*)::int from public.exchange_rates
+                 where company_id is null and from_currency = 'USD' and to_currency = 'VES'
+                   and rate_date <= ${HOY}::date) as guardadas`;
+      expect(pre!.margen).toBe(7);
+      expect(pre!.guardadas).toBeGreaterThan(0);
+      expect(pre!.hoy).toBeNull();
+
+      type Antiguedad = {
+        total: string | null;
+        total_motivo: string | null;
+        total_por_moneda: { currency: string; nominal: string }[];
+        buckets: { bucket: string; document_count: number; amount: string | null }[];
+      };
+      type Estado = {
+        invoices: { status: string; balance: string; balance_today: string | null }[];
+        total_outstanding: string | null;
+        total_outstanding_motivo: string | null;
+        total_outstanding_por_moneda: { currency: string; nominal: string }[];
+        aging: Antiguedad;
+      };
+
+      // El proveedor al que NO se le debe nada: antes, 500 (LAD51 sobre la factura pagada).
+      const e1 = await pedir("GET", `/v1/suppliers/${alDia}/statement`, COMPRADOR);
+      expect(e1.status, await e1.clone().text()).toBe(200);
+      const c1 = (await e1.json()) as Estado;
+      expect(c1.invoices).toHaveLength(1);
+      expect(c1.invoices[0]!.status).toBe("paid");
+      expect(c1.invoices[0]!.balance_today).toBe("0.00");
+      expect(c1.total_outstanding).toBe("0.00");
+      expect(c1.total_outstanding_motivo).toBeNull();
+      expect(c1.total_outstanding_por_moneda).toEqual([]);
+      expect(c1.aging.buckets).toEqual([]);
+      expect(c1.aging.total).toBe("0");
+      expect(c1.aging.total_motivo).toBeNull();
+      const a1 = await pedir("GET", `/v1/suppliers/${alDia}/aging`, COMPRADOR);
+      expect(a1.status, await a1.clone().text()).toBe(200);
+
+      // El proveedor al que se debe en dólares: responde, y dice que falta la tasa.
+      const e2 = await pedir("GET", `/v1/suppliers/${debido}/statement`, COMPRADOR);
+      expect(e2.status, await e2.clone().text()).toBe(200);
+      const c2 = (await e2.json()) as Estado;
+      expect(c2.invoices).toHaveLength(1);
+      expect(c2.invoices[0]!.balance).toBe("116.00000000");
+      expect(c2.invoices[0]!.balance_today).toBeNull();
+      // `null` NO es cero: el total no se inventa, y lo que sí se conoce va por moneda.
+      expect(c2.total_outstanding).toBeNull();
+      expect(c2.total_outstanding_motivo).toBe("sin_tasa");
+      expect(c2.total_outstanding_por_moneda).toEqual([{ currency: "USD", nominal: "116.00" }]);
+      expect(c2.aging.total).toBeNull();
+      expect(c2.aging.total_motivo).toBe("sin_tasa");
+      expect(c2.aging.buckets).toHaveLength(1);
+      expect(c2.aging.buckets[0]).toMatchObject({
+        bucket: "0-30",
+        document_count: 1,
+        amount: null,
+      });
+
+      const a2 = await pedir("GET", `/v1/suppliers/${debido}/aging`, COMPRADOR);
+      expect(a2.status, await a2.clone().text()).toBe(200);
+      const g2 = (await a2.json()) as Antiguedad;
+      expect(g2.total).toBeNull();
+      expect(g2.total_motivo).toBe("sin_tasa");
+      expect(g2.total_por_moneda).toEqual([{ currency: "USD", nominal: "116.00" }]);
+      expect(g2.buckets[0]).toMatchObject({ bucket: "0-30", document_count: 1, amount: null });
+    } finally {
+      await borrarTasasOficiales(sql, FUENTE);
+      for (const t of apartadas) {
+        if (t.source.startsWith(FUENTE)) continue;
+        await sql`
+          insert into public.exchange_rates
+            (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+          values ('USD', 'VES', ${t.rate}::numeric, ${t.source}, ${t.rate_date}::date,
+                  ${t.rate_timestamp}::timestamptz)`;
+      }
+    }
   });
 });

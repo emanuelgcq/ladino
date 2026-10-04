@@ -1,4 +1,5 @@
 import type { Sql, TransactionSql } from "postgres";
+import { currentOrigin } from "./origin.js";
 
 /**
  * Actor de una operación. Es lo que el middleware resuelve del JWT verificado y
@@ -134,7 +135,17 @@ export async function withTransaction<T>(
       // función, que es lo que permite parametrizar el valor sin interpolarlo en
       // el texto del SQL: `SET LOCAL` no admite parámetros de bind.
       const actorId = actor.kind === "user" ? actor.userId : SYSTEM_ACTOR_ID;
-      await tx`select set_config('ladino.actor_id', ${actorId}, true)`;
+      // El ORIGEN (A-16) viaja en la MISMA sentencia: un viaje, y ningún acta puede escribirse
+      // entre el actor y su origen. Sin origen declarado van vacíos —no ausentes—, y el trigger
+      // `audit_events_origin` pone el canal por el rol.
+      const origen = currentOrigin();
+      await tx`
+        select set_config('ladino.actor_id', ${actorId}, true),
+               set_config('ladino.origin_channel', ${origen?.channel ?? ""}, true),
+               set_config('ladino.origin_ip', ${origen?.ip ?? ""}, true),
+               set_config('ladino.origin_user_agent', ${origen?.userAgent ?? ""}, true),
+               set_config('ladino.origin_session', ${origen?.sessionId ?? ""}, true),
+               set_config('ladino.origin_build', ${origen?.appBuild ?? ""}, true)`;
 
       const resultado = await fn({ sql: tx, actor });
       // Lanzar es lo ÚNICO que revierte en postgres.js. El valor viaja dentro

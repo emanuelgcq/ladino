@@ -104,7 +104,16 @@ export type UpdateCompanyProfileRequest = z.infer<typeof UpdateCompanyProfileReq
  * la corrección excepcional de abajo.
  */
 export const SetCompanyTaxIdRequest = z
-  .object({ tax_id: z.string().trim().min(1).max(30) })
+  .object({
+    tax_id: z.string().trim().min(1).max(30),
+    /**
+     * A-05 (ADR-0050: «RIF real exige razón social y domicilio fiscal»): la razón social, como
+     * aparece en el RIF. OBLIGATORIA al poner el PRIMER RIF —una empresa que nació sin RIF guarda
+     * el nombre del negocio como razón social, y la factura la congela—; con RIF ya puesto no se
+     * acepta aquí: se cambia en el perfil, con su acta.
+     */
+    legal_name: z.string().trim().min(1).max(200).optional(),
+  })
   .strict();
 export type SetCompanyTaxIdRequest = z.infer<typeof SetCompanyTaxIdRequest>;
 
@@ -150,8 +159,17 @@ export type CompanyResponse = z.infer<typeof CompanyResponse>;
  */
 export const ListCompaniesResponse = z.array(CompanyResponse);
 
-/** ADR-0048: los permisos del usuario en la empresa activa, para formar el menú. */
-export const MePermissionsResponse = z.object({ permissions: z.array(z.string()) }).strict();
+/**
+ * ADR-0048: los permisos del usuario en la empresa activa, para formar el menú.
+ *
+ * `roles` (A-04): las claves de los roles de SISTEMA con los que la persona actúa en esa empresa
+ * (`owner`, `accountant`, `cashier`…). No autoriza nada —eso lo hacen los permisos—: existe porque
+ * «Contabilidad y Libros aparecen cuando hay datos o cuando el rol es contador», y el dueño tiene
+ * todos los permisos del contador, así que un permiso no los distingue.
+ */
+export const MePermissionsResponse = z
+  .object({ permissions: z.array(z.string()), roles: z.array(z.string()) })
+  .strict();
 export type MePermissionsResponse = z.infer<typeof MePermissionsResponse>;
 
 /**

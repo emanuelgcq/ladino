@@ -25,8 +25,10 @@ import {
   simplePurchase,
   registerArrival,
   previewArrival,
+  previewSupplierPayment,
   ventasIntermedias,
   closePurchaseOrder,
+  cargarReglaDeRetencion,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
@@ -103,6 +105,68 @@ async function exigeLecturaDeCompras(
       message: `Consultar esto exige ap.read o ${ademas.join(" / ")}.`,
     });
   }
+}
+
+/**
+ * Lo que SÍ se conoce cuando falta la tasa: lo que se le debe a un proveedor en cada moneda,
+ * sin convertir (las facturas asentadas con saldo; `fecha` acota a las fechadas hasta ese día).
+ * La suma la hace el esquema. Solo se pregunta cuando el total en bolívares viene en NULL.
+ */
+async function nominalPorMonedaDeProveedor(
+  tx: TransactionSql,
+  companyId: string,
+  supplierId: string,
+  fecha: string | null,
+): Promise<{ currency: string; nominal: string }[]> {
+  return tx<{ currency: string; nominal: string }[]>`
+    select s.currency,
+           round(sum(s.saldo), platform.currency_minor_units(s.currency))::text as nominal
+      from (select i.transaction_currency as currency,
+                   platform.supplier_invoice_balance(${companyId}, i.id) as saldo
+              from public.supplier_invoices i
+             where i.company_id = ${companyId} and i.supplier_id = ${supplierId}
+               and i.status = 'posted'
+               and (${fecha}::date is null or i.invoice_date <= ${fecha}::date)) s
+     where s.saldo > 0
+     group by s.currency
+     order by s.currency`;
+}
+
+/**
+ * La antigüedad de lo que se le debe a un proveedor (`platform.ap_aging`). UNA LISTA NUNCA SE
+ * CAE (migración 20261004200000): sin tasa dentro del margen, el tramo con una factura en divisa
+ * trae `amount` en NULL. NULL no es cero —`sum()` lo descartaría en silencio—, así que el total
+ * es NULL con su motivo (`sin_tasa`) y el nominal por moneda, como el resumen del negocio.
+ */
+async function antiguedadDeProveedor(
+  tx: TransactionSql,
+  companyId: string,
+  supplierId: string,
+  fecha: string,
+): Promise<{
+  reference_date: string;
+  buckets: Record<string, unknown>[];
+  total: string | null;
+  total_motivo: "sin_tasa" | null;
+  total_por_moneda: { currency: string; nominal: string }[];
+}> {
+  const buckets = await tx<Record<string, unknown>[]>`
+    select supplier_id, bucket, document_count::int as document_count, amount::text as amount
+      from platform.ap_aging(${companyId}, ${supplierId}, ${fecha}::date)`;
+  const [total] = await tx<{ t: string | null }[]>`
+    select (case when bool_or(amount is null) then null
+                 else coalesce(sum(amount), 0) end)::text as t
+      from platform.ap_aging(${companyId}, ${supplierId}, ${fecha}::date)`;
+  const sinTasa = total !== undefined && total.t === null;
+  return {
+    reference_date: fecha,
+    buckets,
+    total: total === undefined ? "0" : total.t,
+    total_motivo: sinTasa ? "sin_tasa" : null,
+    total_por_moneda: sinTasa
+      ? await nominalPorMonedaDeProveedor(tx, companyId, supplierId, fecha)
+      : [],
+  };
 }
 
 /**
@@ -530,6 +594,21 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     return c.json(r.value, 201);
   });
 
+  /**
+   * La vista previa del pago (D-02): el MISMO caso de uso, deshecho al terminar. Sin
+   * idempotencia: no crea nada (como `/v1/arrivals/preview`).
+   */
+  app.post("/v1/supplier-payments/preview", async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = RegisterSupplierPaymentRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => previewSupplierPayment(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
+
   /** La COMPRA SIMPLE de la Fase C: orden + recepción + factura (+ pago) en un paso. */
   app.post("/v1/purchases/simple", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);
@@ -693,23 +772,8 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
           message: "Cargar una regla de retención exige el permiso retention.rules.manage.",
         });
       }
-      // Una regla cargada es DE ESTA EMPRESA (ADR-0057): retiene aquí, no en
-      // toda la instancia.
-      const [r] = await tx<Record<string, unknown>[]>`
-        insert into public.retention_rules
-          (tenant_id, company_id, jurisdiction, retention_code, concept_code, taxpayer_type,
-           supplier_person_type, formula_kind, rate, subtrahend, minimum_exempt, effective_from,
-           effective_to, legal_source, priority)
-        values ((select tenant_id from public.companies where id = ${companyId}), ${companyId},
-                ${d.jurisdiction}, ${d.retention_code}, ${d.concept_code},
-                ${d.taxpayer_type ?? null}, ${d.supplier_person_type ?? null}, ${d.formula_kind},
-                ${d.rate}, ${d.subtrahend ?? null}, ${d.minimum_exempt ?? null},
-                ${d.effective_from}::date, ${d.effective_to ?? null}, ${d.legal_source},
-                ${d.priority ?? 100})
-        returning id, jurisdiction, retention_code, concept_code, formula_kind, rate::text as rate,
-                  subtrahend::text as subtrahend, minimum_exempt::text as minimum_exempt,
-                  effective_from::text as effective_from, legal_source, priority, status`;
-      return r!;
+      // Cargar la regla y dejar su acta es una regla del dominio (§2.15): aquí, solo el permiso.
+      return cargarReglaDeRetencion(tx, companyId, d);
     });
     return c.json(fila, 201);
   });
@@ -725,13 +789,7 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
       await exigeApRead(tx, actor, companyId);
       const [ref] = await tx<{ d: string }[]>`
         select coalesce(${referencia}::date, current_date)::text as d`;
-      const buckets = await tx<Record<string, unknown>[]>`
-        select supplier_id, bucket, document_count::int as document_count, amount::text as amount
-          from platform.ap_aging(${companyId}, ${id}, ${ref!.d}::date)`;
-      const [total] = await tx<{ t: string }[]>`
-        select coalesce(sum(amount), 0)::text as t
-          from platform.ap_aging(${companyId}, ${id}, ${ref!.d}::date)`;
-      return { reference_date: ref!.d, buckets, total: total?.t ?? "0" };
+      return antiguedadDeProveedor(tx, companyId, id, ref!.d);
     });
     return c.json(cuerpo, 200);
   });
@@ -760,30 +818,42 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
          where i.company_id = ${companyId} and i.supplier_id = ${id}
            and i.status in ('posted', 'paid', 'annulled')
          order by i.invoice_date, i.id`;
-      const [totales] = await tx<{ pendiente: string; retenido: string }[]>`
+      const [totales] = await tx<{ pendiente: string | null; retenido: string }[]>`
         -- En moneda funcional, como balance_today y la antigüedad (migración 65); las filas
         -- conservan además su saldo en la moneda de la factura.
-        select coalesce((select sum(platform.supplier_debt_today(${companyId}, i.id))
-                           from public.supplier_invoices i
-                          where i.company_id = ${companyId} and i.supplier_id = ${id}
-                            and i.status in ('posted', 'paid')), 0)::text as pendiente,
+        -- UNA LISTA NUNCA SE CAE (20261004200000): sin tasa dentro del margen,
+        -- supplier_debt_today devuelve NULL para lo que se debe en divisa. NULL no es cero y
+        -- sum() lo descartaría en silencio: si alguna factura QUE SE DEBE no se pudo valorar, el
+        -- total es NULL.
+        -- LA MISMA PREGUNTA QUE ap_aging: «sin tasa» es DEUDA sin valorar (deuda NULL y saldo
+        -- nominal > 0). Una factura en divisa de saldo NEGATIVO (retenida o pagada de más) y
+        -- sin tasa también da NULL, pero no se le debe nada: no hace al total NULL —antes sí, con
+        -- el nominal vacío, mientras la antigüedad de esta misma respuesta no la contaba—. Su
+        -- saldo a favor queda en su fila, en su moneda; sin tasa no resta del total.
+        select (select case when bool_or(d.deuda is null and d.nominal > 0) then null
+                            else coalesce(sum(d.deuda), 0) end
+                  from (select platform.supplier_debt_today(${companyId}, i.id) as deuda,
+                               platform.supplier_invoice_balance(${companyId}, i.id) as nominal
+                          from public.supplier_invoices i
+                         where i.company_id = ${companyId} and i.supplier_id = ${id}
+                           and i.status in ('posted', 'paid')) d)::text as pendiente,
                coalesce((select sum(r.retained_amount) from public.supplier_retentions r
                           where r.company_id = ${companyId} and r.supplier_id = ${id}
                             and r.status <> 'cancelled'), 0)::text as retenido`;
-      const buckets = await tx<Record<string, unknown>[]>`
-        select supplier_id, bucket, document_count::int as document_count, amount::text as amount
-          from platform.ap_aging(${companyId}, ${id}, current_date)`;
       const [ref] = await tx<{ d: string }[]>`select current_date::text as d`;
-      const [totalAging] = await tx<{ t: string }[]>`
-        select coalesce(sum(amount), 0)::text as t
-          from platform.ap_aging(${companyId}, ${id}, current_date)`;
+      const pendiente = totales?.pendiente ?? null;
+      const sinTasa = totales !== undefined && pendiente === null;
       return {
         supplier_id: id,
         currency: empresa.moneda,
         invoices,
-        total_outstanding: totales?.pendiente ?? "0",
+        total_outstanding: totales === undefined ? "0" : pendiente,
+        total_outstanding_motivo: sinTasa ? ("sin_tasa" as const) : null,
+        total_outstanding_por_moneda: sinTasa
+          ? await nominalPorMonedaDeProveedor(tx, companyId, id, null)
+          : [],
         total_retained: totales?.retenido ?? "0",
-        aging: { reference_date: ref!.d, buckets, total: totalAging?.t ?? "0" },
+        aging: await antiguedadDeProveedor(tx, companyId, id, ref!.d),
       };
     });
     if (cuerpo === null)

@@ -225,6 +225,53 @@ describe("clientes de extremo a extremo", () => {
     expect(pagina.items[0]?.id).toBe(id);
   });
 
+  // P-05: el orden por deuda es del servidor. El orden CON deuda de verdad (quien debe antes que
+  // quien no) lo demuestra e2e-moneda-deuda-reversa, que tiene ventas; aquí, sus tres puertas.
+  it("P-05 · `sort`: desconocido o sin `with_debt` → 422 con su mensaje; por deuda sin ar.read → 403; con ar.read → 200 y lo no adeudado empata por nombre", async () => {
+    const raro = await pedir("GET", "/v1/customers?with_debt=1&sort=saldo", GESTOR);
+    expect(raro.status).toBe(422);
+    // El mensaje, no solo el código: los dos 422 son VALIDATION_FAILED.
+    expect(((await raro.json()) as { message: string }).message).toBe(
+      "«sort» debe ser name, debt_desc, debt_asc, overdue_desc u overdue_asc.",
+    );
+    const sinDeuda = await pedir("GET", "/v1/customers?sort=debt_desc", GESTOR);
+    expect(sinDeuda.status).toBe(422);
+    expect(((await sinDeuda.json()) as { message: string }).message).toBe(
+      "Ordenar por deuda exige pedirla: añade with_debt=1.",
+    );
+    // El gestor de este fichero tiene customer.manage y NO ar.read.
+    const vedado = await pedir("GET", "/v1/customers?with_debt=1&sort=debt_desc", GESTOR);
+    expect(vedado.status).toBe(403);
+    expect(((await vedado.json()) as { code: string }).code).toBe("PERMISSION_REQUIRED");
+    try {
+      await sql`insert into public.role_permissions (role_id, permission_key)
+                values ('e2ec0000-0000-4000-8000-0000000000e1', 'ar.read')`;
+      for (const orden of ["debt_desc", "debt_asc"]) {
+        const r = await pedir(
+          "GET",
+          `/v1/customers?with_debt=1&per_page=100&exclude_system=1&sort=${orden}`,
+          GESTOR,
+        );
+        expect(r.status, await r.clone().text()).toBe(200);
+        const { items } = (await r.json()) as { items: { legal_name: string; debt: string }[] };
+        expect(items.length).toBeGreaterThanOrEqual(2);
+        // Nadie debe aquí: todos en «0.00», y el desempate es el orden de siempre, por nombre.
+        expect(items.every((i) => i.debt === "0.00")).toBe(true);
+        const nombres = items.map((i) => i.legal_name);
+        const porNombre = (
+          (await (
+            await pedir("GET", "/v1/customers?per_page=100&exclude_system=1", GESTOR)
+          ).json()) as { items: { legal_name: string }[] }
+        ).items.map((i) => i.legal_name);
+        expect(nombres).toEqual(porNombre);
+      }
+    } finally {
+      await sql`delete from public.role_permissions
+                 where role_id = 'e2ec0000-0000-4000-8000-0000000000e1'
+                   and permission_key = 'ar.read'`;
+    }
+  });
+
   it("PUT tax-id: gestor 403; usuario con customer.tax_id.manage 200 y el valor anterior queda en la auditoría", async () => {
     expect(
       (

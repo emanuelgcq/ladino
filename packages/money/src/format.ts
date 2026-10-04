@@ -113,32 +113,91 @@ export function parseUserInput(text: string, currency: string): Result<MoneyJSON
       details: { text, currency },
     });
 
+  const read = readAmountText(text);
+  if (!read.ok) return invalid();
+
+  const money = Money.of(read.value, currency);
+  if (!money.ok) return money;
+  return ok(money.value.toJSON());
+}
+
+/** Por qué un texto no se pudo leer como importe. Códigos estables: el texto lo pone quien pinta. */
+export type AmountTextProblem =
+  | "EMPTY"
+  | "NOT_A_NUMBER"
+  | "AMBIGUOUS"
+  /** Termina en el separador: «5,» o «5.» — faltan los decimales. */
+  | "INCOMPLETE"
+  /** Con los dos separadores, los miles no van de tres en tres: «12.34,56». */
+  | "BAD_GROUPING";
+
+/**
+ * EL análisis de un importe tecleado (F-06). Vive aquí y solo aquí: `parseUserInput` y todo
+ * campo de dinero de la web leen el texto con esta función. Devuelve el número con punto
+ * decimal y sin agrupar («26.003,58» → «26003.58»), con los decimales TAL COMO se teclearon:
+ * no redondea ni rellena. Cero aritmética: es manejo de cadenas.
+ *
+ *   · «26.003,58» y «1.234.567,89»: punto de miles, coma decimal (es-VE).
+ *   · «1,234.56»: coma de miles, punto decimal.
+ *   · «26003,58» y «26003.58»: un solo separador, es el decimal.
+ *   · «1.234.567»: varios puntos en grupos de tres, son miles.
+ *   · UN SOLO separador seguido de exactamente tres cifras, sin cero inicial, es AMBIGUO, sea
+ *     punto o coma — la regla es SIMÉTRICA: «26.003» es veintiséis mil tres a la venezolana y
+ *     veintiséis con tres milésimas con punto decimal; «1,234» y «26,003» son lo mismo para quien
+ *     teclea a la americana. Se rechaza diciéndolo en vez de adivinar: un importe mil veces menor
+ *     no hace ruido. («0,125» y «0.125» no son ambiguos: nadie agrupa miles detrás de un cero.)
+ *   · Con los dos separadores, el agrupamiento va de tres en tres: «12.34,56», «1.2.3,4» y
+ *     «1.234,567.89» se rechazan (BAD_GROUPING) en vez de devolver algo que no es un número.
+ *   · «5,» y «5.» se rechazan con su motivo (INCOMPLETE): faltan los decimales.
+ *
+ * Es el lector de DINERO. Una cantidad o una tasa con tres decimales legítimos («1,250 kg»,
+ * «36,500») NO debe leerse con esta función: aquí se rechazaría por ambigua.
+ */
+export type AmountTextReading =
+  | { readonly ok: true; readonly value: string }
+  | { readonly ok: false; readonly error: AmountTextProblem };
+
+export function readAmountText(text: string): AmountTextReading {
+  const no = (error: AmountTextProblem): AmountTextReading => ({ ok: false, error });
+  const si = (value: string): AmountTextReading => ({ ok: true, value });
   // U+00A0 y U+202F son los espacios no separables que emite Intl al agrupar miles; vuelven
   // cuando el usuario copia y pega un importe ya formateado. Escritos con escape a proposito:
   // un caracter invisible dentro de una expresion regular es un bug esperando su turno.
   const compact = text.replace(/[\s\u00a0\u202f]/g, "");
-  if (compact === "" || !/^-?[\d.,]+$/.test(compact)) return invalid();
+  if (compact === "") return no("EMPTY");
+  if (!/^-?[\d.,]+$/.test(compact) || !/\d/.test(compact)) return no("NOT_A_NUMBER");
 
   const lastDot = compact.lastIndexOf(".");
   const lastComma = compact.lastIndexOf(",");
 
-  let normalized: string;
   if (lastDot >= 0 && lastComma >= 0) {
     // Están los dos: el ÚLTIMO manda como separador decimal, el otro es agrupamiento.
     const decimalAt = Math.max(lastDot, lastComma);
     const groupChar = decimalAt === lastDot ? "," : ".";
-    normalized =
-      compact.slice(0, decimalAt).split(groupChar).join("") + "." + compact.slice(decimalAt + 1);
-  } else if (lastComma >= 0) {
-    // Solo comas. Más de una es ambiguo ("1,2,3"): se rechaza en vez de suponer.
-    if (compact.indexOf(",") !== lastComma) return invalid();
-    normalized = compact.replace(",", ".");
-  } else {
-    if (lastDot >= 0 && compact.indexOf(".") !== lastDot) return invalid();
-    normalized = compact;
+    const entera = compact.slice(0, decimalAt);
+    const decimales = compact.slice(decimalAt + 1);
+    if (decimales === "") return no("INCOMPLETE");
+    // La parte entera solo lleva el separador de miles, de tres en tres; la decimal, cifras.
+    const grupos = entera.replace(/^-/, "").split(groupChar);
+    const bienAgrupado =
+      /^\d{1,3}$/.test(grupos[0] ?? "") && grupos.slice(1).every((g) => /^\d{3}$/.test(g));
+    if (!bienAgrupado || !/^\d+$/.test(decimales)) return no("BAD_GROUPING");
+    return si(entera.split(groupChar).join("") + "." + decimales);
   }
-
-  const money = Money.of(normalized, currency);
-  if (!money.ok) return money;
-  return ok(money.value.toJSON());
+  // Termina en el separador: no es «un número con muchas cifras», le faltan los decimales.
+  if (/[.,]$/.test(compact)) return no("INCOMPLETE");
+  if (lastComma >= 0) {
+    // Solo comas. Más de una es ambiguo ("1,2,3"): se rechaza en vez de suponer.
+    if (compact.indexOf(",") !== lastComma) return no("AMBIGUOUS");
+    // La misma regla que con el punto: «1,234» puede ser mil doscientos treinta y cuatro.
+    if (/^-?[1-9]\d{0,2},\d{3}$/.test(compact)) return no("AMBIGUOUS");
+    return si(compact.replace(",", "."));
+  }
+  if (lastDot >= 0 && compact.indexOf(".") !== lastDot) {
+    // Varios puntos y ninguna coma: solo pueden ser miles, y entonces van de tres en tres.
+    if (!/^-?\d{1,3}(\.\d{3})+$/.test(compact)) return no("AMBIGUOUS");
+    return si(compact.split(".").join(""));
+  }
+  if (/^-?[1-9]\d{0,2}\.\d{3}$/.test(compact)) return no("AMBIGUOUS");
+  return si(compact);
 }

@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture } from "./_fiado-de-fixture.js";
 import { borrarTasasOficiales, sembrarTasaOficial } from "./_tasa-oficial.js";
 
 /**
@@ -200,7 +201,7 @@ async function sembrarEmpresa(e: Empresa): Promise<void> {
                values (${e.tenant}, ${e.company}, ${e.clave === "ESP" ? "especial" : "ordinario"},
                        (now() - interval '30 days')::date,
                        ${e.clave === "ESP" ? sql`(now() - interval '30 days')::date` : null},
-                       'Fixture de la checklist', 'e2e')`;
+                       'Fixture de la checklist', 'domain-s0.5')`;
     }
     const mem = crypto.randomUUID();
     const asig = crypto.randomUUID();
@@ -220,6 +221,8 @@ async function sembrarEmpresa(e: Empresa): Promise<void> {
                                            person_type_code, taxpayer_type_code, fiscal_address)
              values (${e.cliente}, ${e.tenant}, ${e.company}, ${`J${nueveDigitos()}`},
                      ${`Cliente ${e.clave}`}, 'juridica', 'ordinario', 'Calle 8, Maracay')`;
+    // R-82.1: la factura de administración nace fiada — la empresa de prueba declara que fía.
+    await fiadoDeFixture(tx, e.company, [ROL]);
     const [l] = await tx<{ id: string }[]>`
       insert into public.price_lists (tenant_id, company_id, name, currency_code)
       values (${e.tenant}, ${e.company}, ${`chk-${RUN}`}, ${e.moneda}) returning id`;
@@ -341,6 +344,7 @@ beforeAll(async () => {
              (${ROL}, 'fiscal.range.manage'),
              (${ROL}, 'sales.invoice.issue'),
              (${ROL}, 'sales.return.manage'),
+             (${ROL}, 'sales.credit_note.direct'),
              (${ROL}, 'sales.payment.register'),
              (${ROL}, 'company.settings.manage'),
              (${ROL}, 'inventory.move'),

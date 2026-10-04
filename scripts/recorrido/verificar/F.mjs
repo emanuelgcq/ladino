@@ -61,11 +61,31 @@ async function ventaZelleIgtfE3() {
     select id from public.customers where company_id = ${E3i} and not is_system
        and status <> 'blocked' order by legal_name limit 1`;
   afirmar(w && p && cl, "E3 no trae depósito, tornillos con existencia o un cliente");
+  // E-09: el tornillo vale más que el USD 1,03 que se paga por Zelle, así que el resto de la
+  // venta queda FIADO (deuda de verdad, documento `issued`). Fiar exige que el cliente tenga
+  // límite: lo fija el dueño por el camino real, una vez. Es una ENTRADA del guion.
+  const [lim] = await sql`
+    select credit_limit_usd = 100000 as fijado from public.customers where id = ${cl.id}`;
+  if (!lim.fijado) {
+    const fija = await pedirIgtf(
+      PER_IGTF.duenoE2E3,
+      "E3",
+      "PUT",
+      `/v1/customers/${cl.id}/credit-limit`,
+      { company_id: E3i, credit_limit_usd: "100000" },
+    );
+    afirmar(fija.status === 200, `fijar el límite de fiado: ${fija.status} ${fija.texto}`);
+  }
   const r = await pedirIgtf(PER_IGTF.duenoE2E3, "E3", "POST", "/v1/pos/sales", {
     company_id: E3i,
     customer_id: cl.id,
     warehouse_id: w.id,
     lines: [{ product_id: p.product_id, quantity: "1" }],
+    // P-05: el abono deja saldo, y una venta que deja saldo dice cuándo se paga (entrada del
+    // guion: el día de Caracas más 15, nunca toISOString()).
+    due_date: new Intl.DateTimeFormat("en-CA", { timeZone: "America/Caracas" }).format(
+      new Date(Date.now() + 15 * 86_400_000),
+    ),
     payments: [{ instrument: "zelle", currency: "USD", amount: "1.03" }],
   });
   afirmar(r.status === 201, `venta de caja de E3: ${r.status} ${r.texto}`);
@@ -415,5 +435,195 @@ c.caso("F-04", "la lista de clientes con deuda responde 200 en E1, E2 y E3", asy
     afirmar(r.status === 200, `${e}: ${r.status} ${r.texto.slice(0, 200)}`);
   }
 });
+
+// ── Ola 4 · cobros, saldos a favor y la cartera contra el mayor (F-06, F-07, F-10, F-12) ────
+c.caso(
+  "F-06",
+  "el importe a la venezolana se lee en UN sitio y el campo dice por qué no lee",
+  async () => {
+    const formato = fs.readFileSync("packages/money/src/format.ts", "utf8");
+    afirmar(formato.includes("export function readAmountText("), "no existe readAmountText");
+    const forms = fs.readFileSync("apps/web/src/components/forms.tsx", "utf8");
+    afirmar(forms.includes('from "@ladino/money/format"'), "forms.tsx no usa el lector único");
+    afirmar(forms.includes("leerImporte(value)"), "MoneyInput no lee con leerImporte");
+    afirmar(
+      forms.includes('role="alert"') && forms.includes("{motivo}"),
+      "el campo no dice el motivo",
+    );
+    afirmar(
+      !forms.includes('value.trim().replace(",", ".")'),
+      "sigue el replace de la primera coma",
+    );
+    const cobro = fs.readFileSync("apps/web/src/components/CobrarDocumento.tsx", "utf8");
+    afirmar(!cobro.includes('.replace(",", ".")'), "CobrarDocumento sigue con su propio replace");
+  },
+);
+
+c.caso(
+  "F-07",
+  "no reproducido: su prueba vive en el E2E y los saldados no dejan residuo",
+  async () => {
+    const e2e = fs.readFileSync("apps/api/test/e2e-moneda-diferencial.test.ts", "utf8");
+    afirmar(
+      e2e.includes("F-07 · un cobro en USD que cierra a otra tasa"),
+      "falta la prueba de F-07",
+    );
+    for (const e of ["E1", "E2", "E3"]) {
+      const filas = await sql`select * from platform.settled_ledger_gaps(${EMPRESAS[e]})`;
+      afirmar(filas.length === 0, `${e}: ${filas.length} saldados con residuo`);
+    }
+  },
+);
+
+c.caso(
+  "F-10",
+  "un pago de más nace como saldo a favor: la plantilla lo lleva y nadie manda a hacer una NC",
+  async () => {
+    const ventas = fs.readFileSync("packages/domain/src/sales.ts", "utf8");
+    afirmar(
+      !ventas.includes("regístralo como saldo a favor con una nota de crédito"),
+      "el cobro sigue mandando a hacer una nota de crédito",
+    );
+    afirmar(ventas.includes("source_payment_id"), "el sobrante no nace como saldo a favor");
+    for (const e of ["E1", "E2", "E3"]) {
+      const [t] = await sql`
+      select count(*)::int as plantillas,
+             count(*) filter (where exists (
+               select 1 from public.journal_template_lines l
+                where l.template_id = t.id and l.amount_source = 'credit_surplus'
+                  and l.account_purpose = 'customer_credit_liability'
+                  and l.side = 'credit'))::int as con_linea
+        from public.journal_templates t
+       where t.company_id = ${EMPRESAS[e]} and t.effective_to is null
+         and t.source_kind = 'payment_received' and t.source_event = 'ar.payment_applied'`;
+      afirmar(t.plantillas === t.con_linea, `${e}: ${t.con_linea} de ${t.plantillas} con la línea`);
+    }
+  },
+);
+
+c.caso(
+  "F-12",
+  "la cartera por documento es la cuenta por cobrar del mayor en E1, E2 y E3",
+  async () => {
+    for (const e of ["E1", "E2", "E3"]) {
+      const filas = await sql`
+      select documents::text as documentos, ledger::text as mayor, gap::text as diferencia
+        from platform.receivables_ledger_gap(${EMPRESAS[e]})`;
+      afirmar(filas.length === 0, `${e}: ${JSON.stringify(filas[0])}`);
+    }
+  },
+);
+
+// ── Ola 4 · cobros, cuarta pasada: lo nuevo de la tercera ronda (ADR-0075 decisión 5; R-84) ──
+c.caso(
+  "F-10 (tercera ronda)",
+  "un saldo a favor RETIRADO por la reversa de su cobro no se aplica ni se reembolsa (422), y la factura vuelve a deber lo mismo",
+  async () => {
+    // ESCRIBE, y deja el escenario como estaba: paga de más una factura que E2 ya tenía por
+    // cobrar y reversa ese cobro. Quedan el cobro, su reversa y un saldo a favor retirado, con
+    // sus asientos en cero neto; la factura vuelve a su saldo y el banco al suyo.
+    const E2 = EMPRESAS.E2;
+    const [f] = await sql`
+      select d.id, d.customer_id, d.transaction_currency as moneda,
+             platform.document_balance(d.company_id, d.id)::text as saldo,
+             platform.document_balance_transaction(d.company_id, d.id)::text as saldo_tx,
+             round(platform.document_debt_today(d.company_id, d.id), 2)::text as hoy
+        from public.documents d
+       where d.company_id = ${E2} and d.kind = 'invoice' and d.status = 'issued'
+         and platform.document_balance(d.company_id, d.id) > 0
+       order by platform.document_balance(d.company_id, d.id), d.id limit 1`;
+    afirmar(f !== undefined, "el escenario no tiene una factura por cobrar en E2");
+    afirmar(
+      f.hoy !== null,
+      "no hay tasa de hoy para valorar la factura: la tabla global de tasas está vacía (no es de este caso)",
+    );
+    const banco = await monedaA.bancoBsE2();
+    const [antes] = await sql`
+      select coalesce((select balance from public.company_account_balances
+                        where account_id = ${banco.id}), 0)::text as banco`;
+    const [mas] = await sql`select (${f.hoy}::numeric + 100)::text as importe`;
+    const cobro = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/payments", {
+      company_id: E2,
+      document_id: f.id,
+      currency: "VES",
+      amount: mas.importe,
+      instrument: "transferencia",
+      account_id: banco.id,
+    });
+    afirmar(cobro.status === 201, `el pago de más: ${cobro.status} ${cobro.texto.slice(0, 300)}`);
+    const credito = cobro.json.customer_credit?.id;
+    afirmar(credito, "el pago de más no dejó un saldo a favor");
+    const rev = await pedir(
+      PERSONAS.duenoE2E3,
+      "E2",
+      "POST",
+      `/v1/payments/${cobro.json.payment.id}/reversal`,
+      { company_id: E2, reason: "Comprobación del recorrido: el cobro se reversa" },
+    );
+    afirmar(rev.status === 201, `la reversa: ${rev.status} ${rev.texto.slice(0, 300)}`);
+
+    const RETIRADO =
+      "Ese saldo a favor se retiró al reversar el cobro que lo creó: ya no se aplica ni se reembolsa.";
+    const aplicar = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/payments", {
+      company_id: E2,
+      document_id: f.id,
+      currency: f.moneda,
+      amount: "0.01",
+      instrument: "saldo_a_favor",
+      customer_credit_id: credito,
+    });
+    afirmar(aplicar.status === 422, `aplicar: esperaba 422, llegó ${aplicar.status}`);
+    afirmar(aplicar.json?.message === RETIRADO, `aplicar dice «${aplicar.json?.message}»`);
+    const reembolsar = await pedir(
+      PERSONAS.duenoE2E3,
+      "E2",
+      "POST",
+      `/v1/customer-credits/${credito}/refunds`,
+      {
+        company_id: E2,
+        account_id: banco.id,
+        whole: true,
+        reason: "Comprobación del recorrido: un saldo retirado no se reembolsa",
+      },
+    );
+    afirmar(reembolsar.status === 422, `reembolsar: esperaba 422, llegó ${reembolsar.status}`);
+    afirmar(reembolsar.json?.message === RETIRADO, `reembolsar dice «${reembolsar.json?.message}»`);
+
+    const [despues] = await sql`
+      select (select status from public.documents where id = ${f.id}) as estado,
+             platform.document_balance(${E2}, ${f.id})::text as saldo,
+             platform.document_balance_transaction(${E2}, ${f.id})::text as saldo_tx,
+             coalesce((select balance from public.company_account_balances
+                        where account_id = ${banco.id}), 0)::text as banco,
+             (select status from public.customer_credits where id = ${credito}) as credito,
+             (select applied_amount::text from public.customer_credits where id = ${credito})
+               as aplicado,
+             (select count(*)::int from public.payments
+               where customer_credit_id = ${credito}) as usos,
+             (select count(*)::int from public.customer_refunds
+               where customer_credit_id = ${credito}) as reembolsos`;
+    afirmar(despues.estado === "issued", `la factura quedó en ${despues.estado}`);
+    afirmar(
+      despues.saldo === f.saldo && despues.saldo_tx === f.saldo_tx,
+      `la factura debía ${f.saldo} (${f.saldo_tx} ${f.moneda}) y ahora ${despues.saldo} (${despues.saldo_tx})`,
+    );
+    afirmar(
+      despues.banco === antes.banco,
+      `el banco tenía ${antes.banco} y ahora ${despues.banco}`,
+    );
+    afirmar(
+      despues.credito === "expired" && Number(despues.aplicado) === 0,
+      `el saldo a favor quedó ${despues.credito} con ${despues.aplicado} aplicado`,
+    );
+    afirmar(
+      despues.usos === 0 && despues.reembolsos === 0,
+      `el saldo retirado tiene ${despues.usos} uso(s) y ${despues.reembolsos} reembolso(s)`,
+    );
+    const pasivo = await sql`select * from platform.customer_credit_ledger_gap(${E2})`;
+    afirmar(pasivo.length === 0, `customer_credit_ledger_gap: ${JSON.stringify(pasivo[0])}`);
+    const cartera = await sql`select * from platform.receivables_ledger_gap(${E2})`;
+    afirmar(cartera.length === 0, `receivables_ledger_gap: ${JSON.stringify(cartera[0])}`);
+  },
+);
 
 export default c.correr;

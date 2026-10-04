@@ -194,10 +194,17 @@
             "items": {
               "type": "string"
             }
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
-          "permissions"
+          "permissions",
+          "roles"
         ],
         "additionalProperties": false
       },
@@ -1186,6 +1193,19 @@
           "unit_code": {
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]{0,39}$"
+          },
+          "tax_category_code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,39}$"
+          },
+          "reduced_rate_literal": {
+            "type": "string",
+            "pattern": "^64(\\.[0-9a-z]+)+$"
+          },
+          "tax_category_justification": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 500
           }
         },
         "required": [
@@ -1387,6 +1407,35 @@
               "equivalent_currency": {
                 "type": "string",
                 "nullable": true
+              },
+              "historical_equivalent_amount": {
+                "type": "string",
+                "nullable": true
+              },
+              "historical_equivalent_currency": {
+                "type": "string",
+                "nullable": true
+              },
+              "historical_rate": {
+                "type": "string",
+                "nullable": true
+              },
+              "historical_rate_date": {
+                "type": "string",
+                "nullable": true
+              },
+              "historical_rate_source": {
+                "type": "string",
+                "nullable": true
+              },
+              "historical_rate_status": {
+                "type": "string",
+                "enum": [
+                  "available",
+                  "missing",
+                  "scheduled",
+                  "not_applicable"
+                ]
               }
             },
             "required": [
@@ -1439,6 +1488,35 @@
               "equivalent_currency": {
                 "type": "string",
                 "nullable": true
+              },
+              "historical_equivalent_amount": {
+                "type": "string",
+                "nullable": true
+              },
+              "historical_equivalent_currency": {
+                "type": "string",
+                "nullable": true
+              },
+              "historical_rate": {
+                "type": "string",
+                "nullable": true
+              },
+              "historical_rate_date": {
+                "type": "string",
+                "nullable": true
+              },
+              "historical_rate_source": {
+                "type": "string",
+                "nullable": true
+              },
+              "historical_rate_status": {
+                "type": "string",
+                "enum": [
+                  "available",
+                  "missing",
+                  "scheduled",
+                  "not_applicable"
+                ]
               }
             },
             "required": [
@@ -2313,6 +2391,35 @@
           "equivalent_currency": {
             "type": "string",
             "nullable": true
+          },
+          "historical_equivalent_amount": {
+            "type": "string",
+            "nullable": true
+          },
+          "historical_equivalent_currency": {
+            "type": "string",
+            "nullable": true
+          },
+          "historical_rate": {
+            "type": "string",
+            "nullable": true
+          },
+          "historical_rate_date": {
+            "type": "string",
+            "nullable": true
+          },
+          "historical_rate_source": {
+            "type": "string",
+            "nullable": true
+          },
+          "historical_rate_status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "missing",
+              "scheduled",
+              "not_applicable"
+            ]
           }
         },
         "required": [
@@ -2394,6 +2501,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 30
+          },
+          "legal_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
           }
         },
         "required": [
@@ -2517,6 +2629,9 @@
             "nullable": true,
             "format": "uuid"
           },
+          "credit_limit_usd": {
+            "type": "string"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -2527,6 +2642,17 @@
           "debt": {
             "type": "string",
             "nullable": true
+          },
+          "overdue": {
+            "type": "string",
+            "nullable": true
+          },
+          "overdue_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "sin_tasa"
+            ]
           }
         },
         "required": [
@@ -2543,6 +2669,7 @@
           "phone",
           "status",
           "default_price_list_id",
+          "credit_limit_usd",
           "created_at"
         ],
         "additionalProperties": false
@@ -2610,6 +2737,9 @@
                   "nullable": true,
                   "format": "uuid"
                 },
+                "credit_limit_usd": {
+                  "type": "string"
+                },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
@@ -2620,6 +2750,17 @@
                 "debt": {
                   "type": "string",
                   "nullable": true
+                },
+                "overdue": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "overdue_reason": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "sin_tasa"
+                  ]
                 }
               },
               "required": [
@@ -2636,6 +2777,7 @@
                 "phone",
                 "status",
                 "default_price_list_id",
+                "credit_limit_usd",
                 "created_at"
               ],
               "additionalProperties": false
@@ -2810,6 +2952,42 @@
         "required": [
           "company_id",
           "blocked"
+        ],
+        "additionalProperties": false
+      },
+      "SetCustomerCreditLimitRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "credit_limit_usd": {
+            "type": "string",
+            "pattern": "^\\d{1,12}(\\.\\d{1,2})?$"
+          }
+        },
+        "required": [
+          "company_id",
+          "credit_limit_usd"
+        ],
+        "additionalProperties": false
+      },
+      "SetCustomerTaxpayerTypeRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "taxpayer_type_code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,39}$"
+          }
+        },
+        "required": [
+          "company_id",
+          "taxpayer_type_code"
         ],
         "additionalProperties": false
       },
@@ -4559,6 +4737,10 @@
           "rules_version": {
             "type": "string",
             "nullable": true
+          },
+          "due_date": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -4586,7 +4768,8 @@
           "tax_amount",
           "total_amount",
           "regime_version_id",
-          "rules_version"
+          "rules_version",
+          "due_date"
         ],
         "additionalProperties": false
       },
@@ -4708,6 +4891,10 @@
               "rules_version": {
                 "type": "string",
                 "nullable": true
+              },
+              "due_date": {
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [
@@ -4735,7 +4922,8 @@
               "tax_amount",
               "total_amount",
               "regime_version_id",
-              "rules_version"
+              "rules_version",
+              "due_date"
             ],
             "additionalProperties": false
           },
@@ -5031,6 +5219,36 @@
               "author_name"
             ],
             "additionalProperties": false
+          },
+          "annulment": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "allowed": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "has_payments",
+                  "not_same_day",
+                  "period_declared",
+                  "cash_closed",
+                  "originals_not_confirmed"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "allowed",
+              "reason",
+              "message"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -5163,6 +5381,10 @@
                 "rules_version": {
                   "type": "string",
                   "nullable": true
+                },
+                "due_date": {
+                  "type": "string",
+                  "nullable": true
                 }
               },
               "required": [
@@ -5190,7 +5412,8 @@
                 "tax_amount",
                 "total_amount",
                 "regime_version_id",
-                "rules_version"
+                "rules_version",
+                "due_date"
               ],
               "additionalProperties": false
             }
@@ -5441,6 +5664,10 @@
           "issued_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "due_date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
           }
         },
         "required": [
@@ -5462,6 +5689,9 @@
             "type": "string",
             "minLength": 3,
             "maxLength": 500
+          },
+          "originals_in_hand": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -5992,6 +6222,28 @@
               "control_display"
             ],
             "additionalProperties": false
+          },
+          "customer_credit": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "amount": {
+                "type": "string"
+              },
+              "currency": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "amount",
+              "currency"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -6071,6 +6323,12 @@
             "type": "string",
             "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
           },
+          "whole": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
           "reason": {
             "type": "string",
             "minLength": 3,
@@ -6087,7 +6345,6 @@
         "required": [
           "company_id",
           "account_id",
-          "amount",
           "reason"
         ],
         "additionalProperties": false
@@ -6131,6 +6388,21 @@
           },
           "credit_remaining": {
             "type": "string"
+          },
+          "paid_amount": {
+            "type": "string"
+          },
+          "paid_currency": {
+            "type": "string"
+          },
+          "fx_rate": {
+            "type": "string"
+          },
+          "exchange_difference": {
+            "type": "string"
+          },
+          "credit_fx_rate": {
+            "type": "string"
           }
         },
         "required": [
@@ -6142,7 +6414,12 @@
           "refunded_at",
           "accounting",
           "journal_entry_id",
-          "credit_remaining"
+          "credit_remaining",
+          "paid_amount",
+          "paid_currency",
+          "fx_rate",
+          "exchange_difference",
+          "credit_fx_rate"
         ],
         "additionalProperties": false
       },
@@ -6298,6 +6575,17 @@
           "total": {
             "type": "string",
             "nullable": true
+          },
+          "overdue": {
+            "type": "string",
+            "nullable": true
+          },
+          "overdue_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "sin_tasa"
+            ]
           }
         },
         "required": [
@@ -6380,6 +6668,13 @@
                 },
                 "days_outstanding": {
                   "type": "integer"
+                },
+                "due_date": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "overdue": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -6425,6 +6720,16 @@
                     "applied",
                     "expired"
                   ]
+                },
+                "currency": {
+                  "type": "string"
+                },
+                "fx_rate": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "from_overpayment": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -6432,7 +6737,10 @@
                 "source_document_id",
                 "amount",
                 "applied_amount",
-                "status"
+                "status",
+                "currency",
+                "fx_rate",
+                "from_overpayment"
               ],
               "additionalProperties": false
             }
@@ -6539,6 +6847,17 @@
               "total": {
                 "type": "string",
                 "nullable": true
+              },
+              "overdue": {
+                "type": "string",
+                "nullable": true
+              },
+              "overdue_reason": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "sin_tasa"
+                ]
               }
             },
             "required": [
@@ -6903,9 +7222,63 @@
             "type": "string",
             "nullable": true
           },
+          "lo_que_me_deben_motivo": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "sin_permiso",
+              "sin_tasa"
+            ]
+          },
+          "lo_que_me_deben_por_moneda": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "currency": {
+                  "type": "string"
+                },
+                "nominal": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "currency",
+                "nominal"
+              ],
+              "additionalProperties": false
+            }
+          },
           "lo_que_debo": {
             "type": "string",
             "nullable": true
+          },
+          "lo_que_debo_motivo": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "sin_permiso",
+              "sin_tasa"
+            ]
+          },
+          "lo_que_debo_por_moneda": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "currency": {
+                  "type": "string"
+                },
+                "nominal": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "currency",
+                "nominal"
+              ],
+              "additionalProperties": false
+            }
           },
           "mi_dinero": {
             "type": "array",
@@ -7006,11 +7379,53 @@
           "pendientes_de_contabilizar",
           "lineas_sin_costo_mes",
           "lo_que_me_deben",
+          "lo_que_me_deben_motivo",
+          "lo_que_me_deben_por_moneda",
           "lo_que_debo",
+          "lo_que_debo_motivo",
+          "lo_que_debo_por_moneda",
           "mi_dinero",
           "por_agotarse",
           "tasa_del_dia",
           "ultimas_ventas"
+        ],
+        "additionalProperties": false
+      },
+      "NegocioTasaResponse": {
+        "type": "object",
+        "properties": {
+          "tasa_del_dia": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "rate": {
+                "type": "string"
+              },
+              "rate_date": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "es_de_hoy": {
+                "type": "boolean"
+              },
+              "dias_de_antiguedad": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "rate",
+              "rate_date",
+              "source",
+              "es_de_hoy",
+              "dias_de_antiguedad"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "tasa_del_dia"
         ],
         "additionalProperties": false
       },
@@ -7052,9 +7467,6 @@
           "sells_wholesale": {
             "type": "boolean"
           },
-          "block_sale_without_stock": {
-            "type": "boolean"
-          },
           "allow_unidentified_sales": {
             "type": "boolean"
           },
@@ -7083,7 +7495,6 @@
         },
         "required": [
           "sells_wholesale",
-          "block_sale_without_stock",
           "allow_unidentified_sales",
           "default_tax_category_code",
           "default_warehouse_id",
@@ -7098,9 +7509,6 @@
         "type": "object",
         "properties": {
           "sells_wholesale": {
-            "type": "boolean"
-          },
-          "block_sale_without_stock": {
             "type": "boolean"
           },
           "allow_unidentified_sales": {
@@ -7180,6 +7588,9 @@
               "ninguno"
             ]
           },
+          "invoicing_notice": {
+            "type": "boolean"
+          },
           "iva_general": {
             "type": "object",
             "nullable": true,
@@ -7231,6 +7642,7 @@
           "regimes",
           "current_regime",
           "sales_mode",
+          "invoicing_notice",
           "iva_general",
           "iva_catalog"
         ],
@@ -7657,6 +8069,54 @@
           "anchor_rate": {
             "type": "string",
             "nullable": true
+          },
+          "credit": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "permitted": {
+                "type": "boolean"
+              },
+              "limit_usd": {
+                "type": "string"
+              },
+              "debt_usd": {
+                "type": "string",
+                "nullable": true
+              },
+              "available_usd": {
+                "type": "string",
+                "nullable": true
+              },
+              "covers_total": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "permitted",
+              "limit_usd",
+              "debt_usd",
+              "available_usd",
+              "covers_total"
+            ],
+            "additionalProperties": false
+          },
+          "credit_due_date": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "required": {
+                "type": "boolean"
+              },
+              "min": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "required",
+              "min"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -7675,7 +8135,9 @@
           "functional_currency",
           "anchor_currency",
           "anchor_total",
-          "anchor_rate"
+          "anchor_rate",
+          "credit",
+          "credit_due_date"
         ],
         "additionalProperties": false
       },
@@ -8007,6 +8469,10 @@
             },
             "maxItems": 4
           },
+          "due_date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
           "cart_id": {
             "type": "string",
             "format": "uuid"
@@ -8146,6 +8612,10 @@
               "rules_version": {
                 "type": "string",
                 "nullable": true
+              },
+              "due_date": {
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [
@@ -8173,7 +8643,8 @@
               "tax_amount",
               "total_amount",
               "regime_version_id",
-              "rules_version"
+              "rules_version",
+              "due_date"
             ],
             "additionalProperties": false
           },
@@ -8427,6 +8898,28 @@
                     "series",
                     "document_number",
                     "control_display"
+                  ],
+                  "additionalProperties": false
+                },
+                "customer_credit": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "amount": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "amount",
+                    "currency"
                   ],
                   "additionalProperties": false
                 }
@@ -8934,6 +9427,10 @@
               "rules_version": {
                 "type": "string",
                 "nullable": true
+              },
+              "due_date": {
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [
@@ -8961,7 +9458,8 @@
               "tax_amount",
               "total_amount",
               "regime_version_id",
-              "rules_version"
+              "rules_version",
+              "due_date"
             ],
             "additionalProperties": false
           },
@@ -10702,7 +11200,8 @@
                   "minimum": 0
                 },
                 "amount": {
-                  "type": "string"
+                  "type": "string",
+                  "nullable": true
                 }
               },
               "required": [
@@ -10715,13 +11214,42 @@
             }
           },
           "total": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
+          },
+          "total_motivo": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "sin_tasa"
+            ]
+          },
+          "total_por_moneda": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "currency": {
+                  "type": "string"
+                },
+                "nominal": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "currency",
+                "nominal"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
           "reference_date",
           "buckets",
-          "total"
+          "total",
+          "total_motivo",
+          "total_por_moneda"
         ],
         "additionalProperties": false
       },
@@ -10794,7 +11322,34 @@
             }
           },
           "total_outstanding": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
+          },
+          "total_outstanding_motivo": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "sin_tasa"
+            ]
+          },
+          "total_outstanding_por_moneda": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "currency": {
+                  "type": "string"
+                },
+                "nominal": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "currency",
+                "nominal"
+              ],
+              "additionalProperties": false
+            }
           },
           "total_retained": {
             "type": "string"
@@ -10828,7 +11383,8 @@
                       "minimum": 0
                     },
                     "amount": {
-                      "type": "string"
+                      "type": "string",
+                      "nullable": true
                     }
                   },
                   "required": [
@@ -10841,13 +11397,42 @@
                 }
               },
               "total": {
-                "type": "string"
+                "type": "string",
+                "nullable": true
+              },
+              "total_motivo": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "sin_tasa"
+                ]
+              },
+              "total_por_moneda": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "currency": {
+                      "type": "string"
+                    },
+                    "nominal": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "currency",
+                    "nominal"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
               "reference_date",
               "buckets",
-              "total"
+              "total",
+              "total_motivo",
+              "total_por_moneda"
             ],
             "additionalProperties": false
           }
@@ -10857,6 +11442,8 @@
           "currency",
           "invoices",
           "total_outstanding",
+          "total_outstanding_motivo",
+          "total_outstanding_por_moneda",
           "total_retained",
           "aging"
         ],
@@ -11071,6 +11658,58 @@
           "functional_currency",
           "total_retained",
           "lines"
+        ],
+        "additionalProperties": false
+      },
+      "SupplierPaymentPreviewResponse": {
+        "type": "object",
+        "properties": {
+          "money_amount": {
+            "type": "string"
+          },
+          "money_currency": {
+            "type": "string"
+          },
+          "settled_amount": {
+            "type": "string"
+          },
+          "settled_currency": {
+            "type": "string"
+          },
+          "crossed": {
+            "type": "boolean"
+          },
+          "fx_rate": {
+            "type": "string",
+            "nullable": true
+          },
+          "fx_rate_currency": {
+            "type": "string",
+            "nullable": true
+          },
+          "fx_rate_date": {
+            "type": "string",
+            "nullable": true
+          },
+          "balance_after": {
+            "type": "string"
+          },
+          "insufficient_funds": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "money_amount",
+          "money_currency",
+          "settled_amount",
+          "settled_currency",
+          "crossed",
+          "fx_rate",
+          "fx_rate_currency",
+          "fx_rate_date",
+          "balance_after",
+          "insufficient_funds"
         ],
         "additionalProperties": false
       },
@@ -15742,6 +16381,28 @@
                   "control_display"
                 ],
                 "additionalProperties": false
+              },
+              "customer_credit": {
+                "type": "object",
+                "nullable": true,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "amount": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "amount",
+                  "currency"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -17387,6 +18048,93 @@
             "type": "string",
             "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
           },
+          "invoice": {
+            "type": "object",
+            "properties": {
+              "supplier_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "document_number": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "control_number": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60
+              },
+              "invoice_date": {
+                "type": "string",
+                "format": "date"
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              },
+              "lines": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "tax_category_code": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,39}$"
+                    },
+                    "base": {
+                      "type": "string",
+                      "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                    }
+                  },
+                  "required": [
+                    "tax_category_code",
+                    "base"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1,
+                "maxItems": 10
+              },
+              "retention_exclusion": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{0,39}$"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 10,
+                    "maxLength": 500
+                  }
+                },
+                "required": [
+                  "code",
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "iva_retention_full_reason": {
+                "type": "string",
+                "enum": [
+                  "iva_no_discriminado",
+                  "factura_sin_requisitos",
+                  "indicado_por_portal",
+                  "proveedor_sin_rif",
+                  "operaciones_art_2"
+                ]
+              }
+            },
+            "required": [
+              "supplier_id",
+              "document_number",
+              "control_number",
+              "invoice_date",
+              "lines"
+            ],
+            "additionalProperties": false
+          },
           "paid_at": {
             "type": "string",
             "format": "date-time"
@@ -17418,8 +18166,7 @@
         "required": [
           "company_id",
           "category",
-          "account_id",
-          "amount"
+          "account_id"
         ],
         "additionalProperties": false
       },
@@ -17491,6 +18238,64 @@
               "posted",
               "queued"
             ]
+          },
+          "supplier_invoice_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "invoice": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "document_number": {
+                "type": "string",
+                "nullable": true
+              },
+              "control_number": {
+                "type": "string",
+                "nullable": true
+              },
+              "invoice_date": {
+                "type": "string"
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              },
+              "subtotal_amount": {
+                "type": "string"
+              },
+              "tax_amount": {
+                "type": "string"
+              },
+              "total_amount": {
+                "type": "string"
+              },
+              "retention_total": {
+                "type": "string"
+              },
+              "retention_voucher_number": {
+                "type": "string",
+                "nullable": true
+              },
+              "tax_is_recoverable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "document_number",
+              "control_number",
+              "invoice_date",
+              "currency",
+              "subtotal_amount",
+              "tax_amount",
+              "total_amount",
+              "retention_total",
+              "retention_voucher_number",
+              "tax_is_recoverable"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -17579,6 +18384,64 @@
                   "type": "string",
                   "nullable": true,
                   "format": "uuid"
+                },
+                "supplier_invoice_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "invoice": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "document_number": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "control_number": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "invoice_date": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string",
+                      "pattern": "^[A-Z]{3}$"
+                    },
+                    "subtotal_amount": {
+                      "type": "string"
+                    },
+                    "tax_amount": {
+                      "type": "string"
+                    },
+                    "total_amount": {
+                      "type": "string"
+                    },
+                    "retention_total": {
+                      "type": "string"
+                    },
+                    "retention_voucher_number": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tax_is_recoverable": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "document_number",
+                    "control_number",
+                    "invoice_date",
+                    "currency",
+                    "subtotal_amount",
+                    "tax_amount",
+                    "total_amount",
+                    "retention_total",
+                    "retention_voucher_number",
+                    "tax_is_recoverable"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -17672,6 +18535,11 @@
             "type": "string",
             "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
           },
+          "owner_contribution": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+          },
           "reason": {
             "type": "string",
             "nullable": true
@@ -17702,6 +18570,7 @@
           "expected_amount",
           "counted_amount",
           "difference",
+          "owner_contribution",
           "reason",
           "currency",
           "journal_entry_id",
@@ -17743,6 +18612,11 @@
                   "type": "string",
                   "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
                 },
+                "owner_contribution": {
+                  "type": "string",
+                  "nullable": true,
+                  "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                },
                 "reason": {
                   "type": "string",
                   "nullable": true
@@ -17765,6 +18639,7 @@
                 "expected_amount",
                 "counted_amount",
                 "difference",
+                "owner_contribution",
                 "reason",
                 "currency",
                 "journal_entry_id"
@@ -17828,6 +18703,101 @@
           "rate",
           "rate_date",
           "source"
+        ],
+        "additionalProperties": false
+      },
+      "ExpensePreviewResponse": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tax_category_code": {
+                  "type": "string"
+                },
+                "base": {
+                  "type": "string"
+                },
+                "tax_rate": {
+                  "type": "string"
+                },
+                "tax_amount": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tax_category_code",
+                "base",
+                "tax_rate",
+                "tax_amount"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "subtotal_amount": {
+            "type": "string"
+          },
+          "tax_amount": {
+            "type": "string"
+          },
+          "total_amount": {
+            "type": "string"
+          },
+          "retention_total": {
+            "type": "string"
+          },
+          "retention_currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "tax_is_recoverable": {
+            "type": "boolean"
+          },
+          "amount": {
+            "type": "string"
+          },
+          "account_currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "fx_rate": {
+            "type": "string",
+            "nullable": true
+          },
+          "fx_rate_currency": {
+            "type": "string",
+            "nullable": true
+          },
+          "fx_rate_date": {
+            "type": "string",
+            "nullable": true
+          },
+          "insufficient_funds": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "currency",
+          "lines",
+          "subtotal_amount",
+          "tax_amount",
+          "total_amount",
+          "retention_total",
+          "retention_currency",
+          "tax_is_recoverable",
+          "amount",
+          "account_currency",
+          "fx_rate",
+          "fx_rate_currency",
+          "fx_rate_date",
+          "insufficient_funds"
         ],
         "additionalProperties": false
       },
@@ -19118,6 +20088,15 @@
             },
             "required": false,
             "name": "price_list_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "customer_id",
             "in": "query"
           },
           {
@@ -20875,7 +21854,7 @@
     "/v1/customers": {
       "get": {
         "summary": "Listar clientes (búsqueda por RIF o razón social, paginación en servidor)",
-        "description": "`with_debt=1` añade a cada cliente lo que debe (suma de saldos positivos de sus facturas emitidas, calculada por el esquema) — la cifra de la pantalla de Clientes. Pedir la deuda exige el permiso ar.read: sin él, 403 PERMISSION_REQUIRED (P-04). La lista sin `with_debt` no lo exige.",
+        "description": "`with_debt=1` añade a cada cliente lo que debe (suma de saldos positivos de sus facturas emitidas, calculada por el esquema) — la cifra de la pantalla de Clientes. Pedir la deuda exige el permiso ar.read: sin él, 403 PERMISSION_REQUIRED (P-04). La lista sin `with_debt` no lo exige. `sort=debt_desc` (o `debt_asc`) ordena por esa deuda —mayor primero, y lo que no se pudo valorar hoy arriba— en vez de por nombre (P-05); exige `with_debt=1` y un valor desconocido es 422.",
         "security": [
           {
             "bearerAuth": []
@@ -20918,6 +21897,19 @@
             },
             "required": false,
             "name": "with_debt",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "name",
+                "debt_desc",
+                "debt_asc"
+              ]
+            },
+            "required": false,
+            "name": "sort",
             "in": "query"
           },
           {
@@ -21506,6 +22498,206 @@
         "responses": {
           "200": {
             "description": "Estado cambiado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/customers/{id}/credit-limit": {
+      "put": {
+        "summary": "Fijar el límite de fiado del cliente, en USD (permiso customers.credit.set; deja acta). Un cliente nace con límite 0",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCustomerCreditLimitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Límite fijado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/customers/{id}/taxpayer-type": {
+      "put": {
+        "summary": "Cambiar la clasificación fiscal del cliente (permiso customer.tax_id.manage; deja acta)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCustomerTaxpayerTypeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Clasificación cambiada.",
             "content": {
               "application/json": {
                 "schema": {
@@ -24621,7 +25813,7 @@
     "/v1/invoices/{id}/annul": {
       "post": {
         "summary": "Anular una factura o un recibo emitidos y SIN cobros (permiso sales.invoice.annul)",
-        "description": "Anular no es borrar: el documento y su correlativo SE CONSERVAN (regla 1, ADR-0037). El número anulado sigue ocupado y no se reutiliza. Anular REPONE la existencia al lote y valor con que salió (ADR-0061 §2). Con cobros → 409 DOCUMENT_HAS_PAYMENTS: una venta cobrada se deshace con una devolución, no anulándola.",
+        "description": "Anular no es borrar: el documento y su correlativo SE CONSERVAN (regla 1, ADR-0037). El número anulado sigue ocupado y no se reutiliza. Anular REPONE la existencia al lote y valor con que salió (ADR-0061 §2). Con cobros → 409 DOCUMENT_HAS_PAYMENTS: una venta cobrada se deshace con una devolución, no anulándola. G-10 (PA 00071 arts. 22 y 36): una FACTURA se anula solo el mismo día de Caracas, antes del cierre de su caja, con el período sin declarar y con originals_in_hand = true; si no → 409 ANNULMENT_NOT_ALLOWED con details.reason, y el camino es la nota de crédito.",
         "security": [
           {
             "bearerAuth": []
@@ -25026,7 +26218,7 @@
     "/v1/negocio/resumen": {
       "get": {
         "summary": "Los números de Inicio y Mi dinero, calculados TODOS en el servidor",
-        "description": "Vendido y ganado (hoy/mes, con el corte del día de VENEZUELA y el margen desde el costo CONGELADO de cada línea), lo que me deben y lo que debo (saldos del esquema), el dinero por moneda, los productos por agotarse, la tasa del día con su fuente y las últimas ventas. La pantalla no suma ni un céntimo (permiso treasury.read).",
+        "description": "Vendido y ganado (hoy/mes, con el corte del día de VENEZUELA y el margen desde el costo CONGELADO de cada línea), lo que me deben y lo que debo (saldos del esquema), el dinero por moneda, los productos por agotarse, la tasa del día con su fuente y las últimas ventas. La pantalla no suma ni un céntimo (permiso treasury.read). Un total de deuda en `null` lleva su motivo en `…_motivo` (`sin_permiso` | `sin_tasa`) y, sin tasa, el nominal por moneda en `…_por_moneda`.",
         "security": [
           {
             "bearerAuth": []
@@ -25050,6 +26242,80 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NegocioResumenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/negocio/tasa": {
+      "get": {
+        "summary": "La tasa del día, para cualquier miembro de la empresa",
+        "description": "La misma `tasa_del_dia` del resumen, sin exigir treasury.read: quien cierra su caja o trae la tasa la necesita aunque no vea el dinero del negocio (N-05). `null` = nunca se cargó.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "La tasa del día, o null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NegocioTasaResponse"
                 }
               }
             }
@@ -27085,7 +28351,7 @@
     },
     "/v1/customer-credits/{id}/refunds": {
       "post": {
-        "summary": "Reembolsar un saldo a favor desde una caja (permiso sales.return.manage)",
+        "summary": "Reembolsar un saldo a favor desde una caja (permiso sales.refund)",
         "description": "ADR-0061 §8: el camino del dinero de una venta devuelta. Consume el saldo a favor, saca el dinero de la cuenta (en la moneda del saldo) y lo asienta contra la caja real.",
         "security": [
           {
@@ -27386,7 +28652,7 @@
     },
     "/v1/credit-notes": {
       "post": {
-        "summary": "Nota de crédito DIRECTA, sin devolución (permiso sales.return.manage)",
+        "summary": "Nota de crédito DIRECTA, sin devolución (permiso sales.credit_note.direct)",
         "description": "Corrige una factura emitida por descuento o error de precio, SIN mover mercancía (mercancía que vuelve = devolución). Líneas del origen a su precio original; motivo obligatorio con acta. Genera saldo a favor aplicable como forma de cobro. El total acreditado acumulado contra la factura no puede exceder su total.",
         "security": [
           {
@@ -29782,7 +31048,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Facturas con saldo calculado por el esquema.",
+            "description": "Facturas con saldo calculado por el esquema. `balance` es null en `draft` y `annulled`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -29792,9 +31058,15 @@
                       "type": "array",
                       "items": {
                         "type": "object",
-                        "additionalProperties": {
-                          "nullable": true
-                        }
+                        "properties": {
+                          "balance": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "balance"
+                        ]
                       }
                     },
                     "total": {
@@ -29955,12 +31227,22 @@
     "/v1/retention-exclusions": {
       "get": {
         "summary": "Exclusiones del art. 3 de la PA SNAT/2025/000054 que se pueden marcar (ADR-0072 §3)",
+        "description": "Con «account_id» (la cuenta de la que sale un gasto con factura) no trae las exclusiones que esa cuenta no admite: el servicio público domiciliado (art. 3 num. 8) solo se ofrece para una cuenta bancaria (AF4-01). Sin el parámetro, el catálogo entero.",
         "security": [
           {
             "bearerAuth": []
           }
         ],
         "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "account_id",
+            "in": "query"
+          },
           {
             "schema": {
               "type": "string",
@@ -30188,6 +31470,170 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RetentionVoucherResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payments/{id}/pdf": {
+      "get": {
+        "summary": "Comprobante NO fiscal de un cobro: recibido, aplicado y saldo a favor si pagó de más (F-10)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "application/pdf",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/customer-refunds/{id}/pdf": {
+      "get": {
+        "summary": "Comprobante NO fiscal del reembolso de un saldo a favor (G-15)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "application/pdf",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -31135,6 +32581,99 @@
           },
           "404": {
             "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/supplier-payments/preview": {
+      "post": {
+        "summary": "Vista previa de un pago a proveedor: cuánto sale, a qué tasa y cuánto cancela (D-02)",
+        "description": "El MISMO caso de uso que `POST /v1/supplier-payments`, deshecho al terminar: no escribe nada y no lleva Idempotency-Key. Para el pago cruzado (la cuenta vive en otra moneda que la factura) dice cuánto sale de la cuenta en su moneda, la tasa BCV del día con la fecha en que se publicó, y cuánto cancela de la factura. Falla con los mismos códigos que el pago (sin tasa, sin saldo, por encima del saldo).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterSupplierPaymentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Lo que el pago registraría.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupplierPaymentPreviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sin tasa del día, o el saldo de la cuenta no alcanza.",
             "content": {
               "application/json": {
                 "schema": {
@@ -37245,7 +38784,7 @@
     "/v1/expenses": {
       "post": {
         "summary": "Registrar un gasto en un paso (permiso expense.register)",
-        "description": "Alquiler, luz, nómina, flete: sale de su cuenta, baja el saldo y va a contabilidad — directo si el mapeo del contador resuelve, a la cola de ADR-0042 si no. El importe va en la MONEDA de la cuenta; la conversión a funcional usa la tasa vigente con su fuente.",
+        "description": "Alquiler, luz, nómina, flete: sale de su cuenta, baja el saldo y va a contabilidad — CON `invoice` (H-09) el gasto es una compra de servicio: se registra como factura de proveedor (libro de compras, crédito fiscal, retención del agente con su comprobante) y se paga su saldo desde la cuenta; el importe NO se manda, lo calcula el servidor. SIN `invoice`, el gasto llano: directo si el mapeo del contador resuelve, a la cola de ADR-0042 si no. El importe va en la MONEDA de la cuenta; la conversión a funcional usa la tasa vigente con su fuente.",
         "security": [
           {
             "bearerAuth": []
@@ -37400,6 +38939,99 @@
           },
           "404": {
             "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/expenses/preview": {
+      "post": {
+        "summary": "Vista previa de un gasto con factura fiscal: bases, IVA, retención y total (H-09)",
+        "description": "El MISMO registro de la factura que `POST /v1/expenses` con `invoice`, deshecho al terminar: no escribe nada y no lleva Idempotency-Key. Devuelve la base y el IVA por categoría tributaria, el total, lo retenido (en moneda funcional) y lo que saldría de la cuenta. El pago no se ensaya: el saldo de la cuenta se pregunta al confirmar. Sin `invoice` responde 422: un gasto llano no tiene nada que calcular.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterExpenseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Lo que el gasto con factura registraría.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExpensePreviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sin tasa del día, sin regla de IVA o sin regla de retención.",
             "content": {
               "application/json": {
                 "schema": {

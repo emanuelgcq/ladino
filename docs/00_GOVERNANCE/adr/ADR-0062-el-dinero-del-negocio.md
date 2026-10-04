@@ -63,6 +63,20 @@ traiga `allow_negative_balance: true`. La pantalla pide la confirmación con el 
 No se prohíbe del todo porque una cuenta nace en cero y el dinero que ya existía no se ha cargado:
 bloquear del todo impediría registrar el primer gasto.
 
+**Cómo se salda el sobregiro al cerrar la caja (nota del 2026-10-04, J-02; ADR aplicado según la
+respuesta del dueño del 2026-09-28).** Una caja en negativo que se cierra contando cero o más no
+tuvo un «sobrante»: el dinero que faltaba lo puso el dueño. El sobregiro al cerrar se salda contra
+**«Cuentas por pagar a socios (aportes del dueño)»** (papel `owner_payable`, pasivo; 2.1.92 en
+`ve_basico`, código por confirmar, P-36), nunca contra resultado; el contador puede reclasificarlo
+a capital con un asiento propio. **Se parte:** lo que lleva la caja de su saldo negativo a cero es
+del dueño; lo contado por encima de cero es sobrante (5.1.06), como siempre. Alternativa
+descartada: llevar toda la diferencia al dueño (un sobrante real quedaría como deuda con él).
+El hecho contable es un origen propio con el evento real del outbox,
+`cash_closing_overdraft / treasury.cash_register.closed` (migraciones 20261004180000 a 180200):
+el preset no inventa eventos. La respuesta del cierre dice cuánto puso el dueño
+(`owner_contribution`) y la pantalla lo cuenta con esas palabras. Los cierres anteriores los
+reclasifica `scripts/reparar/j-02-sobregiro-al-cierre.mjs` (R-71 paso 8, R-79).
+
 ## Consecuencias
 
 - Los cobros sin forma configurada llegan a las cajas del dueño; «Sin asignar» se vuelve la

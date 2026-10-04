@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { IvaRetentionFullReason, RetentionExclusionMark } from "./purchases.js";
 
 /**
  * Contratos de TESORERÍA (migraciones 29–31, Fase C).
@@ -124,6 +125,50 @@ export type ListPaymentMethodsResponse = z.infer<typeof ListPaymentMethodsRespon
 export const AccountingOutcome = z.enum(["posted", "queued"]);
 export type AccountingOutcome = z.infer<typeof AccountingOutcome>;
 
+/**
+ * H-09 (recorrido 2026-09-24): LA FACTURA FISCAL DE UN GASTO. La luz, el teléfono, el alquiler:
+ * una compra de servicio. Con este bloque el gasto se registra por el mismo camino que una
+ * factura de proveedor —libro de compras, crédito fiscal (LIVA art. 33), retención del agente y
+ * su comprobante— y se paga en el acto desde la cuenta. El RIF y la razón social son los del
+ * proveedor. La persona escribe la BASE por alícuota tal como viene impresa; el IVA, el total,
+ * lo retenido y lo que sale de la cuenta los calcula el servidor.
+ */
+export const ExpenseInvoice = z
+  .object({
+    supplier_id: uuid,
+    document_number: z.string().trim().min(1).max(60),
+    control_number: z.string().trim().min(1).max(60),
+    invoice_date: z.string().date(),
+    /**
+     * LA MONEDA EN QUE VIENE IMPRESA LA FACTURA (por omisión, la funcional de la empresa). Las
+     * bases van en ESTA moneda y así entran al libro de compras: lo impreso, no una conversión.
+     * La cuenta de la que sale el dinero puede vivir en otra: el pago cruza a la tasa BCV del
+     * día (ADR-0075 §3) y la vista previa dice cuánto sale.
+     */
+    currency: currency.optional(),
+    /** Una línea por categoría tributaria de la factura: «gravado_general», «exento»… */
+    lines: z
+      .array(
+        z
+          .object({
+            tax_category_code: z
+              .string()
+              .trim()
+              .regex(/^[a-z][a-z0-9_]{0,39}$/),
+            base: amount,
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(10),
+    /** Solo la empresa agente: una exclusión del art. 3 de la PA SNAT/2025/000054, con motivo. */
+    retention_exclusion: RetentionExclusionMark.optional(),
+    /** Solo la empresa agente: el supuesto del art. 5 por el que se retiene el 100 %. */
+    iva_retention_full_reason: IvaRetentionFullReason.optional(),
+  })
+  .strict();
+export type ExpenseInvoice = z.infer<typeof ExpenseInvoice>;
+
 export const RegisterExpenseRequest = z
   .object({
     company_id: uuid,
@@ -132,7 +177,14 @@ export const RegisterExpenseRequest = z
     description: z.string().trim().min(1).max(500).optional(),
     /** La cuenta de la que SALIÓ el dinero. El importe va en SU moneda. */
     account_id: uuid,
-    amount,
+    /**
+     * Lo que salió de la cuenta. Obligatorio SIN factura fiscal. CON factura (`invoice`) no se
+     * manda: lo calcula el servidor (total de la factura menos lo retenido), y mandar los dos
+     * se rechaza. Lo exige el caso de uso, con su mensaje.
+     */
+    amount: amount.optional(),
+    /** H-09: con este bloque, el gasto es una compra de servicio que va al libro de compras. */
+    invoice: ExpenseInvoice.optional(),
     paid_at: z.string().datetime({ offset: true }).optional(),
     supplier_id: uuid.optional(),
     is_recurring: z.boolean().optional(),
@@ -215,9 +267,76 @@ export const ExpenseResponse = z
     attachment_path: z.string().nullable(),
     journal_entry_id: uuid.nullable(),
     accounting: AccountingOutcome,
+    /**
+     * H-09: no nulo = el gasto tiene factura fiscal y ES esta factura de proveedor (`id` es el
+     * mismo). `amount` es lo que salió de la cuenta: el total menos lo retenido.
+     */
+    supplier_invoice_id: uuid.nullable().optional(),
+    /** H-09: las cifras de la factura del gasto, calculadas por el servidor. */
+    invoice: z
+      .object({
+        document_number: z.string().nullable(),
+        control_number: z.string().nullable(),
+        invoice_date: z.string(),
+        currency,
+        subtotal_amount: z.string(),
+        tax_amount: z.string(),
+        total_amount: z.string(),
+        retention_total: z.string(),
+        retention_voucher_number: z.string().nullable(),
+        /** true = el IVA es crédito fiscal y va al libro; false = fue al costo. */
+        tax_is_recoverable: z.boolean(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 export type ExpenseResponse = z.infer<typeof ExpenseResponse>;
+
+/**
+ * LA VISTA PREVIA DE UN GASTO CON FACTURA (`POST /v1/expenses/preview`, H-09). El mismo caso de
+ * uso que registra la factura, deshecho al terminar: lo que la pantalla enseña ANTES de
+ * confirmar —base por categoría, impuesto, retención, total y lo que sale de la cuenta— son las
+ * cifras que el registro escribiría. El pago también se ensaya: si la cuenta no alcanza, la
+ * vista previa lo dice (`insufficient_funds`) SIN dejar de enseñar las cifras; el sobregiro se
+ * confirma al registrar, con su permiso y su motivo (ADR-0062 §4).
+ */
+export const ExpensePreviewResponse = z
+  .object({
+    /** La moneda de la factura: en ella van las bases, el impuesto y el total. */
+    currency,
+    lines: z.array(
+      z
+        .object({
+          tax_category_code: z.string(),
+          base: z.string(),
+          /** La alícuota como fracción («0.16000000»), del motor de impuestos. */
+          tax_rate: z.string(),
+          tax_amount: z.string(),
+        })
+        .strict(),
+    ),
+    subtotal_amount: z.string(),
+    tax_amount: z.string(),
+    total_amount: z.string(),
+    /** Lo retenido, en la moneda FUNCIONAL (así se declara), y esa moneda. */
+    retention_total: z.string(),
+    retention_currency: currency,
+    /** true = el impuesto es crédito fiscal y va al libro; false = va al costo. */
+    tax_is_recoverable: z.boolean(),
+    /** Lo que saldría de la cuenta, en la moneda DE LA CUENTA (`account_currency`). */
+    amount: z.string(),
+    account_currency: currency,
+    /** Si el pago cruza monedas: la tasa BCV del día de la divisa a la funcional, y su fecha. */
+    fx_rate: z.string().nullable(),
+    fx_rate_currency: z.string().nullable(),
+    fx_rate_date: z.string().nullable(),
+    /** No nulo = la cuenta no alcanza: el mensaje del control de saldo (cuánto hay, cuánto sale). */
+    insufficient_funds: z.string().nullable(),
+  })
+  .strict();
+export type ExpensePreviewResponse = z.infer<typeof ExpensePreviewResponse>;
 
 export const ListExpensesResponse = z
   .object({
@@ -250,6 +369,12 @@ export const CashClosingResponse = z
     counted_amount: amount,
     /** Con signo: positiva = sobrante, negativa = faltante, cero = cuadró. */
     difference: signedAmount,
+    /**
+     * J-02: la caja estaba en NEGATIVO al cerrarla. Lo que la llevó a cero, en su moneda: no es
+     * un sobrante, es dinero que puso el dueño (pasivo). Lo contado por encima de cero
+     * (`counted_amount`) sí es sobrante. `null` si la caja no estaba en negativo.
+     */
+    owner_contribution: amount.nullable(),
     reason: z.string().nullable(),
     currency,
     journal_entry_id: uuid.nullable(),

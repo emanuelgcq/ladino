@@ -19,6 +19,12 @@ import { useSesion } from "../../app/session.js";
 import { errorDePersona } from "../../lib.js";
 import { mostrarImporte } from "../../money.js";
 import { compararImportes } from "../../components/decimal-compare.js";
+import {
+  FALTA_LA_TASA,
+  estadoDeTotal,
+  nominalPorMoneda,
+  type MotivoSinTotal,
+} from "../../components/deuda.js";
 import { ETIQUETA_FORMA } from "../../components/formas-de-pago.js";
 import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
@@ -33,7 +39,7 @@ import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
 import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
-import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
+import { FormField, MoneyInput, importeLimpio, importeValido } from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import { fechaLocal } from "../../fechas.js";
 import { mostrarTasa, tasaLimpia } from "../../tasa.js";
@@ -54,12 +60,29 @@ interface Cuenta {
   is_system: boolean;
   balance: string;
 }
+interface NominalDeMoneda {
+  currency: string;
+  nominal: string;
+}
 interface Resumen {
   functional_currency: string;
-  /** null = el rol no tiene ar.read / ap.read: la tarjeta no se pinta (nunca «0»). */
+  /**
+   * null = sin ar.read / ap.read (la tarjeta no se pinta) O falta la tasa de hoy para valorar lo
+   * que está en divisa (se pinta y lo dice, con el nominal por moneda). Cuál, en `…_motivo`: la
+   * decisión es `estadoDeTotal`. Los campos nuevos son opcionales: una API anterior no los manda.
+   */
   lo_que_me_deben: string | null;
+  lo_que_me_deben_motivo?: MotivoSinTotal | null;
+  lo_que_me_deben_por_moneda?: NominalDeMoneda[];
   lo_que_debo: string | null;
-  tasa_del_dia: { rate: string; rate_date: string; source: string; es_de_hoy: boolean } | null;
+  lo_que_debo_motivo?: MotivoSinTotal | null;
+  lo_que_debo_por_moneda?: NominalDeMoneda[];
+}
+interface TasaDelDia {
+  rate: string;
+  rate_date: string;
+  source: string;
+  es_de_hoy: boolean;
 }
 /** Una fila del informe de ADR-0067 §4. */
 interface CaidaDeDinero {
@@ -88,6 +111,8 @@ interface Cierre {
   expected_amount: string;
   counted_amount: string;
   difference: string;
+  /** J-02: lo que llevó la caja de negativo a cero (lo puso el dueño); null si no estaba en negativo. */
+  owner_contribution: string | null;
   reason: string | null;
   currency: string;
 }
@@ -172,6 +197,16 @@ export function Dinero(): React.JSX.Element {
     enabled: puedeDinero,
     queryFn: () => llamar<Resumen>("/v1/negocio/resumen"),
   });
+  /**
+   * LA TASA TIENE SU LECTURA (N-05). Salía del resumen, que exige treasury.read y aquí ni se pide
+   * sin él: al encargado la tarjeta le decía «Todavía no hay tasa BCV» habiéndola. Ahora la lee
+   * todo el que entra a esta pantalla, y «no hay» solo se dice cuando el servidor contestó que no
+   * hay: cargando y error tienen su propio texto.
+   */
+  const tasa = useQuery({
+    queryKey: ["negocio-tasa", empresa.id],
+    queryFn: () => llamar<{ tasa_del_dia: TasaDelDia | null }>("/v1/negocio/tasa"),
+  });
   const cuentas = useQuery({
     queryKey: ["cuentas", empresa.id],
     queryFn: () => llamar<{ accounts: Cuenta[] }>("/v1/treasury/accounts"),
@@ -200,6 +235,7 @@ export function Dinero(): React.JSX.Element {
 
   const recargar = () => {
     void qc.invalidateQueries({ queryKey: ["negocio-resumen", empresa.id] });
+    void qc.invalidateQueries({ queryKey: ["negocio-tasa", empresa.id] });
     void qc.invalidateQueries({ queryKey: ["cuentas", empresa.id] });
     void qc.invalidateQueries({ queryKey: ["cierres", empresa.id] });
   };
@@ -209,12 +245,19 @@ export function Dinero(): React.JSX.Element {
   // La deuda vive en la administración: el enlace solo para quien puede
   // entrar ahí; a los demás se les dice, sin puerta que no abre.
   const puedeVerDeuda = puede(["customer.tax_id.manage", "accounting.read"]);
+  const deben = estadoDeTotal(resumen.data?.lo_que_me_deben, resumen.data?.lo_que_me_deben_motivo);
+  const debo = estadoDeTotal(resumen.data?.lo_que_debo, resumen.data?.lo_que_debo_motivo);
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <h1 className="text-xl font-semibold">Mi dinero</h1>
 
-      <TarjetaTasa resumen={resumen.data ?? null} onCambio={recargar} />
+      <TarjetaTasa
+        tasa={tasa.data === undefined ? undefined : tasa.data.tasa_del_dia}
+        error={tasa.isError ? tasa.error : null}
+        onReintentar={() => void tasa.refetch()}
+        onCambio={recargar}
+      />
 
       {puedeDinero && resumen.isError && (
         <ErrorDeBloque
@@ -226,26 +269,24 @@ export function Dinero(): React.JSX.Element {
 
       {puedeDinero && !resumen.isError && (
         <div className="grid gap-4 sm:grid-cols-2">
-          {/* Sin ar.read / ap.read el servidor manda null: esa tarjeta no se pinta. */}
-          {(!resumen.data || resumen.data.lo_que_me_deben !== null) && (
+          {/* Sin ar.read / ap.read la tarjeta no se pinta; sin tasa SÍ, y lo dice (estadoDeTotal). */}
+          {deben !== "oculta" && (
             <Card>
               <CardContent className="py-4">
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <ArrowDownToLine className="size-4" />
                   <span className="text-[0.9rem]">Lo que me deben</span>
                 </div>
-                <p className="mt-1 text-2xl font-semibold tabular-nums">
-                  {resumen.data && resumen.data.lo_que_me_deben !== null
-                    ? mostrarImporte({ amount: resumen.data.lo_que_me_deben, currency: funcional })
-                    : "…"}
-                </p>
-                {/* J-04 (ADR-0075 §6): es un cálculo a la tasa de hoy, no el saldo del mayor. */}
-                <p className="text-[0.8rem] text-muted-foreground">
-                  Lo que te deben en dólares va a la tasa BCV de hoy.
-                </p>
+                <TotalDeDeuda
+                  estado={deben}
+                  importe={resumen.data?.lo_que_me_deben ?? null}
+                  moneda={funcional}
+                  porMoneda={resumen.data?.lo_que_me_deben_por_moneda}
+                  nota="Lo que te deben en dólares va a la tasa BCV de hoy."
+                />
                 {puedeVerDeuda ? (
                   <Link
-                    to="/admin/clientes"
+                    to="/admin/clientes?orden=vencido"
                     className="text-[0.85rem] text-accent-soft-foreground hover:underline"
                   >
                     Ver quién me debe
@@ -258,24 +299,23 @@ export function Dinero(): React.JSX.Element {
               </CardContent>
             </Card>
           )}
-          {(!resumen.data || resumen.data.lo_que_debo !== null) && (
+          {debo !== "oculta" && (
             <Card>
               <CardContent className="py-4">
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <ArrowUpFromLine className="size-4" />
                   <span className="text-[0.9rem]">Lo que debo</span>
                 </div>
-                <p className="mt-1 text-2xl font-semibold tabular-nums">
-                  {resumen.data && resumen.data.lo_que_debo !== null
-                    ? mostrarImporte({ amount: resumen.data.lo_que_debo, currency: funcional })
-                    : "…"}
-                </p>
-                {/* J-04 (ADR-0075 §6): es un cálculo a la tasa de hoy, no el saldo del mayor. */}
-                <p className="text-[0.8rem] text-muted-foreground">
-                  Lo que debes en dólares va a la tasa BCV de hoy.
-                </p>
+                <TotalDeDeuda
+                  estado={debo}
+                  importe={resumen.data?.lo_que_debo ?? null}
+                  moneda={funcional}
+                  porMoneda={resumen.data?.lo_que_debo_por_moneda}
+                  nota="Lo que debes en dólares va a la tasa BCV de hoy."
+                />
+                {/* H-10: lo que se debe son las facturas de proveedores, no los gastos. */}
                 <Link
-                  to="/compras"
+                  to="/compras?ver=compras"
                   className="text-[0.85rem] text-accent-soft-foreground hover:underline"
                 >
                   Ver qué debo
@@ -446,7 +486,29 @@ export function Dinero(): React.JSX.Element {
   );
 }
 
+/**
+ * J-02: una caja que estaba en NEGATIVO no tuvo un «sobrante»: lo que faltaba lo puso el dueño.
+ * Las dos cifras llegan del servidor (`owner_contribution` y lo contado); aquí no se resta nada.
+ */
+function textoSobregiroCubierto(c: {
+  owner_contribution: string;
+  counted_amount: string;
+  currency: string;
+}): string {
+  const delDueno = mostrarImporte({ amount: c.owner_contribution, currency: c.currency });
+  const base = `Esta caja estaba en negativo. Lo que faltaba, ${delDueno}, queda anotado como dinero que puso el dueño.`;
+  if (compararImportes(c.counted_amount, "0") <= 0) return base;
+  const contado = mostrarImporte({ amount: c.counted_amount, currency: c.currency });
+  return `${base} Lo que contaste, ${contado}, queda como sobrante.`;
+}
+
 function ResultadoCierre({ cierre }: { cierre: Cierre }): React.JSX.Element {
+  if (cierre.owner_contribution != null)
+    return (
+      <span className="text-[0.85rem] text-muted-foreground">
+        {textoSobregiroCubierto({ ...cierre, owner_contribution: cierre.owner_contribution })}
+      </span>
+    );
   const cmp = compararImportes(cierre.difference, "0");
   if (cmp === 0)
     return <span className="text-[0.85rem] text-success-soft-foreground">Cuadró exacta</span>;
@@ -461,11 +523,62 @@ function ResultadoCierre({ cierre }: { cierre: Cierre }): React.JSX.Element {
   );
 }
 
+/**
+ * La cifra de una tarjeta de deuda, o por qué no la hay. Con la tasa: el importe y la nota de que
+ * es un cálculo a la tasa de hoy, no el saldo del mayor (J-04, ADR-0075 §6). Sin la tasa: se dice,
+ * con lo que sí se conoce —el nominal por moneda—, nunca «0», «…» eterno ni la tarjeta escondida.
+ */
+function TotalDeDeuda({
+  estado,
+  importe,
+  moneda,
+  porMoneda,
+  nota,
+}: {
+  estado: "cargando" | "cifra" | "sin_tasa";
+  importe: string | null;
+  moneda: string;
+  porMoneda: NominalDeMoneda[] | undefined;
+  nota: string;
+}): React.JSX.Element {
+  if (estado === "sin_tasa") {
+    const nominal = nominalPorMoneda(porMoneda);
+    return (
+      <>
+        <p className="mt-1 text-[1.05rem] font-semibold text-warning-soft-foreground">
+          {FALTA_LA_TASA}
+        </p>
+        <p className="text-[0.8rem] text-muted-foreground">
+          {nominal === ""
+            ? "Tráela arriba para ver esta cifra en bolívares."
+            : `Lo que se conoce, sin convertir: ${nominal}. Tráela arriba para verlo en bolívares.`}
+        </p>
+      </>
+    );
+  }
+  return (
+    <>
+      <p className="mt-1 text-2xl font-semibold tabular-nums">
+        {estado === "cifra" && importe !== null
+          ? mostrarImporte({ amount: importe, currency: moneda })
+          : "…"}
+      </p>
+      <p className="text-[0.8rem] text-muted-foreground">{nota}</p>
+    </>
+  );
+}
+
 function TarjetaTasa({
-  resumen,
+  tasa,
+  error,
+  onReintentar,
   onCambio,
 }: {
-  resumen: Resumen | null;
+  /** undefined = todavía sin respuesta; null = el servidor dijo que no hay tasa cargada. */
+  tasa: TasaDelDia | null | undefined;
+  /** La lectura falló (sin acceso, sin red): no es «no hay tasa», y no se dice como tal (N-05). */
+  error: unknown;
+  onReintentar: () => void;
   onCambio: () => void;
 }): React.JSX.Element {
   const { llamar } = useSesion();
@@ -486,7 +599,6 @@ function TarjetaTasa({
     onError: (e) => toast.error("No se pudo traer la tasa", errorDePersona(e)),
   });
 
-  const tasa = resumen?.tasa_del_dia ?? null;
   return (
     <Card>
       <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-3 py-4">
@@ -495,7 +607,21 @@ function TarjetaTasa({
             <RefreshCw className="size-4" />
             <span className="text-[0.9rem]">Tasa BCV</span>
           </div>
-          {tasa === null ? (
+          {error !== null && tasa === undefined ? (
+            <div className="mt-1" role="alert">
+              <p className="text-[0.95rem]">No se pudo leer la tasa.</p>
+              <p className="text-[0.8rem] text-muted-foreground">{errorDePersona(error)}</p>
+              <button
+                type="button"
+                onClick={onReintentar}
+                className="text-[0.85rem] text-accent-soft-foreground hover:underline"
+              >
+                Reintentar
+              </button>
+            </div>
+          ) : tasa === undefined ? (
+            <p className="mt-1 text-2xl font-semibold tabular-nums">…</p>
+          ) : tasa === null ? (
             <p className="mt-1 text-[0.95rem]">
               Todavía no hay tasa BCV. Tráela para poder vender en dólares.
             </p>
@@ -514,7 +640,7 @@ function TarjetaTasa({
           )}
         </div>
         <Button
-          variant={tasa === null || !tasa.es_de_hoy ? "primary" : "secondary"}
+          variant={tasa === null || tasa?.es_de_hoy === false ? "primary" : "secondary"}
           disabled={traerBcv.isPending}
           onClick={() => traerBcv.mutate()}
         >
@@ -633,7 +759,7 @@ function MoverPlata({
   // pregunta antes de reenviar con la confirmación (ADR-0062 §4).
   const [sinSaldo, setSinSaldo] = useState<string | null>(null);
 
-  const limpio = monto.trim().replace(",", ".");
+  const limpio = importeLimpio(monto);
   const montoOk = importeValido(limpio) && compararImportes(limpio, "0") > 0;
   const listo = montoOk && destino !== null && motivo.trim().length >= 3;
 
@@ -840,7 +966,7 @@ function CerrarCaja({
   const [contado, setContado] = useState("");
   const [motivo, setMotivo] = useState("");
 
-  const contadoLimpio = contado.trim().replace(",", ".");
+  const contadoLimpio = importeLimpio(contado);
   const contadoOk = importeValido(contadoLimpio);
   // Comparación de STRINGS decimales (decimal-compare.ts): decide si pedir el
   // motivo, nada más. El importe de la diferencia lo calcula el servidor.
@@ -849,7 +975,13 @@ function CerrarCaja({
 
   const cerrar = useMutation({
     mutationFn: () =>
-      llamar<{ difference: string; currency: string; accounting: string }>("/v1/cash-closings", {
+      llamar<{
+        difference: string;
+        currency: string;
+        accounting: string;
+        counted_amount: string;
+        owner_contribution: string | null;
+      }>("/v1/cash-closings", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
@@ -867,7 +999,13 @@ function CerrarCaja({
       });
       toast.success(
         "Caja cerrada",
-        cmp === 0 ? "Cuadró exacta." : cmp > 0 ? `Sobraron ${importe}.` : `Faltaron ${importe}.`,
+        r.owner_contribution != null
+          ? textoSobregiroCubierto({ ...r, owner_contribution: r.owner_contribution })
+          : cmp === 0
+            ? "Cuadró exacta."
+            : cmp > 0
+              ? `Sobraron ${importe}.`
+              : `Faltaron ${importe}.`,
       );
       setAbierto(false);
       setContado("");

@@ -13,10 +13,17 @@ import {
   EntityPicker,
   FormField,
   MoneyInput,
+  MotivoDeLectura,
+  cantidadLimpia,
+  cantidadValida,
+  importeLimpio,
   importeValido,
+  motivoDeCantidad,
+  motivoDeImporte,
   type EntityOption,
 } from "../../components/forms.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
+import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import { Button } from "../../ui/button.js";
 import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
@@ -34,6 +41,7 @@ import {
 } from "../../ui/dialog.js";
 import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
+import { FALTA_LA_TASA, nominalPorMoneda, textoDeDeuda } from "../../components/deuda.js";
 import { compararImportes } from "../../components/decimal-compare.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { errorDePersona } from "../../lib.js";
@@ -53,6 +61,7 @@ import type {
 } from "../../lib.js";
 import { hoyLocal, fechaLocal } from "../../fechas.js";
 import { useConFacturas } from "../../app/modo-venta.js";
+import { ANULACION } from "../../components/capa-fiscal/textos.js";
 import {
   ComprobantesRetencion,
   RetencionIvaCampos,
@@ -781,7 +790,17 @@ function NuevaOrden(): React.JSX.Element {
     almacenId !== "" &&
     lineas.some(
       (l) => l.producto !== null && l.quantity.trim() !== "" && l.unit_price.trim() !== "",
-    );
+    ) &&
+    // F-06: una línea que el lector único rechazó no se envía (el motivo lo dice el servidor
+    // en el 422 si llegara; aquí el botón no deja mandarla).
+    lineas
+      .filter((l) => l.producto !== null && l.quantity.trim() !== "")
+      .every(
+        (l) =>
+          cantidadValida(l.quantity) &&
+          importeValido(l.unit_price) &&
+          (l.unit_weight.trim() === "" || cantidadValida(l.unit_weight)),
+      );
 
   async function crear(): Promise<void> {
     setError(null);
@@ -800,9 +819,11 @@ function NuevaOrden(): React.JSX.Element {
             .filter((l) => l.producto !== null && l.quantity.trim() !== "")
             .map((l) => ({
               product_id: l.producto?.id ?? "",
-              quantity: l.quantity.trim(),
-              unit_price: l.unit_price.trim(),
-              ...(l.unit_weight.trim() === "" ? {} : { unit_weight: l.unit_weight.trim() }),
+              quantity: cantidadLimpia(l.quantity),
+              unit_price: importeLimpio(l.unit_price),
+              ...(l.unit_weight.trim() === ""
+                ? {}
+                : { unit_weight: cantidadLimpia(l.unit_weight) }),
             })),
         }),
       });
@@ -1127,11 +1148,24 @@ function CuentasPorPagar(): React.JSX.Element {
                   <CardTitle>Pendiente por pagar</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <DualMoney
-                    variant="kpi"
-                    amount={estado.data.total_outstanding}
-                    currency={estado.data.currency}
-                  />
+                  {estado.data.total_outstanding === null ? (
+                    // Se debe, y falta la tasa para decirlo en bolívares: el texto único y el
+                    // nominal por moneda, que sí se conoce. `null` no es cero.
+                    <div>
+                      <p className="text-2xl font-semibold">{FALTA_LA_TASA}</p>
+                      {nominalPorMoneda(estado.data.total_outstanding_por_moneda) !== "" && (
+                        <p className="mt-1 text-[0.9rem] tabular-nums">
+                          Se debe {nominalPorMoneda(estado.data.total_outstanding_por_moneda)}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <DualMoney
+                      variant="kpi"
+                      amount={estado.data.total_outstanding}
+                      currency={estado.data.currency}
+                    />
+                  )}
                   <p className="mt-2 text-[0.85rem] text-muted-foreground">
                     Retenido acumulado:{" "}
                     <span className="font-mono">
@@ -1156,7 +1190,7 @@ function CuentasPorPagar(): React.JSX.Element {
                       <span key={b.bucket} className="font-mono text-muted-foreground">
                         {b.bucket}:{" "}
                         <span className="text-foreground">
-                          {mostrarImporte({ amount: b.amount, currency: estado.data.currency })}
+                          {textoDeDeuda(b.amount, estado.data.currency)}
                         </span>{" "}
                         ({b.document_count})
                       </span>
@@ -1784,7 +1818,12 @@ function RegistrarFacturaProveedor({
         description: l.description,
         quantity: /^0*(\.0*)?$/.test(falta)
           ? ""
-          : falta.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, ""),
+          : // F-06: se propone con COMA decimal. Con punto, «1.125» kilos lo rechazaría el lector
+            // por ambiguo sin que nadie lo hubiera tecleado.
+            falta
+              .replace(/(\.\d*?)0+$/, "$1")
+              .replace(/\.$/, "")
+              .replace(".", ","),
         unit_price: l.unit_price_transaction,
       };
     }),
@@ -1798,7 +1837,14 @@ function RegistrarFacturaProveedor({
     nroFactura.trim() !== "" &&
     nroControl.trim() !== "" &&
     eleccionCompleta(retencion) &&
-    lineas.some((l) => l.quantity.trim() !== "" && l.unit_price.trim() !== "");
+    lineas.some((l) => l.quantity.trim() !== "" && l.unit_price.trim() !== "") &&
+    // F-06: lo que el lector rechazó no se envía; el motivo va junto a su línea.
+    lineas.every(
+      (l) =>
+        l.quantity.trim() === "" ||
+        l.unit_price.trim() === "" ||
+        (cantidadValida(l.quantity) && importeValido(l.unit_price)),
+    );
 
   async function registrar(): Promise<void> {
     setError(null);
@@ -1820,8 +1866,8 @@ function RegistrarFacturaProveedor({
             .filter((l) => l.quantity.trim() !== "" && l.unit_price.trim() !== "")
             .map((l) => ({
               product_id: l.product_id,
-              quantity: l.quantity.trim().replace(",", "."),
-              unit_price: l.unit_price.trim().replace(",", "."),
+              quantity: cantidadLimpia(l.quantity),
+              unit_price: importeLimpio(l.unit_price),
             })),
         }),
       });
@@ -1849,7 +1895,7 @@ function RegistrarFacturaProveedor({
         <DialogTitle>Registrar la factura del proveedor</DialogTitle>
         <DialogDescription>
           Copia los datos DE LA FACTURA DE PAPEL: sus números, su fecha y sus cantidades. El
-          matching de tres vías comparará contra la orden y lo recibido.
+          matching de tres vías comparará contra la orden y lo recibido. {ANULACION.proveedorAnulo}
         </DialogDescription>
         <div className="mt-3 space-y-3">
           <div className="grid grid-cols-3 gap-2">
@@ -1904,6 +1950,13 @@ function RegistrarFacturaProveedor({
                 />
               </div>
             ))}
+            {/* F-06: lo que no se pudo leer se dice, con la línea a la que pertenece. */}
+            {lineas.map((l) => (
+              <MotivoDeLectura key={`cantidad-${l.clave}`} motivo={motivoDeCantidad(l.quantity)} />
+            ))}
+            {lineas.map((l) => (
+              <MotivoDeLectura key={`precio-${l.clave}`} motivo={motivoDeImporte(l.unit_price)} />
+            ))}
             <p className="text-[0.8rem] text-faint-foreground">
               Precio unitario sin IVA, en {detalle.order.transaction_currency}: el impuesto lo
               resuelve el sistema con la regla vigente. Deja en blanco la cantidad de lo que esta
@@ -1951,7 +2004,12 @@ function NotaCreditoProveedor({
   const validas = lineas.filter(
     (l) => l.producto !== null && l.quantity.trim() !== "" && l.unit_price.trim() !== "",
   );
-  const listo = nroNota.trim() !== "" && motivo.trim().length >= 3 && validas.length > 0;
+  // F-06: lo que el lector rechazó no se envía; el motivo va junto a su línea.
+  const listo =
+    nroNota.trim() !== "" &&
+    motivo.trim().length >= 3 &&
+    validas.length > 0 &&
+    validas.every((l) => cantidadValida(l.quantity) && importeValido(l.unit_price));
 
   async function registrar(): Promise<void> {
     setError(null);
@@ -1969,8 +2027,8 @@ function NotaCreditoProveedor({
           currency: factura.transaction_currency,
           lines: validas.map((l) => ({
             product_id: l.producto!.id,
-            quantity: l.quantity.trim().replace(",", "."),
-            unit_price: l.unit_price.trim().replace(",", "."),
+            quantity: cantidadLimpia(l.quantity),
+            unit_price: importeLimpio(l.unit_price),
           })),
         }),
       });
@@ -2073,6 +2131,13 @@ function NotaCreditoProveedor({
                 </Button>
               </div>
             ))}
+            {/* F-06: lo que no se pudo leer se dice, con la cifra a la que se refiere. */}
+            {lineas.map((l) => (
+              <MotivoDeLectura key={`cantidad-${l.clave}`} motivo={motivoDeCantidad(l.quantity)} />
+            ))}
+            {lineas.map((l) => (
+              <MotivoDeLectura key={`precio-${l.clave}`} motivo={motivoDeImporte(l.unit_price)} />
+            ))}
             <Button
               variant="secondary"
               size="sm"
@@ -2120,6 +2185,20 @@ interface CuentaTesoreria {
  * paga (`otro`). Una nota de crédito del proveedor se aplica por su propio
  * diálogo («NC…»), no como instrumento de pago (contrato alineado con la base).
  */
+/** Lo que responde `POST /v1/supplier-payments/preview` (D-02): todo calculado por el servidor. */
+interface VistaPreviaDePago {
+  money_amount: string;
+  money_currency: string;
+  settled_amount: string;
+  settled_currency: string;
+  crossed: boolean;
+  fx_rate: string | null;
+  fx_rate_currency: string | null;
+  fx_rate_date: string | null;
+  balance_after: string;
+  insufficient_funds?: string | null;
+}
+
 const INSTRUMENTOS_PAGO: { value: string; label: string; moneda: string | null }[] = [
   { value: "transferencia", label: "Transferencia", moneda: "VES" },
   { value: "efectivo_bs", label: "Efectivo Bs.", moneda: "VES" },
@@ -2152,11 +2231,16 @@ function PagarProveedor({
     factura.transaction_currency === "USD" ? "zelle" : "transferencia",
   );
   const [monedaLibre, setMonedaLibre] = useState(factura.transaction_currency);
-  const [monto, setMonto] = useState(factura.balance ?? "");
+  // H-05 / D-13: el saldo se prellenaba crudo («220400.00000000»). Es texto del servidor: se le
+  // quitan los ceros de más allá del céntimo, sin calcular nada.
+  const [monto, setMonto] = useState((factura.balance ?? "").replace(/(\.\d{2})0+$/, "$1"));
   const [referencia, setReferencia] = useState("");
   const [cuenta, setCuenta] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [ocupado, setOcupado] = useState(false);
+  // H-05: sin saldo manda el MISMO diálogo de tesorería que en /compras, la llegada y Mi dinero:
+  // «elige otra cuenta» o, con `treasury.overdraft`, registrarlo igual con su motivo.
+  const [sinSaldo, setSinSaldo] = useState<string | null>(null);
 
   const cuentas = useQuery({
     queryKey: ["cuentas", empresa.id],
@@ -2172,29 +2256,56 @@ function PagarProveedor({
     (c) => c.is_active && !c.is_system && c.currency === moneda,
   );
   const cuentaValida = cuenta !== null && cuentasElegibles.some((c) => c.id === cuenta);
-  const montoLimpio = monto.trim().replace(",", ".");
-  const listo = importeValido(montoLimpio) && !ocupado;
+  const montoLimpio = importeLimpio(monto);
+  /**
+   * EL PAGO CRUZADO (D-02, ADR-0075 §3): una factura se paga en cualquier moneda a la tasa BCV
+   * del día. El importe se escribe SIEMPRE en la moneda de la factura (lo que cancela); si el
+   * instrumento es de otra moneda, hay que decir de qué cuenta sale y el servidor dice cuánto
+   * sale de ella, a qué tasa y de qué fecha. La pantalla no convierte nada.
+   */
+  const cruzado = !esNota && moneda !== factura.transaction_currency;
+  const listo = importeValido(montoLimpio) && !ocupado && (!cruzado || cuentaValida);
+  const cuerpo = (motivoSobregiro: string | null): Record<string, unknown> => ({
+    company_id: empresa.id,
+    supplier_invoice_id: factura.id,
+    gross_amount: montoLimpio,
+    currency: factura.transaction_currency,
+    instrument: instrumento,
+    ...(referencia.trim() === "" ? {} : { reference: referencia.trim() }),
+    ...(esNota || !cuentaValida ? {} : { account_id: cuenta }),
+    ...(motivoSobregiro === null
+      ? {}
+      : { allow_negative_balance: true, overdraft_reason: motivoSobregiro }),
+  });
+  const previa = useQuery({
+    queryKey: ["pago-proveedor-previa", factura.id, montoLimpio, instrumento, cuenta],
+    enabled: cruzado && cuentaValida && importeValido(montoLimpio),
+    retry: false,
+    queryFn: () =>
+      llamar<VistaPreviaDePago>("/v1/supplier-payments/preview", {
+        method: "POST",
+        body: JSON.stringify(cuerpo(null)),
+      }),
+  });
 
-  async function pagar(): Promise<void> {
+  async function pagar(motivoSobregiro: string | null = null): Promise<void> {
     setError(null);
     setOcupado(true);
     try {
       await llamar("/v1/supplier-payments", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          supplier_invoice_id: factura.id,
-          gross_amount: montoLimpio,
-          currency: moneda,
-          instrument: instrumento,
-          ...(referencia.trim() === "" ? {} : { reference: referencia.trim() }),
-          ...(esNota || !cuentaValida ? {} : { account_id: cuenta }),
-        }),
+        body: JSON.stringify(cuerpo(motivoSobregiro)),
       });
       toast.success("Pago registrado", "La deuda con el proveedor bajó.");
       onCerrar(true);
     } catch (e) {
+      const falta = esSinSaldo(e);
+      if (falta !== null && motivoSobregiro === null) {
+        setSinSaldo(falta);
+        return;
+      }
+      if (motivoSobregiro !== null) throw e;
       setError(e);
     } finally {
       setOcupado(false);
@@ -2247,13 +2358,29 @@ function PagarProveedor({
               )}
             </FormField>
           )}
-          <FormField label="Importe bruto" required hint={`En ${moneda}: lo que cancela deuda.`}>
-            {(a) => <MoneyInput id={a.id} value={monto} onChange={setMonto} currency={moneda} />}
+          <FormField
+            label="Importe bruto"
+            required
+            hint={`En ${factura.transaction_currency}, la moneda de la factura: lo que cancela deuda.`}
+          >
+            {(a) => (
+              <MoneyInput
+                id={a.id}
+                value={monto}
+                onChange={setMonto}
+                currency={factura.transaction_currency}
+              />
+            )}
           </FormField>
           {!esNota && (
             <FormField
               label="Cuenta de la que sale"
-              hint="Opcional: sin ella, el sistema usa la forma de pago configurada o «Sin asignar»."
+              required={cruzado}
+              hint={
+                cruzado
+                  ? `La factura es en ${factura.transaction_currency} y pagas en ${moneda}: elige la cuenta y se convierte a la tasa BCV del día.`
+                  : "Opcional: sin ella, el sistema usa la forma de pago configurada o «Sin asignar»."
+              }
             >
               {(a) => (
                 <SimpleSelect
@@ -2285,6 +2412,51 @@ function PagarProveedor({
               />
             )}
           </FormField>
+          {cruzado && previa.data !== undefined && (
+            <p
+              className="rounded-md border border-border bg-surface-muted px-3 py-2 text-[0.86rem]"
+              data-testid="pago-cruzado-resumen"
+            >
+              Salen{" "}
+              <strong>
+                {mostrarImporte({
+                  amount: previa.data.money_amount,
+                  currency: previa.data.money_currency,
+                })}
+              </strong>{" "}
+              de la cuenta
+              {previa.data.fx_rate !== null && previa.data.fx_rate_date !== null && (
+                <>
+                  {" "}
+                  a la tasa BCV del {fechaLocal(previa.data.fx_rate_date)} ( Bs.{" "}
+                  {mostrarCantidad(previa.data.fx_rate)} por {previa.data.fx_rate_currency})
+                </>
+              )}
+              . Cancela{" "}
+              <strong>
+                {mostrarImporte({
+                  amount: previa.data.settled_amount,
+                  currency: previa.data.settled_currency,
+                })}
+              </strong>{" "}
+              de la factura y queda debiendo{" "}
+              {mostrarImporte({
+                amount: previa.data.balance_after,
+                currency: previa.data.settled_currency,
+              })}
+              .
+            </p>
+          )}
+          {/* Si la cuenta no alcanza, el resumen de arriba se ve IGUAL: la vista previa lo
+              devuelve junto al aviso, para saber cuánto sale antes de confirmar el sobregiro. */}
+          {cruzado &&
+            previa.data !== undefined &&
+            (previa.data.insufficient_funds ?? null) !== null && (
+              <p role="alert" className="text-[0.86rem] text-destructive-soft-foreground">
+                {previa.data.insufficient_funds}
+              </p>
+            )}
+          {cruzado && previa.isError && <MensajeError error={previa.error} />}
           {error !== null && <MensajeError error={error} />}
         </div>
         <DialogFooter>
@@ -2296,6 +2468,16 @@ function PagarProveedor({
           </Button>
         </DialogFooter>
       </DialogContent>
+      {sinSaldo !== null && (
+        <ConfirmarSobregiro
+          mensaje={sinSaldo}
+          onCancelar={() => setSinSaldo(null)}
+          onConfirmar={async (porQue) => {
+            await pagar(porQue);
+            setSinSaldo(null);
+          }}
+        />
+      )}
     </Dialog>
   );
 }

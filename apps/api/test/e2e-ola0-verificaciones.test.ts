@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture, venceDeFixture } from "./_fiado-de-fixture.js";
 
 /**
  * OLA 0 (plan «Ladino sin RIF», 2026-09-14): dos afirmaciones del plan que
@@ -110,6 +111,8 @@ beforeAll(async () => {
                                            person_type_code, taxpayer_type_code)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, 'Vecina Carmen', 'natural',
                      'consumidor_final')`;
+    // E-09: la venta sin cobro de este fichero es fiado; la empresa de prueba fía (permiso y límite).
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
     const [q] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                    tax_category_code, tracks_lots, tracks_expiry)
@@ -210,6 +213,7 @@ describe("Ola 0 · verificaciones ejecutadas", () => {
       warehouse_id: W1,
       customer_id: CLIENTE,
       lines: [{ product_id: SERVICIO, quantity: "1" }],
+      due_date: venceDeFixture(),
     });
     expect(venta.status).toBe(201);
     const recibo = ((await venta.json()) as { document: { id: string } }).document.id;

@@ -1,7 +1,7 @@
 import type { Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql, type TransactionSql } from "@ladino/db";
 import { UpdateCompanySettingsRequest } from "@ladino/schemas";
-import { getCompanySettings, setCompanySettings } from "@ladino/domain";
+import { explicarFaltaDeTasa, getCompanySettings, setCompanySettings } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
 import { puedeLeerDeuda } from "./ar-read.js";
@@ -16,6 +16,7 @@ import { puedeLeerDeuda } from "./ar-read.js";
  * Permiso: `treasury.read` — es la vista del dinero del negocio entero. Los dos totales de DEUDA
  * exigen además el permiso de su libro: `lo_que_me_deben` con `ar.read` y `lo_que_debo` con
  * `ap.read`; sin él van en `null` y ni se consultan (N-07/P-04, ADR-0048 nota de re-revisión).
+ * Un `null` lleva SIEMPRE su motivo en `…_motivo`: `sin_permiso` o `sin_tasa` (ola 4).
  */
 async function exigeTreasuryRead(
   tx: TransactionSql,
@@ -36,6 +37,33 @@ async function exigeTreasuryRead(
       message: "Ver el resumen del negocio exige el permiso treasury.read.",
     });
   }
+}
+
+interface TasaDelDiaFila {
+  rate: string;
+  rate_date: string;
+  source: string;
+  es_de_hoy: boolean;
+  dias_de_antiguedad: number;
+}
+
+/**
+ * LA TASA DEL DÍA, UNA SOLA CONSULTA para las dos lecturas que la sirven: el resumen
+ * (treasury.read) y `GET /v1/negocio/tasa` (cualquier miembro de la empresa, N-05). Si cada una
+ * tuviera la suya, el encargado y el dueño acabarían viendo tasas distintas.
+ */
+async function tasaDelDia(
+  tx: TransactionSql,
+  companyId: string,
+  funcional: string,
+): Promise<TasaDelDiaFila | null> {
+  const [tasa] = await tx<TasaDelDiaFila[]>`
+    select f.rate::text as rate, f.rate_date::text as rate_date, f.source,
+           f.rate_date = (now() at time zone 'America/Caracas')::date as es_de_hoy,
+           ((now() at time zone 'America/Caracas')::date - f.rate_date)::int
+             as dias_de_antiguedad
+      from platform.rate_for(${companyId}, 'USD', ${funcional}, (now() at time zone 'America/Caracas')::date + 1) f`;
+  return tasa ?? null;
 }
 
 export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler): void {
@@ -162,6 +190,19 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
             from public.expenses x
            where x.company_id = ${companyId}
              and x.paid_at >= (select mes from ventana)::timestamptz - interval '1 day'
+          union all
+          -- H-09 (ADR-0080): el gasto CON factura fiscal es una factura de proveedor con
+          -- expense_category, no una fila de expenses. Cuenta como gasto lo MISMO que su
+          -- asiento debita a gasto: la base si el impuesto es crédito, el total si va al costo;
+          -- y en el día en que se asienta (el de la factura, o el contable si llegó tarde).
+          select coalesce(i.accounting_date, i.invoice_date) as dia,
+                 round((case when i.tax_is_recoverable then i.subtotal_amount
+                             else i.total_amount end) * i.fx_rate, 2)
+            from public.supplier_invoices i
+           where i.company_id = ${companyId}
+             and i.expense_category is not null
+             and i.status in ('posted', 'paid')
+             and coalesce(i.accounting_date, i.invoice_date) >= (select mes from ventana)
         )
         select exists (select 1 from public.journal_templates t where t.company_id = ${companyId})
                  as lleva,
@@ -196,19 +237,58 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
       const veCxp = await puedeLeerDeuda(tx, actor, companyId, "ap.read");
       const [deben] = !veCxc
         ? [null]
-        : await tx<{ total: string }[]>`
+        : await tx<{ total: string | null }[]>`
         -- F-04 (ADR-0075 §5): la única función de deuda, sobre todos los clientes.
         select round(platform.customer_debt_today(${companyId}), 2)::text as total`;
+      // EL NULL DICE SU MOTIVO (ola 4, la familia de N-05). Con permiso y sin cifra, la función
+      // de deuda no pudo valorar hoy lo que está en divisa: `sin_tasa`, y lo que SÍ se conoce
+      // —el nominal por moneda, de la misma `document_debt`— va aparte. La consulta del nominal
+      // solo corre en ese caso.
+      const debenSinTasa = veCxc && (deben?.total ?? null) === null;
+      const debenPorMoneda = !debenSinTasa
+        ? []
+        : await tx<{ currency: string; nominal: string }[]>`
+        select dd.currency,
+               round(sum(dd.nominal), platform.currency_minor_units(dd.currency))::text as nominal
+          from public.documents d
+          cross join lateral platform.document_debt(${companyId}, d.id) dd
+         where d.company_id = ${companyId}
+           and d.kind in ('invoice', 'receipt', 'debit_note')
+           and d.status in ('issued', 'paid')
+           and dd.nominal > 0
+         group by dd.currency
+         order by dd.currency`;
+      // LA FUNCIÓN DECIDE SI FALTA LA TASA (20261004200000). `supplier_debt_today` ya no lanza:
+      // sin tasa dentro del margen devuelve NULL para lo que se debe y no se puede valorar hoy,
+      // y 0 para lo que no se debe (una factura en divisa de saldo cero no necesita tasa). NULL
+      // no es cero, y `sum()` y `greatest(x, 0)` lo descartarían en silencio: si alguna factura
+      // quedó sin valorar, el total entero es NULL — el mismo patrón que el estado de cuenta
+      // del proveedor. Aquí no hay pre-comprobación de la tasa: sería una segunda regla, y decía
+      // `sin_tasa` con una factura en divisa que ya no debe nada.
       const [debo] = !veCxp
         ? [null]
-        : await tx<{ total: string }[]>`
-        select round(coalesce(sum(saldo), 0), 2)::text as total
+        : await tx<{ total: string | null }[]>`
+        select (case when bool_or(s.deuda is null) then null
+                     else round(coalesce(sum(greatest(s.deuda, 0)), 0), 2) end)::text as total
           -- En bolívares: una factura de proveedor en USD se valora a la tasa del día (la
           -- misma regla que lo que me deben). Antes se sumaban saldos de monedas distintas
           -- y USD 50,112 aparecía como «Bs 50,11» (QA 2026-09-15, h. 76).
-          from (select greatest(platform.supplier_debt_today(${companyId}, i.id), 0) as saldo
+          from (select platform.supplier_debt_today(${companyId}, i.id) as deuda
                   from public.supplier_invoices i
                  where i.company_id = ${companyId} and i.status = 'posted') s`;
+      const deboSinTasa = veCxp && (debo?.total ?? null) === null;
+      const deboPorMoneda = !deboSinTasa
+        ? []
+        : await tx<{ currency: string; nominal: string }[]>`
+        select s.currency,
+               round(sum(s.saldo), platform.currency_minor_units(s.currency))::text as nominal
+          from (select i.transaction_currency as currency,
+                       platform.supplier_invoice_balance(${companyId}, i.id) as saldo
+                  from public.supplier_invoices i
+                 where i.company_id = ${companyId} and i.status = 'posted') s
+         where s.saldo > 0
+         group by s.currency
+         order by s.currency`;
 
       const dinero = await tx<{ currency: string; balance: string }[]>`
         select ca.currency,
@@ -224,20 +304,7 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
       const [agotarse] = await tx<{ n: number }[]>`
         select count(*)::int as n from platform.low_stock_products(${companyId})`;
 
-      const [tasa] = await tx<
-        {
-          rate: string;
-          rate_date: string;
-          source: string;
-          es_de_hoy: boolean;
-          dias_de_antiguedad: number;
-        }[]
-      >`
-        select f.rate::text as rate, f.rate_date::text as rate_date, f.source,
-               f.rate_date = (now() at time zone 'America/Caracas')::date as es_de_hoy,
-               ((now() at time zone 'America/Caracas')::date - f.rate_date)::int
-                 as dias_de_antiguedad
-          from platform.rate_for(${companyId}, 'USD', ${funcional}, (now() at time zone 'America/Caracas')::date + 1) f`;
+      const tasa = await tasaDelDia(tx, companyId, funcional);
 
       const ultimas = await tx<Record<string, unknown>[]>`
         select d.id,
@@ -263,12 +330,36 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
         pendientes_de_contabilizar: llevaContabilidad ? contable.pendientes : 0,
         lineas_sin_costo_mes: ventas!.lineas_sin_costo_mes,
         lo_que_me_deben: deben?.total ?? null,
+        lo_que_me_deben_motivo: !veCxc ? "sin_permiso" : debenSinTasa ? "sin_tasa" : null,
+        lo_que_me_deben_por_moneda: debenPorMoneda,
         lo_que_debo: debo?.total ?? null,
+        lo_que_debo_motivo: !veCxp ? "sin_permiso" : deboSinTasa ? "sin_tasa" : null,
+        lo_que_debo_por_moneda: deboPorMoneda,
         mi_dinero: dinero,
         por_agotarse: agotarse?.n ?? 0,
-        tasa_del_dia: tasa ?? null,
+        tasa_del_dia: tasa,
         ultimas_ventas: ultimas,
       };
+    });
+    return c.json(cuerpo, 200);
+  });
+
+  /**
+   * LA TASA DEL DÍA, PARA QUIEN TRABAJA EN LA EMPRESA (N-05). «Mi dinero» la leía del resumen, que
+   * exige `treasury.read`: al encargado —que cierra su caja y trae la tasa, sin ver el dinero del
+   * negocio— la pantalla le decía «Todavía no hay tasa BCV» habiéndola. Un 403 leído como «no hay».
+   *
+   * Sin permiso propio, igual que `/v1/exchange-rates` y `/v1/exchange-rates/preview`: la tasa
+   * del BCV es un dato público y la caja ya la enseña a quien vende. La empresa la valida el
+   * middleware de alcance (quien no es miembro recibe su 404).
+   */
+  app.get("/v1/negocio/tasa", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      const [empresa] = await tx<{ moneda: string }[]>`
+        select functional_currency_code as moneda from public.companies where id = ${companyId}`;
+      return { tasa_del_dia: await tasaDelDia(tx, companyId, empresa?.moneda ?? "VES") };
     });
     return c.json(cuerpo, 200);
   });
@@ -311,7 +402,9 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
       if (!t?.rate) {
         throw new DominioError({
           code: "EXCHANGE_RATE_MISSING",
-          message: `No hay tasa BCV de ${from} a ${to}. Tráela en Mi dinero.`,
+          // El día que se dice es HOY (la consulta mira un día más allá para alcanzar la tasa
+          // publicada con fecha valor de mañana): la persona trae la de hoy.
+          message: await explicarFaltaDeTasa(tx, from, to),
         });
       }
       // La equivalencia es PRESENTACIÓN: se sirve a las unidades mínimas de su moneda

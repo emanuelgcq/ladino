@@ -797,7 +797,7 @@ describe("el agente retiene solo y el comprobante es un documento", () => {
       await tx`insert into public.company_taxpayer_types
                  (tenant_id, company_id, taxpayer_type_code, effective_from, reason, rules_version)
                values (${TENANT}, ${COMPANY}, 'ordinario', ${HOY}::date,
-                       'E2E H12: deja de ser especial desde hoy', 'e2e')`;
+                       'E2E H12: deja de ser especial desde hoy', 'domain-s0.5')`;
     });
     const r = await registrar({
       supplier_document_number: `F-${RUN}-H12`,

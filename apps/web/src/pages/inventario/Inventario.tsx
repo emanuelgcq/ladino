@@ -6,7 +6,15 @@ import { ArrowLeftRight, ArrowUpFromLine, ClipboardList, Scale, TimerReset } fro
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
-import { FormField, EntityPicker, type EntityOption } from "../../components/forms.js";
+import {
+  FormField,
+  EntityPicker,
+  MotivoDeLectura,
+  cantidadLimpia,
+  cantidadValida,
+  motivoDeCantidad,
+  type EntityOption,
+} from "../../components/forms.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
 import { PorRecibir } from "../../components/PorRecibir.js";
 import { Button } from "../../ui/button.js";
@@ -1114,8 +1122,8 @@ function DefinirUmbral({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
           company_id: empresa.id,
           warehouse_id: almacen,
           product_id: producto?.id ?? "",
-          stock_min: minimo.trim().replace(",", "."),
-          ...(maximo.trim() === "" ? {} : { stock_max: maximo.trim().replace(",", ".") }),
+          stock_min: cantidadLimpia(minimo),
+          ...(maximo.trim() === "" ? {} : { stock_max: cantidadLimpia(maximo) }),
         }),
       }),
     onSuccess: () => {
@@ -1128,7 +1136,8 @@ function DefinirUmbral({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
   const listo =
     producto !== null &&
     almacen !== null &&
-    /^\d{1,16}(\.\d{1,8})?$/.test(minimo.trim().replace(",", "."));
+    cantidadValida(minimo) &&
+    (maximo.trim() === "" || cantidadValida(maximo));
 
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
@@ -1170,7 +1179,7 @@ function DefinirUmbral({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
             )}
           </FormField>
           <div className="grid grid-cols-2 gap-2">
-            <FormField label="Mínimo" required>
+            <FormField label="Mínimo" required error={motivoDeCantidad(minimo) ?? undefined}>
               {(a) => (
                 <Input
                   id={a.id}
@@ -1181,7 +1190,7 @@ function DefinirUmbral({ onCerrar }: { onCerrar: (hecho: boolean) => void }): Re
                 />
               )}
             </FormField>
-            <FormField label="Máximo (opcional)">
+            <FormField label="Máximo (opcional)" error={motivoDeCantidad(maximo) ?? undefined}>
               {(a) => (
                 <Input
                   id={a.id}
@@ -1462,7 +1471,9 @@ function DefinirReceta({
   const validas = lineas.filter(
     (l) => l.ingrediente !== null && l.quantity.trim() !== "" && l.unit_code !== "",
   );
-  const listo = compuesto !== null && validas.length > 0;
+  // F-06: una cantidad que el lector rechazó no se envía; el motivo va junto a su línea.
+  const listo =
+    compuesto !== null && validas.length > 0 && validas.every((l) => cantidadValida(l.quantity));
 
   async function guardar(): Promise<void> {
     setError(null);
@@ -1475,7 +1486,7 @@ function DefinirReceta({
           company_id: empresa.id,
           lines: validas.map((l) => ({
             child_product_id: l.ingrediente!.id,
-            quantity: l.quantity.trim().replace(",", "."),
+            quantity: cantidadLimpia(l.quantity),
             unit_code: l.unit_code,
           })),
         }),
@@ -1519,62 +1530,66 @@ function DefinirReceta({
           </FormField>
           <div className="space-y-2">
             {lineas.map((l, i) => (
-              <div key={l.id} className="flex items-start gap-2">
-                <div className="min-w-0 flex-1">
-                  <EntityPicker
-                    placeholder="Ingrediente…"
-                    value={l.ingrediente}
-                    onChange={(v) =>
+              <div key={l.id} className="space-y-1">
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <EntityPicker
+                      placeholder="Ingrediente…"
+                      value={l.ingrediente}
+                      onChange={(v) =>
+                        setLineas((prev) =>
+                          prev.map((x, j) => (j === i ? { ...x, ingrediente: v } : x)),
+                        )
+                      }
+                      buscar={async (q) => {
+                        const r = await llamar<{ items: Product[] }>(
+                          "/v1/products?search=" + encodeURIComponent(q) + "&per_page=10",
+                        );
+                        return r.items
+                          .filter((x) => x.kind === "good" && !x.is_composed)
+                          .map((x) => ({ id: x.id, label: x.name, detalle: x.sku }));
+                      }}
+                    />
+                  </div>
+                  <Input
+                    aria-label="Cantidad por unidad"
+                    placeholder="Cant."
+                    inputMode="decimal"
+                    className="w-20 text-right font-mono"
+                    value={l.quantity}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                       setLineas((prev) =>
-                        prev.map((x, j) => (j === i ? { ...x, ingrediente: v } : x)),
+                        prev.map((x, j) => (j === i ? { ...x, quantity: e.target.value } : x)),
                       )
                     }
-                    buscar={async (q) => {
-                      const r = await llamar<{ items: Product[] }>(
-                        "/v1/products?search=" + encodeURIComponent(q) + "&per_page=10",
-                      );
-                      return r.items
-                        .filter((x) => x.kind === "good" && !x.is_composed)
-                        .map((x) => ({ id: x.id, label: x.name, detalle: x.sku }));
-                    }}
                   />
+                  <div className="w-32">
+                    <SimpleSelect
+                      ariaLabel="Unidad del ingrediente"
+                      value={l.unit_code}
+                      onValueChange={(v) =>
+                        setLineas((prev) =>
+                          prev.map((x, j) => (j === i ? { ...x, unit_code: v } : x)),
+                        )
+                      }
+                      options={(unidades.data ?? []).map((u) => ({
+                        value: u.code,
+                        label: u.name,
+                      }))}
+                    />
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="iconSm"
+                    aria-label="Quitar ingrediente"
+                    disabled={lineas.length <= 1}
+                    onClick={() => setLineas((prev) => prev.filter((_, j) => j !== i))}
+                  >
+                    ×
+                  </Button>
                 </div>
-                <Input
-                  aria-label="Cantidad por unidad"
-                  placeholder="Cant."
-                  inputMode="decimal"
-                  className="w-20 text-right font-mono"
-                  value={l.quantity}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                    setLineas((prev) =>
-                      prev.map((x, j) => (j === i ? { ...x, quantity: e.target.value } : x)),
-                    )
-                  }
-                />
-                <div className="w-32">
-                  <SimpleSelect
-                    ariaLabel="Unidad del ingrediente"
-                    value={l.unit_code}
-                    onValueChange={(v) =>
-                      setLineas((prev) =>
-                        prev.map((x, j) => (j === i ? { ...x, unit_code: v } : x)),
-                      )
-                    }
-                    options={(unidades.data ?? []).map((u) => ({
-                      value: u.code,
-                      label: u.name,
-                    }))}
-                  />
-                </div>
-                <Button
-                  variant="ghost"
-                  size="iconSm"
-                  aria-label="Quitar ingrediente"
-                  disabled={lineas.length <= 1}
-                  onClick={() => setLineas((prev) => prev.filter((_, j) => j !== i))}
-                >
-                  ×
-                </Button>
+                {/* F-06: lo que no se pudo leer se dice junto a su línea. */}
+                <MotivoDeLectura motivo={motivoDeCantidad(l.quantity)} />
               </div>
             ))}
             <Button

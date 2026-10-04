@@ -1,11 +1,136 @@
+# Handoff — 2026-10-04 (36ª entrega) — Ola 4: todo lo que quedaba, bloque por bloque (altas y medias)
+
+Hallazgos cerrados (51 filas del Estado):
+
+- **Registro (A):** A-01, A-02, A-04, A-05, A-09 y A-12.
+- **Primer día y de recibos a facturas (B, M):** B-09, B-10, B-12, M-06, M-07, M-09, M-10 («Formal» queda oculto: cláusula literal de la respuesta, P-38), M-11 y M-12.
+- **Actas, origen y versión de reglas (ADR-0079):** B-05, B-06, G-13, A-16 y B-14.
+- **Productos (C):** C-02, C-03, C-10 y C-11.
+- **La caja y el fiado (E, P):** E-07, E-09, E-13, E-14, y con ellos la puerta única del fiado (R-82.1) y su vencimiento: E-22 (adelantado de la ola 6) y P-05.
+- **Cobros y saldos a favor (F, G; ADR-0075, notas de la ola 4):** F-06, F-07 (ya no se reproduce), F-10, F-12, G-04, G-05 y G-15; la pantalla de las reversas; los comprobantes del cobro y del reembolso.
+- **Devoluciones y anulación (G; ADR-0061, nota de la ola 4):** G-07, G-10 y G-14.
+- **Compras y gastos (H; ADR-0080):** H-05, H-08, H-09, H-10 y H-15; la pantalla del pago cruzado (D-02) y su tope a tasa real.
+- **Tesorería, contabilidad y libros (J, K, L):** J-02, K-07, K-10 y L-10.
+- **Usuarios, empresas e Inicio (N, O, P):** N-05, O-05; nulos «sin tasa» frente a «sin permiso»; `INFORMATION_ARCHITECTURE.md` reescrita.
+- **Una sola regla de la tasa del día** (resto de D-09; ADR-0075 §6).
+
+**Cadena de cada familia:** reparador → revisor en contexto limpio → arreglos → re-revisión donde hizo falta (actas: cinco pasadas; cobros: cuatro; devoluciones: tres; compras: cuatro; tasa: tres) → auditor fiscal de la ola → gate y recorrido. La sesión se cortó una vez por límite de uso: los agentes se relanzaron sobre el árbol y cada continuación volvió a comprobar lo hecho.
+
+**Quedan abiertas 54 filas:** 11 de lo no construido (ola 5: B-01, C-06, C-07, E-06, F-13, H-03, H-07, H-11, I-04, P-06, P-07) y 43 bajas (ola 6).
+
+## Lo que la norma impuso sobre lo decidido (RESPUESTA §0: manda la norma)
+
+- **La exclusión de retención del servicio público exige cuenta bancaria** (PA SNAT/2025/000054 art. 3 num. 8, leído en reproducción no oficial el 2026-10-04: «pagados mediante domiciliación a cuentas bancarias de los agentes de retención»). El gasto con factura rechaza esa exclusión cuando sale de una caja o de un monedero (AF4-01). P-95 pregunta si «domiciliación» exige el cargo automático y si «telefonía» incluye móvil e internet.
+- **Un gasto con factura mal registrado no tiene corrección** (AF4-02; LIVA arts. 35 y 37): su crédito y su retención quedan en libro y declaración. Se cierra en la ola 5 con la nota de crédito de proveedor (H-03). P-102.
+- La RESPUESTA (línea 70) cita «art. 13.9» de la PA 00071 para la anulación; ese numeral es de cargos, descuentos y ajustes. El art. 36 solo manda conservar el original y las copias: la ventana de anulación de Ladino es regla del dueño, más estricta que el texto (P-91).
+
+## Decisiones por criterio (§2.16), con su alternativa
+
+| Qué | Decidido | Alternativa descartada |
+|---|---|---|
+| M-10 | «Formal» oculto hasta tener la fuente | implementarlo sin fuente |
+| J-02 | origen contable propio (`cash_closing_overdraft`) con el evento de siempre | cambiar aserciones de pgTAP 031 y 026 |
+| J-02, la cola | «contabilizar pendientes» decide con la misma función que el cierre | depender del orden manual de las reparaciones |
+| H-09, moneda | la factura del gasto lleva su moneda impresa (Bs por omisión) y se paga cruzado | heredar la moneda de la cuenta con un aviso |
+| Pago cruzado | la tolerancia es la de ventas (media unidad mínima de la moneda del dinero) y solo alinea el pago que CIERRA; un abono se asienta con su diferencia en el acto | alinear también los abonos |
+| Tasa del día | un margen único de antigüedad (7 días, dato) para toda conversión | un margen por tipo de operación; margen 0 con calendario hábil |
+| Proveedores sin tasa | las listas responden `null` con motivo `sin_tasa` y el nominal por moneda | lanzar (lo que había) |
+| Falta la tasa de un día pasado | mensaje veraz; cargar una oficial histórica es operación de soporte | pantalla para cargarla (decisión abierta del dueño) |
+| Versión de reglas (ADR-0079) | documento fiscal y asiento llevan SIEMPRE versión de reglas (lo sella el trigger); la factura de proveedor posteada entra en el invariante; un asiento manual congela la versión al postear; basta una subida de semver por ventana de despliegue | permitir cadenas de sistema; dejar fuera la factura de proveedor; la versión del borrador; una subida por migración |
+| Hash de reglas | fuera: plantillas de asiento, cuentas por papel, ajustes de inventario, `default_tax_category_code` | meterlos |
+| E-09, quién fía | `sales.credit`: cajero, encargado, administrativo y dueño; `customers.credit.set`: administrativo y dueño | solo cajero y dueño |
+| Fiado, una puerta | la regla (permiso, límite, candado) corre en TODO camino que emite una venta con saldo: caja y factura de administración | solo la caja |
+| Fuera de la puerta | factura de contingencia, nota de débito y reversa de un cobro (reabre deuda quien tiene `ar.payment.reverse`) | exigirles la regla |
+| Límite | mide la deuda bruta; un saldo a favor sin aplicar no resta | restarlo |
+| Vencimiento | la venta fiada lleva fecha acordada al vender (obligatoria en la caja, opcional en la factura de administración: sin ella vence al emitirse); lo viejo sin fecha cuenta como vencido desde su emisión | 30 días fijos; plazo por cliente o empresa; «la deuda más antigua» |
+| Papel del crédito | «A CRÉDITO», saldo y «Vence» en el recibo y en la copia de cortesía; NO en la factura sobre forma libre (no se midió que quepa) | imprimirlas también ahí (P-101: el art. 35 lo admite) |
+| G-10, período | «declarado» es la definición de la casa (una vista previa no declara): la cláusula queda como red de seguridad | que la vista previa bloquee |
+| G-10, la caja | bloquea cualquier cierre de una CAJA de la empresa (misma sucursal) posterior a la emisión | solo las cuentas de sus cobros |
+| G-10, compras | «la anulada no se registra» = la que anuló el proveedor no se carga; lo ya registrado sigue R-2 ampliada | sacarlas del libro |
+| G-07 | el cajero hace devoluciones con mercancía; la nota de crédito directa exige `sales.credit_note.direct` (dueño, administrativo y roles que ya podían) | dejarle `sales.return.manage` entero |
+| Reembolso | `sales.refund`: dueño y administrativo | solo el dueño |
+| F-10 | el sobrante queda en la moneda del documento; un pago de más en divisa que causa IGTF se rechaza (P-98) | la del pago; percibir sobre todo lo recibido |
+| G-05, el pasivo | cada uso baja la parte proporcional del importe funcional y el que agota se lleva el resto: el pasivo termina en 0,00 | importe × tasa de nacimiento (dejaba bolívares sueltos) |
+| Saldo a favor | aplicar de más se rechaza diciendo cuánto se puede aplicar | recortar en silencio |
+| F-06 | un único separador seguido de exactamente tres cifras es ambiguo y se rechaza, sea punto o coma, en dinero; costos y precios unitarios son dinero | la coma sola siempre es decimal |
+| AF4-01 | «cuenta no bancaria» incluye el monedero; la regla es una constante del dominio (no entra en el hash de reglas) | solo la caja; una columna en el catálogo |
+| P-05 | el recordatorio ordena por deuda VENCIDA (texto literal del dueño) | por deuda total |
+
+## Aserciones existentes cambiadas (clase autorizada, §5.2.4)
+
+| Fichero:línea | Antes | Después | Por qué |
+|---|---|---|---|
+| `apps/web/test/modulos-activos.test.ts:46` | entrada sin rol | entrada `{esContador:true}` | A-04: la sonda depende del rol; cambia la ENTRADA |
+| `apps/api/test/e2e-create-company.test.ts:159` | `every(e => e.rules_version === RULES_VERSION)` | una sola versión, forma `x.y.z+hash`, distinta de la constante | B-06: la versión deja de ser una cadena fija |
+| `supabase/tests/008_audit_events_test.sql:419-431` | `is(count de triggers, 5)` | `set_eq` de los 7 triggers por nombre | A-16 y B-14 añaden dos; el conjunto exacto es más estricto |
+| `supabase/tests/026_journal_generator_test.sql:156-160` | lista de eventos admitidos | + `ap.expense_invoice_posted` | H-09: evento real del outbox; el esperado (0) no cambia |
+| `supabase/tests/021_sales_test.sql:120-123` | `rate_at(…, día 15)` = 40 y 50 | `rate_at(…, día 5)`, mismas cifras | el fixture a 14 días pasaba gracias a que no había margen |
+| `supabase/tests/110_…:566-579` | «ROTO: rate_at devuelve la tasa rancia» = 50 | la misma cifra con el margen ensanchado a 30 en un savepoint | afirmaba el defecto |
+| `supabase/tests/040_named_roles_test.sql:117` | cajero: 6 permisos | 8 (`sales.credit`, `sales.return.manage`) | E-09 y G-07 (§2.8 «Oficios») |
+| `supabase/tests/040_named_roles_test.sql:159` | encargado: 15 permisos | 16 (`sales.credit`) | E-09, por criterio |
+| `scripts/recorrido/verificar/J.mjs` (J-04) | precondición `rate_at(hoy+30) !== null` | existe una oficial en `exchange_rates` y el margen es menor que 30 | con la regla nueva `rate_at` da NULL; lo medido (`closing_rate === null`) no cambia |
+
+Entrada con cambio de contrato: `apps/api/test/e2e-sales.test.ts:1788-1792` aplica el saldo a favor de una NC en USD (116,00) en vez de en Bs (5.220,00): desde G-05 ese saldo nace en dólares; la aserción de `:1799` no cambió.
+
+## Preguntas al asesor nuevas o cambiadas
+
+Nuevas: P-93 (recibo de devolución tras tener RIF), P-94, P-95, P-96 (gasto con factura), P-97 (conservación de ip y user-agent), P-98 (anticipo: IVA e IGTF), P-99 (saldo a favor en divisa), P-100 (residuo del pago cruzado), P-101 (leyendas de crédito en el papel), P-102 (corregir un gasto con factura). Cerrada: P-5 (construida). Ampliadas con texto normativo leído: P-22, P-34, P-36, P-72, P-88, P-91. Estado regulatorio: corte 2026-10-04, ocho filas nuevas; todas las fuentes son reproducciones no oficiales (cotejo con la Gaceta pendiente).
+
+## Despliegue (para la sección 7)
+
+- **TODA la ola 4 va JUSTO DESPUÉS del `git pull`, en orden de timestamp, en la misma ventana que la ola 3.** Sus 30 migraciones dependen de las de la ola 3 que ya iban después del pull (entrega 35), así que no hay «antes del pull» por familia.
+- **Antes de la ventana, en producción (solo lectura):**
+  - `select rolbypassrls from pg_roles where rolname = 'postgres';` tiene que dar `t` (comprobado el 2026-10-04: `t`). Si diera `f`, toda escritura fallaría con `LADINO_RULES_HASH_BLIND`: no se aplica.
+  - las dos consultas del pie de `20261004200000_a_payables_list_never_falls.sql` tienen que dar 0 filas (cobros en otra moneda cuyo día no tiene tasa dentro del margen; huecos de más de N días en la serie de tasas).
+  - el ensayo en seco (todas las migraciones en una transacción con ROLLBACK) ejercita lo que no corre en local: el bucle de `20261004170000` que da la plantilla del gasto a las empresas existentes, con los triggers nuevos de `audit_events`.
+- **Antes de `docker compose up -d --build`:** `export LADINO_BUILD=$(git rev-parse --short HEAD)` (el build entra en el origen de cada acta).
+- **Orden dentro de la ventana:** `git pull` → migraciones en orden (las cinco de ADR-0079 juntas; `190200` nunca sin `190300`; `195900`, `200000` y `200100` juntas; `160200` lo más pegada posible al arranque de la API nueva: su corte es el instante de la migración) → `docker compose up -d --build api worker web` → traer la tasa de hoy en «Mi dinero» → reparaciones.
+- **Reparaciones tras el arranque, en el orden de R-71:** las cinco de la entrega 35 y, la última, `node scripts/reparar/j-02-sobregiro-al-cierre.mjs` (se niega a correr si faltan la del céntimo o la de subcuentas). La de la divisa del mayor necesita la tasa de hoy.
+- **Lo que nota quien usa Ladino al desplegar:**
+  - todo cliente existente queda con límite de fiado 0: no se le fía ni se le factura a crédito hasta que alguien con `customers.credit.set` fije su límite;
+  - la caja pregunta «¿Cuándo paga?» al fiar; una pestaña con la web vieja no puede fiar hasta recargar;
+  - «Vencido» es casi igual a «Deuda» el primer día (los fiados viejos no tienen fecha);
+  - sin tasa oficial de los últimos 7 días, no se vende, cobra, paga ni factura a crédito en divisa (ni se fía en Bs: el límite se mide en USD);
+  - el cajero ya no emite notas de crédito directas ni reembolsa; el administrativo sí;
+  - una factura solo se anula el mismo día, antes del cierre de una caja y confirmando original y copias; lo demás es nota de crédito;
+  - quien no tenga `expense.read` deja de leer comprobantes de gasto; el primer RIF exige razón social;
+  - un rol propio con `sales.invoice.issue` y sin `sales.credit` deja de facturar por administración.
+
+## Lo que queda abierto
+
+- **Ola 5:** el retiro de inventario se factura (ADR-0082); NC de proveedor (H-03), incluida la de una factura de gasto; reportes y carteras (P-07, F-13, H-11); paleta y lo que se deja de prometer (ADR-0081); recetas, mayor, lotes y gastos recurrentes.
+- **Ola 6, añadido por las revisiones de esta ola:**
+  - **la guarda de la factura emitida ENUMERA columnas** y no congela la moneda del documento ni su importe funcional (`platform.assert_document_immutable`): familia propia de rigor máximo;
+  - **`GET /v1/documents` y su detalle no exigen permiso de lectura**: cualquier miembro ve todas las ventas;
+  - fechas futuras sin rechazar en gastos, pagos y facturas de proveedor; `issued_at` del reloj de Node frente a `closed_at` de Postgres; `current_date` en UTC en cuentas por pagar;
+  - `platform.customer_credit_carried` responde el importe de nacimiento para un saldo retirado; los tramos de antigüedad se arman en la ruta;
+  - higiene de tests: varios E2E borran la tabla GLOBAL de tasas o tocan filas de otros tenants (`e2e-treasury`, `e2e-sales`, `e2e-fiscal-legal`, `e2e-purchases:100`, `worker.test.ts:299`);
+  - un 500 inesperado no deja el error crudo en el log de la API.
+- **Decisiones del dueño:** numeración propia para los comprobantes de cobro y de reembolso (hoy llevan el identificador interno); pantalla para cargar una tasa oficial histórica; añadir «subir `rules_releases`» al checklist del agente de migraciones (hoy es disciplina manual, R-81.1); las leyendas de crédito en la forma libre (P-101).
+- **No verificado:** ninguna pantalla nueva se abrió en un navegador (solo typecheck, lint, tests y lectura de fuente); los guiones de pantalla del recorrido que fían se corrigieron por lectura; el candado del fiado entre series tiene test pero su variante rota no se pudo fabricar con honestidad; el hook de migraciones vigila la herramienta de edición y no los comandos de shell (un agente editó una con `sed` y lo declaró; el fichero se borró).
+
+## Migraciones (30)
+
+20261004110000 (recibo de devolución) · 120000, 120100, 120200, 120300, 205000, 205200 (actas y versión de reglas) · 140000, 210000, 210100 (fiado y vencimiento) · 150000, 190000, 190100, 190200, 190300, 190400, 190500 (cobros y saldos a favor) · 160000, 160100, 160200, 160300 (anulación y devoluciones) · 170000, 170100 (gasto con factura) · 180000, 180100, 180200, 180300 (sobregiro al cierre) · 195900, 200000, 200100 (tasa del día).
+
+## Gate y recorrido
+
+- **Gate (`scripts/gate-verdict.sh`, una corrida desde `db:reset`):** VERDE · vitest 1693 en 19 paquetes (base 1417) · pgTAP 2627 en 125 ficheros (base 2221 en 113) · `openapi:check OK` · `release:manifest:check OK` · ningún plan de pgTAP sin cuadrar. Línea base guardada en `.recorrido/base-gate.txt`.
+- **El juez del gate tiene un motivo nuevo de rojo:** un plan de pgTAP que no cuadra («Looks like you planned…»), que el arnés da por PASS cuando una aserción queda dentro de un savepoint revertido.
+- **Dos rojos que solo vio el gate sobre base limpia** (los agentes corrían sobre la base con el escenario y con tasas ajenas): cuatro E2E facturaban a crédito sin sembrar la tasa del día (desde la puerta única del fiado hace falta también en bolívares: entrada de fixture), y pgTAP 068 preguntaba por «la plantilla de compra» cuando ya hay dos (mercancía y gasto con factura).
+- **Recorrido:** `RECORRIDO_FECHA=2026-09-24 pnpm recorrido A` (restaura el escenario y corre las reparaciones en el orden de R-71) y B a P: los 16 bloques en VERDE, 28 invariantes en 0 en E1, E2 y E3.
+- **Aserciones existentes cambiadas, además de la tabla de arriba:** `apps/api/test/e2e-onboarding.test.ts:161-172` (la lista exacta de permisos de la cajera: 6 → 8, los mismos dos de `040`) y `supabase/tests/068_retention_accrues_when_the_invoice_is_booked_test.sql:19-36` (las dos preguntas a la plantilla de compra se hacen ahora por su evento, y se repiten para la del gasto: 6 → 8 aserciones, mismos esperados).
+
+---
+
 # Handoff — 2026-10-03 (35ª entrega) — Ola 3: bloqueos visibles y familias de dinero (POS, inventario, moneda, céntimo, empresa, sin RIF y la llegada, permisos)
 
-Hallazgos cerrados (71):
+Hallazgos cerrados (65 filas del Estado; el mensaje del commit f16e8c6 dice 71 por un error de conteo):
 - **Idempotencia y cuentas del POS (ADR-0076):** M-01, M-02, M-03, M-04, D-03, F-03, F-08, E-08 y O-02.
 - **Salidas de inventario (ADR-0078):** I-01, I-02, I-05, I-06, I-07, I-08, I-09, I-10, I-11, I-12 y P-10.
 - **Moneda y diferencial (ADR-0075 §1-6):** E-05, D-02 (servidor), D-07, H-02, F-01, F-02, F-04, F-15, G-12, H-06, E-11 y J-04.
 - **El céntimo (ADR-0075 §7):** P-01, P-03 y K-08.
-- **Empresa por pestaña e invitaciones (ADR-0077):** O-01, A-13, E-15, K-09, N-03, N-06 y N-08.
+- **Empresa por pestaña e invitaciones (ADR-0077):** O-01, A-13, E-15, K-09, N-03, N-06 y N-08; y con ellos A-10 (el texto de «Cambiar el RIF»).
 - **Sin RIF y la llegada (ADR-0066, nota de la ola 3):** D-01, D-04, D-12, F-14, D-05, D-06, D-08, D-09, D-10, D-11, D-13 y D-14/I-03.
 - **Permisos que terminan en verde (ADR-0068 §7-9):** J-03, N-07, P-04, E-12, A-07, C-09, A-14, O-03 y N-10.
 

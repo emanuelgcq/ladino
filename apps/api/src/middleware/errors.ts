@@ -39,6 +39,10 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // M4 para clientes (migración 18): el cliente ES visible; falta el permiso
   // segregado del RIF. 403, como LAD29.
   LAD36: { code: "PERMISSION_REQUIRED", status: 403 },
+  // E-09 (20261004140000): la red del esquema del límite de fiado. LAD78: un cliente nace con
+  // límite 0 (dato inválido: 422). LAD79: cambiarlo sin customers.credit.set (403).
+  LAD78: { code: "VALIDATION_FAILED", status: 422 },
+  LAD79: { code: "PERMISSION_REQUIRED", status: 403 },
   // Inventario (migración 19, ADR-0034). LAD38 es «lo que pides no se puede
   // hacer con este producto/almacén» — dato del cliente semánticamente inválido,
   // 422. LAD39 (negativo) y LAD40 (transferencia descuadrada) son estados
@@ -68,6 +72,9 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // PA 00071 art. 13.7 (migración 20260928190400): factura, NC o ND sobre forma libre sin
   // adquirente identificado. El dominio lo dice antes con su propio mensaje.
   LAD99: { code: "VALIDATION_FAILED", status: 422 },
+  // H-09 (migración 20261004170100): una línea de factura de proveedor sin producto fuera de la
+  // factura de un gasto. El dominio lo dice antes con su mensaje.
+  LADH9: { code: "VALIDATION_FAILED", status: 422 },
   LAD50: { code: "TAX_RULE_MISSING", status: 409 },
   LAD51: { code: "EXCHANGE_RATE_MISSING", status: 409 },
   // ADR-0073 (B-02): la general propuesta no es una general del catálogo (0 %, fuera de 8–16,5 %
@@ -191,6 +198,9 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   // bien; lo que impide anular es el estado (el dinero ya entró), y el mensaje
   // dice el camino.
   DOCUMENT_HAS_PAYMENTS: 409,
+  // G-10 (PA 00071 arts. 22 y 36): la factura ya no se anula (otro día, caja cerrada, período
+  // declarado o papel sin confirmar). 409: el cuerpo está bien; el camino es la nota de crédito.
+  ANNULMENT_NOT_ALLOWED: 409,
   // ADR-0075 §8: un cobro se reversa una sola vez; y si su IGTF se documentó con una nota de
   // débito, la reversa para. 409: el cuerpo está bien; lo impide el estado.
   PAYMENT_ALREADY_REVERSED: 409,
@@ -225,6 +235,9 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   // ADR-0076 (M-01): la cuenta del POS ya se cobró. 409: el cuerpo está bien; lo que lo impide
   // es que esa cuenta ya es una venta, y el mensaje dice cuál y qué hacer (otra cuenta).
   POS_CART_SOLD: 409,
+  // E-09: fiar esta venta dejaría al cliente por encima de su límite de fiado. 409: el cuerpo
+  // está bien; lo que lo impide es el límite, y el mensaje dice cuánto es y qué hacer.
+  CREDIT_LIMIT_EXCEEDED: 409,
   // ADR-0072 §1 (A-03): sin tipo de contribuyente vigente en la fecha del documento no se
   // factura. 409: el cuerpo está bien; falta una declaración, y el mensaje dice dónde hacerla.
   TAXPAYER_TYPE_REQUIRED: 409,
@@ -563,6 +576,7 @@ const ACCION_DE_PERMISO: Readonly<Record<string, string>> = {
   "customer.block": "bloquear y desbloquear clientes",
   "customer.manage": "crear y editar clientes",
   "customer.tax_id.manage": "cambiar el RIF de un cliente",
+  "customers.credit.set": "fijar el límite de fiado de un cliente",
   "expense.read": "ver los gastos",
   "expense.register": "registrar gastos",
   "fiscal_book.export": "exportar los libros fiscales",
@@ -609,6 +623,8 @@ const ACCION_DE_PERMISO: Readonly<Record<string, string>> = {
   "sales.order.manage": "hacer pedidos de venta",
   "sales.payment.register": "registrar cobros",
   "sales.price_list.override": "cambiar la lista de precios de una venta",
+  "sales.credit": "vender a crédito (fiar)",
+  "sales.credit_note.direct": "emitir notas de crédito sin devolución de mercancía",
   "sales.quote.manage": "hacer cotizaciones",
   "sales.refund": "devolver dinero a un cliente",
   "sales.return.manage": "registrar devoluciones",

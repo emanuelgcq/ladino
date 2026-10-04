@@ -83,11 +83,10 @@ export function pricingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
       if (!lista) return null;
 
       // La EQUIVALENCIA en la otra moneda, con la tasa BCV vigente HOY y en
-      // SQL numeric — cero aritmética en el cliente. Es una REFERENCIA: la
-      // tasa histórica de un precio no existe como dato (se ancla al
-      // documento), así que las filas históricas también convierten a la de
-      // hoy y el encabezado de la pantalla lo dice. Sin tasa: null, y la UI
-      // enseña «sin tasa del día», no un cero.
+      // SQL numeric — cero aritmética en el cliente. Es la REFERENCIA de hoy,
+      // igual para todas las filas; los Bs del día del precio van aparte
+      // (`historical_*`, C-11). Sin tasa: null, y la UI enseña «sin tasa del
+      // día», no un cero.
       const [tasa] = await tx<{ rate: string; rate_date: string; source: string }[]>`
         select f.rate::text as rate, f.rate_date::text as rate_date, f.source
           from platform.rate_for(${companyId}, 'USD', 'VES', (now() at time zone 'America/Caracas')::date) f`;
@@ -111,18 +110,61 @@ export function pricingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
                 }
               : { expr: tx`null`, moneda: null };
 
+      // C-11: ADEMÁS de la referencia de hoy, los Bs a la tasa del DÍA EN QUE EMPEZÓ A REGIR el
+      // precio. La granularidad es el DÍA DE CARACAS de `effective_from` contra `rate_date`
+      // (date contra date, nunca un instante contra medianoche), y la tasa es la oficial vigente
+      // ese día según `platform.rate_for` (regla 8: por fecha y fuente), consultada una vez por
+      // día distinto. Un precio programado (su día aún no llegó) NO toma la tasa de hoy: va sin
+      // cifra y con `scheduled`; un día sin tasa, sin cifra y con `missing`. Una lista que no
+      // es USD ni VES no tiene par que convertir: sin cifra, sin tasa y con `not_applicable`.
+      const historica =
+        lista.currency_code === "VES"
+          ? {
+              expr: tx`round(i.amount / t.rate, platform.currency_minor_units('USD'))::text`,
+              moneda: "USD",
+            }
+          : lista.currency_code === "USD"
+            ? {
+                expr: tx`round(i.amount * t.rate, platform.currency_minor_units('VES'))::text`,
+                moneda: "VES",
+              }
+            : { expr: tx`null`, moneda: null };
+
       const filtro = productId === undefined ? tx`` : tx`and product_id = ${productId}`;
       const items = await tx<Record<string, unknown>[]>`
-        select id, price_list_id, product_id, amount::text as amount,
+        with hoy as (
+          select (now() at time zone 'America/Caracas')::date as dia
+        ), i as (
+          select id, price_list_id, product_id, amount, effective_from, effective_to,
+                 platform.caracas_day(effective_from) as dia
+            from public.price_list_items
+           where price_list_id = ${listaId} ${filtro}
+        ), t as (
+          select d.dia, f.rate, f.rate_date, f.source
+            from (select distinct i.dia from i, hoy where i.dia <= hoy.dia) d
+            left join lateral platform.rate_for(${companyId}, 'USD', 'VES', d.dia) f on true
+        )
+        select i.id, i.price_list_id, i.product_id, i.amount::text as amount,
                ${lista.currency_code} as currency,
                ${equivalencia.expr} as equivalent_amount,
                ${equivalencia.moneda} as equivalent_currency,
-               to_char(effective_from at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as effective_from,
-               case when effective_to is null then null
-                    else to_char(effective_to at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') end as effective_to
-          from public.price_list_items
-         where price_list_id = ${listaId} ${filtro}
-         order by product_id, effective_from desc`;
+               ${historica.expr} as historical_equivalent_amount,
+               ${historica.moneda} as historical_equivalent_currency,
+               case when ${historica.moneda !== null} then t.rate::text end as historical_rate,
+               case when ${historica.moneda !== null} then t.rate_date::text end
+                 as historical_rate_date,
+               case when ${historica.moneda !== null} then t.source end as historical_rate_source,
+               case when not ${historica.moneda !== null} then 'not_applicable'
+                    when i.dia > hoy.dia then 'scheduled'
+                    when t.rate is null then 'missing'
+                    else 'available' end as historical_rate_status,
+               to_char(i.effective_from at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as effective_from,
+               case when i.effective_to is null then null
+                    else to_char(i.effective_to at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') end as effective_to
+          from i
+          cross join hoy
+          left join t on t.dia = i.dia
+         order by i.product_id, i.effective_from desc`;
       let vigente: { amount: string; currency: string } | null = null;
       if (at !== undefined && productId !== undefined) {
         const [v] = await tx<{ amount: string | null }[]>`

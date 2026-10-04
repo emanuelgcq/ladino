@@ -5,6 +5,8 @@ import type {
   UpdateCustomerRequest,
   SetCustomerTaxIdRequest,
   SetCustomerBlockedRequest,
+  SetCustomerCreditLimitRequest,
+  SetCustomerTaxpayerTypeRequest,
   CustomerResponse,
 } from "@ladino/schemas";
 import { normalizarDocumento } from "@ladino/schemas";
@@ -47,6 +49,7 @@ export function clasificacionPorPrefijo(taxId: string | null): {
 
 const COLUMNS = `id, tenant_id, company_id, tax_id, legal_name, trade_name, person_type_code,
   taxpayer_type_code, fiscal_address, email, phone, status, default_price_list_id,
+  credit_limit_usd::text as credit_limit_usd,
   to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
 
 type Row = CustomerResponse;
@@ -372,6 +375,122 @@ export async function setCustomerBlocked(
   }
   await auditarYPublicar(sql, fila, input.blocked ? "customer.blocked" : "customer.unblocked", {
     reason: input.reason ?? null,
+  });
+  return ok(fila);
+}
+
+/**
+ * E-09 · EL LÍMITE DE FIADO (RESPUESTA §2.8). Permiso propio, `customers.credit.set` —
+ * administrativo y dueño; el cajero no—. En USD, al céntimo. El ACTA la escribe el trigger del
+ * esquema (`customer.credit_limit_set`, con el valor anterior y el nuevo): no hay camino que
+ * cambie el límite sin dejarla, y este caso de uso no la duplica. El mismo trigger es la red del
+ * permiso (LAD79). Fijar el mismo valor es un no-op que se dice.
+ */
+export async function setCustomerCreditLimit(
+  uow: UnitOfWork,
+  customerId: string,
+  input: SetCustomerCreditLimitRequest,
+): Promise<Result<CustomerResponse, CustomerError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Los maestros exigen un usuario real." });
+  }
+  const scope = await companyScope(sql, actor.userId, input.company_id, "customers.credit.set");
+  if (!scope.ok) {
+    if (scope.error.code !== "PERMISSION_REQUIRED") return scope;
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message:
+        "Necesitas el permiso para fijar límites de fiado (customers.credit.set). " +
+        "Pídeselo a quien administra el negocio.",
+    });
+  }
+  if (scope.value.companyStatus === "suspended") {
+    return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
+  }
+  const [actual] = await sql<{ is_system: boolean; igual: boolean }[]>`
+    select is_system, credit_limit_usd = ${input.credit_limit_usd}::numeric as igual
+      from public.customers
+     where id = ${customerId} and company_id = ${input.company_id} for update`;
+  if (!actual) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (actual.is_system) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Al «Consumidor final» no se le fía: no hay a quién cobrarle. Identifica al cliente.",
+    });
+  }
+  if (actual.igual) {
+    return err({ code: "VALIDATION_FAILED", message: "El límite de fiado ya es ese." });
+  }
+
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  const [fila] = await sql<Row[]>`
+    update public.customers set credit_limit_usd = ${input.credit_limit_usd}::numeric
+     where id = ${customerId} and company_id = ${input.company_id}
+    returning ${sql.unsafe(COLUMNS)}`;
+  if (!fila) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  await sql`
+    insert into public.outbox
+      (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
+    values (${fila.tenant_id}, ${fila.company_id}, 'customer', ${fila.id},
+            'customer.credit_limit_set', 1,
+            ${sql.json({
+              customer_id: fila.id,
+              company_id: fila.company_id,
+              credit_limit_usd: fila.credit_limit_usd,
+            })})`;
+  return ok(fila);
+}
+
+/**
+ * E-14 · LA CLASIFICACIÓN FISCAL DEL CLIENTE se cambia aparte de la edición rutinaria: de ella
+ * depende quién retiene IVA. Decidido por criterio (§2.16): el permiso es el de la identidad
+ * fiscal del cliente, `customer.tax_id.manage` (administrativo y dueño; el cajero no), en vez
+ * de estrenar otro. Deja acta con el valor anterior y el nuevo.
+ */
+export async function setCustomerTaxpayerType(
+  uow: UnitOfWork,
+  customerId: string,
+  input: SetCustomerTaxpayerTypeRequest,
+): Promise<Result<CustomerResponse, CustomerError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Los maestros exigen un usuario real." });
+  }
+  const scope = await companyScope(sql, actor.userId, input.company_id, "customer.tax_id.manage");
+  if (!scope.ok) return scope;
+  if (scope.value.companyStatus === "suspended") {
+    return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
+  }
+  const [actual] = await sql<{ taxpayer_type_code: string; is_system: boolean }[]>`
+    select taxpayer_type_code, is_system from public.customers
+     where id = ${customerId} and company_id = ${input.company_id} for update`;
+  if (!actual) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (actual.is_system) {
+    return err({ code: "VALIDATION_FAILED", message: "«Consumidor final» no se edita." });
+  }
+  if (actual.taxpayer_type_code === input.taxpayer_type_code) {
+    return err({ code: "VALIDATION_FAILED", message: "La clasificación ya es esa." });
+  }
+  const [cat] = await sql<{ ok: boolean }[]>`
+    select exists (select 1 from public.taxpayer_types
+                    where code = ${input.taxpayer_type_code} and status = 'active') as ok`;
+  if (!cat?.ok) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "La clasificación fiscal no existe o está inactiva.",
+    });
+  }
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  const [fila] = await sql<Row[]>`
+    update public.customers set taxpayer_type_code = ${input.taxpayer_type_code}
+     where id = ${customerId} and company_id = ${input.company_id}
+    returning ${sql.unsafe(COLUMNS)}`;
+  if (!fila) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  await auditarYPublicar(sql, fila, "customer.taxpayer_type_changed", {
+    from: actual.taxpayer_type_code,
+    to: fila.taxpayer_type_code,
   });
   return ok(fila);
 }

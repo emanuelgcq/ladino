@@ -211,13 +211,34 @@ export function companiesRoutes(
     }
     const companyId = ctx.companyId;
     const { actor, userId } = c.get("ladino.auth");
-    const filas = await withTransaction(
-      sql,
-      actor,
-      ({ sql: tx }) => tx<{ permiso: string }[]>`
+    const { filas, roles } = await withTransaction(sql, actor, async ({ sql: tx }) => ({
+      filas: await tx<{ permiso: string }[]>`
         select platform.ladino_user_permissions(${userId}, ${companyId}) as permiso`,
+      // A-04: los roles de SISTEMA con los que la persona actúa en esta empresa. No autoriza: solo
+      // le dice al menú si la persona es contadora.
+      // OJO: estos joins son una SEGUNDA COPIA, en TS, de los de `platform.ladino_user_permissions`
+      // (membresía activa, asignación de la empresa o de todo el negocio, alcance cumplido si el
+      // rol lo exige). Dos copias PUEDEN divergir: si cambia la función, cambia esto. Lo vigila
+      // `e2e-el-primer-rif-y-el-rol` (los roles explican exactamente los permisos; otro tenant no
+      // lee nada). La salida limpia es una `platform.ladino_user_roles` (anotada en R-76).
+      roles: await tx<{ key: string }[]>`
+        select distinct r.key
+          from public.companies c
+          join public.memberships m
+            on m.tenant_id = c.tenant_id and m.user_id = ${userId} and m.status = 'active'
+          join public.user_role_assignments ura
+            on ura.membership_id = m.id and (ura.company_id = c.id or ura.company_id is null)
+          join public.roles r on r.id = ura.role_id and r.tenant_id is null
+         where c.id = ${companyId}
+           and (not r.requires_scope
+                or exists (select 1 from public.scope_bindings sb
+                            where sb.assignment_id = ura.id and sb.company_id = c.id))
+         order by 1`,
+    }));
+    return c.json(
+      { permissions: filas.map((f) => f.permiso), roles: roles.map((r) => r.key) },
+      200,
     );
-    return c.json({ permissions: filas.map((f) => f.permiso) }, 200);
   });
 
   /** «Mi empresa»: el perfil editable. El RIF tiene su puerta aparte (abajo). */

@@ -167,4 +167,167 @@ c.caso("B-07", "la historia es append-only: un UPDATE es LAD06", async () => {
   afirmar(codigo === "LAD06", `dio ${codigo}`);
 });
 
+// ── Ola 4 · B-09, B-10, B-12: el asistente de /empezar (texto y forma: se mira la fuente) ──
+const fuenteWeb = (ruta) =>
+  fs.readFileSync(
+    path.join(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", ".."),
+      "apps/web/src",
+      ruta,
+    ),
+    "utf8",
+  );
+
+c.caso("B-09", "la tasa «se actualiza sola»: /empezar ya no dice «Un toque al día»", async () => {
+  const empezar = fuenteWeb("pages/negocio/Empezar.tsx");
+  afirmar(!/Un toque al día/.test(empezar), "/empezar sigue diciendo «Un toque al día»");
+  afirmar(/Se actualiza sola/.test(empezar), "/empezar ya no dice «Se actualiza sola»");
+});
+
+// La lógica de `pasoInicial` la ejerce el unitario `apps/web/test/empezar-paso.test.ts` (el runner
+// no carga TypeScript de la web); aquí se comprueba que la pantalla la usa.
+c.caso("B-10", "/empezar recuerda el paso: arranca donde iba, no siempre en el 1", async () => {
+  const empezar = fuenteWeb("pages/negocio/Empezar.tsx");
+  afirmar(!/useState\(0\)/.test(empezar), "el paso sigue naciendo en useState(0)");
+  afirmar(
+    /pasoInicial\(window\.location\.search, pasoGuardado\(empresa\.id\)\)/.test(empezar),
+    "el paso inicial no sale de lo recordado",
+  );
+  afirmar(/recordarPaso\(empresa\.id, i\)/.test(empezar), "cambiar de paso no lo recuerda");
+  const paso = fuenteWeb("pages/negocio/empezar-paso.ts");
+  afirmar(/sessionStorage/.test(paso), "el paso no se guarda por pestaña");
+});
+
+c.caso("B-12", "el paso 4 de /empezar dice que está cargando: no queda en blanco", async () => {
+  const empezar = fuenteWeb("pages/negocio/Empezar.tsx");
+  afirmar(
+    /paso === 3 && fiscal\.isPending/.test(empezar),
+    "el paso 4 no pinta nada mientras /v1/fiscal/setup responde",
+  );
+});
+
+// ── Ola 4 · actas, origen y versión de reglas (RESPUESTA §2.15, ADR-0079): B-05, B-06, B-14 ──
+const raizActas = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const fuenteActas = (...ruta) => fs.readFileSync(path.join(raizActas, ...ruta), "utf8");
+const versionVigente = async (empresa) => {
+  const [v] = await sql`select version from platform.current_rules_version(${empresa})`;
+  return v.version;
+};
+
+c.caso(
+  "B-05",
+  "dueño de E2 carga un talonario → acta fiscal.range.registered con canal, build y versión registrada",
+  async () => {
+    const r = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/fiscal-number-ranges", {
+      company_id: EMPRESAS.E2,
+      series: "ZA",
+      printer_identifier: "77",
+      range_from: "900001",
+      range_to: "900010",
+      printer_legal_name: "Gráficas de la Verificación, C.A.",
+      printer_tax_id: "J-12345678-9",
+      printer_authorization: "SNAT/INTI/GRTI/RCO/2020/000123",
+      printer_authorization_date: "2020-01-15",
+      printed_on: "2026-09-01",
+    });
+    afirmar(r.status === 201, `registrar: ${r.status}: ${r.texto.slice(0, 200)}`);
+    const actas = await sql`
+      select a.channel, a.app_build, a.rules_version, a.created_by,
+             exists (select 1 from platform.rules_versions v where v.version = a.rules_version)
+               as registrada
+        from public.audit_events a
+       where a.company_id = ${EMPRESAS.E2} and a.event_type = 'fiscal.range.registered'
+         and a.aggregate_id = ${r.json.id}`;
+    // Se retira el papel de prueba antes de afirmar: el escenario queda como estaba.
+    const anulado = await pedir(
+      PERSONAS.duenoE2E3,
+      "E2",
+      "POST",
+      `/v1/fiscal-number-ranges/${r.json.id}/cancel`,
+      { company_id: EMPRESAS.E2, reason: "Talonario de la verificación B-05: no es papel real" },
+    );
+    afirmar(anulado.status === 200, `anular: ${anulado.status}: ${anulado.texto.slice(0, 200)}`);
+    afirmar(actas.length === 1, `actas del talonario: ${actas.length} (antes del arreglo, 0)`);
+    const [a] = actas;
+    afirmar(a.created_by !== null, "el acta no dice quién");
+    // A-16: el origen lo puso el middleware, no el caso de uso.
+    afirmar(a.channel === "api", `canal: ${a.channel}`);
+    afirmar(/^api@/.test(a.app_build ?? ""), `build: ${a.app_build}`);
+    // B-06: una versión registrada, no la cadena fija.
+    afirmar(a.registrada && a.rules_version !== "domain-s0.5", `versión: ${a.rules_version}`);
+  },
+);
+
+c.caso(
+  "B-06",
+  "una regla nueva de E2 cambia la versión de reglas de E2 y no la de E3 (en una transacción que se revierte)",
+  async () => {
+    // La aceptación en pantalla ES un insert en tax_rules con la empresa (fiscal-setup.ts): se
+    // hace aquí el mismo insert dentro de una transacción que se revierte, para no depender de
+    // si hoy ya se facturó en E2 (la API rechaza cambiar la alícuota el mismo día).
+    class Reversa extends Error {}
+    const antes = { e2: await versionVigente(EMPRESAS.E2), e3: await versionVigente(EMPRESAS.E3) };
+    let tras = null;
+    await sql
+      .begin(async (tx) => {
+        await tx`
+          insert into public.tax_rules
+            (jurisdiction, tax_code, transaction_type, product_tax_category, rate, effective_from,
+             legal_source, priority, status, tenant_id, company_id)
+          select 'VE', 'iva', 'sale', 'exento', 0, platform.caracas_day(now()) + 1,
+                 'Verificación B-06: regla de prueba, se revierte', 5, 'active', e.tenant_id, e.id
+            from public.companies e where e.id = ${EMPRESAS.E2}`;
+        const [e2] = await tx`select version from platform.current_rules_version(${EMPRESAS.E2})`;
+        const [e3] = await tx`select version from platform.current_rules_version(${EMPRESAS.E3})`;
+        tras = { e2: e2.version, e3: e3.version };
+        throw new Reversa();
+      })
+      .catch((e) => {
+        if (!(e instanceof Reversa)) throw e;
+      });
+    afirmar(/^\d+\.\d+\.\d+\+[0-9a-f]{16}$/.test(antes.e2), `forma de la versión: ${antes.e2}`);
+    afirmar(tras.e2 !== antes.e2, `la versión de E2 no cambió: ${antes.e2}`);
+    afirmar(tras.e3 === antes.e3, `la versión de E3 cambió: ${antes.e3} → ${tras.e3}`);
+    afirmar(
+      (await versionVigente(EMPRESAS.E2)) === antes.e2,
+      "la regla de prueba no se revirtió: la versión de E2 quedó cambiada",
+    );
+    // Y sin now() dentro: dos cálculos seguidos, la misma versión.
+    afirmar((await versionVigente(EMPRESAS.E3)) === antes.e3, "la versión no es determinista");
+  },
+);
+
+c.caso(
+  "B-14",
+  "la tasa oficial solo se guarda por guardarTasaOficial, que deja el acta de plataforma",
+  async () => {
+    const dominio = fuenteActas("packages", "domain", "src", "tasa-oficial.ts");
+    afirmar(
+      /insert into public\.system_audit_events/.test(dominio) &&
+        /'fx\.rate\.captured'/.test(dominio) &&
+        /source_url/.test(dominio) &&
+        /captured_at/.test(dominio) &&
+        /response_sha256/.test(dominio),
+      "guardarTasaOficial no deja el acta con URL, hora de captura y hash",
+    );
+    for (const ruta of [
+      ["apps", "api", "src", "tasa-oficial.ts"],
+      ["apps", "api", "src", "routes", "sales.ts"],
+    ]) {
+      const f = fuenteActas(...ruta);
+      afirmar(/guardarTasaOficial\(/.test(f), `${ruta.at(-1)} no guarda por guardarTasaOficial`);
+      afirmar(
+        !/insert into public\.exchange_rates/.test(f),
+        `${ruta.at(-1)} sigue insertando la tasa por su cuenta, sin acta`,
+      );
+    }
+    // Y el acta es de verdad append-only y de sistema: lo dice la base.
+    const [t] = await sql`
+      select count(*)::int as n from pg_trigger
+       where tgrelid = 'public.system_audit_events'::regclass and not tgisinternal
+         and tgfoid = 'platform.reject_mutation'::regproc`;
+    afirmar(t.n === 2, `system_audit_events tiene ${t.n} triggers de append-only (esperaba 2)`);
+  },
+);
+
 export default c.correr;

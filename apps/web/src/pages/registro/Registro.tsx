@@ -266,6 +266,9 @@ export function Registro({
   const [creando, setCreando] = useState(false);
   const [celebrando, setCelebrando] = useState(false);
   const [errorCrear, setErrorCrear] = useState<string | null>(null);
+  // A-01: el negocio existe y el logo elegido NO quedó guardado. Se dice, y entra la persona
+  // cuando lo leyó — nunca aterriza en silencio con un logo que el resumen enseñó puesto.
+  const [sinLogo, setSinLogo] = useState<{ texto: string; entrar: () => void } | null>(null);
   const [d, setD] = useState<Datos>(() =>
     borrador === null ? DATOS_VACIOS : { ...DATOS_VACIOS, ...borrador.datos },
   );
@@ -425,6 +428,18 @@ export function Registro({
       if (r.status === 409 && !otraEmpresa) {
         // Ya estaba fundado (reintento de un éxito): recargar lo resuelve.
         borrarBorrador(clave);
+        if (d.logo !== null) {
+          // A-01: aquí no se sabe a qué empresa pertenece la persona (puede ser el negocio de
+          // otra, por invitación), así que el logo NO se sube a ciegas: se dice.
+          setCelebrando(true);
+          setD((prev) => ({ ...prev, logo: null, logoUrl: null }));
+          setSinLogo({
+            texto:
+              "Ya tenías un negocio en Ladino, así que no se creó otro y el logo que elegiste no se guardó. Puedes subirlo en Configuración → Mi empresa.",
+            entrar: () => onListo(),
+          });
+          return;
+        }
         onListo();
         return;
       }
@@ -466,6 +481,17 @@ export function Registro({
         borrarBorrador(clave);
         // El aviso dice por qué coincidió: por el nombre, o por el RIF.
         const porNombre = plano(existente.trade_name ?? existente.legal_name) === plano(d.nombre);
+        if (d.logo !== null) {
+          // A-01: había un logo elegido y no se guarda en un negocio que ya existía. Se dice, y
+          // entra la persona cuando lo leyó (sin el temporizador de abajo).
+          setCelebrando(true);
+          setD((prev) => ({ ...prev, logo: null, logoUrl: null }));
+          setSinLogo({
+            texto: `Ya tienes un negocio con ese ${porNombre ? "nombre" : "RIF"}, así que no se creó otro y el logo que elegiste no se guardó. Puedes subirlo en Configuración → Mi empresa.`,
+            entrar: () => onListo(existente.id),
+          });
+          return;
+        }
         setErrorCrear(
           porNombre
             ? "Ya tienes un negocio con ese nombre: te llevamos a él."
@@ -486,25 +512,42 @@ export function Registro({
       const { company_id } = (await r.json()) as { company_id: string };
       // El negocio EXISTE: el borrador ya no tiene razón de ser.
       borrarBorrador(clave);
+      let logoGuardado = true;
       if (d.logo !== null) {
         // El logo es un adorno: si su subida falla, el negocio YA existe y se
         // reintenta después desde Mi empresa — jamás se bloquea la fundación.
+        // Pero se MIRA el resultado (A-01): antes un 4xx, un 5xx o la red caída
+        // se tragaban, y la persona aterrizaba sin el logo que el resumen le
+        // acababa de enseñar puesto.
         const form = new FormData();
         form.append("file", new File([d.logo], "logo.png", { type: "image/png" }));
-        await fetch(`${API_URL}/v1/companies/logo`, {
+        const subida = await fetch(`${API_URL}/v1/companies/logo`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}`, "X-Company-Id": company_id },
           body: form,
         }).catch(() => null);
+        logoGuardado = subida !== null && subida.ok;
       }
       // La micro-celebración sobria, y directo a /empezar sin pantalla
       // intermedia. El destino viaja por sessionStorage: el router nació con
       // la URL «/» congelada y el aterrizaje por rol lo consume UNA vez.
       setCelebrando(true);
       try {
-        sessionStorage.setItem("ladino.aterrizar", "/empezar");
+        // A-02 (regla del dueño, 2026-09-28): el alta con RIF sigue DIRECTO al paso de las
+        // facturas, donde están «Así facturo» y el talonario. Sin RIF, al primer paso.
+        sessionStorage.setItem("ladino.aterrizar", conRif ? "/empezar?paso=facturas" : "/empezar");
       } catch {
         // sin sessionStorage se aterriza por rol: peor no es
+      }
+      if (!logoGuardado) {
+        // A-01: sin logo en la tarjeta (no quedó puesto) y sin entrar hasta que la persona lo lea.
+        setD((prev) => ({ ...prev, logo: null, logoUrl: null }));
+        setSinLogo({
+          texto:
+            "Tu negocio ya está creado, pero el logo no se pudo guardar. Puedes subirlo en Configuración → Mi empresa.",
+          entrar: () => onListo(company_id),
+        });
+        return;
       }
       window.setTimeout(() => onListo(company_id), REDUCIR() ? 0 : 450);
     } catch {
@@ -567,7 +610,7 @@ export function Registro({
             <p className="mx-auto mt-3 max-w-md text-[1.05rem] text-muted-foreground">
               {otraEmpresa
                 ? "Es un negocio aparte, con sus propios documentos, inventario y libros, y tú quedas como su dueño. Puedes ajustar todo después."
-                : "Te toma menos de dos minutos. Puedes ajustar todo después."}
+                : "Te toma unos minutos. Puedes ajustar todo después."}
             </p>
             <Button
               variant="primary"
@@ -636,11 +679,14 @@ export function Registro({
                   <button
                     key={r.code}
                     id={`rubro-${r.code}`}
+                    // A-09: `type="button"`, como las opciones de «¿Tienes RIF?». Sin él, dentro
+                    // del <form> cada rubro era un submit y elegir avanzaba solo. En TODOS los
+                    // pasos de elección, elegir marca y «Continuar» avanza.
+                    type="button"
                     role="radio"
                     aria-checked={activo}
                     autoFocus={r.code === "bodega"}
                     onClick={() => pon("rubro", r.code)}
-                    onDoubleClick={avanzar}
                     className={`flex flex-col items-center gap-2 rounded-lg border p-4 text-center transition-all duration-150 ${
                       activo
                         ? "border-accent bg-accent-soft text-accent-soft-foreground shadow-soft"
@@ -661,7 +707,7 @@ export function Registro({
             <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="¿Tienes RIF?">
               {(
                 [
-                  [true, "Sí, tengo RIF", "Facturas legales desde el primer día."],
+                  [true, "Sí, tengo RIF", "Facturas legales desde tu primer talonario."],
                   [false, "Todavía no", "Empiezas hoy mismo, sin papeleo."],
                 ] as const
               ).map(([valor, titulo, detalle]) => (
@@ -1035,16 +1081,36 @@ export function Registro({
                 {errorCrear}
               </p>
             )}
-            <Button
-              variant="primary"
-              size="lg"
-              autoFocus
-              disabled={creando}
-              className="mt-8 h-12 px-10 text-[1.05rem]"
-              onClick={() => void crear()}
-            >
-              {creando ? "Creando…" : "Crear mi negocio"}
-            </Button>
+            {sinLogo !== null ? (
+              <>
+                <p
+                  role="alert"
+                  className="mx-auto mt-4 max-w-sm rounded-md bg-warning-soft px-3 py-2 text-[0.9rem] text-warning-soft-foreground"
+                >
+                  {sinLogo.texto}
+                </p>
+                <Button
+                  variant="primary"
+                  size="lg"
+                  autoFocus
+                  className="mt-8 h-12 px-10 text-[1.05rem]"
+                  onClick={sinLogo.entrar}
+                >
+                  Entrar a mi negocio
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="primary"
+                size="lg"
+                autoFocus
+                disabled={creando}
+                className="mt-8 h-12 px-10 text-[1.05rem]"
+                onClick={() => void crear()}
+              >
+                {creando ? "Creando…" : "Crear mi negocio"}
+              </Button>
+            )}
           </div>
         )}
       </Pantalla>

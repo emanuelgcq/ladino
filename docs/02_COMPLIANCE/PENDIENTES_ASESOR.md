@@ -92,6 +92,12 @@ de servicios públicos domiciliados del art. 3 de la PA SNAT/2025/000054. La pan
 factura fiscal» / «sin factura». El doble conteo con `supplier_invoices` se evita porque es un
 solo registro.
 
+**Construida en la ola 4 (2026-10-03; migraciones 20261004170000 y 20261004170100).** `POST
+/v1/expenses` con el bloque `invoice` registra una factura de proveedor marcada con
+`expense_category` —el mismo caso de uso, el mismo libro, la misma retención y su comprobante— y
+paga su saldo desde la cuenta. No hay fila en `expenses`: el gasto ES la factura. Decisión en ADR-0080. La empresa sin
+RIF no lleva libro y su IVA va al costo. Lo que sigue para el asesor: P-94, P-95 y P-96.
+
 ## P-6 · Notas de débito: ¿suman al débito del período de emisión?
 
 **Hoy (regla provisional):** en el cálculo del período, la **nota de crédito resta**
@@ -394,6 +400,43 @@ adicional:** «Una factura de sábado, domingo o feriado, ¿va a la tasa que el 
 día hábil con fecha valor del día hábil siguiente?» **Hecho por verificar en código:** qué fecha
 guarda `exchange_rates.rate_date` (publicación o fecha valor; `apps/api/src/tasa-oficial.ts`).
 
+**Ola 4 (2026-10-04, migración 20261004195900) — el tope ya existe, decidido por criterio.**
+- **La antigüedad.** «Sin límite de días» dejó de ser cierto: `platform.rate_for` solo devuelve la
+  oficial más reciente no posterior a la fecha **y no más antigua que
+  `platform.parameters.official_rate_max_age_days`** (dato sembrado: **7**, el mismo de P-88; el
+  nombre viejo `closing_rate_max_age_days` queda de alias). Fuera del margen toda operación que
+  convierte —venta, cobro, factura de proveedor, pago, gasto, transferencia, llegada, cierre— se
+  detiene con `EXCHANGE_RATE_MISSING` y las lecturas dicen «Falta la tasa de hoy». El **7** no sale
+  de ninguna norma: **VALIDAR-TRIBUTARIO**. La primera pregunta de arriba sigue siendo la pregunta
+  exacta; si el asesor da otro número, es un `update` de ese dato, sin código.
+  **Alternativa descartada:** margen 0 con calendario de días hábiles (no hay calendario bancario
+  cargado, y un feriado sin él bloquearía toda venta en divisa).
+- **Qué fecha guarda `rate_date` (verificado en código).** `apps/api/src/bcv.ts:15-19` y `:80`:
+  es el **día de Caracas de `fechaActualizacion`**, el campo que publica la fuente (DolarAPI,
+  `GET /v1/dolares/oficial`), sin ninguna corrección propia. `apps/api/src/tasa-oficial.ts:44-50`
+  considera «la tasa de hoy» la fila cuyo `rate_date` es el día de Caracas de hoy. **No
+  verificado:** si esa `fechaActualizacion` es la fecha de publicación del BCV o su «fecha valor»
+  (el código no lo distingue y la fuente no lo documenta en el repo). Indicio, no prueba:
+  `apps/api/src/routes/negocio.ts:65` lee la tasa «hasta mañana» (`hoy + 1`), lo que solo tiene
+  sentido si la fuente llega a fechar una tasa con el día siguiente (fecha valor).
+- **El día no hábil no se tocó.** `rate_for` sigue tomando la última con fecha **no posterior**
+  (día hábil anterior). Si el asesor confirma LIVA art. 25 (día hábil **siguiente**), una
+  operación de sábado o domingo tendría que esperar la tasa del lunes o reexpresarse: es una
+  decisión de norma, y queda abierta aquí.
+- **Cargar la oficial de un día PASADO no tiene pantalla (revisión de la ola 4, migración
+  20261004200000; R-85.8).** «El operador de la plataforma carga la oficial del día» (arriba) es
+  hoy un `insert` por SQL del dueño de la base: Mi dinero solo trae la publicada hoy. El mensaje
+  de una operación fechada en un día pasado sin tasa lo dice así («…o escribe a soporte para cargar
+  la oficial de ese día»). **Decisión abierta del dueño**, no del asesor: una pantalla de
+  plataforma con fuente citada, o la carga automática de la serie histórica. **Pregunta para el
+  asesor (VALIDAR-TRIBUTARIO), que condiciona esa decisión:** «Si el BCV publicó la tasa de un
+  día y el sistema no la tenía guardada, ¿puede registrarse después una operación con fecha de
+  ese día a esa tasa, y qué respaldo de la fuente hay que conservar (Gaceta, captura de la página
+  del BCV con fecha)?»
+- **La deuda con proveedores sin tasa del día** ya no detiene la pantalla: se enseña el nominal
+  en su moneda y «Falta la tasa de hoy» (no se inventa un equivalente en bolívares). Es solo
+  presentación: no cambia ningún asiento ni libro.
+
 ---
 
 ## P-23 · Las fuentes primarias de la tasa y de la factura en divisa (VALIDAR-TRIBUTARIO)
@@ -605,11 +648,21 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
     exacta: «¿La condición de agente se evalúa el día del abono en cuenta o el de la factura?».
     **Aplicada (PA 000054 arts. 1 y 13 con R-3: retener es al abono en cuenta, que es el registro):**
     el tipo de la empresa el día del REGISTRO (día de Caracas). **Alternativa:** el día de la factura.
+    **Pregunta adicional (auditoría fiscal de la ola 4, 2026-10-04):** «Un gasto pagado en una
+    quincena y registrado en la siguiente (`paid_at` anterior al registro): ¿la retención es del
+    período del pago, y cómo se entera la practicada tarde?» (PA 000054 art. 13; reproducción
+    ivecofi, 2026-10-04, no oficial.)
 - **P-33 · G-01** — Un correlativo de control por emisor (PA 00071 art. 44). **Aplicada:** uno
   por empresa e identificador, compartido por factura, NC y ND. **Alternativa:** tramos por clase,
   si el SENIAT lo admite por escrito.
 - **P-34 · G-10 / L-07** — Anuladas en el libro de ventas. **Aplicada** (migración
   20260928120000): número, estado «annulled» (en pantalla «Anulada») e importes en cero. **Alternativa:** omitirlas del libro con relación aparte.
+  **Añadido (auditoría fiscal de la ola 4):** RLIVA arts. 76-77 leídos literales (reproducción
+  pandectasdigital, 2026-10-04; no oficial, cotejo con la Gaceta pendiente): no mencionan
+  documentos anulados. Art. 11: la factura sustituida se registra como cantidad por sustraer.
+  Art. 57: es no fidedigna la factura cuya numeración no guarda continuidad. Sin norma hallada
+  que exija o prohíba el renglón en cero; habría jurisprudencia de tribunales superiores, sin
+  identificar ni leer, según la cual la anulada no se registra.
 - **P-35 · K-04** — Ventana para deducir crédito de facturas recibidas con retraso. **Aplicada:**
   ninguna todavía: el número (12 períodos desde la emisión) está en fuentes secundarias, pero el
   **artículo no se confirmó** → pendiente de fuente; no se ofrece en pantalla. Estado 2026-09-28
@@ -623,6 +676,14 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
   contador. *La parte del redondeo y de «Diferencias por redondeo» es la misma pregunta que P-79,
   que trae el texto exacto y dónde se toca: se responde allí. Aquí quedan los códigos de
   diferencial cambiario, mermas y faltantes, retiros y aportes.*
+  **Aportes del dueño (J-02, migración 20261004180000) — VALIDAR-CONTABLE, el código.** El
+  sobregiro que se cubre al cerrar una caja va a un PASIVO (respuesta del dueño, 2026-09-28).
+  **Aplicada:** `2.1.92 «Cuentas por pagar a socios (aportes del dueño)»`, pasivo circulante,
+  papel `owner_payable`; lo contado por encima de cero sigue en 5.1.06. **Alternativa:** otro
+  código o grupo (pasivo a largo plazo, o directamente capital). **Pregunta exacta:** «¿El dinero
+  que el dueño pone de su bolsillo para cubrir una caja va en 2.1.92 como cuenta por pagar a
+  socios dentro del pasivo circulante, o en otro código? ¿Y cuándo se reclasifica a capital?».
+  Dónde se toca: `chart_template_accounts` (ve_basico) y la cuenta de cada empresa en Contabilidad.
 - **P-37 · L-05** — Dos arrastres separados en la declaración del especial. **Aplicada:**
   separados (migración 20261002120000, 2026-10-02): las retenciones soportadas se descuentan solo
   de la cuota tributaria positiva y lo que sobra pasa como «retenciones acumuladas por descontar»;
@@ -636,9 +697,31 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
   **Pendiente de fuente:** periodicidad de la declaración informativa (¿trimestral, o semestral
   con ingresos ≤ 1.500 UT?) y contenido y periodicidad de las relaciones. **Aplicada:** la opción
   «Formal» **se oculta** hasta tenerlo.
+  **Estado 2026-10-03 (ola 4, M-10; migración 20261004110000):** la fuente sigue sin llegar, así
+  que «Formal» sigue oculto, sin poder declararse (422 en el dominio y CHECK de la historia) y sin
+  emitir. Construido solo lo que tiene fuente: la base rechaza la factura o la nota de débito de
+  un `formal` con una línea gravada (LIVA art. 8, fuente secundaria), para que el día que se
+  reabra no dependa de que nadie lo intente. **Sin construir, a la espera de esta respuesta:**
+  abrir la declaración, la leyenda en el PDF, las relaciones y la informativa.
+  **Preguntas exactas (VALIDAR-TRIBUTARIO):** (1) «¿Con qué periodicidad presenta el contribuyente
+  formal la declaración informativa de la PA SNAT/2003/1677, y qué artículo la fija: trimestral,
+  o semestral cuando los ingresos brutos del ejercicio anterior no superan 1.500 UT?»;
+  (2) «¿Qué columnas llevan la relación de ventas y la relación de compras del formal, con qué
+  periodicidad se cierran, y sustituyen a los libros de compras y ventas del RLIVA arts. 70-77?»;
+  (3) «¿La leyenda del documento del formal es exactamente "Contribuyente formal" (art. 3), y se
+  imprime también cuando la factura sale sobre forma libre de la PA 00071?»; (4) «Un formal que
+  vende un bien gravado, ¿deja de ser formal desde esa operación (LIVA art. 8), y desde qué fecha
+  declara como ordinario?»; (5) «La nota de crédito sobre una factura gravada emitida cuando la
+  empresa era ordinaria, ¿la emite el formal con su IVA original?» — hoy la guarda no la toca.
 - **P-39 · M-11** — Regularización de lo vendido con recibo antes del RIF. **Aplicada:** los
   recibos quedan como historia, fuera de libros. **Alternativa:** la que indique el asesor (es del
   negocio, no del sistema).
+  **Estado 2026-10-03 (ola 4, M-11):** sin cambio de código; fijado con el E2E
+  `e2e-de-recibos-a-facturas.test.ts`. Quien obtiene el RIF el día D factura desde D (el régimen
+  se juzga a la fecha de emisión) y el talonario es posterior a la inscripción (la imprenta exige
+  el RIF). **Pregunta exacta (VALIDAR-TRIBUTARIO):** «Una persona natural que vendía de forma
+  habitual sin RIF y lo obtiene el día D: ¿debe regularizar ante el SENIAT las ventas anteriores
+  hechas con recibo (LIVA arts. 5 y 54), cómo, y con qué sanción del COT?». Ladino no lo decide.
 - **P-40 · E-03** — Cobro en divisas posterior a la factura de un SPE. **Aplicada:** Nota de
   Débito por IGTF que referencia la factura (PA 00071 art. 22), sin IVA, base 0 en el libro.
   **Alternativa:** comprobante de percepción no fiscal.
@@ -1057,7 +1140,11 @@ cómo se reparte entre sus hijas; se corrige con un asiento manual entre subcuen
   (AF-M02, 2026-10-03).** Para la conversión FISCAL, LIVA art. 25 manda al día hábil siguiente
   cuando el día no es hábil. **Pregunta adicional:** «¿La tasa de cierre contable de un fin de mes
   no hábil es la del último día hábil del mes o la publicada con fecha valor del primer día hábil
-  siguiente?»
+  siguiente?» **Ola 4 (2026-10-04, migración 20261004195900).** El margen dejó de ser solo del
+  cierre: es el de **toda** conversión (`platform.rate_for`; `closing_rate` ya no tiene regla
+  propia). El dato se llama ahora `official_rate_max_age_days`; `closing_rate_max_age_days` es su
+  alias (un trigger los mantiene iguales) hasta la ola Z. El valor **7** sigue decidido por
+  criterio y la pregunta es la misma; su cara tributaria está en P-22.
 
 - **P-89 · La retención soportada que se anula después de declarada (VALIDAR-TRIBUTARIO; LIVA art.
   11, PA SNAT/2025/000054; ADR-0075 §8, H9, ola 3).** **Aplicada, decidida por criterio (lo más
@@ -1095,5 +1182,90 @@ cómo se reparte entre sus hijas; se corrige con un asiento manual entre subcuen
 ## Auditoría fiscal de la familia de moneda (ola 3, 2026-10-03)
 
 - **P-90 · AF-M04 · El IVA por línea y lo que la factura imprime por alícuota (VALIDAR-TRIBUTARIO; PA 00071 art. 13 num. 10-11).** **Aplicada, decidida por criterio:** el IVA en Bs se redondea por línea (la fórmula literal de la respuesta del dueño, §2.7) y el PDF imprime, por alícuota, la suma de bases y la suma de IVA; en una factura de n líneas el IVA impreso puede apartarse de «base impresa × alícuota» hasta 0,005 × n Bs. La misma respuesta enunció el invariante «exacto por alícuota»; lo implementado y lo que vigila `fiscal_amount_gaps` es exacto por línea. No se halló norma que fije la unidad de cálculo ni el redondeo. **Pregunta exacta:** «¿El IVA de la factura se calcula sobre la base total de cada alícuota (un solo redondeo por alícuota) o puede ser la suma del IVA redondeado de cada línea? Si el agente de retención recalcula base × alícuota y su 75 % difiere en céntimos del nuestro, ¿qué cifra manda?» **Alternativa:** IVA por alícuota sobre la base sumada, repartiendo el residuo entre líneas. **Dónde se toca:** `fiscalDeLinea` (sales.ts), `fiscal_amount_gaps`, la tolerancia de `registerSupportedRetention` (declarations.ts; ver P-30).
-- **P-91 · AF-M14 · Anular una factura cuyo cobro se reversó (VALIDAR-TRIBUTARIO; PA 00071 art. 36, LIVA art. 58; ola 4, G-10).** **Aplicada, decidida por criterio (ADR-0075):** un cobro reversado no cuenta y la factura vuelve a poder anularse. Norma leída (reproducción): el art. 36 solo manda conservar original y copias de lo anulado; el art. 58 de la LIVA manda corregir con nota la operación que queda sin efecto después de facturada. **Pregunta exacta:** «¿Qué condiciones permiten ANULAR una factura en lugar de emitir nota de crédito: tener el original y todas las copias, que el período no esté declarado, que el cliente no haya tomado el crédito? ¿Haber tenido un cobro, aunque se reversara, lo impide?» **Alternativa:** que la reversa de un cobro no habilite la anulación. La regla de anulación se rehace en la ola 4 (G-10) y pregunta por el original en mano y por el período, haya habido cobro o no. **Dónde se toca:** `annulInvoice` (sales.ts).
+- **P-91 · AF-M14 · Anular una factura cuyo cobro se reversó (VALIDAR-TRIBUTARIO; PA 00071 art. 36, LIVA art. 58; ola 4, G-10).** **Aplicada, decidida por criterio (ADR-0075):** un cobro reversado no cuenta y la factura vuelve a poder anularse. Norma leída (reproducción): el art. 36 solo manda conservar original y copias de lo anulado; el art. 58 de la LIVA manda corregir con nota la operación que queda sin efecto después de facturada. **Pregunta exacta:** «¿Qué condiciones permiten ANULAR una factura en lugar de emitir nota de crédito: tener el original y todas las copias, que el período no esté declarado, que el cliente no haya tomado el crédito? ¿Haber tenido un cobro, aunque se reversara, lo impide?» **Alternativa:** que la reversa de un cobro no habilite la anulación. La regla de anulación se rehace en la ola 4 (G-10) y pregunta por el original en mano y por el período, haya habido cobro o no. **Dónde se toca:** `annulInvoice` (sales.ts). **Estado 2026-10-04 (ola 4, G-10): Aplicada con la regla del dueño del 2026-09-28** (migraciones 20261004160000 y 20261004160100, `platform.invoice_annulment_blockers`; ADR-0061, nota de la ola 4). Una FACTURA se anula solo si: (1) es del mismo día de Caracas; (2) su caja no se cerró después de emitirla; (3) el período de IVA de ese día no está declarado; (4) la persona confirma que tiene el original y todas las copias (queda en el acta). Lo demás es nota de crédito. La regla ya **no** depende de los cobros reversados: una factura con su cobro reversado se anula solo si además cumple las cuatro; con un cobro vivo sigue sin anularse (ADR-0061 §1). **Decidido por criterio, a confirmar:** «su caja» son las cuentas de sus cobros o, si nunca tuvo cobro, cualquier cierre de caja de la empresa posterior a la emisión; y la regla juzga facturas, no recibos (el recibo no es papel fiscal). **Preguntas que siguen abiertas:** las de arriba, más «¿"mismo día y antes del cierre de caja" es la lectura correcta de "no salió del establecimiento y la operación no ocurrió" (art. 36), o basta tener original y copias aunque sea otro día del mismo período?» **Qué se rompe si la respuesta es otra:** solo se ensancha o se estrecha la ventana (una función SQL); las facturas ya corregidas con nota de crédito quedan bien corregidas. La práctica de «anulada en cero en el libro» es P-34. **Añadido (auditoría fiscal de la ola 4):** art. 36 releído literal (reproducción ivecofi, 2026-10-04; no oficial, cotejo con la Gaceta pendiente): solo manda conservar los originales anulados con su copia hasta la prescripción; no fija día, caja ni período. La ventana de Ladino es criterio del dueño y es más estricta que el texto.
 - **P-92 · AF-M15 · La diferencia en cambio y el ISLR (VALIDAR-TRIBUTARIO).** **Aplicada:** la revaluación mensual y el diferencial al cobrar o pagar van a resultados; Ladino no calcula ISLR. En la reproducción de la LISLR 2015 (G.O. 6.210 Ext.) no se localizó el artículo sobre ganancias y pérdidas cambiarias (una fuente académica lo sitúa en el art. 186, sin texto leído); los SPE están excluidos del ajuste por inflación (art. 171). **Pregunta exacta:** «¿La ganancia o la pérdida cambiaria no realizada de la revaluación al cierre es gravable o deducible en el ejercicio, o solo cuando se cobra, se paga o es exigible? ¿Qué artículo lo dice hoy y aplica igual a un sujeto pasivo especial?» **Dónde se toca:** `revaluarAlCierre` (accounting.ts), papeles `exchange_gain` / `exchange_loss`.
+
+## De recibos a facturas (ola 4, 2026-10-03)
+
+- **P-93 · M-12 · Devolver un recibo cuando la empresa ya factura (VALIDAR-TRIBUTARIO; PA 00071 art. 22).** **Aplicada (respuesta del dueño del 2026-09-28; migración 20261004110000):** el recibo emitido antes del RIF se devuelve con un **recibo de devolución** (serie D, no fiscal, sin IVA, sin número de control, fuera del libro de ventas), aunque la empresa ya esté en el régimen de formas libres. Nunca con nota de crédito: la nota corrige una factura (art. 22) y entraría al libro de ventas restando un débito que nunca existió. **Decidido por criterio:** la excepción vive en el gate de emisión (el origen tiene que ser un recibo de la misma empresa) y no en los documentos que el régimen emite, de modo que quien factura sigue sin poder VENDER por recibo. **Alternativa:** reembolsar sin documento, o añadir el recibo de devolución a lo que emite el régimen de facturas. **Preguntas exactas:** (1) «Una empresa ya inscrita en el RIF que le devuelve dinero o mercancía a quien le compró con recibo antes de la inscripción: ¿puede documentarlo con un recibo no fiscal, o esa devolución exige algún documento de la PA 00071?»; (2) «¿Ese recibo de devolución debe llevar el RIF actual de la empresa?» — hoy el PDF NO lo imprime: el recibo de devolución se trata como recibo y sale sin RIF ni domicilio del emisor (`apps/api/src/routes/documents-pdf.ts`), aunque la empresa ya esté inscrita, con la leyenda de documento no fiscal de A-06 (P-16). **Fuente añadida (auditoría fiscal de la ola 4):** PA 00071 art. 22 (reproducción ivecofi, 2026-10-04; reproducción no oficial, cotejo con la Gaceta pendiente): la nota de crédito es para operaciones «por las cuales se otorgaron facturas»; respalda no usarla para un recibo.
+
+## El gasto con factura fiscal (ola 4, H-09, 2026-10-03)
+
+- **P-94 · H-09 · ¿Todo gasto con factura da crédito fiscal? (VALIDAR-TRIBUTARIO; LIVA art. 33).** **Aplicada, decidida por criterio:** todo gasto registrado «con factura fiscal» por una empresa ordinaria o especial entra al libro de compras y su IVA va a crédito fiscal, como cualquier compra; Ladino no pregunta si el gasto corresponde a la actividad habitual ni aplica límite alguno. La pantalla dice «puede contar como crédito fiscal», no «da». Pregunta exacta: ¿qué gastos con factura NO dan derecho a crédito (los ajenos a la actividad, los de representación u otros) y con qué artículo, para que la pantalla lo pregunte o el contador lo marque? Alternativa: una marca «no deducible» por gasto que lleve el IVA al costo. **Fuente añadida (auditoría fiscal de la ola 4):** LIVA art. 33 y RLIVA art. 55 (reproducciones no oficiales, 2026-10-04; cotejo con la Gaceta pendiente): dan crédito los costos, gastos o egresos propios de la actividad económica habitual. **Pregunta adicional:** ¿el crédito de los gastos generales entra en la prorrata del art. 34 igual que el de las compras?
+- **P-95 · H-09 · La exclusión del servicio público domiciliado (VALIDAR-TRIBUTARIO; PA SNAT/2025/000054 art. 3 num. 8).** **Aplicada:** la exclusión es una fila del catálogo `retention_exclusions` (`servicio_publico_domiciliado`, marcable) y la marca la persona con su motivo, que queda auditado. El servidor NO comprueba que el gasto sea de electricidad, agua, aseo o telefonía ni que se haya pagado por domiciliación en una cuenta bancaria: la cuenta elegida puede ser una caja. Pregunta exacta: ¿basta la marca con motivo, o la exclusión exige que el sistema verifique el medio de pago (cuenta bancaria del agente) y la clase de servicio? Alternativa: ofrecerla solo cuando la cuenta de la que sale el dinero es un banco. **Estado 2026-10-04 (auditoría fiscal de la ola 4, AF4-01):** PA 000054 art. 3 num. 8, literal (reproducción ivecofi, 2026-10-04; reproducción no oficial, cotejo con la Gaceta pendiente): electricidad, agua, aseo y telefonía «pagados mediante domiciliación a cuentas bancarias de los agentes de retención». El medio de pago es condición del texto: desde la ola 4, el gasto con factura rechaza esa exclusión cuando sale de una caja (AF4-01) —422 al registrar y en la vista previa, y el catálogo ofrecible ya no la trae para esa cuenta—; lo de arriba («la cuenta elegida puede ser una caja») ya no vale para el gasto. **Lo que sigue sin comprobarse:** la clase de servicio (no se valida contra nada); y la factura de proveedor registrada SIN pago (`POST /v1/supplier-invoices`, la llegada de mercancía), donde el medio de pago aún no se conoce y la exclusión se sigue aceptando con su motivo. **Decidido por criterio:** «no bancaria» es toda cuenta que no sea de clase banco (caja y monedero). **Preguntas que quedan:** ¿«domiciliación» exige el cargo automático ordenado al banco o basta la transferencia desde una cuenta de la empresa? ¿«Telefonía» incluye móvil e internet? En la factura registrada sin pago, ¿la exclusión debe esperar al pago para saberse?
+- **P-96 · H-09 · La retención de ISLR sobre servicios pagados como gasto (VALIDAR-TRIBUTARIO; ver `ISLR_SPEC.md` y `RETENTIONS_SPEC.md`).** **No aplicada:** el gasto con factura practica sola la retención de IVA del agente; la de ISLR (alquileres, honorarios, servicios) solo se practica en `POST /v1/supplier-invoices` cuando el cuerpo pide el concepto, y la pantalla del gasto no lo ofrece. No se inventó ningún concepto ni porcentaje. Pregunta exacta: ¿qué gastos con factura llevan retención de ISLR, con qué concepto y desde qué importe, para ofrecerlo en la pantalla del gasto?
+- **P-97 · A-16 · El plazo de conservación del origen de las actas (VALIDAR; no hay norma citada en `docs/02_COMPLIANCE/`).** **Aplicada:** las actas guardan canal, ip, user-agent, sesión y build de quien escribe, en una tabla que no admite borrado (`audit_events`, append-only; migración 20261004120000, ADR-0079, R-81). Los lee solo quien tiene `fiscal.audit.read` y no salen en ninguna respuesta de la API. Pregunta exacta: ¿hay un plazo máximo de conservación de esos datos, o una obligación de conservarlos, que aplique (protección de datos, COT)? Alternativa: guardar la ip truncada o un hash de ella, que identifica la sesión sin identificar a la persona. **Añadido (auditoría fiscal de la ola 4, 2026-10-04):** deber de conservación del COT (art. 145 num. 3 en el texto de 2001; número en el COT 2020 SIN verificar; sin fuente leída): mientras el tributo no esté prescrito. **Pregunta adicional:** ¿qué artículo vigente lo fija y por cuánto tiempo?
+
+## P-98 · El pago de más: ¿el anticipo causa IGTF (y cuándo), y causa IVA? (VALIDAR-TRIBUTARIO)
+
+**Hoy (ola 4, F-10; migraciones 20261004150000 y 20261004190000):** un cobro mayor que lo que el documento debe SE ACEPTA. El documento se salda por lo que debía y el sobrante nace como saldo a favor del cliente (`customer_credits.source_payment_id`), en la moneda del documento y a la tasa del cobro; el asiento abona el sobrante a «saldos a favor de clientes» (pasivo), sin IVA. **Si el pago es en divisa y causa IGTF, el sobrante NO se registra:** el cobro responde 422 «registra lo que queda y entrega el vuelto» (`registerPayment`, `packages/domain/src/sales.ts`). La percepción de IGTF sigue calculándose solo sobre lo que abona un documento.
+
+**Falta decidir (no está en `docs/02_COMPLIANCE/` con fuente):**
+1. ¿Un anticipo recibido en divisa de un cliente causa IGTF **al recibirse**, **al aplicarse** a una venta, o nunca hasta que haya documento? ¿Con qué base y con qué documento se soporta (la percepción de hoy va impresa en la factura o en una nota de débito por IGTF, y un anticipo no tiene ninguna de las dos)?
+2. ¿Un anticipo recibido antes de la venta es hecho imponible de IVA al recibirse? Hoy el sobrante no lleva IVA ni documento fiscal: es un pasivo hasta que se aplica a una factura (que lleva su IVA) o se devuelve.
+3. Si se devuelve en dinero un saldo a favor que nació de un cobro con IGTF percibido sobre la parte que sí abonó el documento, ¿cambia algo? (Hoy no: lo percibido queda percibido, como en P-9.)
+
+**Fuentes leídas (auditoría fiscal de la ola 4; reproducciones no oficiales, 2026-10-04; cotejo con la Gaceta pendiente):** RLIVA art. 29 —en bienes muebles vendidos a plazo, el anticipo del precio no es hecho imponible hasta la factura o la entrega—; art. 30 —en ventas por muestras o catálogos, el anticipo sobre proforma sí—; LIVA art. 13 —en servicios, el pago es uno de los momentos del hecho imponible—; Ley de IGTF art. 4 num. 6 —grava «los pagos realizados» a un sujeto pasivo especial en divisa sin mediación financiera, sin distinguir concepto—. **Pregunta 2, reescrita:** «Un pago de más sin venta determinada, ¿es "anticipo del precio" del art. 29? Si se deja a cuenta de un servicio futuro, ¿causa IVA al recibirse y con qué documento?»
+
+**Qué se rompe si la respuesta es otra:** si el anticipo causa IGTF al recibirse, hay que percibirlo sobre el sobrante y darle un soporte; si causa IVA, el sobrante necesita un documento fiscal y el pasivo nace neto. En los dos casos cambia el asiento del cobro con sobrante y lo ya registrado se corrige con asientos nuevos.
+
+**Dónde se toca:** `registerPayment` (el bloque «F-10 + IGTF»), la plantilla `ar.payment_applied` (línea `credit_surplus`).
+
+## P-99 · El saldo a favor en divisa: su tasa, su diferencial y su revaluación (VALIDAR-CONTABLE)
+
+**Hoy (ola 4, G-05 y G-15; ADR-0075, nota «ola 4 · cobros»):** el saldo a favor conserva la moneda del documento que lo originó y guarda la tasa con que nació (la de la nota de crédito —que es la de la factura que corrige— o la del cobro que dejó el sobrante). Aplicado a un documento de la misma moneda, va nominal contra nominal y la diferencia entre lo que el pasivo llevaba y lo que el documento cargó a cuentas por cobrar va a ganancia o pérdida en diferencial cambiario. Aplicado a un documento de otra moneda, a la tasa BCV del día. Reembolsado, sale de la caja en la moneda en que se pague y a la tasa del día, y la diferencia con lo que el pasivo llevaba va al diferencial. Al cierre del período el pasivo en divisa se revalúa a la tasa de cierre (`platform.fx_revaluation_items`, partida `customer_credit`), como las cuentas por pagar.
+
+**Falta confirmar:**
+1. ¿Es correcto tratar el saldo a favor en divisa como partida monetaria (VEN-NIF PYME secc. 30) y revaluarlo al cierre? Un anticipo que solo puede cancelarse entregando mercancía podría ser partida NO monetaria; el nuestro se puede devolver en dinero (G-15).
+2. ¿El diferencial al aplicar y al reembolsar va a las mismas cuentas que el de cobros y pagos (P-83, P-92)?
+3. **(Corregido el 2026-10-04, tercera ronda: la cifra de este punto estaba mal y la regla cambió.)** No era un céntimo. Una nota de crédito con IVA nace por su total en bolívares (el IVA se calcula en Bs, E-05), que no es `importe × tasa`: un saldo de 2,78 USD a 854,4637 cargó 2.378,82 al pasivo, y a `importe × tasa` sus usos bajaban 2.375,41 — quedaban 3,41 Bs en el pasivo para siempre. **Hoy** cada uso baja la parte proporcional de lo que el saldo cargó al nacer (al céntimo) y el uso que lo agota se lleva el resto exacto: el pasivo de cada saldo a favor termina en 0,00. Lo que esa parte se aparta de `importe × tasa` va a «Diferencias por redondeo» cuando el uso ocurre a la tasa del documento, y al diferencial cambiario cuando ocurre a otra tasa o es un reembolso. **Pregunta exacta:** ¿es correcto que ese importe —que es el redondeo del IVA de la nota al céntimo de bolívar, no un movimiento de la tasa— vaya a diferencial cambiario en el reembolso y en la aplicación a otra tasa, o debe ir siempre a «Diferencias por redondeo»?
+
+**Alternativa que se descartó:** todo saldo a favor en USD, convirtiendo los existentes a la tasa de su fecha. Los que ya existían quedaron en bolívares (su documento era en bolívares o nacieron así).
+
+**Dónde se toca:** `registerPayment`, `refundCustomerCredit`, `platform.fx_revaluation_items`.
+
+## P-100 · El residuo del redondeo de caja en un pago cruzado a proveedor: ¿diferencial cambiario o redondeo? (VALIDAR-CONTABLE)
+
+**Hoy (ola 4, re-revisión; ADR-0075, nota «el pago cruzado a tasa real», D-02):** una factura de proveedor en bolívares pagada desde una cuenta en dólares saca de la caja céntimos de dólar, y «lo que salió × tasa» no cae exacto sobre lo que se cancela (hasta medio céntimo de dólar × tasa: 4,27 Bs a 854,4637). Ese residuo tiene hoy DOS tratos:
+
+- en un **abono que no cierra**, se asienta en el acto como diferencial cambiario (ganancia o pérdida), en el mismo asiento del pago (abono de 500,00 Bs: salen 0,59 USD = 504,13 Bs; 4,13 Bs a pérdida en cambio);
+- en el **pago que cierra**, no se asienta: el pago vale en libros exactamente lo que se debía, la caja en dólares conserva su original y la diferencia de valoración la recoge la revaluación del cierre de período (ADR-0075 §6). Es el mismo trato que el cobro que cierra de ventas (ADR-0063 §2).
+
+No hay cambio de tasa en ninguno de los dos casos: factura y pago son del mismo día o la factura está en bolívares. El origen del residuo es el redondeo del dinero a su unidad mínima.
+
+**Falta confirmar:**
+1. ¿Ese residuo es diferencial cambiario (como se asienta hoy en el abono) o va a «Diferencias por redondeo» (5.1.10, ADR-0075 §7; P-36)?
+2. En el pago que cierra, ¿es correcto dejarlo a la revaluación del cierre de período, o debe asentarse en el acto como en el abono (y en qué cuenta)?
+3. ¿La respuesta es la misma para el cobro de ventas (ADR-0063 §2, ADR-0058 §6.4)?
+
+**Alternativa que se descartó:** no asentar el residuo tampoco en los abonos (lo que hizo la primera versión de la ola 4): hasta 4,27 Bs por abono, sin límite de abonos, fuera del mayor hasta el cierre.
+
+**Qué se rompe si la respuesta es otra:** solo la cuenta de destino de una línea del asiento del pago (y, si el cierre debe asentarlo, una línea más en ese asiento); los pagos ya asentados se regularizan con un asiento de reclasificación entre las dos cuentas de resultado.
+
+**Dónde se toca:** `registerSupplierPayment` (`packages/domain/src/purchases.ts`), `toleranciaDeCaja` (`packages/domain/src/tolerancia-de-caja.ts`); en ventas, `registerPayment`.
+
+## P-101 · La factura a crédito sobre forma libre: ¿puede (o debe) llevar «A CRÉDITO», el saldo y la fecha de vencimiento? (VALIDAR-SENIAT)
+
+**Hoy (ola 4; ADR-0075, nota «el vencimiento», P-05 y E-22; R-86.4):** una venta que deja saldo lleva su fecha de vencimiento. El RECIBO (empresa sin RIF, documento no fiscal) y la COPIA DE CORTESÍA de la factura imprimen tres leyendas: «A CRÉDITO», «Saldo pendiente: …» y «Vence: dd/mm/aaaa». La factura impresa SOBRE LA FORMA LIBRE (`destino=papel`) **no las imprime**: no se añadió nada al cuerpo que la PA SNAT/2011/00071 regula, y el tope de filas por forma (art. 33) está medido contra el cuerpo actual. Ninguna leyenda cambia base, IVA, total ni numeración.
+
+**Falta confirmar (no se afirma nada de esto: no está en `docs/02_COMPLIANCE/` con fuente):**
+1. ¿La factura sobre forma libre puede llevar la condición de pago («a crédito»), el saldo pendiente y la fecha de vencimiento como texto adicional, sin afectar su validez? ¿Con qué artículo?
+2. ¿Hay alguna norma (PA 00071, Código de Comercio u otra) que EXIJA la condición de pago o el vencimiento en la factura a crédito?
+3. Si se imprimen, ¿ocupan filas del tope de la forma libre (art. 33), o pueden ir en una zona fuera del cuerpo?
+4. ¿El saldo pendiente impreso puede ser el de la fecha de impresión (hoy lo es en el recibo y en la cortesía), o debe ser el del momento de la emisión?
+
+**Alternativa que se descartó:** imprimirlas también sobre la forma libre sin confirmación (tres renglones más pueden sacar de la hoja una factura que hoy cabe justa, y el sistema rechaza imprimir un documento que no cabe en una forma).
+
+**Qué se rompe si la respuesta es otra:** solo el render del PDF (`apps/api/src/routes/documents-pdf.ts`) y, si las leyendas cuentan como filas, el tope de filas del dominio (`exigeFormaLibre`). Ningún documento emitido cambia.
+
+**Respondido en parte (auditor fiscal, 2026-10-04; reproducción ivecofi, no oficial, cotejo con la Gaceta pendiente):** el art. 13 de la PA 00071 no lista la condición de pago, el saldo ni el vencimiento (no los exige); el art. 35 permite diseñar la factura sobre forma libre según las necesidades del emisor mientras cumpla los requisitos (admite el texto adicional). Quedan: la pregunta 3 (filas del tope del art. 33), la 4 (saldo a qué fecha) y, de la 2, si el Código de Comercio u otra norma lo exige (no verificado).
+
+## P-102 · AF4-02 · Corregir la factura de un gasto ya registrada (VALIDAR-TRIBUTARIO)
+
+**Fuente (auditoría fiscal de la ola 4):** LIVA arts. 35 y 37, versión G.O. 38.263 de 2005, numeración 2020 sin cotejar; Justia, 2026-10-04, leída en resumen (reproducción no oficial; cotejo con la Gaceta pendiente).
+
+**Hoy — No aplicada:** la factura de un gasto no se puede corregir ni anular (ADR-0080, «Negativas»); su crédito fiscal y, si la empresa es agente, su retención y su comprobante quedan como se registraron.
+
+**Pregunta exacta:** «Una factura de servicio registrada con un error (base, alícuota, proveedor) antes de declarar el período: ¿se corrige en el libro de compras con un ajuste propio, o solo con la nota de crédito del proveedor? Si ya se emitió el comprobante de retención, ¿cómo se corrige?»
+
+**Dónde se toca:** ola 5, familia «NC de proveedor» (H-03).

@@ -3,6 +3,10 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture } from "./_fiado-de-fixture.js";
+import { borrarTasasOficiales, sembrarTasaOficial } from "./_tasa-oficial.js";
+
+const FUENTE_TASA_FIADO = `BCV e2e-fiscal-legal-${Date.now().toString(36)}`;
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
@@ -108,6 +112,9 @@ beforeAll(async () => {
             on conflict (id) do nothing`;
   await sql`delete from public.exchange_rates
              where from_currency = 'USD' and to_currency = 'VES'`;
+  // R-82.1 / R-82.3: fiar (la factura de administración nace fiada) exige la tasa de hoy para
+  // medir la deuda contra el límite. Entrada del fixture: ninguna cifra en Bs depende de ella.
+  await sembrarTasaOficial(sql, { rate: "40", rate_date: HOY, source: FUENTE_TASA_FIADO });
   await sql.begin(async (tx) => {
     await tx`select set_config('ladino.actor_id', ${GERENTE}, true)`;
     await tx`insert into public.tenants (id, name) values (${TENANT}, 'Tenant e2e legal')`;
@@ -147,6 +154,8 @@ beforeAll(async () => {
                                            person_type_code, taxpayer_type_code, fiscal_address)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, ${`V-LEG-${RUN}`}, 'Cliente Legal',
                      'natural', 'consumidor_final', 'Calle 9, Maracay')`;
+    // R-82.1: la factura de administración nace fiada — la empresa de prueba declara que fía.
+    await fiadoDeFixture(tx, COMPANY, [ROL_GERENTE]);
     const [pg] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                    tax_category_code)
@@ -210,6 +219,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (sql) await borrarTasasOficiales(sql, FUENTE_TASA_FIADO);
   await sql?.end();
   await sqlApi?.end();
 });

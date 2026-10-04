@@ -19,6 +19,8 @@ import {
   createPaymentMethod,
   updatePaymentMethod,
   registerExpense,
+  registerInvoicedExpense,
+  previewInvoicedExpense,
   transferBetweenAccounts,
   closeCashRegister,
 } from "@ladino/domain";
@@ -65,6 +67,30 @@ async function exigePermiso(
   }
 }
 
+/** H-08: el comprobante de un gasto, hasta 6 MB (lo mismo que `storage.buckets.file_size_limit`). */
+const COMPROBANTE_MAX_BYTES = 6 * 1024 * 1024;
+/** H-08: la extensión con la que se guarda cada tipo admitido. */
+const EXTENSION_DE_COMPROBANTE: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "application/pdf": "pdf",
+};
+
+/** El tipo de un comprobante leído de sus primeros bytes (la «firma» del formato), o null. */
+function tipoPorContenido(b: Uint8Array): string | null {
+  const empieza = (firma: readonly number[], desde = 0): boolean =>
+    firma.every((x, i) => b[desde + i] === x);
+  if (empieza([0x25, 0x50, 0x44, 0x46])) return "application/pdf"; // %PDF
+  if (empieza([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
+  if (empieza([0xff, 0xd8, 0xff])) return "image/jpeg";
+  // RIFF....WEBP
+  if (empieza([0x52, 0x49, 0x46, 0x46]) && empieza([0x57, 0x45, 0x42, 0x50], 8)) {
+    return "image/webp";
+  }
+  return null;
+}
+
 export function treasuryRoutes(
   app: Hono,
   sql: Sql,
@@ -88,6 +114,9 @@ export function treasuryRoutes(
     await withTransaction(sql, actor, ({ sql: tx }) =>
       exigePermiso(tx, actor, companyId, "expense.register", "Adjuntar un comprobante"),
     );
+    // El CUERPO de esta ruta admite hasta 7 MB (`limiteComprobante`, app.ts) para que un archivo
+    // de algo más de 6 MB llegue hasta aquí y reciba su mensaje (abajo), en vez del 413 sin
+    // palabras de la cota general.
     const cuerpo = await c.req.parseBody();
     const archivo = cuerpo["file"];
     if (!(archivo instanceof File)) {
@@ -102,15 +131,29 @@ export function treasuryRoutes(
         message: "El comprobante tiene que ser una foto (JPG, PNG, WebP) o un PDF.",
       });
     }
-    const extension = archivo.type === "application/pdf" ? "pdf" : "img";
+    // H-08: el límite que el comentario prometía y nadie comprobaba (el bucket lo repite,
+    // migración 20261004170000: dos capas).
+    if (archivo.size > COMPROBANTE_MAX_BYTES) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message: "El comprobante pesa más de 6 MB. Sube una foto más liviana o un PDF más corto.",
+      });
+    }
+    // H-08: la extensión REAL del tipo. Antes toda imagen se guardaba como «.img», que ningún
+    // visor abre. La expresión de arriba ya dejó pasar solo estos cuatro tipos.
+    const extension = EXTENSION_DE_COMPROBANTE[archivo.type] ?? "bin";
+    // EL TIPO, POR CONTENIDO: `archivo.type` lo declara el cliente y se le creía. Los primeros
+    // bytes tienen que ser los del tipo declarado; si no, no se sube nada.
+    const bytes = new Uint8Array(await archivo.arrayBuffer());
+    if (tipoPorContenido(bytes) !== archivo.type) {
+      throw new DominioError({
+        code: "VALIDATION_FAILED",
+        message:
+          "El archivo no es lo que dice ser: su contenido no es el de una foto (JPG, PNG, WebP) ni el de un PDF.",
+      });
+    }
     const ruta = `${companyId}/receipts/${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}.${extension}`;
-    await subirObjeto(
-      storage,
-      "receipts",
-      ruta,
-      new Uint8Array(await archivo.arrayBuffer()),
-      archivo.type,
-    );
+    await subirObjeto(storage, "receipts", ruta, bytes, archivo.type);
     return c.json({ attachment_path: ruta }, 201);
   });
 
@@ -212,9 +255,30 @@ export function treasuryRoutes(
     if (!parsed.success) throw new ValidacionError(parsed.error.issues);
     coherente(companyId, parsed.data.company_id);
     const { actor } = c.get("ladino.auth");
-    const r = await withTransaction(sql, actor, (uow) => registerExpense(uow, parsed.data));
+    // H-09: con factura fiscal el gasto es una compra de servicio y va por compras (libro,
+    // crédito fiscal, retención); sin ella, el gasto llano de siempre.
+    const r = await withTransaction(sql, actor, (uow) =>
+      parsed.data.invoice === undefined
+        ? registerExpense(uow, parsed.data)
+        : registerInvoicedExpense(uow, parsed.data),
+    );
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
+  });
+
+  /**
+   * La vista previa del gasto con factura (H-09): el MISMO caso de uso, deshecho al terminar.
+   * Sin idempotencia: no crea nada (como `/v1/arrivals/preview`).
+   */
+  app.post("/v1/expenses/preview", async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = RegisterExpenseRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => previewInvoicedExpense(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
   });
 
   app.get("/v1/expenses", async (c) => {
@@ -226,25 +290,56 @@ export function treasuryRoutes(
     const pagina = Math.max(Number(c.req.query("page") ?? 1) || 1, 1);
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigePermiso(tx, actor, companyId, "expense.read", "Ver los gastos");
+      // H-09: el gasto CON factura fiscal es una factura de proveedor (`expense_category`), no
+      // una fila de `expenses`. El historial es uno solo: quien registró «Luz» la busca aquí.
+      // De la factura se enseña lo que salió de la cuenta (su pago), no su total.
+      const gastos = tx`
+        select e.id, e.category, e.description, e.paid_at as pagado, e.account_id,
+               e.amount_transaction_currency as importe, e.transaction_currency as moneda,
+               e.functional_amount as funcional, e.functional_currency, e.fx_rate,
+               e.is_recurring, e.supplier_id, e.branch_id, e.attachment_path,
+               e.journal_entry_id, null::uuid as supplier_invoice_id
+          from public.expenses e
+         where e.company_id = ${companyId}
+        union all
+        select i.id, i.expense_category, i.notes, coalesce(p.paid_at, i.posted_at), p.account_id,
+               coalesce(p.net_amount, 0), coalesce(p.transaction_currency, i.transaction_currency),
+               coalesce(p.functional_amount, 0), i.functional_currency,
+               coalesce(p.fx_rate, i.fx_rate), i.expense_is_recurring, i.supplier_id,
+               null::uuid, i.expense_attachment_path, i.journal_entry_id, i.id
+          from public.supplier_invoices i
+          left join lateral (
+            select sp.paid_at, sp.account_id, sp.net_amount, sp.transaction_currency,
+                   sp.functional_amount, sp.fx_rate
+              from public.supplier_payments sp
+             where sp.supplier_invoice_id = i.id
+             -- El más reciente: la MISMA regla que la respuesta del registro.
+             order by sp.created_at desc, sp.id desc limit 1) p on true
+         where i.company_id = ${companyId} and i.expense_category is not null
+           and i.status in ('posted', 'paid')`;
       const filas = await tx<Record<string, unknown>[]>`
-        select id, category, description,
-               to_char(paid_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as paid_at,
-               account_id, amount_transaction_currency::text as amount,
-               transaction_currency as currency, functional_amount::text as functional_amount,
-               functional_currency, fx_rate::text as fx_rate, is_recurring, supplier_id,
-               branch_id, attachment_path, journal_entry_id
-          from public.expenses
-         where company_id = ${companyId}
-           and (${desde}::date is null or (paid_at at time zone ${"America/Caracas"})::date >= ${desde}::date)
-           and (${hasta}::date is null or (paid_at at time zone ${"America/Caracas"})::date <= ${hasta}::date)
-         order by paid_at desc
+        select g.id, g.category, g.description,
+               to_char(g.pagado at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as paid_at,
+               g.account_id, g.importe::numeric(24,8)::text as amount, g.moneda as currency,
+               g.funcional::numeric(24,8)::text as functional_amount, g.functional_currency,
+               g.fx_rate::text as fx_rate, g.is_recurring, g.supplier_id, g.branch_id,
+               g.attachment_path, g.journal_entry_id, g.supplier_invoice_id,
+               count(*) over ()::int as total
+          from (${gastos}) g
+         where (${desde}::date is null or (g.pagado at time zone ${"America/Caracas"})::date >= ${desde}::date)
+           and (${hasta}::date is null or (g.pagado at time zone ${"America/Caracas"})::date <= ${hasta}::date)
+         order by g.pagado desc
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
-      const [total] = await tx<{ n: number }[]>`
-        select count(*)::int as n from public.expenses
-         where company_id = ${companyId}
-           and (${desde}::date is null or (paid_at at time zone ${"America/Caracas"})::date >= ${desde}::date)
-           and (${hasta}::date is null or (paid_at at time zone ${"America/Caracas"})::date <= ${hasta}::date)`;
-      return { items: filas, total: total?.n ?? 0 };
+      let total = (filas[0]?.["total"] as number | undefined) ?? null;
+      if (total === null) {
+        // Página vacía (o más allá del final): el total se cuenta aparte.
+        const [n] = await tx<{ n: number }[]>`
+          select count(*)::int as n from (${gastos}) g
+           where (${desde}::date is null or (g.pagado at time zone ${"America/Caracas"})::date >= ${desde}::date)
+             and (${hasta}::date is null or (g.pagado at time zone ${"America/Caracas"})::date <= ${hasta}::date)`;
+        total = n?.n ?? 0;
+      }
+      return { items: filas.map(({ total: _t, ...f }) => f), total };
     });
     return c.json(cuerpo, 200);
   });
@@ -279,6 +374,20 @@ export function treasuryRoutes(
                  as counted_amount,
                round(cc.amount_transaction_currency,
                      platform.currency_minor_units(cc.transaction_currency))::text as difference,
+               -- J-02: lo que llevó la caja de negativo a cero (dinero del dueño). Solo si el
+               -- cierre TIENE su asiento vigente, o su fila de cola, del origen del sobregiro: un
+               -- cierre viejo sin reclasificar sigue en resultado y la pantalla no dice otra cosa.
+               case when exists (select 1 from public.journal_entries je
+                                  where je.company_id = cc.company_id and je.source_id = cc.id
+                                    and je.source_kind = 'cash_closing_overdraft'
+                                    and je.status = 'posted')
+                      or exists (select 1 from public.journal_generation_queue q
+                                  where q.company_id = cc.company_id and q.source_id = cc.id
+                                    and q.source_kind = 'cash_closing_overdraft'
+                                    and q.status = 'pending')
+                    then round(-cc.expected_amount,
+                               platform.currency_minor_units(cc.transaction_currency))::text
+               end as owner_contribution,
                cc.reason,
                cc.transaction_currency as currency, cc.journal_entry_id
           from public.cash_closings cc

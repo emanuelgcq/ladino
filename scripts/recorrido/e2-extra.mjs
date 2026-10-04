@@ -14,9 +14,11 @@ import {
   dialogo,
   esperar,
   estado,
+  fijarLimiteDeFiado,
   guardarEstado,
   login,
   nuevaEvidencia,
+  rellenarCuandoPaga,
   sql,
 } from "./lib.mjs";
 
@@ -189,6 +191,8 @@ async function nuevoCliente(page, ev, etq, c) {
     fiscal: /Especial/i,
     direccion: "Zona Industrial I, Barquisimeto",
   });
+  // R-82.7: el cliente recién creado nace con límite 0 (E-09); este guion le fía.
+  fijarLimiteDeFiado(E.empresas.E3.id);
   await page.goto(BASE + "/vender");
   await esperar(page, 2500);
   if ((await page.getByLabel("Cédula o RIF del cliente").count()) === 0)
@@ -213,6 +217,7 @@ async function nuevoCliente(page, ev, etq, c) {
       .first(),
   );
   await esperar(page, 800);
+  await rellenarCuandoPaga(page); // P-05: sin la fecha, la caja no deja confirmar
   await clic(page.getByRole("button", { name: /Fiar y registrar/ }).first());
   await esperar(page, 3000);
   const x = await ev(page, "E3-especial-fiado");

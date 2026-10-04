@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
+import { readAmountText } from "@ladino/money/format";
 import { cn } from "../ui/cn.js";
 import { Input, Label } from "../ui/input.js";
 
@@ -59,9 +60,163 @@ export function FormField({
 const IMPORTE_RE = /^\d{1,16}(\.\d{1,8})?$/;
 
 /**
- * MoneyInput — entrada de importes SIN aritmética: valida la FORMA al perder
- * foco (el mismo patrón que exige la API) y a lo sumo recorta espacios y
- * cambia coma por punto. Nunca redondea, nunca calcula.
+ * F-06: lo tecleado, leído por la ÚNICA función que analiza importes (`readAmountText`, de
+ * `@ladino/money/format`) y comprobado contra la forma que exige la API. O el importe con punto
+ * decimal y sin agrupar, o POR QUÉ no se pudo leer, en palabras de persona. Cero aritmética.
+ */
+export function leerImporte(
+  texto: string,
+): { ok: true; importe: string } | { ok: false; motivo: string } {
+  const leido = readAmountText(texto);
+  if (!leido.ok) {
+    if (leido.error === "EMPTY") return { ok: false, motivo: "Escribe el importe." };
+    if (leido.error === "AMBIGUOUS") {
+      return {
+        ok: false,
+        motivo: `«${texto.trim()}» se puede leer de dos maneras: con miles o con decimales. Escribe el número sin separador de miles (26003) o con sus céntimos (26.003,00).`,
+      };
+    }
+    if (leido.error === "INCOMPLETE") {
+      return {
+        ok: false,
+        motivo: `A «${texto.trim()}» le faltan los decimales. Escríbelos (5,00) o quita el separador (5).`,
+      };
+    }
+    if (leido.error === "BAD_GROUPING") {
+      return {
+        ok: false,
+        motivo: `En «${texto.trim()}» los miles no van de tres en tres. Escríbelo como 26.003,58 o sin separador de miles (26003,58).`,
+      };
+    }
+    return {
+      ok: false,
+      motivo: "Eso no es un importe. Escribe solo el número, por ejemplo 26.003,58.",
+    };
+  }
+  if (leido.value.startsWith("-")) {
+    return { ok: false, motivo: "El importe no puede ser negativo." };
+  }
+  if (!IMPORTE_RE.test(leido.value)) {
+    return {
+      ok: false,
+      motivo: "El importe admite hasta 16 cifras enteras y 8 decimales.",
+    };
+  }
+  return { ok: true, importe: leido.value };
+}
+
+/** Lo tecleado como lo espera la API; si no se puede leer, el texto tal cual (y no valida). */
+export function importeLimpio(texto: string): string {
+  const r = leerImporte(texto);
+  return r.ok ? r.importe : texto.trim();
+}
+
+/** La forma de cantidad, tasa o porcentaje que acepta la API: 16 enteros y 8 decimales. */
+const CANTIDAD_RE = /^\d{1,16}(\.\d{1,8})?$/;
+
+/**
+ * F-06, el lector HERMANO: cantidades, tasas y porcentajes. No es dinero, y por eso no hereda la
+ * regla simétrica de las tres cifras: «1,250 kg» y una tasa «36,500» son legítimos.
+ *
+ *   · UNA sola coma es el decimal, lleve las cifras que lleve: «1,250» = 1.250, «0,5» = 0.5.
+ *   · UN solo punto seguido de exactamente tres cifras es AMBIGUO («1.250»: ¿mil doscientos
+ *     cincuenta o uno con veinticinco?) y se rechaza diciéndolo. «0.125» y «1.5» no lo son.
+ *   · Con los dos separadores, el último es el decimal y los miles van de tres en tres.
+ *   · Varios puntos y ninguna coma son miles («1.000.000»); varias comas, ambiguo.
+ *
+ * Todo lo que no es «una sola coma» lo decide `readAmountText`: no hay un segundo análisis.
+ * Devuelve la cifra con punto decimal, con los decimales tal como se teclearon. Cero aritmética.
+ */
+export function leerCantidad(
+  texto: string,
+): { ok: true; cantidad: string } | { ok: false; motivo: string } {
+  // El patrón de espacio ya incluye U+00A0 y U+202F, los que deja un número copiado y pegado.
+  const compacto = texto.replace(/\s/g, "");
+  const leido: ReturnType<typeof readAmountText> = /^\d+,\d+$/.test(compacto)
+    ? { ok: true, value: compacto.replace(",", ".") }
+    : readAmountText(texto);
+  if (!leido.ok) {
+    if (leido.error === "EMPTY") return { ok: false, motivo: "Escribe la cantidad." };
+    if (leido.error === "AMBIGUOUS") {
+      return {
+        ok: false,
+        motivo: `«${texto.trim()}» se puede leer de dos maneras: con miles o con decimales. Escribe los decimales con coma (1,25) o el número sin separador de miles (1250).`,
+      };
+    }
+    if (leido.error === "INCOMPLETE") {
+      return {
+        ok: false,
+        motivo: `A «${texto.trim()}» le faltan los decimales. Escríbelos (0,5) o quita el separador.`,
+      };
+    }
+    if (leido.error === "BAD_GROUPING") {
+      return {
+        ok: false,
+        motivo: `En «${texto.trim()}» los miles no van de tres en tres. Escríbelo como 1.250,5 o sin separador de miles (1250,5).`,
+      };
+    }
+    return {
+      ok: false,
+      motivo: "Eso no es un número. Escribe solo la cifra, por ejemplo 2 o 0,5.",
+    };
+  }
+  if (leido.value.startsWith("-")) {
+    return { ok: false, motivo: "No puede ser negativo." };
+  }
+  if (!CANTIDAD_RE.test(leido.value)) {
+    return { ok: false, motivo: "Admite hasta 16 cifras enteras y 8 decimales." };
+  }
+  return { ok: true, cantidad: leido.value };
+}
+
+/** Lo tecleado como lo espera la API; si no se puede leer, el texto tal cual (y no valida). */
+export function cantidadLimpia(texto: string): string {
+  const r = leerCantidad(texto);
+  return r.ok ? r.cantidad : texto.trim();
+}
+
+/** ¿Se pudo leer como cantidad, tasa o porcentaje? Para deshabilitar el envío, no para calcular. */
+export function cantidadValida(texto: string): boolean {
+  return leerCantidad(texto).ok;
+}
+
+/**
+ * El motivo del rechazo para un campo que NO es `MoneyInput` (un `input` dentro de una tabla):
+ * `null` si está vacío —vacío no es un error mientras se rellena— o si se pudo leer.
+ */
+export function motivoDeImporte(texto: string): string | null {
+  if (texto.trim() === "") return null;
+  const r = leerImporte(texto);
+  return r.ok ? null : r.motivo;
+}
+
+export function motivoDeCantidad(texto: string): string | null {
+  if (texto.trim() === "") return null;
+  const r = leerCantidad(texto);
+  return r.ok ? null : r.motivo;
+}
+
+/** Pinta el motivo junto al campo: nunca un botón apagado sin decir por qué (F-06). */
+export function MotivoDeLectura({
+  motivo,
+  className,
+}: {
+  motivo: string | null;
+  className?: string;
+}): React.JSX.Element | null {
+  if (motivo === null) return null;
+  return (
+    <p role="alert" className={cn("text-[0.8rem] text-destructive-soft-foreground", className)}>
+      {motivo}
+    </p>
+  );
+}
+
+/**
+ * MoneyInput — entrada de importes SIN aritmética: al perder foco lee lo tecleado (a la
+ * venezolana —«26.003,58»— o con punto decimal), lo deja en la forma que exige la API y, si no
+ * se puede leer, DICE POR QUÉ debajo del campo (F-06): nunca un botón apagado sin motivo. Nunca
+ * redondea, nunca calcula.
  */
 export function MoneyInput({
   value,
@@ -82,7 +237,9 @@ export function MoneyInput({
   ariaDescribedby?: string | undefined;
   className?: string;
 }): React.JSX.Element {
-  const [malo, setMalo] = useState(false);
+  const [motivo, setMotivo] = useState<string | null>(null);
+  const motivoId = useId();
+  const malo = motivo !== null;
   return (
     <div className={cn("relative", className)}>
       <Input
@@ -91,29 +248,47 @@ export function MoneyInput({
         value={value}
         disabled={disabled ?? false}
         aria-invalid={ariaInvalid ?? (malo ? true : undefined)}
-        aria-describedby={ariaDescribedby}
+        aria-describedby={malo ? motivoId : ariaDescribedby}
         className="pr-12 text-right font-mono"
         onChange={(e) => {
-          setMalo(false);
+          setMotivo(null);
           onChange(e.target.value);
         }}
         onBlur={() => {
-          const limpio = value.trim().replace(",", ".");
-          if (limpio !== value) onChange(limpio);
-          setMalo(limpio !== "" && !IMPORTE_RE.test(limpio));
+          // Vacío no es un error mientras se rellena el formulario: quien lo exige es el envío.
+          if (value.trim() === "") {
+            setMotivo(null);
+            return;
+          }
+          const leido = leerImporte(value);
+          if (leido.ok) {
+            if (leido.importe !== value) onChange(leido.importe);
+            setMotivo(null);
+          } else {
+            setMotivo(leido.motivo);
+          }
         }}
-        placeholder="0.00"
+        placeholder="0,00"
       />
-      <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-[0.8rem] font-medium text-faint-foreground">
+      <span className="pointer-events-none absolute right-2.5 top-0 flex h-10 items-center sm:h-8 text-[0.8rem] font-medium text-faint-foreground">
         {currency}
       </span>
+      {malo && (
+        <p
+          id={motivoId}
+          role="alert"
+          className="mt-1 text-left text-[0.8rem] text-destructive-soft-foreground"
+        >
+          {motivo}
+        </p>
+      )}
     </div>
   );
 }
 
 /** ¿Cumple la forma que la API exige? Para deshabilitar el envío, no para calcular. */
 export function importeValido(v: string): boolean {
-  return IMPORTE_RE.test(v.trim());
+  return leerImporte(v).ok;
 }
 
 /**

@@ -13,14 +13,19 @@
 -- =============================================================================
 
 begin;
-select plan(6);
+select plan(8);
 
 -- ── 1 y 2. Las plantillas del preset, que es de donde salen todas ───────────
+-- Desde la ola 4 (H-09, migración 20261004170000) `purchase_invoice` tiene DOS plantillas: la de
+-- la compra de mercancía (`ap.invoice_posted`) y la del gasto con factura
+-- (`ap.expense_invoice_posted`). Las dos preguntas de siempre se hacen ahora a cada una por su
+-- evento: antes el subselect daba por hecho que había una sola y, con dos, reventaba.
 select is(
   (select l.amount_source
      from public.journal_template_preset_lines l
      join public.journal_template_preset_entries e on e.id = l.entry_id
     where e.preset_code = 've_basico' and e.source_kind = 'purchase_invoice'
+      and e.source_event = 'ap.invoice_posted'
       and l.account_purpose = 'ap_general'),
   'net_amount',
   'la compra le acredita al proveedor el NETO: lo retenido ya no se le debe a él');
@@ -30,10 +35,32 @@ select is(
      from public.journal_template_preset_lines l
      join public.journal_template_preset_entries e on e.id = l.entry_id
     where e.preset_code = 've_basico' and e.source_kind = 'purchase_invoice'
+      and e.source_event = 'ap.invoice_posted'
       and l.account_purpose in ('retention_iva_payable', 'retention_islr_payable')
       and l.side = 'credit'),
   2::bigint,
   'y le acredita al FISCO lo retenido de IVA y de ISLR, en el asiento de la factura');
+
+select is(
+  (select l.amount_source
+     from public.journal_template_preset_lines l
+     join public.journal_template_preset_entries e on e.id = l.entry_id
+    where e.preset_code = 've_basico' and e.source_kind = 'purchase_invoice'
+      and e.source_event = 'ap.expense_invoice_posted'
+      and l.account_purpose = 'ap_general'),
+  'net_amount',
+  'el gasto con factura también le acredita al proveedor el NETO');
+
+select is(
+  (select count(*)
+     from public.journal_template_preset_lines l
+     join public.journal_template_preset_entries e on e.id = l.entry_id
+    where e.preset_code = 've_basico' and e.source_kind = 'purchase_invoice'
+      and e.source_event = 'ap.expense_invoice_posted'
+      and l.account_purpose in ('retention_iva_payable', 'retention_islr_payable')
+      and l.side = 'credit'),
+  2::bigint,
+  'y también le acredita al FISCO lo retenido de IVA y de ISLR en su asiento');
 
 select is(
   (select count(*)

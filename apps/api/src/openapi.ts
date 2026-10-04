@@ -43,6 +43,8 @@ import {
   UpdateCustomerRequest,
   SetCustomerTaxIdRequest,
   SetCustomerBlockedRequest,
+  SetCustomerCreditLimitRequest,
+  SetCustomerTaxpayerTypeRequest,
   CustomerResponse,
   ListCustomersResponse,
   ReceiveStockApiRequest,
@@ -126,6 +128,7 @@ import {
   RegisterArrivalRequest,
   ArrivalResponse,
   ArrivalPreviewResponse,
+  SupplierPaymentPreviewResponse,
   ArrivalImpactResponse,
   SimplePurchaseResponse,
   RetentionReceiptResponse,
@@ -187,6 +190,7 @@ import {
   ProductImportPreviewResponse,
   ProductImportJobResponse,
   NegocioResumenResponse,
+  NegocioTasaResponse,
   ConvertResponse,
   CompanySettingsResponse,
   UpdateCompanySettingsRequest,
@@ -210,6 +214,7 @@ import {
   ListPaymentMethodsResponse,
   RegisterExpenseRequest,
   ExpenseResponse,
+  ExpensePreviewResponse,
   ListExpensesResponse,
   CloseCashRegisterRequest,
   CashClosingResponse,
@@ -757,6 +762,8 @@ export function buildOpenApiDocument(): object {
         with_price: z.enum(["1"]).optional(),
         with_stock: z.enum(["1"]).optional(),
         price_list_id: z.string().uuid().optional(),
+        /** E-07: cotiza por la lista preferida de ese cliente (la que aplicará el carrito). */
+        customer_id: z.string().uuid().optional(),
       }),
     },
     responses: {
@@ -1132,7 +1139,9 @@ export function buildOpenApiDocument(): object {
       "`with_debt=1` añade a cada cliente lo que debe (suma de saldos positivos de sus " +
       "facturas emitidas, calculada por el esquema) — la cifra de la pantalla de Clientes. " +
       "Pedir la deuda exige el permiso ar.read: sin él, 403 PERMISSION_REQUIRED (P-04). " +
-      "La lista sin `with_debt` no lo exige.",
+      "La lista sin `with_debt` no lo exige. `sort=debt_desc` (o `debt_asc`) ordena por esa deuda " +
+      "—mayor primero, y lo que no se pudo valorar hoy arriba— en vez de por nombre (P-05); " +
+      "exige `with_debt=1` y un valor desconocido es 422.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
@@ -1141,6 +1150,7 @@ export function buildOpenApiDocument(): object {
         page: z.coerce.number().int().min(1).optional(),
         per_page: z.coerce.number().int().min(1).max(100).optional(),
         with_debt: z.enum(["1"]).optional(),
+        sort: z.enum(["name", "debt_desc", "debt_asc"]).optional(),
       }),
     },
     responses: {
@@ -1238,6 +1248,51 @@ export function buildOpenApiDocument(): object {
       body: { content: { "application/json": { schema: setBloqueo } } },
     },
     responses: { 200: okJson(cliente, "Estado cambiado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/customers/{id}/credit-limit",
+    summary:
+      "Fijar el límite de fiado del cliente, en USD (permiso customers.credit.set; deja acta). " +
+      "Un cliente nace con límite 0",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: {
+        content: {
+          "application/json": {
+            schema: registry.register(
+              "SetCustomerCreditLimitRequest",
+              SetCustomerCreditLimitRequest,
+            ),
+          },
+        },
+      },
+    },
+    responses: { 200: okJson(cliente, "Límite fijado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "put",
+    path: "/v1/customers/{id}/taxpayer-type",
+    summary:
+      "Cambiar la clasificación fiscal del cliente (permiso customer.tax_id.manage; deja acta)",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: {
+        content: {
+          "application/json": {
+            schema: registry.register(
+              "SetCustomerTaxpayerTypeRequest",
+              SetCustomerTaxpayerTypeRequest,
+            ),
+          },
+        },
+      },
+    },
+    responses: { 200: okJson(cliente, "Clasificación cambiada."), ...erroresComunes },
   });
   catalogo(
     "/v1/taxpayer-types",
@@ -1744,7 +1799,10 @@ export function buildOpenApiDocument(): object {
       "Anular no es borrar: el documento y su correlativo SE CONSERVAN (regla 1, ADR-0037). " +
       "El número anulado sigue ocupado y no se reutiliza. Anular REPONE la existencia al lote y " +
       "valor con que salió (ADR-0061 §2). Con cobros → 409 DOCUMENT_HAS_PAYMENTS: una venta " +
-      "cobrada se deshace con una devolución, no anulándola.",
+      "cobrada se deshace con una devolución, no anulándola. G-10 (PA 00071 arts. 22 y 36): una " +
+      "FACTURA se anula solo el mismo día de Caracas, antes del cierre de su caja, con el período " +
+      "sin declarar y con originals_in_hand = true; si no → 409 ANNULMENT_NOT_ALLOWED con " +
+      "details.reason, y el camino es la nota de crédito.",
     security: [{ bearerAuth: [] }],
     request: {
       params: idParam,
@@ -1818,10 +1876,24 @@ export function buildOpenApiDocument(): object {
       "Vendido y ganado (hoy/mes, con el corte del día de VENEZUELA y el margen desde el costo " +
       "CONGELADO de cada línea), lo que me deben y lo que debo (saldos del esquema), el dinero " +
       "por moneda, los productos por agotarse, la tasa del día con su fuente y las últimas " +
-      "ventas. La pantalla no suma ni un céntimo (permiso treasury.read).",
+      "ventas. La pantalla no suma ni un céntimo (permiso treasury.read). Un total de deuda en " +
+      "`null` lleva su motivo en `…_motivo` (`sin_permiso` | `sin_tasa`) y, sin tasa, el nominal " +
+      "por moneda en `…_por_moneda`.",
     security: [{ bearerAuth: [] }],
     request: { headers: companyHeader },
     responses: { 200: okJson(resumenNegocio, "El resumen."), ...erroresComunes },
+  });
+  const tasaNegocio = registry.register("NegocioTasaResponse", NegocioTasaResponse);
+  registry.registerPath({
+    method: "get",
+    path: "/v1/negocio/tasa",
+    summary: "La tasa del día, para cualquier miembro de la empresa",
+    description:
+      "La misma `tasa_del_dia` del resumen, sin exigir treasury.read: quien cierra su caja o trae " +
+      "la tasa la necesita aunque no vea el dinero del negocio (N-05). `null` = nunca se cargó.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(tasaNegocio, "La tasa del día, o null."), ...erroresComunes },
   });
   const convertir = registry.register("ConvertResponse", ConvertResponse);
   registry.registerPath({
@@ -2260,7 +2332,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "post",
     path: "/v1/customer-credits/{id}/refunds",
-    summary: "Reembolsar un saldo a favor desde una caja (permiso sales.return.manage)",
+    summary: "Reembolsar un saldo a favor desde una caja (permiso sales.refund)",
     description:
       "ADR-0061 §8: el camino del dinero de una venta devuelta. Consume el saldo a favor, saca " +
       "el dinero de la cuenta (en la moneda del saldo) y lo asienta contra la caja real.",
@@ -2314,7 +2386,7 @@ export function buildOpenApiDocument(): object {
   registry.registerPath({
     method: "post",
     path: "/v1/credit-notes",
-    summary: "Nota de crédito DIRECTA, sin devolución (permiso sales.return.manage)",
+    summary: "Nota de crédito DIRECTA, sin devolución (permiso sales.credit_note.direct)",
     description:
       "Corrige una factura emitida por descuento o error de precio, SIN mover mercancía " +
       "(mercancía que vuelve = devolución). Líneas del origen a su precio original; motivo " +
@@ -2767,8 +2839,19 @@ export function buildOpenApiDocument(): object {
     },
     responses: {
       200: okJson(
-        z.object({ items: z.array(z.record(z.string(), z.unknown())), total: z.number().int() }),
-        "Facturas con saldo calculado por el esquema.",
+        z.object({
+          items: z.array(
+            z
+              .object({
+                // Ola 4: `platform.supplier_invoice_balance` solo responde por `posted` y `paid`.
+                // Una factura `draft` o `annulled` llega con el saldo en null, no en "0".
+                balance: z.string().nullable(),
+              })
+              .passthrough(),
+          ),
+          total: z.number().int(),
+        }),
+        "Facturas con saldo calculado por el esquema. `balance` es null en `draft` y `annulled`.",
       ),
       ...erroresComunes,
     },
@@ -2809,8 +2892,15 @@ export function buildOpenApiDocument(): object {
     method: "get",
     path: "/v1/retention-exclusions",
     summary: "Exclusiones del art. 3 de la PA SNAT/2025/000054 que se pueden marcar (ADR-0072 §3)",
+    description:
+      "Con «account_id» (la cuenta de la que sale un gasto con factura) no trae las exclusiones " +
+      "que esa cuenta no admite: el servicio público domiciliado (art. 3 num. 8) solo se ofrece " +
+      "para una cuenta bancaria (AF4-01). Sin el parámetro, el catálogo entero.",
     security: [{ bearerAuth: [] }],
-    request: { headers: companyHeader },
+    request: {
+      headers: companyHeader,
+      query: z.object({ account_id: z.string().uuid().optional() }),
+    },
     responses: {
       200: okJson(
         z.object({ items: z.array(z.record(z.string(), z.unknown())) }),
@@ -2849,6 +2939,31 @@ export function buildOpenApiDocument(): object {
     request: { headers: companyHeader, params: idRetencion },
     responses: { 200: okJson(comprobanteRetencion, "El comprobanteRetencion."), ...erroresComunes },
   });
+  for (const [ruta, resumen] of [
+    [
+      "/v1/payments/{id}/pdf",
+      "Comprobante NO fiscal de un cobro: recibido, aplicado y saldo a favor si pagó de más (F-10)",
+    ],
+    [
+      "/v1/customer-refunds/{id}/pdf",
+      "Comprobante NO fiscal del reembolso de un saldo a favor (G-15)",
+    ],
+  ] as const) {
+    registry.registerPath({
+      method: "get",
+      path: ruta,
+      summary: resumen,
+      security: [{ bearerAuth: [] }],
+      request: { headers: companyHeader, params: idRetencion },
+      responses: {
+        200: {
+          description: "application/pdf",
+          content: { "application/pdf": { schema: z.string() } },
+        },
+        ...erroresComunes,
+      },
+    });
+  }
   registry.registerPath({
     method: "get",
     path: "/v1/retention-vouchers/{id}/pdf",
@@ -2993,6 +3108,31 @@ export function buildOpenApiDocument(): object {
     responses: {
       201: okJson(respuestaPago, "Pago aplicado, con el comprobante si se pidió."),
       ...erroresComunes,
+    },
+  });
+  const vistaPago = registry.register(
+    "SupplierPaymentPreviewResponse",
+    SupplierPaymentPreviewResponse,
+  );
+  registry.registerPath({
+    method: "post",
+    path: "/v1/supplier-payments/preview",
+    summary: "Vista previa de un pago a proveedor: cuánto sale, a qué tasa y cuánto cancela (D-02)",
+    description:
+      "El MISMO caso de uso que `POST /v1/supplier-payments`, deshecho al terminar: no escribe " +
+      "nada y no lleva Idempotency-Key. Para el pago cruzado (la cuenta vive en otra moneda que " +
+      "la factura) dice cuánto sale de la cuenta en su moneda, la tasa BCV del día con la fecha " +
+      "en que se publicó, y cuánto cancela de la factura. Falla con los mismos códigos que el " +
+      "pago (sin tasa, sin saldo, por encima del saldo).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: pagoProveedor } } },
+    },
+    responses: {
+      200: okJson(vistaPago, "Lo que el pago registraría."),
+      ...erroresComunes,
+      409: errorRef("Sin tasa del día, o el saldo de la cuenta no alcanza."),
     },
   });
   const llegada = registry.register("RegisterArrivalRequest", RegisterArrivalRequest);
@@ -4181,6 +4321,10 @@ export function buildOpenApiDocument(): object {
     summary: "Registrar un gasto en un paso (permiso expense.register)",
     description:
       "Alquiler, luz, nómina, flete: sale de su cuenta, baja el saldo y va a contabilidad — " +
+      "CON `invoice` (H-09) el gasto es una compra de servicio: se registra como factura de " +
+      "proveedor (libro de compras, crédito fiscal, retención del agente con su comprobante) y " +
+      "se paga su saldo desde la cuenta; el importe NO se manda, lo calcula el servidor. SIN " +
+      "`invoice`, el gasto llano: " +
       "directo si el mapeo del contador resuelve, a la cola de ADR-0042 si no. El importe va en " +
       "la MONEDA de la cuenta; la conversión a funcional usa la tasa vigente con su fuente.",
     security: [{ bearerAuth: [] }],
@@ -4189,6 +4333,28 @@ export function buildOpenApiDocument(): object {
       body: { content: { "application/json": { schema: registrarGasto } } },
     },
     responses: { 201: okJson(gasto, "El gasto registrado."), ...erroresComunes },
+  });
+  const vistaGasto = registry.register("ExpensePreviewResponse", ExpensePreviewResponse);
+  registry.registerPath({
+    method: "post",
+    path: "/v1/expenses/preview",
+    summary: "Vista previa de un gasto con factura fiscal: bases, IVA, retención y total (H-09)",
+    description:
+      "El MISMO registro de la factura que `POST /v1/expenses` con `invoice`, deshecho al " +
+      "terminar: no escribe nada y no lleva Idempotency-Key. Devuelve la base y el IVA por " +
+      "categoría tributaria, el total, lo retenido (en moneda funcional) y lo que saldría de la " +
+      "cuenta. El pago no se ensaya: el saldo de la cuenta se pregunta al confirmar. Sin " +
+      "`invoice` responde 422: un gasto llano no tiene nada que calcular.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: registrarGasto } } },
+    },
+    responses: {
+      200: okJson(vistaGasto, "Lo que el gasto con factura registraría."),
+      ...erroresComunes,
+      409: errorRef("Sin tasa del día, sin regla de IVA o sin regla de retención."),
+    },
   });
   registry.registerPath({
     method: "post",

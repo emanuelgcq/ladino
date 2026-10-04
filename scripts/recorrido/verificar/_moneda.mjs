@@ -12,6 +12,25 @@ export { afirmar, sql, EMPRESAS };
 export const E2 = EMPRESAS.E2;
 const RUN = Date.now().toString(36);
 
+/**
+ * R-82.1: una factura de administración nace FIADA y pasa por la regla del fiado (permiso
+ * `sales.credit` y límite del cliente). Quien factura a un cliente del escenario le fija antes
+ * el límite por el camino real, una vez. Es una ENTRADA del guion.
+ */
+export async function conLimiteDeFiado(clave, companyId, customerId) {
+  const [lim] = await sql`
+    select credit_limit_usd = 100000 as fijado from public.customers where id = ${customerId}`;
+  if (lim?.fijado) return;
+  const fija = await pedir(
+    PERSONAS.duenoE2E3,
+    clave,
+    "PUT",
+    `/v1/customers/${customerId}/credit-limit`,
+    { company_id: companyId, credit_limit_usd: "100000" },
+  );
+  afirmar(fija.status === 200, `fijar el límite de fiado: ${fija.status} ${fija.texto}`);
+}
+
 /** La cuenta en bolívares de E2 con más saldo, y cuánto tiene. */
 export async function bancoBsE2() {
   const [c] = await sql`
@@ -96,6 +115,7 @@ export async function ventaUsdCobradaEnBs() {
      where company_id = ${E2} and not is_system and tax_id is not null and status = 'active'
      order by legal_name limit 1`;
   afirmar(w && p && cl, "E2 no trae depósito, producto gravado con existencia o cliente con RIF");
+  await conLimiteDeFiado("E2", E2, cl.id);
   const f = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/invoices", {
     company_id: E2,
     customer_id: cl.id,

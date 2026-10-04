@@ -10,14 +10,12 @@ import { clasificacionOfrecidaEnVentas } from "./products.js";
  * defecto es la que el alta simple asigna a productos NUEVOS, y el contador
  * corrige por producto en /admin.
  *
- * `block_sale_without_stock` es el interruptor de la persona; la DEFENSA real
- * contra vender sin existencia sigue siendo la del kardex (LAD39 y la
- * política de inventario): este flag decide qué enseña la pantalla, no qué
- * permite el esquema.
+ * E-13 (2026-10-04): el ajuste `block_sale_without_stock` se RETIRÓ. Estaba muerto (nadie lo
+ * leía) y la caja nunca vende sin existencia: la defensa es la del kardex (LAD39). La columna
+ * sigue en `company_settings` con su valor por omisión; aquí ya no se lee ni se escribe.
  */
 export interface CompanySettings {
   readonly sells_wholesale: boolean;
-  readonly block_sale_without_stock: boolean;
   readonly allow_unidentified_sales: boolean;
   readonly default_price_list_id: string | null;
   readonly default_tax_category_code: string;
@@ -34,7 +32,6 @@ export type SettingsError = CompanyScopeError | { code: "VALIDATION_FAILED"; mes
 
 const DEFAULTS: CompanySettings = {
   sells_wholesale: false,
-  block_sale_without_stock: false,
   allow_unidentified_sales: true,
   default_price_list_id: null,
   default_tax_category_code: "gravado_general",
@@ -56,7 +53,7 @@ export async function getCompanySettings(
   // interruptores. El scope de visibilidad de la empresa ya lo puso el
   // middleware; aquí se revalida la membresía con el permiso más básico.
   const [fila] = await sql<CompanySettings[]>`
-    select sells_wholesale, block_sale_without_stock, allow_unidentified_sales,
+    select sells_wholesale, allow_unidentified_sales,
            default_tax_category_code, default_warehouse_id, default_price_list_id,
            print_control_number, rows_per_free_form, absorb_igtf
       from public.company_settings where company_id = ${companyId}`;
@@ -96,12 +93,11 @@ export async function setCompanySettings(
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   const [fila] = await sql<CompanySettings[]>`
     insert into public.company_settings
-      (company_id, tenant_id, sells_wholesale, block_sale_without_stock,
+      (company_id, tenant_id, sells_wholesale,
        allow_unidentified_sales, default_tax_category_code, default_warehouse_id,
        default_price_list_id, print_control_number, rows_per_free_form, absorb_igtf)
     values (${companyId}, ${scope.value.tenantId},
             ${cambios.sells_wholesale ?? DEFAULTS.sells_wholesale},
-            ${cambios.block_sale_without_stock ?? DEFAULTS.block_sale_without_stock},
             ${cambios.allow_unidentified_sales ?? DEFAULTS.allow_unidentified_sales},
             ${cambios.default_tax_category_code ?? DEFAULTS.default_tax_category_code},
             ${cambios.default_warehouse_id ?? null},
@@ -112,9 +108,6 @@ export async function setCompanySettings(
     on conflict (company_id) do update set
       sells_wholesale = case when ${cambios.sells_wholesale === undefined}
         then public.company_settings.sells_wholesale else excluded.sells_wholesale end,
-      block_sale_without_stock = case when ${cambios.block_sale_without_stock === undefined}
-        then public.company_settings.block_sale_without_stock
-        else excluded.block_sale_without_stock end,
       allow_unidentified_sales = case when ${cambios.allow_unidentified_sales === undefined}
         then public.company_settings.allow_unidentified_sales
         else excluded.allow_unidentified_sales end,
@@ -135,7 +128,7 @@ export async function setCompanySettings(
       absorb_igtf = case when ${cambios.absorb_igtf === undefined}
         then public.company_settings.absorb_igtf
         else excluded.absorb_igtf end
-    returning sells_wholesale, block_sale_without_stock, allow_unidentified_sales,
+    returning sells_wholesale, allow_unidentified_sales,
               default_tax_category_code, default_warehouse_id, default_price_list_id,
            print_control_number, rows_per_free_form, absorb_igtf`;
   await sql`

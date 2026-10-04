@@ -28,6 +28,7 @@ import {
   confirmOrder,
   createInvoice,
   annulInvoice,
+  annulmentStatus,
   registerPayment,
   reversePayment,
   reverseSupportedRetention,
@@ -48,7 +49,11 @@ import {
   previsualizarCobro,
   exigeEmpresaQueFactura,
   refundCustomerCredit,
+  customerStatement,
+  customerOverdue,
   registrarTalonario,
+  guardarTasaOficial,
+  explicarFaltaDeTasa,
   completarImprenta,
   corregirImprenta,
   anularTalonario,
@@ -69,7 +74,8 @@ const DOC_COLUMNS = `id, company_id, kind, series,
   annul_reason, customer_id, vendor_id, price_list_id, source_document_id,
   transaction_currency, functional_currency, fx_rate::text as fx_rate, rate_source,
   subtotal_amount::text as subtotal_amount, tax_amount::text as tax_amount,
-  total_amount::text as total_amount, regime_version_id, rules_version`;
+  total_amount::text as total_amount, regime_version_id, rules_version,
+  due_date::text as due_date`;
 
 function idValido(id: string): string {
   if (!UUID_RE.test(id))
@@ -225,6 +231,8 @@ export function salesRoutes(
         exchange_differences: diferencias,
         balance: saldo === undefined ? "0" : saldo.balance,
         pos_cart: cuenta ?? null,
+        // G-10 / G-14: si se puede anular y, si no, por qué. La regla es del dominio.
+        annulment: await annulmentStatus(tx, companyId, id),
       };
     });
     if (detalle === null)
@@ -473,7 +481,7 @@ export function salesRoutes(
         if (!t?.rate) {
           throw new DominioError({
             code: "EXCHANGE_RATE_MISSING",
-            message: `No hay tasa BCV de ${tenderedCurrency} a ${currency}: tráela en Mi dinero.`,
+            message: await explicarFaltaDeTasa(tx, tenderedCurrency, currency),
           });
         }
         rate = t.rate;
@@ -492,7 +500,7 @@ export function salesRoutes(
           if (!t2?.rate) {
             throw new DominioError({
               code: "EXCHANGE_RATE_MISSING",
-              message: `No hay tasa BCV de ${alreadyPaidCurrency} a ${currency}: tráela en Mi dinero.`,
+              message: await explicarFaltaDeTasa(tx, alreadyPaidCurrency, currency),
             });
           }
           const [conv] = await tx<{ v: string }[]>`
@@ -671,106 +679,26 @@ export function salesRoutes(
           from platform.ar_aging(${companyId}, ${id}, ${ref!.d}::date)`;
       // H12: sin tasa de hoy, el equivalente en Bs de lo que está en divisa va en null (la
       // pantalla dice «falta la tasa de hoy»); nunca una suma parcial ni un 500.
-      return { reference_date: ref!.d, buckets, total: total === undefined ? "0" : total.t };
+      const vencido = await customerOverdue(tx, companyId, id, ref!.d);
+      return {
+        reference_date: ref!.d,
+        buckets,
+        total: total === undefined ? "0" : total.t,
+        ...vencido,
+      };
     });
     return c.json(cuerpo, 200);
   });
 
+  // La lectura —y sus reglas de valoración: G-04, G-05, P-05— vive en el dominio
+  // (`customerStatement`): aquí solo se autentica, se autoriza, se llama y se mapea.
   app.get("/v1/customers/:id/statement", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
     const id = idValido(c.req.param("id"));
     const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigeArRead(tx, actor, companyId);
-      const [empresa] = await tx<{ moneda: string }[]>`
-        select functional_currency_code as moneda from public.companies where id = ${companyId}`;
-      if (!empresa) return null;
-      // El estado de cuenta ENSEÑA dinero: pagado y saldo viajan a 2 decimales
-      // (2026-09-08) — la persona paga lo que ve, y la regla del último
-      // centavo (registerPayment) cierra el documento sin residuo fantasma.
-      const documentos = await tx<Record<string, unknown>[]>`
-        select d.id, d.kind, d.series, d.document_number::int as document_number,
-               to_char(d.issued_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as issued_at,
-               d.status, d.total_amount::text as total_amount,
-               -- Lo pagado = total − el saldo ÚNICO (platform.document_balance, 20261002100000):
-               -- la ND por IGTF la paga su percepción, no un cobro. La copia en línea «Σ cobros» la
-               -- enseñaba como no pagada. Una anulada no tiene saldo: se enseñan sus cobros.
-               round(coalesce(d.total_amount - platform.document_balance(${companyId}, d.id),
-                              (select sum(p.functional_amount) from public.payments p
-                                where p.document_id = d.id
-                                  and not exists (select 1 from public.payment_reversals pr where pr.payment_id = p.id)), 0), 2)::text as paid_amount,
-               round(platform.document_debt_today(${companyId}, d.id), 2)::text as balance,
-               -- La deuda NOMINAL, en la moneda del documento (ADR-0075 §5).
-               d.transaction_currency as debt_currency,
-               -- Una anulada no debe: «0». Una emitida cuyo nominal no se puede calcular (un
-               -- cobro viejo en otra moneda sin tasa): NULL, nunca «0» — diría que no debe.
-               (case when d.status = 'annulled' then '0'
-                     else (select dd.nominal::text
-                             from platform.document_debt(${companyId}, d.id) dd) end)
-                 as debt_nominal,
-               -- El día de CARACAS, no el UTC (CLAUDE.md §3: una fecha contra un reloj).
-               greatest(0, platform.caracas_day(now()) - platform.caracas_day(d.issued_at))::int
-                 as days_outstanding
-          from public.documents d
-         where d.company_id = ${companyId} and d.customer_id = ${id}
-           and d.status in ('issued', 'paid', 'annulled')
-         order by d.issued_at, d.id`;
-      const credits = await tx<Record<string, unknown>[]>`
-        select id, source_document_id, amount::text as amount,
-               applied_amount::text as applied_amount, status
-          from public.customer_credits
-         where company_id = ${companyId} and customer_id = ${id} order by created_at, id`;
-      const [totales] = await tx<{ pendiente: string | null; credito: string }[]>`
-        select round(platform.customer_debt_today(${companyId}, ${id}), 2)::text as pendiente,
-               round(coalesce((select sum(cc.amount - cc.applied_amount)
-                           from public.customer_credits cc
-                          where cc.company_id = ${companyId} and cc.customer_id = ${id}
-                            and cc.status = 'available'), 0), 2)::text as credito`;
-      // LA DEUDA POR MONEDA (F-04): nominal y, para mostrar, a la tasa de hoy. Misma función y
-      // mismos documentos que `total_outstanding`: la suma de functional_today ES ese total.
-      const porMoneda = await tx<Record<string, unknown>[]>`
-        select dd.currency, sum(dd.nominal)::text as nominal, max(dd.rate)::text as rate,
-               round(sum(dd.functional_today), 2)::text as functional_today
-          from public.documents d
-          cross join lateral platform.document_debt(${companyId}, d.id) dd
-         where d.company_id = ${companyId} and d.customer_id = ${id}
-           and d.kind in ('invoice', 'receipt', 'debit_note')
-           and d.status in ('issued', 'paid')
-           and dd.nominal <> 0
-         group by dd.currency
-         order by dd.currency`;
-      const buckets = await tx<Record<string, unknown>[]>`
-        select customer_id, bucket, document_count::int as document_count,
-               round(amount, 2)::text as amount
-          from platform.ar_aging(${companyId}, ${id}, platform.caracas_day(now()))`;
-      const [ref] = await tx<{ d: string }[]>`select platform.caracas_day(now())::text as d`;
-      const [totalAging] = await tx<{ t: string | null }[]>`
-        select round(case when bool_or(amount is null) then null
-                          else coalesce(sum(amount), 0) end, 2)::text as t
-          from platform.ar_aging(${companyId}, ${id}, platform.caracas_day(now()))`;
-      return {
-        customer_id: id,
-        currency: empresa.moneda,
-        documents: documentos,
-        credits,
-        // H12: null = hay deuda en divisa y falta la tasa de hoy. El nominal va en `debt`.
-        total_outstanding: totales === undefined ? "0" : totales.pendiente,
-        debt: {
-          functional_currency: empresa.moneda,
-          as_of: ref!.d,
-          by_currency: porMoneda,
-          // Los que `by_currency` no puede sumar: se dicen, no se callan.
-          unvalued_documents: documentos.filter(
-            (d) => d["status"] !== "annulled" && d["debt_nominal"] === null,
-          ).length,
-        },
-        total_credit_available: totales?.credito ?? "0",
-        aging: {
-          reference_date: ref!.d,
-          buckets,
-          total: totalAging === undefined ? "0" : totalAging.t,
-        },
-      };
+      return customerStatement(tx, companyId, id);
     });
     if (cuerpo === null)
       throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
@@ -1070,24 +998,11 @@ export function salesRoutes(
     // La tasa oficial es de la PLATAFORMA (company_id nulo), no de quien pulsó
     // el botón: la escribe el actor de sistema, que es el único al que la RLS
     // se lo permite (ADR-0057). El permiso ya se comprobó arriba, con el usuario.
-    const fuente = `BCV oficial vía DolarAPI (${tasa.actualizada})`;
-    const { fila, nueva } = await withTransaction(sql, { kind: "system" }, async ({ sql: tx }) => {
-      const [insertada] = await tx<Record<string, unknown>[]>`
-        insert into public.exchange_rates
-          (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
-        values ('USD', 'VES', ${tasa.rate}, ${fuente}, ${tasa.rateDate}::date, now())
-        on conflict on constraint exchange_rates_day_key do nothing
-        returning id, from_currency, to_currency, rate::text as rate, source,
-                  rate_date::text as rate_date`;
-      if (insertada) return { fila: insertada, nueva: true };
-      const [existente] = await tx<Record<string, unknown>[]>`
-        select id, from_currency, to_currency, rate::text as rate, source,
-               rate_date::text as rate_date
-          from public.exchange_rates
-         where from_currency = 'USD' and to_currency = 'VES' and company_id is null
-           and source = ${fuente} and rate_date = ${tasa.rateDate}::date`;
-      return { fila: existente!, nueva: false };
-    });
+    // B-14: guardar la tasa y dejar su acta es una regla del dominio (guardarTasaOficial); aquí
+    // solo se dice quién lo pidió.
+    const { fila, nueva } = await withTransaction(sql, { kind: "system" }, ({ sql: tx }) =>
+      guardarTasaOficial(tx, tasa, { trigger: "button", requestedBy: actor.userId }),
+    );
     return c.json(fila, nueva ? 201 : 200);
   });
 

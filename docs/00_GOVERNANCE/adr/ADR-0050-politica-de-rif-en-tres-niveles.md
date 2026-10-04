@@ -75,3 +75,23 @@ el logo vive.
 - Tests que la fijan: pgTAP 043 (las dos caras del helper, RLS del bucket) y
   `apps/api/test/e2e-company-profile.test.ts` (los tres niveles con actas, el
   régimen con motivo, el logo en el PDF).
+
+## Nota de la ola 4 (2026-10-03, A-05): el primer RIF llega con su razón social
+
+*ADR aplicado según la respuesta del dueño del 2026-09-28* (A-05 no pidió decisión: «es la regla de
+ADR-0050» — RIF real exige razón social y domicilio fiscal).
+
+- La regla se cumplía en el alta con RIF y NO al poner el primer RIF después: una empresa que nació
+  sin RIF guarda como razón social el nombre del negocio, el servidor solo comprobaba la dirección,
+  y la primera factura congelaba el nombre comercial como razón social del emisor (PA 00071
+  art. 13.5).
+- Ahora el nivel 1, cuando es el PRIMER RIF, exige `legal_name` en `PUT /v1/companies/tax-id`, lo
+  guarda junto al RIF y deja acta `company.profile_updated` (`origin: first_tax_id`). Con RIF ya
+  puesto, esa puerta lo rechaza: la razón social sigue siendo el nivel 2 (perfil, con motivo si hay
+  documentos).
+- El nivel 3 (corrección) ya no sirve para poner un primer RIF: sobre una empresa `PEND-…` responde
+  422 y remite a «Poner mi RIF». *Decidido por criterio* (lo más estrecho); alternativa: que la
+  corrección aceptara también la razón social.
+- No repara lo ya guardado: quien puso su RIF antes conserva el nombre del negocio como razón
+  social y lo corrige en «Editar» (R-76).
+- Tests: `apps/api/test/e2e-el-primer-rif-y-el-rol.test.ts`.

@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardList, Paperclip, Plus, Receipt, ShoppingCart } from "lucide-react";
 import { useSesion } from "../../app/session.js";
-import { errorDePersona } from "../../lib.js";
-import { mostrarImporte } from "../../money.js";
+import { errorDePersona, vistaDeGasto, type VistaDeGasto } from "../../lib.js";
+import { mostrarCantidad, mostrarImporte } from "../../money.js";
+import { tieneRif } from "../../app/rif.js";
 import { compararImportes, esCero } from "../../components/decimal-compare.js";
 import { Button } from "../../ui/button.js";
 import { Card, Skeleton } from "../../ui/card.js";
@@ -19,8 +20,16 @@ import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
 import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
-import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
-import { PRECIO_DE_LA_FACTURA } from "../../components/capa-fiscal/textos.js";
+import {
+  EntityPicker,
+  FormField,
+  MoneyInput,
+  importeLimpio,
+  importeValido,
+  leerImporte,
+  type EntityOption,
+} from "../../components/forms.js";
+import { GASTO_CON_FACTURA, PRECIO_DE_LA_FACTURA } from "../../components/capa-fiscal/textos.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import {
   FORMAS_DE_COMPRA,
@@ -31,7 +40,7 @@ import {
 } from "../../components/formas-de-pago.js";
 import { HacerPedido } from "../../components/HacerPedido.js";
 import { fechaRelativa } from "./comunes.js";
-import { fechaLocal } from "../../fechas.js";
+import { fechaLocal, hoyLocal } from "../../fechas.js";
 import {
   RetencionIvaCampos,
   cuerpoRetencionIva,
@@ -46,6 +55,13 @@ import {
  * nómina: sale de una cuenta y va a contabilidad solo). Todo importe lo
  * calcula el servidor; los totales de la factura llegan con su impuesto puesto.
  */
+
+/** F-06: por qué no se pudo leer el precio que la persona tecleó (sin tocar, no hay motivo). */
+function motivoDelPrecio(tecleado: string | undefined): string | undefined {
+  if (tecleado === undefined) return undefined;
+  const leido = leerImporte(tecleado);
+  return leido.ok ? undefined : leido.motivo;
+}
 
 interface Proveedor {
   id: string;
@@ -71,6 +87,45 @@ interface Gasto {
   amount: string;
   currency: string;
   is_recurring: boolean;
+}
+/** El valor, cuando lleva `ms` sin cambiar: para no pedir al servidor una vez por pulsación. */
+function useDebounced<T>(valor: T, ms: number): T {
+  const [v, setV] = useState(valor);
+  useEffect(() => {
+    const t = setTimeout(() => setV(valor), ms);
+    return () => clearTimeout(t);
+  }, [valor, ms]);
+  return v;
+}
+
+function FilaDeResumen({
+  rotulo,
+  valor,
+  fuerte = false,
+}: {
+  rotulo: string;
+  valor: string;
+  fuerte?: boolean;
+}): React.JSX.Element {
+  return (
+    <>
+      <dt className={fuerte ? "font-medium" : "text-muted-foreground"}>{rotulo}</dt>
+      <dd className={`text-right font-mono ${fuerte ? "font-medium" : ""}`}>{valor}</dd>
+    </>
+  );
+}
+
+/** Lo que responde `POST /v1/expenses`: con factura (H-09) trae sus cifras ya calculadas. */
+interface GastoRegistrado {
+  amount: string;
+  currency: string;
+  functional_currency: string;
+  invoice?: {
+    currency: string;
+    tax_amount: string;
+    total_amount: string;
+    retention_total: string;
+  } | null;
 }
 interface Cuenta {
   id: string;
@@ -148,8 +203,18 @@ export function ComprasNegocio(): React.JSX.Element {
   // Pedir es un acto de compras; recibir es uno del depósito. Quien puede lo uno no siempre
   // puede lo otro, y el botón lo respeta (ADR-0066, entrega iii).
   const puedePedir = puede("purchase.order.manage");
+  // H-10: «Lo que debo → Ver qué debo» llega con `?ver=compras`: lo que se debe son las
+  // facturas de proveedores, no los gastos. Sin el parámetro, la pestaña de siempre.
+  const [parametros] = useSearchParams();
+  const pedida = parametros.get("ver");
   const [pestana, setPestana] = useState<"gastos" | "compras" | "falta">(
-    puedeGastos ? "gastos" : "compras",
+    pedida === "compras" || pedida === "falta"
+      ? pedida
+      : pedida === "gastos" && puedeGastos
+        ? "gastos"
+        : puedeGastos
+          ? "gastos"
+          : "compras",
   );
   const [enganchando, setEnganchando] = useState<RecepcionPendiente | null>(null);
   const [nuevoGasto, setNuevoGasto] = useState(false);
@@ -519,7 +584,7 @@ function RegistrarGasto({
   onCerrar: () => void;
   onListo: () => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const [categoria, setCategoria] = useState<string | null>(null);
   const [otraCategoria, setOtraCategoria] = useState("");
@@ -532,17 +597,118 @@ function RegistrarGasto({
   // gasto; si el gasto falla después, la ruta se conserva y el reintento la
   // reusa en vez de subir el archivo otra vez (auditoría 2026-09-11).
   const [adjuntoSubido, setAdjuntoSubido] = useState<{ archivo: File; ruta: string } | null>(null);
+  // H-09: con factura fiscal el gasto es una compra de servicio. La pantalla recoge lo que trae
+  // el papel; el impuesto, lo retenido y lo que sale de la cuenta los calcula el servidor.
+  const [conFactura, setConFactura] = useState(false);
+  const [proveedor, setProveedor] = useState<EntityOption | null>(null);
+  // La moneda IMPRESA en la factura (ADR-0080): en ella van las bases y así entra al libro. No
+  // es la de la cuenta: si difieren, el pago cruza a la tasa del día y el resumen lo dice.
+  const [monedaFactura, setMonedaFactura] = useState("VES");
+  const [numero, setNumero] = useState("");
+  const [control, setControl] = useState("");
+  const [fechaFactura, setFechaFactura] = useState(hoyLocal());
+  const [bases, setBases] = useState<Record<string, string>>({});
+  const [retencion, setRetencion] = useState<EleccionRetencion>({ tipo: "normal" });
+  // El proveedor se BUSCA en el servidor: la lista de cien dejaba fuera al 101. Solo los que
+  // tienen su documento cargado: la factura fiscal de un proveedor nacional lo exige.
+  const buscarProveedor = useCallback(
+    async (q: string): Promise<EntityOption[]> => {
+      const r = await llamar<{ items: Proveedor[] }>(
+        `/v1/suppliers?per_page=50${q === "" ? "" : `&search=${encodeURIComponent(q)}`}`,
+      );
+      return r.items
+        .filter((x) => x.tax_id !== null)
+        .map((x) => ({ id: x.id, label: x.legal_name, detalle: x.tax_id ?? "" }));
+    },
+    [llamar],
+  );
+  const categorias = useQuery({
+    queryKey: ["tax-categories"],
+    enabled: conFactura,
+    queryFn: () => llamar<{ code: string; name: string }[]>("/v1/tax-categories"),
+  });
+  const lineasDeFactura = Object.entries(bases)
+    .map(([code, base]) => ({ tax_category_code: code, base: importeLimpio(base) }))
+    .filter((l) => l.base !== "");
+  const facturaLista =
+    proveedor !== null &&
+    numero.trim() !== "" &&
+    control.trim() !== "" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(fechaFactura) &&
+    lineasDeFactura.length > 0 &&
+    lineasDeFactura.every((l) => importeValido(l.base)) &&
+    eleccionCompleta(retencion);
+  const categoriaDeLaVista = categoria === "otro" ? otraCategoria.trim() : (categoria ?? "");
+  const cuerpoDeFactura = {
+    supplier_id: proveedor?.id ?? null,
+    currency: monedaFactura,
+    document_number: numero.trim(),
+    control_number: control.trim(),
+    invoice_date: fechaFactura,
+    lines: lineasDeFactura,
+    ...cuerpoRetencionIva(retencion),
+  };
+  // ANTES DE CONFIRMAR, LAS CONSECUENCIAS: el servidor registra la factura en una transacción
+  // que deshace y devuelve sus cifras. La pantalla solo las enseña; sin ellas no se confirma.
+  // Cada vista previa registra y deshace una factura en el servidor: no se pide una por
+  // pulsación. Se ESPERA a que la persona deje de escribir, y la petición anterior se cancela
+  // (la señal de TanStack Query aborta el `fetch` cuando la clave cambia).
+  const cuerpoDeLaVista = JSON.stringify({
+    company_id: empresa.id,
+    category: categoriaDeLaVista,
+    account_id: cuenta,
+    invoice: cuerpoDeFactura,
+  });
+  const cuerpoEnReposo = useDebounced(cuerpoDeLaVista, 400);
+  const vistaPedible =
+    conFactura && facturaLista && cuenta !== null && categoriaDeLaVista.length >= 2;
+  const previa = useQuery({
+    queryKey: ["gasto-previa", cuerpoEnReposo],
+    enabled: vistaPedible && cuerpoEnReposo === cuerpoDeLaVista,
+    retry: false,
+    queryFn: async ({ signal }): Promise<VistaDeGasto> =>
+      vistaDeGasto(
+        await llamar<Parameters<typeof vistaDeGasto>[0]>("/v1/expenses/preview", {
+          method: "POST",
+          body: cuerpoEnReposo,
+          signal,
+        }),
+      ),
+  });
+  // Las cifras que se enseñan son SOLO las del cuerpo que está escrito ahora: mientras la
+  // persona teclea (o espera el reposo), no hay resumen y no se confirma.
+  const vista = vistaPedible && cuerpoEnReposo === cuerpoDeLaVista ? previa.data : undefined;
 
+  // LAS CUENTAS. Con `treasury.read`, las de siempre. Quien SOLO registra gastos no ve el dinero
+  // (ADR-0048) y esa lectura le daba 403: elige entre las candidatas, que no traen saldos.
+  const veElDinero = puede("treasury.read");
   const cuentas = useQuery({
     queryKey: ["cuentas", empresa.id],
+    enabled: veElDinero,
     queryFn: () => llamar<{ accounts: Cuenta[] }>("/v1/treasury/accounts"),
   });
-  const activas = (cuentas.data?.accounts ?? []).filter((c) => c.is_active && !c.is_system);
+  const candidatas = useQuery({
+    queryKey: ["cuentas-candidatas", empresa.id],
+    enabled: !veElDinero,
+    queryFn: () =>
+      llamar<{ instruments: { accounts: { id: string; name: string; currency: string }[] }[] }>(
+        "/v1/treasury/accounts/candidates",
+      ),
+  });
+  const activas: { id: string; name: string; currency: string }[] = veElDinero
+    ? (cuentas.data?.accounts ?? []).filter((c) => c.is_active && !c.is_system)
+    : [
+        ...new Map(
+          (candidatas.data?.instruments ?? []).flatMap((i) => i.accounts).map((c) => [c.id, c]),
+        ).values(),
+      ];
   const monedaCuenta = activas.find((c) => c.id === cuenta)?.currency ?? "VES";
 
   const categoriaFinal = categoria === "otro" ? otraCategoria.trim() : (categoria ?? "");
   const listo =
-    categoriaFinal.length >= 2 && cuenta !== null && importeValido(monto.trim().replace(",", "."));
+    categoriaFinal.length >= 2 &&
+    cuenta !== null &&
+    (conFactura ? facturaLista && vista !== undefined : importeValido(monto));
 
   // Sobregiro: el servidor rechaza con 409 el gasto que deja la cuenta en negativo y aquí se
   // pregunta antes de reenviarlo confirmado (ADR-0062 §4; QA 2026-09-15, h. 71).
@@ -565,7 +731,7 @@ function RegistrarGasto({
           setAdjuntoSubido({ archivo: adjunto, ruta: r.attachment_path });
         }
       }
-      return llamar("/v1/expenses", {
+      return llamar<GastoRegistrado>("/v1/expenses", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
@@ -573,15 +739,30 @@ function RegistrarGasto({
           category: categoriaFinal,
           ...(descripcion.trim() === "" ? {} : { description: descripcion.trim() }),
           account_id: cuenta,
-          amount: monto.trim().replace(",", "."),
+          // H-09: con factura NO se manda el importe: lo calcula el servidor.
+          ...(conFactura ? { invoice: cuerpoDeFactura } : { amount: importeLimpio(monto) }),
           ...(recurrente ? { is_recurring: true } : {}),
           ...(forzar !== null ? { allow_negative_balance: true, overdraft_reason: forzar } : {}),
           ...(attachment === undefined ? {} : { attachment_path: attachment }),
         }),
       });
     },
-    onSuccess: () => {
-      toast.success("Gasto registrado", `${categoriaFinal} quedó anotado y salió de tu cuenta.`);
+    onSuccess: (g) => {
+      // H-09: las cifras de la factura vienen del servidor, ya calculadas; aquí solo se enseñan.
+      const f = g.invoice ?? null;
+      toast.success(
+        "Gasto registrado",
+        f === null
+          ? `${categoriaFinal} quedó anotado y salió de tu cuenta.`
+          : GASTO_CON_FACTURA.hecho({
+              total: mostrarImporte({ amount: f.total_amount, currency: f.currency }),
+              iva: mostrarImporte({ amount: f.tax_amount, currency: f.currency }),
+              retenido: esCero(f.retention_total)
+                ? null
+                : mostrarImporte({ amount: f.retention_total, currency: g.functional_currency }),
+              sale: mostrarImporte({ amount: g.amount, currency: g.currency }),
+            }),
+      );
       onListo();
       onCerrar();
     },
@@ -665,17 +846,209 @@ function RegistrarGasto({
                   />
                 )}
               </FormField>
-              <FormField label="¿Cuánto?" required>
-                {(p) => (
-                  <MoneyInput
-                    {...p}
-                    value={monto}
-                    onChange={setMonto}
-                    currency={monedaCuenta === "VES" ? "Bs." : monedaCuenta}
-                  />
-                )}
-              </FormField>
+              {!conFactura && (
+                <FormField label="¿Cuánto?" required>
+                  {(p) => (
+                    <MoneyInput
+                      {...p}
+                      value={monto}
+                      onChange={setMonto}
+                      currency={monedaCuenta === "VES" ? "Bs." : monedaCuenta}
+                    />
+                  )}
+                </FormField>
+              )}
             </div>
+            <div>
+              <p className="pb-1.5 text-[0.88rem] font-medium" id="gasto-factura-titulo">
+                {GASTO_CON_FACTURA.pregunta}
+              </p>
+              <div className="flex gap-1.5" role="group" aria-labelledby="gasto-factura-titulo">
+                {[false, true].map((v) => (
+                  <button
+                    key={String(v)}
+                    type="button"
+                    aria-pressed={conFactura === v}
+                    onClick={() => setConFactura(v)}
+                    className={`rounded-full border px-3 py-1.5 text-[0.85rem] ${
+                      conFactura === v
+                        ? "border-accent bg-accent-soft text-accent-soft-foreground"
+                        : "border-border hover:bg-surface-muted"
+                    }`}
+                  >
+                    {v ? GASTO_CON_FACTURA.con : GASTO_CON_FACTURA.sin}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {conFactura && (
+              <div className="space-y-3 rounded-md border border-border p-3">
+                <p className="text-[0.8rem] text-muted-foreground">
+                  {GASTO_CON_FACTURA.ayudaCon(tieneRif(empresa))}
+                </p>
+                <FormField
+                  label={GASTO_CON_FACTURA.proveedor}
+                  required
+                  hint={GASTO_CON_FACTURA.ayudaProveedor}
+                >
+                  {(p) => (
+                    <EntityPicker
+                      id={p.id}
+                      value={proveedor}
+                      onChange={setProveedor}
+                      buscar={buscarProveedor}
+                      placeholder="Busca el proveedor…"
+                    />
+                  )}
+                </FormField>
+                <div className="grid grid-cols-2 gap-2">
+                  <FormField label={GASTO_CON_FACTURA.numero} required>
+                    {(p) => (
+                      <Input {...p} value={numero} onChange={(e) => setNumero(e.target.value)} />
+                    )}
+                  </FormField>
+                  <FormField label={GASTO_CON_FACTURA.control} required>
+                    {(p) => (
+                      <Input {...p} value={control} onChange={(e) => setControl(e.target.value)} />
+                    )}
+                  </FormField>
+                </div>
+                <FormField
+                  label={GASTO_CON_FACTURA.moneda}
+                  required
+                  hint={GASTO_CON_FACTURA.ayudaMoneda}
+                >
+                  {(p) => (
+                    <SimpleSelect
+                      id={p.id}
+                      value={monedaFactura}
+                      onValueChange={setMonedaFactura}
+                      options={[
+                        { value: "VES", label: "Bolívares (Bs.)" },
+                        { value: "USD", label: "Dólares (USD)" },
+                      ]}
+                    />
+                  )}
+                </FormField>
+                <FormField label={GASTO_CON_FACTURA.fecha} required>
+                  {(p) => (
+                    <Input
+                      {...p}
+                      type="date"
+                      value={fechaFactura}
+                      max={hoyLocal()}
+                      onChange={(e) => setFechaFactura(e.target.value)}
+                    />
+                  )}
+                </FormField>
+                <div>
+                  <p className="text-[0.88rem] font-medium">{GASTO_CON_FACTURA.bases}</p>
+                  <p className="pb-1.5 text-[0.78rem] text-muted-foreground">
+                    {GASTO_CON_FACTURA.ayudaBases}
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(categorias.data ?? []).map((cat) => (
+                      <FormField key={cat.code} label={cat.name}>
+                        {(p) => (
+                          <MoneyInput
+                            {...p}
+                            value={bases[cat.code] ?? ""}
+                            onChange={(v) => setBases((b) => ({ ...b, [cat.code]: v }))}
+                            currency={monedaFactura === "VES" ? "Bs." : monedaFactura}
+                          />
+                        )}
+                      </FormField>
+                    ))}
+                  </div>
+                </div>
+                <RetencionIvaCampos valor={retencion} onCambio={setRetencion} cuentaId={cuenta} />
+                <div
+                  className="rounded-md bg-surface-muted px-3 py-2 text-[0.86rem]"
+                  data-testid="gasto-con-factura-resumen"
+                  aria-live="polite"
+                >
+                  <p className="pb-1 font-medium">{GASTO_CON_FACTURA.resumenTitulo}</p>
+                  {vista === undefined ? (
+                    previa.isError && cuerpoEnReposo === cuerpoDeLaVista ? (
+                      <p role="alert" className="text-destructive-soft-foreground">
+                        {errorDePersona(previa.error)}
+                      </p>
+                    ) : (
+                      <p className="text-muted-foreground">
+                        {vistaPedible ? "Calculando…" : GASTO_CON_FACTURA.resumenFalta}
+                      </p>
+                    )
+                  ) : (
+                    <>
+                      <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5">
+                        {vista.lines.map((l) => (
+                          <FilaDeResumen
+                            key={l.tax_category_code}
+                            rotulo={GASTO_CON_FACTURA.resumenBase(
+                              (categorias.data ?? []).find((x) => x.code === l.tax_category_code)
+                                ?.name ?? l.tax_category_code,
+                            )}
+                            valor={mostrarImporte({ amount: l.base, currency: vista.currency })}
+                          />
+                        ))}
+                        <FilaDeResumen
+                          rotulo={GASTO_CON_FACTURA.resumenImpuesto}
+                          valor={mostrarImporte({
+                            amount: vista.tax_amount,
+                            currency: vista.currency,
+                          })}
+                        />
+                        <FilaDeResumen
+                          rotulo={GASTO_CON_FACTURA.resumenTotal}
+                          valor={mostrarImporte({
+                            amount: vista.total_amount,
+                            currency: vista.currency,
+                          })}
+                        />
+                        {!esCero(vista.retention_total) && (
+                          <FilaDeResumen
+                            rotulo={GASTO_CON_FACTURA.resumenRetenido}
+                            valor={mostrarImporte({
+                              amount: vista.retention_total,
+                              currency: vista.retention_currency,
+                            })}
+                          />
+                        )}
+                        <FilaDeResumen
+                          fuerte
+                          rotulo={GASTO_CON_FACTURA.resumenSale}
+                          valor={mostrarImporte({
+                            amount: vista.amount,
+                            currency: vista.account_currency,
+                          })}
+                        />
+                      </dl>
+                      {vista.tasa !== null &&
+                        vista.tasaFecha !== null &&
+                        vista.tasaMoneda !== null && (
+                          <p className="pt-1 text-[0.78rem] text-muted-foreground">
+                            {GASTO_CON_FACTURA.resumenTasa({
+                              fecha: fechaLocal(vista.tasaFecha),
+                              tasa: mostrarCantidad(vista.tasa),
+                              divisa: vista.tasaMoneda,
+                            })}
+                          </p>
+                        )}
+                      <p className="pt-1 text-[0.78rem] text-muted-foreground">
+                        {vista.tax_is_recoverable
+                          ? GASTO_CON_FACTURA.resumenCredito
+                          : GASTO_CON_FACTURA.resumenCosto}
+                      </p>
+                      {vista.sinSaldo !== null && (
+                        <p role="alert" className="pt-1 text-destructive-soft-foreground">
+                          {vista.sinSaldo}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
             <FormField label="Algo más que anotar">
               {(p) => (
                 <Input
@@ -699,13 +1072,15 @@ function RegistrarGasto({
                 aria-label="Se paga todos los meses"
               />
             </label>
-            <label className="flex cursor-pointer items-center gap-2 text-[0.88rem] text-muted-foreground">
+            {/* H-08: el campo estaba `hidden` y no se alcanzaba con el teclado. Ahora sigue en
+                el orden de tabulación (solo oculto a la vista) y el rótulo enseña su foco. */}
+            <label className="flex cursor-pointer items-center gap-2 rounded-md text-[0.88rem] text-muted-foreground focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">
               <Paperclip className="size-4" />
-              {adjunto === null ? "Adjuntar el comprobante (foto o PDF)" : adjunto.name}
+              {adjunto === null ? "Adjuntar el comprobante (foto o PDF, hasta 6 MB)" : adjunto.name}
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp,application/pdf"
-                className="hidden"
+                className="sr-only"
                 onChange={(e) => setAdjunto(e.target.files?.[0] ?? null)}
               />
             </label>
@@ -830,7 +1205,7 @@ function PagarFactura({
         body: JSON.stringify({
           company_id: empresa.id,
           supplier_invoice_id: factura.id,
-          gross_amount: monto.trim().replace(",", "."),
+          gross_amount: importeLimpio(monto),
           currency: factura.transaction_currency,
           instrument: tipoDePago,
           ...(cuentaDelPago == null ? {} : { account_id: cuentaDelPago }),
@@ -928,10 +1303,7 @@ function PagarFactura({
             <Button
               variant="primary"
               disabled={
-                forma === null ||
-                faltaElegirCuenta ||
-                !importeValido(monto.trim().replace(",", ".")) ||
-                pagar.isPending
+                forma === null || faltaElegirCuenta || !importeValido(monto) || pagar.isPending
               }
               onClick={() => pagar.mutate(null)}
             >
@@ -1018,7 +1390,11 @@ function EngancharFactura({
             goods_receipt_line_id: l.id,
             product_id: l.product_id,
             quantity: l.quantity,
-            unit_price: (precios[l.id] ?? l.unit_price_transaction).trim().replace(",", "."),
+            // F-06: lo tecleado pasa por el lector; lo que no se tocó viaja como lo dio el servidor.
+            unit_price:
+              precios[l.id] === undefined
+                ? l.unit_price_transaction
+                : importeLimpio(precios[l.id] ?? ""),
           })),
         }),
       }),
@@ -1049,6 +1425,7 @@ function EngancharFactura({
               key={l.id}
               label={PRECIO_DE_LA_FACTURA(i + 1, sinCeros(l.quantity))}
               hint="Si el proveedor facturó otro precio, escríbelo: el costo del inventario se ajusta."
+              error={motivoDelPrecio(precios[l.id])}
             >
               {(p) => (
                 <Input
@@ -1071,7 +1448,7 @@ function EngancharFactura({
             disabled={
               numero.trim() === "" ||
               !eleccionCompleta(retencion) ||
-              Object.values(precios).some((v) => !importeValido(v.trim().replace(",", "."))) ||
+              Object.values(precios).some((v) => !importeValido(v)) ||
               detalle.isPending ||
               enganchar.isPending
             }

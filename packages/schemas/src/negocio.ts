@@ -8,6 +8,44 @@ import { z } from "zod";
 const uuid = z.string().uuid();
 const cifra = z.string();
 
+/**
+ * La tasa del día, tal como la enseñan Inicio y Mi dinero. Vive aparte porque la sirven DOS
+ * lecturas: el resumen (treasury.read) y `GET /v1/negocio/tasa`, que la da a quien trabaja en la
+ * empresa sin ver el dinero (N-05).
+ */
+export const TasaDelDia = z
+  .object({
+    rate: cifra,
+    rate_date: z.string(),
+    source: z.string(),
+    /** true si la fecha de la tasa es HOY (día de Venezuela). */
+    es_de_hoy: z.boolean(),
+    /**
+     * Días desde la fecha de la tasa hasta hoy (día de Venezuela). El
+     * cálculo usa la última tasa disponible SIN límite de antigüedad; esto
+     * es lo que la pantalla enseña para que nadie venda con una tasa vieja
+     * sin saberlo (B12: visible, sin regla dura todavía).
+     */
+    dias_de_antiguedad: z.number().int(),
+  })
+  .strict();
+export type TasaDelDia = z.infer<typeof TasaDelDia>;
+
+/** `GET /v1/negocio/tasa`: la tasa del día para cualquier miembro de la empresa (N-05). */
+export const NegocioTasaResponse = z.object({ tasa_del_dia: TasaDelDia.nullable() }).strict();
+export type NegocioTasaResponse = z.infer<typeof NegocioTasaResponse>;
+
+/**
+ * Por qué un total de deuda viaja en `null` (ola 4, la familia de N-05: «no hay» no es «no puedes
+ * ver» ni «no se puede calcular»):
+ *   · `sin_permiso` — quien pregunta no tiene `ar.read` / `ap.read`: la cifra ni se calcula;
+ *   · `sin_tasa`    — hay deuda en divisa (o un cobro viejo en otra moneda) y falta la tasa para
+ *                     valorarla hoy: el nominal por moneda, que sí se conoce, va aparte.
+ */
+export const MotivoSinTotal = z.enum(["sin_permiso", "sin_tasa"]);
+export type MotivoSinTotal = z.infer<typeof MotivoSinTotal>;
+const nominalPorMoneda = z.array(z.object({ currency: z.string(), nominal: cifra }).strict());
+
 export const NegocioResumenResponse = z
   .object({
     functional_currency: z.string(),
@@ -32,35 +70,27 @@ export const NegocioResumenResponse = z
     lineas_sin_costo_mes: z.number().int(),
     /**
      * Suma de saldos pendientes de facturas emitidas (solo positivos). `null` = quien pregunta no
-     * tiene `ar.read`: «no tienes acceso», nunca «0.00» (N-07/P-04).
+     * tiene `ar.read` («no tienes acceso», nunca «0.00»: N-07/P-04) O falta la tasa para valorar
+     * hoy lo que está en divisa. Cuál de los dos lo dice `lo_que_me_deben_motivo`.
      */
     lo_que_me_deben: cifra.nullable(),
+    /** El motivo del `null` de arriba; `null` cuando hay cifra. */
+    lo_que_me_deben_motivo: MotivoSinTotal.nullable(),
+    /** Solo con `sin_tasa`: lo que se debe en cada moneda, sin convertir. Si no, vacía. */
+    lo_que_me_deben_por_moneda: nominalPorMoneda,
     /**
-     * Suma de saldos pendientes de facturas de proveedor asentadas. `null` = sin `ap.read`.
+     * Suma de saldos pendientes de facturas de proveedor asentadas. `null` = sin `ap.read` o sin
+     * tasa para valorar hoy una factura en divisa; el motivo y el nominal, como arriba.
      */
     lo_que_debo: cifra.nullable(),
+    lo_que_debo_motivo: MotivoSinTotal.nullable(),
+    lo_que_debo_por_moneda: nominalPorMoneda,
     /** El dinero por MONEDA: la suma de los saldos de las cuentas activas. */
     mi_dinero: z.array(z.object({ currency: z.string(), balance: cifra }).strict()),
     /** Productos bajo su mínimo. */
     por_agotarse: z.number().int(),
     /** La última tasa USD→VES, con su fuente, o null si nunca se cargó. */
-    tasa_del_dia: z
-      .object({
-        rate: cifra,
-        rate_date: z.string(),
-        source: z.string(),
-        /** true si la fecha de la tasa es HOY (día de Venezuela). */
-        es_de_hoy: z.boolean(),
-        /**
-         * Días desde la fecha de la tasa hasta hoy (día de Venezuela). El
-         * cálculo usa la última tasa disponible SIN límite de antigüedad; esto
-         * es lo que la pantalla enseña para que nadie venda con una tasa vieja
-         * sin saberlo (B12: visible, sin regla dura todavía).
-         */
-        dias_de_antiguedad: z.number().int(),
-      })
-      .strict()
-      .nullable(),
+    tasa_del_dia: TasaDelDia.nullable(),
     /** Las últimas ventas (facturas y recibos), para la lista de Inicio. */
     ultimas_ventas: z.array(
       z
@@ -92,11 +122,14 @@ export const ConvertResponse = z
   .strict();
 export type ConvertResponse = z.infer<typeof ConvertResponse>;
 
-/** Los tres interruptores del negocio y su depósito por defecto (migración 28). */
+/**
+ * Los interruptores del negocio y su depósito por defecto (migración 28). E-13 (2026-10-04):
+ * `block_sale_without_stock` se RETIRÓ del contrato — nadie lo leía y la caja nunca vende sin
+ * existencia (RESPUESTA §2.13). La columna sigue en la tabla; no se lee ni se ofrece.
+ */
 export const CompanySettingsResponse = z
   .object({
     sells_wholesale: z.boolean(),
-    block_sale_without_stock: z.boolean(),
     /** Si es false, el mostrador exige cédula o RIF: quickSale rechaza al «Consumidor final». */
     allow_unidentified_sales: z.boolean(),
     default_tax_category_code: z.string(),
@@ -116,7 +149,6 @@ export type CompanySettingsResponse = z.infer<typeof CompanySettingsResponse>;
 export const UpdateCompanySettingsRequest = z
   .object({
     sells_wholesale: z.boolean().optional(),
-    block_sale_without_stock: z.boolean().optional(),
     allow_unidentified_sales: z.boolean().optional(),
     print_control_number: z.boolean().optional(),
     rows_per_free_form: z.number().int().min(1).max(18).optional(),

@@ -42,6 +42,23 @@ export interface CotizacionPos {
   readonly anchor_currency: string;
   readonly anchor_total: string | null;
   readonly anchor_rate: string | null;
+  /**
+   * E-09: el fiado de este cliente, dicho por el servidor antes de cobrar. null = venta de
+   * mostrador. Importes en USD; `covers_total` = fiar toda la cuenta cabe en el disponible.
+   */
+  readonly credit?: {
+    readonly permitted: boolean;
+    readonly limit_usd: string;
+    readonly debt_usd: string | null;
+    readonly available_usd: string | null;
+    readonly covers_total: boolean;
+  } | null;
+  /**
+   * P-05: el vencimiento del fiado, dicho por el servidor. `required`: dejar saldo exige mandar
+   * `due_date`; `min`: el primer día que acepta (hoy, en Caracas). Ausente = API anterior: la
+   * caja ni lo pide ni lo manda.
+   */
+  readonly credit_due_date?: { readonly required: boolean; readonly min: string } | null;
 }
 
 type Llamar = <T>(path: string, init?: RequestInit) => Promise<T>;

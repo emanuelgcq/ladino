@@ -74,6 +74,11 @@ pgtap_ficheros=$(printf '%s' "$pgtap_linea" | sed -nE 's/Files=([0-9]+).*/\1/p')
 pgtap_tests=$(printf '%s' "$pgtap_linea" | sed -nE 's/.*Tests=([0-9]+)/\1/p')
 openapi_ok=$(printf '%s\n' "$LIMPIO" | grep -c 'openapi:check OK')
 manifest_ok=$(printf '%s\n' "$LIMPIO" | grep -c 'release:manifest:check OK')
+# Un plan de pgTAP que no cuadra («Looks like you planned 31 tests but ran 30») puede salir con
+# «All tests successful»: pasa cuando una aserción queda dentro de un savepoint que se revierte y
+# el contador de pgTAP retrocede. El arnés ve un flujo coherente y da PASS; el aviso es lo único
+# que lo delata (cobros, 2026-10-04).
+plan_malo=$(printf '%s\n' "$LIMPIO" | grep -c 'Looks like you planned')
 
 # vitest: una línea «Tests  N passed | M failed | K skipped (T)» por paquete.
 vitest=$(printf '%s\n' "$LIMPIO" | grep -E '^@ladino/[a-z-]+:test: +Tests +' | awk '
@@ -96,6 +101,7 @@ razones=()
 [ "$openapi_ok" -ge 1 ] || razones+=("no aparece «openapi:check OK» (paso 8)")
 [ "$manifest_ok" -ge 1 ] || razones+=("no aparece «release:manifest:check OK» (paso 9)")
 [ "${vitest_fallan:-0}" -eq 0 ] || razones+=("vitest: $vitest_fallan tests fallan")
+[ "${plan_malo:-0}" -eq 0 ] || razones+=("pgTAP: $plan_malo plan(es) que no cuadran («Looks like you planned…»): una aserción no contó")
 
 comparacion=""
 if [ -n "$BASE" ]; then

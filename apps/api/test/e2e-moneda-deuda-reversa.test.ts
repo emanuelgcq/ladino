@@ -4,6 +4,7 @@ import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
+import { fiadoDeFixture } from "./_fiado-de-fixture.js";
 import { borrarTasasOficiales, sembrarTasaOficial } from "./_tasa-oficial.js";
 
 /**
@@ -228,6 +229,8 @@ async function sembrar(e: Empresa): Promise<void> {
              values (${e.cliente}, ${e.tenant}, ${e.company},
                      ${`J${String(Date.now() + 7).slice(-9)}`}, 'Constructora e2e moneda B',
                      'juridica', 'especial', 'Calle 8, Maracay')`;
+    // R-82.1: la factura de administración nace fiada — la empresa de prueba declara que fía.
+    await fiadoDeFixture(tx, e.company, [ROL]);
     const [p] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                    tax_category_code)
@@ -487,6 +490,36 @@ describe("moneda B · la divisa en el mayor y una sola deuda (E-11, J-04, F-04)"
       debt_currency: "USD",
       debt_nominal: "100.00",
     });
+  });
+
+  it("P-05 · la lista de clientes se ORDENA por deuda en el servidor: quien debe 4.200,00 va antes que «AAA», que no debe nada — y al revés", async () => {
+    // Un segundo cliente SIN deuda cuyo nombre va el primero por orden alfabético: si el orden
+    // por deuda cayera en silencio al orden por nombre, encabezaría la lista.
+    // Sembrado a mano, como el cliente del montaje: el dueño de este fichero no da altas.
+    const sinDeuda = crypto.randomUUID();
+    await sql.begin(async (tx) => {
+      await tx`select set_config('ladino.actor_id', ${DUENO}, true)`;
+      await tx`insert into public.customers
+                 (id, tenant_id, company_id, tax_id, legal_name, person_type_code,
+                  taxpayer_type_code, fiscal_address)
+               values (${sinDeuda}, ${ORD.tenant}, ${ORD.company},
+                       ${`J${String(Date.now() + 13).slice(-9)}`}, 'AAA sin deuda e2e',
+                       'juridica', 'ordinario', 'Av. E2E, edificio Orden, Caracas')`;
+    });
+    type Fila = { id: string; debt: string | null };
+    const lista = async (q: string): Promise<Fila[]> => {
+      const r = await pedir(ORD, "GET", `/v1/customers?per_page=50&exclude_system=1&${q}`);
+      expect(r.status, await r.clone().text()).toBe(200);
+      return ((await r.json()) as { items: Fila[] }).items;
+    };
+    // Por nombre (lo de siempre), «AAA» encabeza.
+    expect((await lista("with_debt=1"))[0]!.id).toBe(sinDeuda);
+    const desc = await lista("with_debt=1&sort=debt_desc");
+    expect(desc[0]).toMatchObject({ id: ORD.cliente, debt: "4200.00" });
+    expect(desc[desc.length - 1]).toMatchObject({ id: sinDeuda, debt: "0.00" });
+    const asc = await lista("with_debt=1&sort=debt_asc");
+    expect(asc[0]).toMatchObject({ id: sinDeuda, debt: "0.00" });
+    expect(asc[asc.length - 1]).toMatchObject({ id: ORD.cliente, debt: "4200.00" });
   });
 
   it("F-04 · un documento pagado debe CERO, aunque la tasa cambie después", async () => {
@@ -1166,6 +1199,71 @@ describe("moneda B · la revaluación al cierre (VEN-NIF PYME secc. 30)", () => 
     expect(bien.status, await bien.clone().text()).toBe(200);
     expect(await revaluaciones()).toHaveLength(2);
   });
+
+  it("ola 4 · el resumen dice POR QUÉ no hay cifra: con deuda que no se puede valorar, `sin_tasa` y el nominal por moneda — no un null mudo", async () => {
+    // El mismo cobro viejo sin tasa de su día: `customer_debt_today` no puede valorar la cartera
+    // y el resumen manda `lo_que_me_deben: null`. Antes era indistinguible del null de «sin
+    // ar.read» y la pantalla escondía la tarjeta: «no hay» por «no se puede calcular».
+    type Resumen = {
+      lo_que_me_deben: string | null;
+      lo_que_me_deben_motivo: string | null;
+      lo_que_me_deben_por_moneda: { currency: string; nominal: string }[];
+    };
+    const resumen = async (): Promise<Resumen> => {
+      const r = await pedir(ORD, "GET", "/v1/negocio/resumen");
+      expect(r.status, await r.clone().text()).toBe(200);
+      return (await r.json()) as Resumen;
+    };
+    await reabrir();
+    const antes = await resumen();
+    expect(antes.lo_que_me_deben).toMatch(/^\d+\.\d{2}$/);
+    expect(antes.lo_que_me_deben_motivo).toBeNull();
+    expect(antes.lo_que_me_deben_por_moneda).toEqual([]);
+    const [doc] = await sql<{ id: string }[]>`
+      select d.id from public.documents d
+       where d.company_id = ${ORD.company} and d.transaction_currency = 'USD'
+         and d.status = 'issued' and d.kind = 'invoice'
+       order by d.created_at limit 1`;
+    expect(doc).toBeDefined();
+    const [viejo] = await sql.begin(async (tx) => {
+      await tx`select set_config('ladino.actor_id', ${DUENO}, true)`;
+      return tx<{ id: string }[]>`
+        insert into public.payments
+          (tenant_id, company_id, document_id, paid_at, currency, amount, fx_rate, rate_source,
+           rate_timestamp, functional_amount, instrument, account_id, settled_transaction_amount)
+        values (${ORD.tenant}, ${ORD.company}, ${doc!.id}, '2001-01-06T16:00:00Z', 'VES', 0.01, 1,
+                'identidad', now(), 0.01, 'transferencia', ${ORD.bancoBs}, null)
+        returning id`;
+    });
+    let sinValorar: Resumen;
+    try {
+      sinValorar = await resumen();
+    } finally {
+      await sql.begin(async (tx) => {
+        await tx`select set_config('ladino.actor_id', ${DUENO}, true)`;
+        await tx`
+          insert into public.payment_reversals
+            (tenant_id, company_id, payment_id, document_id, reason, currency, amount,
+             functional_amount)
+          values (${ORD.tenant}, ${ORD.company}, ${viejo!.id}, ${doc!.id},
+                  'E2E ola 4: cobro viejo sin tasa, retirado', 'VES', 0.01, 0.01)`;
+      });
+    }
+    expect(sinValorar.lo_que_me_deben).toBeNull();
+    expect(sinValorar.lo_que_me_deben_motivo).toBe("sin_tasa");
+    // Lo que sí se conoce: el nominal por moneda, en string decimal, nunca null.
+    // Lo que SÍ se conoce, y no una lista vacía: la cartera en dólares al cierre era A 106 + B 116
+    // + C 100 + D 116 = 438 USD (el test «al cerrar el mes a 45»). El cobro viejo dejó sin valorar
+    // el documento A, que por eso no entra: 438 − 106 = 332,00 USD.
+    expect(sinValorar.lo_que_me_deben_por_moneda).toEqual([{ currency: "USD", nominal: "332.00" }]);
+    // Retirado el cobro, vuelve la cifra de antes y el motivo desaparece.
+    const despues = await resumen();
+    expect(despues.lo_que_me_deben).toBe(antes.lo_que_me_deben);
+    expect(despues.lo_que_me_deben_motivo).toBeNull();
+    const bien = await cerrar();
+    expect(bien.status, await bien.clone().text()).toBe(200);
+    expect(await revaluaciones()).toHaveLength(2);
+  });
 });
 
 describe("moneda B · los bordes de la reversa (H4, Y13)", () => {
@@ -1216,6 +1314,8 @@ describe("moneda B · los bordes de la reversa (H4, Y13)", () => {
     const anula = await pedir(SPE, "POST", `/v1/invoices/${G}/annul`, {
       company_id: SPE.company,
       reason: "La venta no se concretó: el pago fue devuelto",
+      // G-10 (PA 00071 art. 36): la persona confirma el original y las copias.
+      originals_in_hand: true,
     });
     expect(anula.status, await anula.clone().text()).toBe(200);
     const [doc] = await sql<{ status: string }[]>`

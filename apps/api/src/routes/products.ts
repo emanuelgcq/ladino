@@ -110,6 +110,12 @@ export function productsRoutes(
     const conPrecio = c.req.query("with_price") === "1";
     const conStock = c.req.query("with_stock") === "1";
     const listaPedida = c.req.query("price_list_id") ?? null;
+    // E-07: con `customer_id`, la cuadrícula cotiza por la lista PREFERIDA de ese cliente — la
+    // misma que aplicará el carrito (`resolverLista`). Sin cliente, la de mostrador.
+    const clientePedido = c.req.query("customer_id") ?? null;
+    if (clientePedido !== null && !UUID_RE.test(clientePedido)) {
+      throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    }
 
     const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
       // La búsqueda incluye el código de barras: la cuadrícula tiene lector.
@@ -135,8 +141,21 @@ export function productsRoutes(
       // cuadrícula funcione sin saber de listas.
       let listaId: string | null = null;
       if (conPrecio) {
+        // La preferida del cliente (E-07): mismo criterio que resolverLista — el «Consumidor
+        // final» de sistema no tiene preferida, y sin preferida rige la de mostrador.
+        let preferida: string | null = null;
+        if (clientePedido !== null) {
+          const [cu] = await tx<{ lista: string | null }[]>`
+            select case when cu.is_system then null else cu.default_price_list_id end as lista
+              from public.customers cu
+             where cu.id = ${clientePedido} and cu.company_id = ${companyId}`;
+          if (!cu) throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+          preferida = cu.lista;
+        }
         if (listaPedida !== null && UUID_RE.test(listaPedida)) {
           listaId = listaPedida;
+        } else if (preferida !== null) {
+          listaId = preferida;
         } else {
           // La MISMA resolución de la caja que resolverLista (migración 36):
           // el dato del dueño primero, la heurística por nombre después. Si

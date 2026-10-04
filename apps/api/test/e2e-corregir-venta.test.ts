@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture, venceDeFixture } from "./_fiado-de-fixture.js";
 
 /**
  * CORREGIR UNA VENTA (ADR-0061 · migración 59), en un negocio que vende con
@@ -116,9 +117,11 @@ beforeAll(async () => {
              values (${W1}, ${TENANT}, ${COMPANY}, 'E2E-CVW1', 'Local')`;
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values
              (${ROL}, null, ${`e2ecv_${RUN}`}, 'Dueño', true)`;
+    // G-07 (ola 4): sacar el dinero de la caja exige sales.refund; este rol reembolsa.
     await tx`insert into public.role_permissions (role_id, permission_key) values
              (${ROL}, 'sales.invoice.issue'), (${ROL}, 'sales.invoice.annul'),
              (${ROL}, 'sales.payment.register'), (${ROL}, 'sales.return.manage'),
+             (${ROL}, 'sales.refund'),
              (${ROL}, 'ar.read'), (${ROL}, 'inventory.move'), (${ROL}, 'treasury.read'),
              (${ROL}, 'treasury.account.manage'), (${ROL}, 'accounting.account.manage'),
              (${ROL}, 'accounting.template.manage'), (${ROL}, 'accounting.entry.reverse'),
@@ -141,6 +144,8 @@ beforeAll(async () => {
                                            person_type_code, taxpayer_type_code)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, 'Señora Inés', 'natural',
                      'consumidor_final')`;
+    // E-09: esta empresa de prueba fía (permiso y límite), como lo declararía una real.
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
     const prods = await tx<{ id: string; sku: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                    tax_category_code, tracks_lots, tracks_expiry)
@@ -223,6 +228,7 @@ describe("corregir una venta", () => {
       warehouse_id: W1,
       customer_id: CLIENTE,
       lines: [{ product_id: QUESO, quantity: "4" }],
+      due_date: venceDeFixture(),
     });
     expect(venta.status).toBe(201);
     const doc = ((await venta.json()) as { document: { id: string } }).document.id;
@@ -424,6 +430,7 @@ describe("corregir una venta", () => {
       warehouse_id: W1,
       customer_id: CLIENTE,
       lines: [{ product_id: PAN, quantity: "2" }],
+      due_date: venceDeFixture(),
     });
     expect(venta.status).toBe(201);
     const doc = ((await venta.json()) as { document: { id: string } }).document.id;

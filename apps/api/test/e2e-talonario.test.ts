@@ -6,6 +6,9 @@ import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
 import { digitoVerificadorRif } from "@ladino/schemas";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
+import { fiadoDeFixture } from "./_fiado-de-fixture.js";
+
+const FUENTE_TASA_FIADO = `BCV e2e-talonario-fiado-${Date.now().toString(36)}`;
 
 /**
  * EL TALONARIO DE LA IMPRENTA, DE PUNTA A PUNTA (ADR-0071; G-01, E-01, B-03, E-17, G-16).
@@ -120,6 +123,20 @@ beforeAll(async () => {
   sqlApi = createClient(URL_API);
   app = buildApp({ sql: sqlApi, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
   await sql`insert into auth.users (id) values (${DUENO}) on conflict (id) do nothing`;
+  // R-82.1 / R-82.3: fiar (la factura de administración nace fiada) exige la tasa de hoy para
+  // medir la deuda contra el límite. Entrada del fixture, bajo el candado de las tasas y solo si
+  // no hay ya una de hoy: ninguna cifra de este fichero depende de USD→VES.
+  await sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext('ladino-e2e-rates'))`;
+    await tx`
+      insert into public.exchange_rates
+        (from_currency, to_currency, rate, rate_date, rate_timestamp, source)
+      select 'USD', 'VES', 40, (now() at time zone 'America/Caracas')::date, now(),
+             ${FUENTE_TASA_FIADO}
+       where not exists (select 1 from public.exchange_rates
+                          where company_id is null and from_currency = 'USD' and to_currency = 'VES'
+                            and rate_date = (now() at time zone 'America/Caracas')::date)`;
+  });
   await sql.begin(async (tx) => {
     await tx`select set_config('ladino.actor_id', ${DUENO}, true)`;
     await tx`insert into public.tenants (id, name) values (${TENANT}, 'Tenant e2e talonario')`;
@@ -134,6 +151,7 @@ beforeAll(async () => {
              values (${ROL}, null, ${`e2etal_${RUN}`}, 'Dueño e2e talonario', true)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
              (${ROL}, 'sales.invoice.issue'), (${ROL}, 'sales.return.manage'),
+             (${ROL}, 'sales.credit_note.direct'),
              (${ROL}, 'fiscal.range.manage'), (${ROL}, 'inventory.move'), (${ROL}, 'ar.read')
              on conflict do nothing`;
     await tx`insert into public.memberships (id, tenant_id, user_id)
@@ -152,6 +170,8 @@ beforeAll(async () => {
                 taxpayer_type_code, default_price_list_id)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, ${`J-CLT-${RUN}`}, 'Cliente e2e talonario',
                      'juridica', 'ordinario', ${l!.id})`;
+    // R-82.1: la factura de administración nace fiada — la empresa de prueba declara que fía.
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
     const [p] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                    tax_category_code)
@@ -200,6 +220,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (sql) await sql`delete from public.exchange_rates where source = ${FUENTE_TASA_FIADO}`;
   await sql?.end();
   await sqlApi?.end();
 });
@@ -689,7 +710,8 @@ describe("el talonario de la imprenta (ADR-0071)", () => {
       await tx`insert into public.company_taxpayer_types
                  (tenant_id, company_id, taxpayer_type_code, effective_from, notified_on, reason,
                   rules_version)
-               values (${TENANT}, ${C2}, 'ordinario', '2026-01-01', null, 'E2E talonario', 'e2e')`;
+               values (${TENANT}, ${C2}, 'ordinario', '2026-01-01', null, 'E2E talonario',
+                       'domain-s0.5')`;
       await tx`insert into public.scope_bindings
                  (tenant_id, company_id, assignment_id, scope_type, scope_id)
                values (${TENANT}, ${C2}, ${ASIG}, 'warehouse', ${W2})`;
@@ -701,6 +723,7 @@ describe("el talonario de la imprenta (ADR-0071)", () => {
                   taxpayer_type_code, default_price_list_id)
                values (${CL2}, ${TENANT}, ${C2}, ${`J-CL2-${RUN}`}, 'Cliente de la empresa en dólares',
                        'juridica', 'ordinario', ${l!.id})`;
+      await fiadoDeFixture(tx, C2);
       const [p] = await tx<{ id: string }[]>`
         insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                      tax_category_code)
@@ -723,6 +746,12 @@ describe("el talonario de la imprenta (ADR-0071)", () => {
       await tx`insert into public.exchange_rates
                  (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
                values ('VES', 'USD', 0.02, ${fuente}, ${AYER}::date, now())`;
+      // R-82.1 / R-82.3: la factura de administración nace fiada y la deuda se mide a la tasa
+      // de HOY: la del día abre igual que la de ayer (0,02) y el BCV publica otra más tarde.
+      await tx`insert into public.exchange_rates
+                 (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+               values ('VES', 'USD', 0.02, ${`${fuente} (apertura)`},
+                       (now() at time zone 'America/Caracas')::date, now())`;
     });
     const [prod] = await sql<{ id: string }[]>`
       select id from public.products where company_id = ${C2}`;
@@ -802,5 +831,6 @@ describe("el talonario de la imprenta (ADR-0071)", () => {
     expect(textoNuevo).toMatch(/Tasa BCV del \d{2}\/\d{2}\/\d{4}: Bs /);
     expect(textoNuevo).not.toContain("Tasa BCV de la factura");
     await sql`delete from public.exchange_rates where source = ${fuente}`;
+    await sql`delete from public.exchange_rates where source = ${`${fuente} (apertura)`}`;
   }, 30_000);
 });

@@ -84,6 +84,8 @@ Usa la skill `adr` de Claude Code.
 | [0076](adr/ADR-0076-llave-por-intento-y-cuentas-del-pos.md) | Llave de idempotencia por intento; IDEMPOTENCY_BODY_MISMATCH; la cuenta vendida muere en el servidor; cuentas con autor y caja | Aplicado (respuesta del dueño 2026-09-28) | NO |
 | [0077](adr/ADR-0077-empresa-por-pestana-e-invitaciones.md) | La empresa activa vive en la pestaña; segunda empresa desde el selector; invitación por enlace con token; quien pierde el acceso no aterriza en «monta tu negocio» | Aplicado (respuesta del dueño 2026-09-28) | NO |
 | [0078](adr/ADR-0078-salidas-y-retiros-de-inventario.md) | Traslado, ajuste por conteo y salida con motivo (CHECK); mermas a su cuenta; el retiro (consumo propio, regalo, donación, muestra) causa débito con Nota de retiro; inactivo no es inexistente; «por agotarse» cuenta lotes | Aplicado (respuesta del dueño 2026-09-28) | YES |
+| [0079](adr/ADR-0079-rules-version-semver-mas-hash.md) | `rules_version` = versión semántica (sube por migración) + hash del conjunto de reglas de la empresa; la base la congela en cada fila en un solo sitio y la registra; lo anterior conserva `domain-s0.5` | Aplicado (respuesta del dueño 2026-09-28) | YES |
+| [0080](adr/ADR-0080-el-gasto-con-factura-fiscal-es-una-compra-de-servicio.md) | El gasto con factura fiscal se registra por `registerSupplierInvoice` (libro, crédito, retención, comprobante) y se paga en el acto; línea sin producto, plantilla y evento `ap.expense_invoice_posted`; no hay fila en `expenses` | Aplicado (respuesta del dueño 2026-09-28) | YES |
 
 ## Decisiones aún abiertas
 

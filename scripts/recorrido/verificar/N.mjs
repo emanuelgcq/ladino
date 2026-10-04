@@ -90,11 +90,30 @@ c.caso(
     select id from public.customers
      where company_id = ${EMPRESAS.E2} and legal_name ilike 'Abastos El Sol%' limit 1`;
     afirmar(cliente, "no existe el cliente Abastos El Sol en E2");
+    // E-09: una venta sin cobro es un fiado, y fiar exige que el cliente tenga límite. Lo fija el
+    // propio administrativo (`customers.credit.set`) por el camino real, una vez. Es una ENTRADA.
+    const [lim] = await sql`
+      select credit_limit_usd = 100000 as fijado from public.customers where id = ${cliente.id}`;
+    if (!lim.fijado) {
+      const fija = await pedir(
+        PERSONAS.administrativo,
+        "E2",
+        "PUT",
+        `/v1/customers/${cliente.id}/credit-limit`,
+        { company_id: EMPRESAS.E2, credit_limit_usd: "100000" },
+      );
+      afirmar(fija.status === 200, `fijar el límite de fiado: ${fija.status} ${fija.texto}`);
+    }
     const emitida = await pedir(PERSONAS.administrativo, "E2", "POST", "/v1/pos/sales", {
       company_id: EMPRESAS.E2,
       customer_id: cliente.id,
       warehouse_id: deposito,
       lines: [{ product_id: producto, quantity: "1" }],
+      // P-05: una venta de la caja que deja saldo dice cuándo se paga. El día de CARACAS más 15
+      // (nunca toISOString(): a partir de las 20:00 sería mañana). Es una entrada, no lo esperado.
+      due_date: new Intl.DateTimeFormat("en-CA", { timeZone: "America/Caracas" }).format(
+        new Date(Date.now() + 15 * 86_400_000),
+      ),
     });
     afirmar(
       emitida.status === 201,
@@ -105,7 +124,12 @@ c.caso(
       "E2",
       "POST",
       `/v1/invoices/${emitida.json.document.id}/annul`,
-      { company_id: EMPRESAS.E2, reason: "Verificación N-04 del recorrido" },
+      // G-10: la persona confirma que tiene el original y las copias (PA 00071 art. 36).
+      {
+        company_id: EMPRESAS.E2,
+        reason: "Verificación N-04 del recorrido",
+        originals_in_hand: true,
+      },
     );
     afirmar(
       anular.status === 200,
@@ -254,6 +278,49 @@ c.caso(
       select m.status from public.memberships m join public.companies c on c.tenant_id = m.tenant_id
        where c.id = ${EMPRESAS.E2} and m.user_id = ${cajero.id}`;
     afirmar(activo.status === "active", "la comprobación dejó al cajero desactivado");
+  },
+);
+
+// N-05 (ola 4): «Mi dinero» le decía al encargado «Todavía no hay tasa BCV» habiéndola: la tasa
+// salía del resumen, que exige treasury.read y la pantalla ni lo pedía. Ahora la tasa del día tiene
+// su lectura propia, para quien trabaja en la empresa; el resumen sigue vedado a quien no ve el
+// dinero, y un error de lectura no se pinta como «no hay».
+c.caso(
+  "N-05",
+  "el encargado, sin treasury.read, lee la tasa del día; el resumen le sigue vedado y un extraño no la lee",
+  async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const resumen = await pedir(PERSONAS.encargado, "E2", "GET", "/v1/negocio/resumen");
+    afirmar(resumen.status === 403, `el resumen del encargado dio ${resumen.status}`);
+    const r = await pedir(PERSONAS.encargado, "E2", "GET", "/v1/negocio/tasa");
+    afirmar(r.status === 200, `la tasa del encargado dio ${r.status}: ${r.texto.slice(0, 160)}`);
+    const dueno = await pedir(PERSONAS.duenoE2E3, "E2", "GET", "/v1/negocio/resumen");
+    afirmar(dueno.status === 200 && dueno.json.tasa_del_dia !== null, "el dueño no ve tasa en E2");
+    afirmar(
+      r.json.tasa_del_dia !== null && r.json.tasa_del_dia.rate === dueno.json.tasa_del_dia.rate,
+      `encargado ${JSON.stringify(r.json.tasa_del_dia)} ≠ dueño ${dueno.json.tasa_del_dia.rate}`,
+    );
+    afirmar(
+      typeof r.json.tasa_del_dia.es_de_hoy === "boolean" &&
+        r.json.tasa_del_dia.rate_date === dueno.json.tasa_del_dia.rate_date,
+      "la tasa del encargado no trae su día",
+    );
+    // Quien no es de la empresa no la lee por aquí (la dueña de E1, en E2).
+    const ajena = await pedir(PERSONAS.duenaE1, "E2", "GET", "/v1/negocio/tasa");
+    afirmar(ajena.status === 404 || ajena.status === 403, `una extraña leyó: ${ajena.status}`);
+    // La pantalla: la tarjeta lee de la lectura propia y distingue cargando y error de «no hay».
+    const dinero = fs.readFileSync(
+      path.join(raiz, "apps", "web", "src", "pages", "negocio", "Dinero.tsx"),
+      "utf8",
+    );
+    afirmar(dinero.includes('"/v1/negocio/tasa"'), "Mi dinero no lee /v1/negocio/tasa");
+    afirmar(
+      dinero.includes("No se pudo leer la tasa"),
+      "Mi dinero no distingue el error de lectura de «no hay tasa»",
+    );
   },
 );
 

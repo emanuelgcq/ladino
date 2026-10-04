@@ -72,6 +72,13 @@ export const DocumentLineRequest = z
   .strict();
 export type DocumentLineRequest = z.infer<typeof DocumentLineRequest>;
 
+/**
+ * El VENCIMIENTO de una venta que deja saldo (P-05, E-22): un día, `AAAA-MM-DD`, del calendario
+ * de Caracas. Lo decide quien vende; no hay plazo por omisión. No puede ser anterior al día de la
+ * venta (422). Se congela en el documento al emitir.
+ */
+const vencimiento = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
 const documentoBase = {
   company_id: uuid,
   customer_id: uuid,
@@ -114,12 +121,26 @@ export const CreateInvoiceRequest = z
     source_document_id: uuid.optional(),
     /** Fecha de emisión; por omisión, la del servidor. */
     issued_at: z.string().datetime({ offset: true }).optional(),
+    /**
+     * Cuándo vence (P-05). OPCIONAL en la factura de administración: sin ella, la deuda vence
+     * el día de la emisión.
+     */
+    due_date: vencimiento.optional(),
   })
   .strict();
 export type CreateInvoiceRequest = z.infer<typeof CreateInvoiceRequest>;
 
 export const AnnulInvoiceRequest = z
-  .object({ company_id: uuid, reason: z.string().trim().min(3).max(500) })
+  .object({
+    company_id: uuid,
+    reason: z.string().trim().min(3).max(500),
+    /**
+     * G-10 (PA 00071 art. 36, aditivo): la persona confirma que tiene en la mano el original y
+     * todas las copias. Una FACTURA no se anula sin `true` (409 ANNULMENT_NOT_ALLOWED); un recibo
+     * no lo necesita.
+     */
+    originals_in_hand: z.boolean().optional(),
+  })
   .strict();
 export type AnnulInvoiceRequest = z.infer<typeof AnnulInvoiceRequest>;
 
@@ -286,6 +307,8 @@ export const DocumentResponse = z
     total_amount: z.string(),
     regime_version_id: uuid.nullable(),
     rules_version: z.string().nullable(),
+    /** P-05: el vencimiento acordado al vender (`AAAA-MM-DD`); null = vence al emitirse. */
+    due_date: z.string().nullable(),
   })
   .strict();
 export type DocumentResponse = z.infer<typeof DocumentResponse>;
@@ -360,6 +383,28 @@ export const DocumentDetailResponse = z
       .object({ author_id: uuid.nullable(), author_name: z.string().nullable() })
       .strict()
       .nullable(),
+    /**
+     * G-10 / G-14 (aditivo): si el documento se puede ANULAR ahora y, si no, por qué y cuál es el
+     * camino, en palabras de persona. Lo decide el servidor (mismo día de Caracas, antes del
+     * cierre de caja, período sin declarar, sin cobros). null = no es un documento que se anule.
+     */
+    annulment: z
+      .object({
+        allowed: z.boolean(),
+        reason: z
+          .enum([
+            "has_payments",
+            "not_same_day",
+            "period_declared",
+            "cash_closed",
+            "originals_not_confirmed",
+          ])
+          .nullable(),
+        message: z.string().nullable(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 export type DocumentDetailResponse = z.infer<typeof DocumentDetailResponse>;
@@ -411,6 +456,15 @@ export const RegisterPaymentResponse = z
         /** El control impreso (00-00001234), o null fuera de forma libre. */
         control_display: z.string().nullable(),
       })
+      .strict()
+      .nullable()
+      .optional(),
+    /**
+     * F-10: el saldo a favor que nació de este cobro porque el cliente pagó de más. En la moneda
+     * del documento. null si el cobro no dejó sobrante.
+     */
+    customer_credit: z
+      .object({ id: uuid, amount: z.string(), currency: z.string() })
       .strict()
       .nullable()
       .optional(),
@@ -480,6 +534,30 @@ export const PosQuoteResponse = z
     anchor_currency: z.string(),
     anchor_total: z.string().nullable(),
     anchor_rate: z.string().nullable(),
+    /**
+     * E-09: el fiado, dicho ANTES de cobrar. `null` en la venta de mostrador (no se fía sin
+     * cliente). `permitted`: quien cotiza tiene `sales.credit`. Importes en USD al céntimo;
+     * `debt_usd` y `available_usd` en `null` cuando la deuda no se puede decir (sin tasa de
+     * hoy). `covers_total`: fiar TODA esta cuenta cabe en el disponible. Lo calcula el servidor,
+     * y el que decide es `POST /v1/pos/sales`.
+     */
+    credit: z
+      .object({
+        permitted: z.boolean(),
+        limit_usd: z.string(),
+        debt_usd: z.string().nullable(),
+        available_usd: z.string().nullable(),
+        covers_total: z.boolean(),
+      })
+      .strict()
+      .nullable(),
+    /**
+     * P-05: el vencimiento del fiado, dicho ANTES. `null` en la venta de mostrador (no se fía).
+     * `required`: dejar saldo en `POST /v1/pos/sales` EXIGE `due_date` (422 sin ella): la caja
+     * pide «¿Cuándo paga?» antes de confirmar. `min`: el primer día que el servidor acepta, el
+     * de hoy en Caracas (`AAAA-MM-DD`). Va aparte de `credit` para no cambiarle la forma.
+     */
+    credit_due_date: z.object({ required: z.boolean(), min: z.string() }).strict().nullable(),
   })
   .strict();
 export type PosQuoteResponse = z.infer<typeof PosQuoteResponse>;
@@ -520,6 +598,11 @@ export const QuickSaleRequest = z
     lines: z.array(DocumentLineRequest).min(1).max(200),
     /** Hasta CUATRO formas de pago (una caja real: Bs, pago móvil, USD, Zelle). */
     payments: z.array(QuickSalePaymentInput).max(4).optional(),
+    /**
+     * P-05: cuándo paga el cliente. OBLIGATORIA si la venta deja saldo (422 «Di cuándo paga el
+     * cliente», y no se emite nada). En una venta que queda pagada se guarda y no significa nada.
+     */
+    due_date: vencimiento.optional(),
     /** La cuenta abierta que esta venta CIERRA: queda marcada como vendida en la MISMA
      *  transacción (ADR-0076) — y un segundo cobro de esa cuenta da 409 POS_CART_SOLD. */
     cart_id: uuid.optional(),
@@ -749,6 +832,13 @@ export const AgingResponse = z
         .strict(),
     ),
     total: z.string().nullable(),
+    /**
+     * P-05: lo VENCIDO a la fecha de referencia (la deuda de los documentos cuyo vencimiento
+     * —o, sin él, su día de emisión— es anterior a ella). Los tramos siguen contando días desde
+     * la emisión. null = hay vencido y falta la tasa de hoy (`overdue_reason`: `sin_tasa`).
+     */
+    overdue: z.string().nullable().optional(),
+    overdue_reason: z.enum(["sin_tasa"]).nullable().optional(),
   })
   .strict();
 export type AgingResponse = z.infer<typeof AgingResponse>;
@@ -778,6 +868,10 @@ export const CustomerStatementResponse = z
           debt_currency: z.string(),
           debt_nominal: z.string().nullable(),
           days_outstanding: z.number().int(),
+          /** P-05: el día en que vence (`AAAA-MM-DD`): el acordado o, sin él, el de emisión. */
+          due_date: z.string().nullable().optional(),
+          /** P-05: debe y su vencimiento ya pasó (lo decide el servidor, en el día de Caracas). */
+          overdue: z.boolean().optional(),
         })
         .strict(),
     ),
@@ -789,6 +883,12 @@ export const CustomerStatementResponse = z
           amount: z.string(),
           applied_amount: z.string(),
           status: z.enum(["available", "applied", "expired"]),
+          /** G-05: la moneda del saldo a favor (la del documento que lo originó). */
+          currency: z.string(),
+          /** La tasa con que nació; null = nació en moneda funcional antes de guardarla. */
+          fx_rate: z.string().nullable(),
+          /** F-10: true si nació del sobrante de un cobro (un anticipo), no de una nota. */
+          from_overpayment: z.boolean(),
         })
         .strict(),
     ),
@@ -1052,6 +1152,11 @@ export const FiscalSetupResponse = z
     current_regime: z.string().nullable(),
     /** Qué vende la empresa hoy: facturas, recibos o ninguno (migración 54). */
     sales_mode: SalesMode,
+    /**
+     * M-09: el negocio pasó de recibos a facturas hace menos de 30 días, o todavía no emitió su
+     * primera factura. La caja enseña «Ya facturas con tu RIF» mientras sea cierto.
+     */
+    invoicing_notice: z.boolean(),
     iva_general: z.object({ rate: amount, legal_source: z.string() }).strict().nullable(),
     /**
      * La general del CATÁLOGO de plataforma, con su cita y el rango del art. 27 (ADR-0073,
@@ -1112,11 +1217,25 @@ export type AcceptIvaGeneralResponse = z.infer<typeof AcceptIvaGeneralResponse>;
  * (`account_id`, en la moneda del saldo) y el saldo a favor baja por lo
  * reembolsado. Es la única vía para el «consumidor final», que no conserva saldo.
  */
+/** El mensaje de persona cuando el reembolso no dice cuánto, o lo dice de dos maneras. */
+export const MENSAJE_IMPORTE_O_TODO =
+  "Di cuánto se devuelve: un importe, o todo lo que queda disponible. Una de las dos cosas, no las dos.";
+
 export const RefundCustomerCreditRequest = z
   .object({
     company_id: uuid,
     account_id: uuid,
-    amount,
+    /**
+     * Lo que se reembolsa, EN LA MONEDA DEL SALDO A FAVOR (G-05: la del documento que lo
+     * originó). Va este o `whole`: EXACTAMENTE uno de los dos.
+     */
+    amount: amount.optional(),
+    /**
+     * G-15: reembolsar TODO lo disponible del saldo a favor, sea cual sea su moneda: quien
+     * reembolsa «la devolución entera» no tiene que conocer en qué moneda quedó el saldo ni
+     * convertir nada. Va este o `amount`: EXACTAMENTE uno de los dos.
+     */
+    whole: z.literal(true).optional(),
     reason: z.string().trim().min(3).max(300),
     /**
      * Confirmar EXPLÍCITAMENTE que la cuenta quede en negativo (ADR-0062 §4). Sin esto, un
@@ -1130,7 +1249,17 @@ export const RefundCustomerCreditRequest = z
      */
     overdraft_reason: z.string().trim().max(300).optional(),
   })
-  .strict();
+  .strict()
+  // Ni los dos ni ninguno: «cuánto» tiene una sola respuesta. Con los dos, ¿cuál mandaría?
+  .superRefine((v, ctx) => {
+    if ((v.amount === undefined) === (v.whole === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [v.amount === undefined ? "amount" : "whole"],
+        message: MENSAJE_IMPORTE_O_TODO,
+      });
+    }
+  });
 export type RefundCustomerCreditRequest = z.infer<typeof RefundCustomerCreditRequest>;
 
 export const CustomerRefundResponse = z
@@ -1146,6 +1275,17 @@ export const CustomerRefundResponse = z
     journal_entry_id: uuid.nullable(),
     /** Lo que queda del saldo a favor después del reembolso. */
     credit_remaining: z.string(),
+    /**
+     * G-15: el dinero que SALIÓ de la caja, en la moneda de la cuenta y a la tasa del día.
+     * `amount` / `currency` son lo consumido del saldo a favor, en su moneda.
+     */
+    paid_amount: z.string(),
+    paid_currency: z.string(),
+    fx_rate: z.string(),
+    /** Lo que bajó del pasivo − lo que salió, en moneda funcional. Positivo = ganancia. */
+    exchange_difference: z.string(),
+    /** La tasa del día moneda del saldo a favor → moneda funcional (1 si ya es la funcional). */
+    credit_fx_rate: z.string(),
   })
   .strict();
 export type CustomerRefundResponse = z.infer<typeof CustomerRefundResponse>;

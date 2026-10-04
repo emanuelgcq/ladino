@@ -70,3 +70,12 @@ export async function subirFotoProducto(
     body: form,
   });
 }
+
+/**
+ * C-10: la foto también se puede ARRASTRAR. Devuelve la primera imagen soltada, o null si lo
+ * soltado no es una imagen. El botón sigue abriendo el selector: el teclado no pierde nada.
+ */
+export function fotoSoltada(e: { dataTransfer: DataTransfer | null }): File | null {
+  const archivos = Array.from(e.dataTransfer?.files ?? []);
+  return archivos.find((f) => f.type.startsWith("image/")) ?? null;
+}

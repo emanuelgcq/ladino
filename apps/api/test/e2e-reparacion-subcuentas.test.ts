@@ -166,6 +166,15 @@ describe("ADR-0070 · repairTreasurySubaccounts sobre una empresa sin reparar", 
       description: "Reclasificación: cada cuenta de tesorería a su subcuenta contable (ADR-0070)",
     });
 
+    // ADR-0079 (C3): el asiento de una REPARACIÓN también es un movimiento contable. Lleva una
+    // versión de reglas registrada, no la cadena de sistema `db-repair` que declara la función.
+    const [version] = await sql<{ rules_version: string; de_reglas: boolean }[]>`
+      select e.rules_version,
+             exists (select 1 from platform.rules_versions v
+                      where v.version = e.rules_version and v.kind = 'rules') as de_reglas
+        from public.journal_entries e where e.id = ${r.entry_id!}`;
+    expect(version).toMatchObject({ de_reglas: true });
+
     // El mismo rastro que el posteo manual: journal.posted en auditoría y en el outbox.
     const [a] = await sql<{ actor_type: string; entry_number: number }[]>`
       select actor_type, (payload ->> 'entry_number')::int as entry_number

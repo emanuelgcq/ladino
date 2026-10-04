@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture, venceDeFixture } from "./_fiado-de-fixture.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 import { repairCents } from "@ladino/domain";
 
@@ -115,6 +116,8 @@ beforeAll(async () => {
                                            person_type_code, taxpayer_type_code)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, 'Vecino Luis', 'natural',
                      'consumidor_final')`;
+    // E-09: esta empresa de prueba fía (permiso y límite), como lo declararía una real.
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
     // Los dos productos del QA: 2 refrescos a 2,80 y un delivery de 1,00.
     const [r] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
@@ -184,6 +187,7 @@ describe("el céntimo de la caja: lo que se anuncia, lo que se guarda y lo que q
       warehouse_id: W1,
       customer_id: CLIENTE,
       lines: lineas,
+      due_date: venceDeFixture(),
     });
     expect(venta.status).toBe(201);
     const v = (await venta.json()) as { document: { total_amount: string } };
@@ -240,6 +244,7 @@ describe("el céntimo de la caja: lo que se anuncia, lo que se guarda y lo que q
       warehouse_id: W1,
       customer_id: CLIENTE,
       lines: [{ product_id: DELIVERY, quantity: "1" }],
+      due_date: venceDeFixture(),
     });
     expect(venta.status).toBe(201);
     const doc = ((await venta.json()) as { document: { id: string; total_amount: string } })
@@ -272,6 +277,7 @@ describe("el céntimo de la caja: lo que se anuncia, lo que se guarda y lo que q
         { product_id: REFRESCO, quantity: "3" },
         { product_id: DELIVERY, quantity: "1" },
       ],
+      due_date: venceDeFixture(),
     });
     expect(venta.status).toBe(201);
     const doc = ((await venta.json()) as { document: { id: string; total_amount: string } })

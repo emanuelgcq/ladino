@@ -270,4 +270,52 @@ c.caso(
   },
 );
 
+// ── L-10 (ola 4): cada libro ofrece solo sus formatos ───────────────────────
+c.caso(
+  "L-10",
+  "el servidor rechaza el TXT de retenciones para el libro de ventas (422) y no deja generación",
+  async () => {
+    const [antes] = await sql`
+      select count(*)::int as n from public.fiscal_book_runs where company_id = ${EMPRESAS.E2}`;
+    const r = await pedir(PERSONAS.contador, "E2", "POST", "/v1/fiscal-books/export", {
+      company_id: EMPRESAS.E2,
+      book_kind: "ventas",
+      period_from: "2026-09-01",
+      period_to: "2026-09-30",
+      format_code: "txt_retenciones_iva",
+      timezone: "America/Caracas",
+    });
+    afirmar(r.status === 422, `esperaba 422, llegó ${r.status}: ${r.texto.slice(0, 200)}`);
+    // Lo que solo dice ESTE rechazo (no la validación genérica del cuerpo).
+    afirmar(
+      r.json?.message?.includes("no sirve para el libro de ventas"),
+      `mensaje: ${r.json?.message}`,
+    );
+    const [despues] = await sql`
+      select count(*)::int as n from public.fiscal_book_runs where company_id = ${EMPRESAS.E2}`;
+    afirmar(despues.n === antes.n, "el rechazo dejó una generación registrada");
+  },
+);
+
+c.caso("L-10", "el selector de la pantalla filtra el catálogo por el libro elegido", async () => {
+  const fs = await import("node:fs");
+  const fuente = fs.readFileSync(
+    new URL("../../../apps/web/src/pages/libros/Libros.tsx", import.meta.url),
+    "utf8",
+  );
+  afirmar(
+    /f\.book_kind === "todos" \|\| f\.book_kind === kind/.test(fuente),
+    "Libros.tsx no filtra los formatos por book_kind",
+  );
+  afirmar(
+    /options=\{formatosDelLibro\.map/.test(fuente) &&
+      !/options=\{\(formatos\.data \?\? \[\]\)\.map/.test(fuente),
+    "el selector sigue listando el catálogo entero",
+  );
+  // Y el catálogo sigue diciendo de qué libro es cada formato: sin eso el filtro no mide nada.
+  const [t] = await sql`
+    select book_kind from public.book_format_adapters where code = 'txt_retenciones_iva'`;
+  afirmar(t?.book_kind === "retenciones_iva", `txt_retenciones_iva es de: ${t?.book_kind}`);
+});
+
 export default c.correr;

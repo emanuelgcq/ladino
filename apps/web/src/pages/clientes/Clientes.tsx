@@ -1,8 +1,19 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router";
+import { useCallback, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Banknote, Lock, LockOpen, MessageCircle, Pencil, Upload, UserPlus } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Banknote,
+  Lock,
+  LockOpen,
+  MessageCircle,
+  Pencil,
+  Upload,
+  UserPlus,
+} from "lucide-react";
 import {
   ImportarArchivo,
   PLANTILLA_CLIENTES,
@@ -11,7 +22,13 @@ import {
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
-import { FormField } from "../../components/forms.js";
+import {
+  FormField,
+  MotivoDeLectura,
+  importeLimpio,
+  importeValido,
+  motivoDeImporte,
+} from "../../components/forms.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
 import { CobrarDocumento } from "../../components/CobrarDocumento.js";
 import { numeroDocumento } from "../../components/documento.js";
@@ -42,10 +59,29 @@ import type { Customer, CodeCatalog, PriceList } from "../../lib.js";
 import { sufijoDeArchivo } from "../../app/rif.js";
 import { avisoDigitoRif, formatearDocumento } from "@ladino/schemas";
 import { useConFacturas } from "../../app/modo-venta.js";
+import { CLIENTE_ESPECIAL } from "../../components/capa-fiscal/textos.js";
 
 /** La fila con la deuda funcional de HOY que calcula el servidor (ADR-0047). */
 /** `debt` null = debe algo en divisa y falta la tasa de hoy (el servidor no lo puede valorar). */
-type ClienteConDeuda = Customer & { readonly debt?: string | null };
+type ClienteConDeuda = Customer & {
+  readonly debt?: string | null;
+  /**
+   * P-05: lo VENCIDO de esa deuda, del servidor. «0.00» = nada vencido; null con
+   * `overdue_reason: "sin_tasa"` = hay vencido y no se puede valorar hoy.
+   */
+  readonly overdue?: string | null;
+  readonly overdue_reason?: "sin_tasa" | null;
+};
+
+type OrdenDeClientes = "nombre" | "deuda" | "deuda-asc" | "vencido" | "vencido-asc";
+const ORDENES: readonly string[] = ["deuda", "deuda-asc", "vencido", "vencido-asc"];
+/** Cómo se llama cada orden en `GET /v1/customers?sort=`. */
+const SORT_DE_ORDEN: Record<Exclude<OrdenDeClientes, "nombre">, string> = {
+  deuda: "debt_desc",
+  "deuda-asc": "debt_asc",
+  vencido: "overdue_desc",
+  "vencido-asc": "overdue_asc",
+};
 
 /** Las facturas emitidas con saldo, tal como las devuelve el estado de cuenta. */
 interface DocumentoAbierto {
@@ -61,6 +97,9 @@ interface DocumentoAbierto {
   status: string;
   /** Días desde la emisión, contados por el servidor. */
   days_outstanding: number;
+  /** P-05: el día en que vence (`AAAA-MM-DD`) y si ya venció; los dos del servidor. */
+  due_date?: string | null;
+  overdue?: boolean;
 }
 interface EstadoDeCuenta {
   currency: string;
@@ -105,19 +144,53 @@ export function Clientes(): React.JSX.Element {
   const verDeuda = puede("ar.read");
   const [busqueda, setBusqueda] = useState("");
   const [pagina, setPagina] = useState(1);
+  /**
+   * P-05: EL ORDEN POR DEUDA, EN LA URL (`?orden=deuda`, mayor primero; `?orden=deuda-asc`). Es
+   * adonde llevan «Te deben…» del Inicio y «Ver quién me debe» de Mi dinero, y una vista con su
+   * orden en la URL se puede compartir. Lo ordena el SERVIDOR sobre todos los clientes (la lista
+   * se pagina allí): ordenar aquí solo ordenaría la página que se ve. Sin `ar.read` no hay deuda
+   * que ordenar, y la lista va por nombre aunque la URL diga otra cosa.
+   */
+  const [params, setParams] = useSearchParams();
+  const ordenPedido = params.get("orden");
+  // `?orden=vencido` (lo vencido primero; `vencido-asc`): adonde llevan los recordatorios desde
+  // que el fiado tiene vencimiento. El orden por deuda total sigue en la cabecera «Deuda».
+  const orden: OrdenDeClientes =
+    verDeuda && ordenPedido !== null && ORDENES.includes(ordenPedido)
+      ? (ordenPedido as OrdenDeClientes)
+      : "nombre";
+  const alternarOrden = useCallback(
+    (campo: "deuda" | "vencido"): void => {
+      // Cada cabecera recorre lo suyo: mayor primero → menor primero → por nombre.
+      const siguiente: OrdenDeClientes =
+        orden === campo ? `${campo}-asc` : orden === `${campo}-asc` ? "nombre" : campo;
+      setParams(
+        (antes) => {
+          const q = new URLSearchParams(antes);
+          if (siguiente === "nombre") q.delete("orden");
+          else q.set("orden", siguiente);
+          return q;
+        },
+        { replace: true },
+      );
+      setPagina(1);
+    },
+    [orden, setParams],
+  );
   const [creando, setCreando] = useState(false);
   const [importando, setImportando] = useState(false);
   const [detalle, setDetalle] = useState<Customer | null>(null);
   const qc = useQueryClient();
 
   const clientes = useQuery({
-    queryKey: ["clientes", empresa.id, busqueda, pagina, verDeuda],
+    queryKey: ["clientes", empresa.id, busqueda, pagina, verDeuda, orden],
     queryFn: () => {
       const q = new URLSearchParams({
         page: String(pagina),
         per_page: String(PER_PAGE),
       });
       if (verDeuda) q.set("with_debt", "1");
+      if (orden !== "nombre") q.set("sort", SORT_DE_ORDEN[orden]);
       if (busqueda.trim() !== "") q.set("search", busqueda.trim());
       return llamar<{ items: ClienteConDeuda[]; total: number }>(`/v1/customers?${q.toString()}`);
     },
@@ -172,7 +245,33 @@ export function Clientes(): React.JSX.Element {
         ? ([
             {
               id: "deuda",
-              header: "Deuda",
+              // P-05: el orden por deuda es del servidor (no el de la tabla, que solo ordena la
+              // página): por eso el botón vive aquí y `enableSorting` sigue apagado.
+              header: () => (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                  onClick={() => alternarOrden("deuda")}
+                  aria-label={
+                    orden === "deuda"
+                      ? "Deuda: de mayor a menor. Ordenar de menor a mayor"
+                      : orden === "deuda-asc"
+                        ? "Deuda: de menor a mayor. Volver al orden por nombre"
+                        : "Ordenar por deuda, de mayor a menor"
+                  }
+                >
+                  Deuda
+                  {orden === "deuda" ? (
+                    <ArrowDown className="size-3" />
+                  ) : orden === "deuda-asc" ? (
+                    <ArrowUp className="size-3" />
+                  ) : (
+                    <ArrowUpDown className="size-3 opacity-40" />
+                  )}
+                </button>
+              ),
+              // El CSV sigue diciendo «Deuda»: la cabecera ya no es un texto.
+              meta: { exportHeader: "Deuda" },
               enableSorting: false,
               // La misma deuda que ve el mostrador: funcional de HOY, del servidor.
               accessorFn: (c) => c.debt,
@@ -198,6 +297,52 @@ export function Clientes(): React.JSX.Element {
               },
             },
             {
+              id: "vencido",
+              // P-05: lo vencido de esa deuda. La cifra y el orden son del servidor; aquí solo
+              // se pinta: «—» sin nada vencido, el texto único cuando falta la tasa.
+              header: () => (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 hover:text-foreground"
+                  onClick={() => alternarOrden("vencido")}
+                  aria-label={
+                    orden === "vencido"
+                      ? "Vencido: de mayor a menor. Ordenar de menor a mayor"
+                      : orden === "vencido-asc"
+                        ? "Vencido: de menor a mayor. Volver al orden por nombre"
+                        : "Ordenar por deuda vencida, de mayor a menor"
+                  }
+                >
+                  Vencido
+                  {orden === "vencido" ? (
+                    <ArrowDown className="size-3" />
+                  ) : orden === "vencido-asc" ? (
+                    <ArrowUp className="size-3" />
+                  ) : (
+                    <ArrowUpDown className="size-3 opacity-40" />
+                  )}
+                </button>
+              ),
+              meta: { exportHeader: "Vencido" },
+              enableSorting: false,
+              accessorFn: (c) => c.overdue,
+              cell: (c) => {
+                const vencido = c.getValue<string | null | undefined>();
+                const estado = estadoDeDeuda(vencido);
+                if (estado === "sin_deuda") {
+                  return <span className="text-[0.82rem] text-muted-foreground">—</span>;
+                }
+                if (estado === "sin_valorar") {
+                  return <span className="text-[0.82rem] text-destructive">{FALTA_LA_TASA}</span>;
+                }
+                return (
+                  <span className="font-mono text-[0.84rem] font-medium text-destructive">
+                    {textoDeDeuda(vencido, "VES")}
+                  </span>
+                );
+              },
+            },
+            {
               id: "cuenta",
               header: "",
               enableSorting: false,
@@ -214,7 +359,7 @@ export function Clientes(): React.JSX.Element {
           ] as ColumnDef<ClienteConDeuda, unknown>[])
         : []),
     ],
-    [conFacturas, verDeuda],
+    [conFacturas, verDeuda, orden, alternarOrden],
   );
 
   return (
@@ -522,7 +667,7 @@ function DetalleCliente({
   cliente: Customer;
   onCerrar: (hecho: boolean) => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const conFacturasFicha = useConFacturas();
   const toast = useToast();
   const [editando, setEditando] = useState(false);
@@ -533,7 +678,58 @@ function DetalleCliente({
     email: cliente.email ?? "",
     phone: cliente.phone ?? "",
     status: cliente.status,
+    default_price_list_id: cliente.default_price_list_id ?? "",
   });
+  // E-09: el límite de fiado, en USD. Lo fija quien tenga customers.credit.set.
+  const [limite, setLimite] = useState("");
+  // E-14: la clasificación fiscal se cambia aparte, con permiso propio.
+  const [clasificacion, setClasificacion] = useState(cliente.taxpayer_type_code);
+  const catalogos = useQuery({
+    queryKey: ["catalogos-ficha-cliente", empresa.id],
+    staleTime: 300_000,
+    queryFn: async () => {
+      const [fiscales, listas] = await Promise.all([
+        llamar<CodeCatalog[]>("/v1/taxpayer-types").catch(() => [] as CodeCatalog[]),
+        llamar<PriceList[]>("/v1/price-lists").catch(() => [] as PriceList[]),
+      ]);
+      return { fiscales, listas };
+    },
+  });
+
+  async function fijarLimite(): Promise<void> {
+    setError(null);
+    try {
+      await llamar(`/v1/customers/${cliente.id}/credit-limit`, {
+        method: "PUT",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          credit_limit_usd: importeLimpio(limite),
+        }),
+      });
+      toast.success("Límite de fiado fijado", "Quedó el acta con el valor anterior.");
+      onCerrar(true);
+    } catch (e) {
+      setError(e);
+      toast.error("No se pudo fijar el límite", errorDePersona(e));
+    }
+  }
+
+  async function cambiarClasificacion(): Promise<void> {
+    setError(null);
+    try {
+      await llamar(`/v1/customers/${cliente.id}/taxpayer-type`, {
+        method: "PUT",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ company_id: empresa.id, taxpayer_type_code: clasificacion }),
+      });
+      toast.success("Clasificación cambiada", "Auditada con el valor anterior.");
+      onCerrar(true);
+    } catch (e) {
+      setError(e);
+      toast.error("No se pudo cambiar la clasificación", errorDePersona(e));
+    }
+  }
   const [rif, setRif] = useState(cliente.tax_id ?? "");
   const [motivoBloqueo, setMotivoBloqueo] = useState("");
   const [confirmandoRif, setConfirmandoRif] = useState(false);
@@ -554,6 +750,8 @@ function DetalleCliente({
           fiscal_address: oNull(form.fiscal_address),
           email: oNull(form.email),
           phone: oNull(form.phone),
+          // E-14: la lista preferida también se elige al editar (antes solo al crear).
+          default_price_list_id: oNull(form.default_price_list_id),
           // El bloqueo NO se toca por aquí: tiene su endpoint y su permiso.
           ...(cliente.status !== "blocked" && form.status !== "blocked"
             ? { status: form.status }
@@ -671,6 +869,76 @@ function DetalleCliente({
               </div>
             </div>
 
+            <div
+              className="rounded-md border border-border bg-surface-muted/40 p-3"
+              data-testid="cliente-limite-fiado"
+            >
+              <p className="text-[0.85rem] font-medium">
+                Límite de fiado:{" "}
+                <span className="tabular-nums">
+                  {mostrarImporte({
+                    amount: cliente.credit_limit_usd ?? "0",
+                    currency: "USD",
+                  })}
+                </span>
+              </p>
+              <p className="mt-1 text-[0.8rem] text-muted-foreground">
+                Hasta cuánto puede deber este cliente, en dólares. Con 0 no se le fía. Cambiarlo
+                deja acta.
+              </p>
+              {puede("customers.credit.set") && (
+                <>
+                  <div className="mt-2 flex gap-2">
+                    <Input
+                      aria-label="Nuevo límite de fiado en dólares"
+                      inputMode="decimal"
+                      className="tabular-nums"
+                      placeholder="Nuevo límite en USD (ej. 50)"
+                      value={limite}
+                      onChange={(e) => setLimite(e.target.value)}
+                    />
+                    <Button
+                      variant="secondary"
+                      disabled={!importeValido(limite)}
+                      onClick={() => void fijarLimite()}
+                    >
+                      Fijar
+                    </Button>
+                  </div>
+                  {/* F-06: lo que no se pudo leer se dice; no se manda mil veces menor. */}
+                  <MotivoDeLectura className="mt-1" motivo={motivoDeImporte(limite)} />
+                </>
+              )}
+            </div>
+
+            {conFacturasFicha && puede("customer.tax_id.manage") && (
+              <div className="rounded-md border border-border bg-surface-muted/40 p-3">
+                <p className="text-[0.85rem] font-medium">{CLIENTE_ESPECIAL.fichaTitulo}</p>
+                <p className="mt-1 text-[0.8rem] text-muted-foreground">
+                  {CLIENTE_ESPECIAL.fichaAyuda}
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <SimpleSelect
+                    ariaLabel="Clasificación fiscal del cliente"
+                    className="flex-1"
+                    value={clasificacion}
+                    onValueChange={setClasificacion}
+                    options={(catalogos.data?.fiscales ?? []).map((t) => ({
+                      value: t.code,
+                      label: t.name,
+                    }))}
+                  />
+                  <Button
+                    variant="secondary"
+                    disabled={clasificacion === cliente.taxpayer_type_code}
+                    onClick={() => void cambiarClasificacion()}
+                  >
+                    Cambiar
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <div className="rounded-md border border-border bg-surface-muted/40 p-3">
               <p className="text-[0.85rem] font-medium">Bloqueo de cobranzas</p>
               <div className="mt-2 flex gap-2">
@@ -756,6 +1024,27 @@ function DetalleCliente({
                   id={a.id}
                   value={form.phone}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                />
+              )}
+            </FormField>
+            <FormField
+              label="Lista de precios preferida"
+              hint="Opcional. Sin ella, la de mostrador."
+            >
+              {(a) => (
+                <SimpleSelect
+                  id={a.id}
+                  value={form.default_price_list_id === "" ? "ninguna" : form.default_price_list_id}
+                  onValueChange={(v) =>
+                    setForm({ ...form, default_price_list_id: v === "ninguna" ? "" : v })
+                  }
+                  options={[
+                    { value: "ninguna", label: "Sin preferida" },
+                    ...(catalogos.data?.listas ?? []).map((l) => ({
+                      value: l.id,
+                      label: `${l.name} (${l.currency_code})`,
+                    })),
+                  ]}
                 />
               )}
             </FormField>
@@ -952,6 +1241,17 @@ function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element 
                     {" "}
                     · {d.issued_at !== null ? fechaRelativa(d.issued_at) : ""}
                   </span>
+                  {/* P-05: cuándo vence y si ya venció, dicho por el servidor (día de Caracas). */}
+                  {d.due_date !== undefined && d.due_date !== null && (
+                    <span
+                      className={`block text-[0.8rem] ${
+                        d.overdue === true ? "text-destructive" : "text-muted-foreground"
+                      }`}
+                    >
+                      {d.overdue === true ? "Venció el " : "Vence el "}
+                      {d.due_date.slice(8, 10)}/{d.due_date.slice(5, 7)}/{d.due_date.slice(0, 4)}
+                    </span>
+                  )}
                 </span>
                 <span className="tabular-nums">
                   {textoDeDeuda(d.balance, estado.data?.currency ?? "VES")}

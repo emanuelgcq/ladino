@@ -11,9 +11,11 @@ import {
   dialogo,
   esperar,
   estado,
+  fijarLimiteDeFiado,
   guardarEstado,
   login,
   nuevaEvidencia,
+  rellenarCuandoPaga,
   sql,
   cronometrar,
 } from "./lib.mjs";
@@ -23,6 +25,8 @@ const clic = (loc, t = 6000) =>
   loc.click({ timeout: t }).catch((e) => `NO-CLIC: ${String(e).slice(0, 90)}`);
 const r = {};
 const cid = E.empresas.E3.id;
+// R-82.7: fiar exige límite (E-09). Antes de abrir la caja: la cotización lo lee al identificar.
+fijarLimiteDeFiado(cid);
 
 const { browser, page, eventos } = await abrir();
 const ev = nuevaEvidencia("F", eventos);
@@ -53,6 +57,7 @@ await clic(
     .first(),
 );
 await esperar(page, 800);
+await rellenarCuandoPaga(page); // P-05: sin la fecha, la caja no deja confirmar
 await clic(page.getByRole("button", { name: /Fiar y registrar/ }).first());
 await esperar(page, 3000);
 const vendida = await ev(page, "E3-mismo-dia-fiado");

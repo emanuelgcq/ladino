@@ -320,7 +320,17 @@ function Libro({
     staleTime: 300_000,
     queryFn: () => llamar<BookFormatAdapter[]>("/v1/fiscal-books/formats"),
   });
-  const formato = formatoElegido ?? (formatos.data ?? []).find((f) => f.implemented)?.code ?? null;
+  // L-10: cada libro ofrece SOLO sus formatos. El catálogo dice de qué libro es cada uno
+  // (`book_kind`, o «todos»); el TXT de retenciones no se ofrece en el libro de ventas. El
+  // servidor rechaza igual la combinación que no corresponde: esto es no ofrecer lo que fallaría.
+  const formatosDelLibro = (formatos.data ?? []).filter(
+    (f) => f.book_kind === "todos" || f.book_kind === kind,
+  );
+  // Al cambiar de libro, un formato elegido que no es de este libro deja de valer.
+  const formato =
+    formatosDelLibro.find((f) => f.code === formatoElegido)?.code ??
+    formatosDelLibro.find((f) => f.implemented)?.code ??
+    null;
 
   /** H6: el resumen del art. 72 de la generación recién exportada, como `resumen-art72.csv`. */
   async function descargarResumen(): Promise<void> {
@@ -378,7 +388,7 @@ function Libro({
   }
 
   const b = libro.data;
-  const elegido = (formatos.data ?? []).find((f) => f.code === formato);
+  const elegido = formatosDelLibro.find((f) => f.code === formato);
 
   const columnas = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(() => {
     if (b === undefined || b.rows.length === 0) return [];
@@ -478,7 +488,7 @@ function Libro({
                 ariaLabel="Formato de exportación"
                 value={formato}
                 onValueChange={setFormatoElegido}
-                options={(formatos.data ?? []).map((f) => ({
+                options={formatosDelLibro.map((f) => ({
                   value: f.code,
                   label: `${f.name}${f.is_official ? " (oficial)" : ""}${f.implemented ? "" : " — sin implementación"}`,
                   disabled: !f.implemented,

@@ -4,6 +4,7 @@ import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
+import { fiadoDeFixture, venceDeFixture } from "./_fiado-de-fixture.js";
 
 /**
  * EL DINERO DEL NEGOCIO (ADR-0062, migración 61). Cuatro cosas que el QA de pantalla del
@@ -142,6 +143,8 @@ beforeAll(async () => {
                                            person_type_code, taxpayer_type_code)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, 'Vecina Rosa', 'natural',
                      'consumidor_final')`;
+    // E-09: la venta sin cobro de este fichero es fiado; la empresa de prueba fía (permiso y límite).
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
     const [s] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                    tax_category_code)
@@ -227,6 +230,7 @@ describe("el dinero del negocio: dónde cae, cómo se mueve y qué pasa si no al
       warehouse_id: W1,
       customer_id: CLIENTE,
       lines: [{ product_id: SERVICIO, quantity: "1" }],
+      due_date: venceDeFixture(),
     });
     expect(venta.status).toBe(201);
     const recibo = ((await venta.json()) as { document: { id: string } }).document.id;

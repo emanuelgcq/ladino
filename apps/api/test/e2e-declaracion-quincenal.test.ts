@@ -4,6 +4,8 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture } from "./_fiado-de-fixture.js";
+import { borrarTasasOficiales, sembrarTasaOficial } from "./_tasa-oficial.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
@@ -40,6 +42,9 @@ const ROL = crypto.randomUUID();
 const MEM = crypto.randomUUID();
 const ASIG = crypto.randomUUID();
 const RUN = Date.now().toString(36);
+// La regla del fiado (R-82.1) mide el límite en USD: facturar a crédito necesita la tasa oficial
+// del día también cuando la factura va en bolívares. En una base limpia no hay ninguna.
+const FUENTE_TASA_FIADO = `BCV e2e-declaracion-quincenal-fiado-${RUN}`;
 const DIGITOS = String(Date.now()).slice(-8);
 const COMPROBANTE = `202609${DIGITOS}`;
 // H4: dos comprobantes más, únicos por cliente y factura (14 dígitos).
@@ -113,6 +118,7 @@ beforeAll(async () => {
   sqlApi = createClient(URL_API);
   app = buildApp({ sql: sqlApi, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
   await sql`insert into auth.users (id) values (${CONTADOR}) on conflict (id) do nothing`;
+  await sembrarTasaOficial(sql, { rate: "40", rate_date: HOY, source: FUENTE_TASA_FIADO });
 
   await sql.begin(async (tx) => {
     await tx`select set_config('ladino.actor_id', ${CONTADOR}, true)`;
@@ -133,7 +139,7 @@ beforeAll(async () => {
                (tenant_id, company_id, taxpayer_type_code, effective_from, notified_on, reason,
                 rules_version)
              values (${TENANT}, ${TRANSICION}, 'especial', '2025-03-10', '2025-03-10',
-                     'E2E: calificada especial a mitad de marzo de 2025', 'e2e')`;
+                     'E2E: calificada especial a mitad de marzo de 2025', 'domain-s0.5')`;
     await tx`insert into public.warehouses (id, tenant_id, company_id, code, name)
              values (${W1}, ${TENANT}, ${ESPECIAL}, 'E2E-QW1', 'Principal')`;
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope)
@@ -171,6 +177,8 @@ beforeAll(async () => {
                 taxpayer_type_code)
              values (${AGENTE}, ${TENANT}, ${ESPECIAL}, ${`J-AGQ-${RUN}`}, 'Agente e2e quincenal',
                      'juridica', 'especial')`;
+    // R-82.1: la factura de administración nace fiada — la empresa de prueba declara que fía.
+    await fiadoDeFixture(tx, ESPECIAL, [ROL]);
     const [p] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                    tax_category_code)
@@ -265,6 +273,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await borrarTasasOficiales(sql, FUENTE_TASA_FIADO);
   await sql.end();
   await sqlApi.end();
 });

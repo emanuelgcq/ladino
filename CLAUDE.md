@@ -182,6 +182,13 @@ Por eso esta categoría de test se escribe aparte y a propósito. Los que ya exi
 | IVA en Bs = base en Bs × alícuota, por línea, y el pie es la suma de sus líneas | `fiscal_amount_gaps()` | documento fiscal ↔ regla de conversión (ADR-0075 §1) |
 | Documento saldado ⇒ su cuenta por cobrar o por pagar del mayor en cero | `settled_ledger_gaps()` | ventas y compras ↔ contabilidad (ADR-0075 §4) |
 | Saldo de cada caja en su moneda = Σ originales de su subcuenta, más la cola | `treasury_currency_gaps()` | tesorería ↔ contabilidad en divisa (ADR-0075 §6) |
+| Toda `rules_version` escrita desde el corte está registrada; documento fiscal emitido (venta, factura de proveedor posteada, comprobante de retención, nota de retiro) y asiento posteado o revertido llevan una versión de REGLAS, nunca una cadena de sistema | `rules_version_gaps()` | documentos y movimientos contables ↔ conjunto de reglas (ADR-0079) |
+| El hash global de reglas guardado = el recalculado | `rule_set_drift()` | reglas ↔ su materialización (ADR-0079) |
+| Toda tasa global creada desde el corte tiene su acta | `global_rate_record_gaps()` | tasa oficial ↔ acta de plataforma (B-14, ADR-0079) |
+| Cierre de caja en negativo ⇒ ni asiento vigente ni fila de cola como sobrante | `overdraft_closing_gaps()` | tesorería ↔ contabilidad (ADR-0062 §4, J-02) |
+| Cartera por documento = cuenta por cobrar del mayor: Σ (total − lo que cancelaron sus cobros vivos), más la cola | `receivables_ledger_gap()` | ventas y cobros ↔ contabilidad (F-12, ADR-0075); sin la revaluación al cierre ni la regularización del céntimo |
+| Saldos a favor vivos = pasivo de saldos a favor del mayor; uno agotado no carga nada y todo saldo vivo nació con asiento o está en cola | `customer_credit_ledger_gap()` | ventas (NC, devolución, pago de más, reembolso, reversa) ↔ contabilidad (ADR-0075 decisión 5) |
+| Factura anulada desde el corte ⇒ mismo día de Caracas, antes del cierre de una caja, período sin declarar y acta con el original y las copias en mano | `annulment_paper_gaps()` | ventas ↔ caja, declaración de IVA y auditoría (ADR-0061, nota de la ola 4) |
 
 **Al cerrar un módulo, la pregunta no es «¿pasan sus tests?» sino «¿qué invariante cruza este
 módulo con los anteriores, y quién lo mira?».** Si la respuesta es «nadie», ese es el trabajo que
@@ -284,8 +291,9 @@ bash scripts/gate-verdict.sh judge <log> <exit> --base F   # juzga un log contra
 ```
 
 Rojo si `VERIFY EXIT` ≠ 0, si hay un `Failed:`, si faltan `All tests successful`, `openapi:check OK`
-o `release:manifest:check OK`, si hay menos de 40 líneas de paso, o si vitest, pgTAP o sus ficheros
-bajan respecto de la línea base (**un test menos es rojo**). Existe por tres verdes falsos: el módulo
+o `release:manifest:check OK`, si hay menos de 40 líneas de paso, si pgTAP avisa de un plan que no cuadra
+(`Looks like you planned…`: una aserción dentro de un savepoint revertido no cuenta y el arnés da PASS
+igual), o si vitest, pgTAP o sus ficheros bajan respecto de la línea base (**un test menos es rojo**). Existe por tres verdes falsos: el módulo
 de clientes salió con lint en rojo leyendo la cola del log (2026-08-26); invocado como `pnpm verify`,
 Windows lo resuelve al builtin `verify` de cmd, que imprime `VERIFY is off.` y devuelve 0 (inventario,
 2026-08-26); y un test que desaparece no hace ruido. Un `Result: PASS` de turbo tampoco es el
@@ -379,7 +387,7 @@ pendientes), libros y declaraciones de IVA, percepción de IGTF y la puesta a pu
 `SPRINT_0_BOOTSTRAP.md` es historia.
 
 Antes de tocar algo: `docs/00_GOVERNANCE/HANDOFF.md` (la entrega más reciente arriba),
-`docs/00_GOVERNANCE/ADR_INDEX.md` (78 ADR) y `docs/02_COMPLIANCE/REGULATORY_STATUS.md`. La
+`docs/00_GOVERNANCE/ADR_INDEX.md` (80 ADR) y `docs/02_COMPLIANCE/REGULATORY_STATUS.md`. La
 homologación de software (PA SNAT/2024/000121) fue **derogada** por la PA SNAT/2026/00084
 sin sustituta: lo que gobierna la emisión es la PA 00071 (forma libre + imprenta autorizada)
 y la PA 102 (imprenta digital). Los `VALIDAR-SENIAT` / `VALIDAR-TRIBUTARIO` abiertos están en

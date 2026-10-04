@@ -253,7 +253,7 @@ describe("el PDF (M-05)", () => {
                 (tenant_id, company_id, taxpayer_type_code, effective_from, notified_on, reason,
                  rules_version)
               values (${TENANT}, ${COMPANY}, 'ordinario', '2026-01-01', null,
-                      'Fixture e2e documento de identidad', 'e2e-documento')`;
+                      'Fixture e2e documento de identidad', 'domain-s0.5')`;
     // PA 00071 art. 13.7 (P-57, migración 20260928190400): sobre forma libre la factura lleva al
     // adquirente identificado; el «Consumidor final» de sistema es solo para recibos.
     const [cf] = await sql<{ id: string }[]>`

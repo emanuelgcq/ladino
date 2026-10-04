@@ -115,10 +115,12 @@ select is(
 insert into public.exchange_rates (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
 values ('USD', 'VES', 40.00000000, 'BCV', '2026-08-01', '2026-08-01T10:00:00Z'),
        ('USD', 'VES', 50.00000000, 'BCV', '2026-09-01', '2026-09-01T10:00:00Z');
-select is(platform.rate_at('aaaa0021-0000-4000-8000-0000000000a2', 'USD', 'VES', '2026-08-15'), 40.00000000::numeric,
-  'rate_at el 15-ago: la tasa del 1-ago, la más reciente que no es posterior');
-select is(platform.rate_at('aaaa0021-0000-4000-8000-0000000000a2', 'USD', 'VES', '2026-09-15'), 50.00000000::numeric,
-  'rate_at el 15-sep: ya la del 1-sep — la FECHA es parámetro, nunca now()');
+-- Días 5, no 15: desde la migración 20261004195900 la tasa del día no puede ser más vieja que el
+-- margen de plataforma (7 días). Cambió la FECHA que se pregunta, no la cifra esperada.
+select is(platform.rate_at('aaaa0021-0000-4000-8000-0000000000a2', 'USD', 'VES', '2026-08-05'), 40.00000000::numeric,
+  'rate_at el 5-ago: la tasa del 1-ago, la más reciente que no es posterior');
+select is(platform.rate_at('aaaa0021-0000-4000-8000-0000000000a2', 'USD', 'VES', '2026-09-05'), 50.00000000::numeric,
+  'rate_at el 5-sep: ya la del 1-sep — la FECHA es parámetro, nunca now()');
 select is(platform.rate_at('aaaa0021-0000-4000-8000-0000000000a2', 'USD', 'VES', '2025-01-01'), null::numeric,
   'antes de toda tasa: NULL, no un invento');
 

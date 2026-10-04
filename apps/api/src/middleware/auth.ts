@@ -82,6 +82,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export interface AuthResult {
   readonly actor: Actor;
   readonly userId: string;
+  /** El `session_id` del JWT verificado (A-16: el origen del acta). Supabase lo emite siempre. */
+  readonly sessionId?: string | null;
 }
 
 /**
@@ -154,7 +156,9 @@ export async function verificarToken(
   const sub = payload["sub"];
   if (typeof sub !== "string" || !UUID_RE.test(sub)) return { ok: false, code: "UNAUTHENTICATED" };
 
-  return { ok: true, value: { actor: { kind: "user", userId: sub }, userId: sub } };
+  const sesion = payload["session_id"];
+  const conSesion = typeof sesion === "string" && sesion.length <= 128 ? { sessionId: sesion } : {};
+  return { ok: true, value: { actor: { kind: "user", userId: sub }, userId: sub, ...conSesion } };
 }
 
 /** Middleware: exige `Authorization: Bearer <jwt>` y deja el resultado en el contexto. */

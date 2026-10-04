@@ -416,12 +416,19 @@ select ok(
      from pg_class where oid = 'public.audit_events'::regclass),
   'RLS habilitada Y FORZADA');
 
-select is(
-  (select count(*) from pg_trigger
-    where tgrelid = 'public.audit_events'::regclass and not tgisinternal),
-  5::bigint,
-  'los CINCO triggers están enganchados: procedencia, anclas, append-only de '
-  'fila, append-only de statement y la validación de occurred_at (6/6)');
+-- El CONJUNTO EXACTO, por nombre: uno de más o uno de menos lo pone en rojo. Eran cinco; la
+-- migración 20261004120000 añadió dos (A-16: el origen del acta; B-06, ADR-0079: la versión de
+-- reglas). Quien añada o quite un trigger aquí lo declara en esta lista.
+select set_eq(
+  $$ select tgname::text from pg_trigger
+      where tgrelid = 'public.audit_events'::regclass and not tgisinternal
+        and tgenabled <> 'D' $$,
+  array['audit_events_provenance', 'audit_events_anchors', 'audit_events_append_only',
+        'audit_events_no_truncate', 'audit_events_occurred_at', 'audit_events_origin',
+        'audit_events_90_rules_version'],
+  'los SIETE triggers, y solo esos, están enganchados y activos: procedencia, anclas, '
+  'append-only de fila, append-only de statement, la validación de occurred_at, el origen '
+  '(A-16) y la versión de reglas (ADR-0079)');
 
 select ok(
   exists (select 1 from pg_trigger

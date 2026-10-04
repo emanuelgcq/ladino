@@ -1,5 +1,6 @@
 import { err, ok, type Result } from "@ladino/core";
 import { diaNegocio } from "./dia-negocio.js";
+import { mensajeFaltaTasa } from "./tasa-oficial.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
 import {
   minorUnitsOf,
@@ -17,6 +18,12 @@ import {
   type MatchInput,
   type RetentionFormula,
 } from "@ladino/purchases";
+import type {
+  RegisterExpenseRequest,
+  ExpenseResponse,
+  ExpensePreviewResponse,
+  SupplierPaymentPreviewResponse,
+} from "@ladino/schemas";
 import type {
   CreateSupplierRequest,
   SupplierResponse,
@@ -42,9 +49,10 @@ import { registrarDigitoDudoso, validarRif, type DocumentoLeido } from "./docume
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { tipoVigente } from "./tipo-contribuyente.js";
 import { receiveStockFor, revalueStock, revalorizar } from "./inventory.js";
-import { exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
+import { comprobanteAjeno, exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 import { emitirComprobanteDeRetencion } from "./retention-vouchers.js";
+import { toleranciaDeCaja } from "./tolerancia-de-caja.js";
 
 /**
  * Casos de uso de COMPRAS — RIGOR MÁXIMO. Es la contraparte de ventas y toca el
@@ -116,6 +124,14 @@ function traducir(e: unknown): PurchaseError | null {
   if (code === "LAD67") return { code: "VALIDATION_FAILED", message };
   if (code === "LAD39") return { code: "NEGATIVE_STOCK", message };
   if (code === "LAD96") return { code: "VALIDATION_FAILED", message: PROVEEDOR_SIN_RIF };
+  // H-09 (migración 20261004170100): una línea sin producto fuera de la factura de un gasto.
+  if (code === "LADH9") {
+    return {
+      code: "VALIDATION_FAILED",
+      message:
+        "Cada línea de una factura de mercancía lleva su producto. Una línea sin producto solo va en un gasto con factura fiscal.",
+    };
+  }
   if (code === "23505") {
     return {
       code: "DUPLICATE",
@@ -181,7 +197,7 @@ async function tasaA(
   if (!t?.rate) {
     return err({
       code: "EXCHANGE_RATE_MISSING",
-      message: `No hay tasa BCV de ${desde} a ${hasta} vigente para esa fecha. Tráela en Mi dinero.`,
+      message: mensajeFaltaTasa(diaNegocio(fecha), diaNegocio(new Date())),
     });
   }
   const d = parseDecimal(t.rate);
@@ -867,16 +883,112 @@ async function topeDeFacturacion(
   return null;
 }
 
+/**
+ * H-09 (recorrido 2026-09-24): LA FACTURA DE UN GASTO. Un gasto con factura fiscal (la luz, el
+ * teléfono, el alquiler) es una compra de SERVICIO, y se registra por `registerSupplierInvoice`
+ * —el mismo libro, el mismo crédito fiscal, la misma retención y su comprobante—, no por una
+ * rama fiscal paralela dentro de gastos. Lo único que cambia respecto de la mercancía:
+ *   · las líneas no llevan producto: llevan la categoría tributaria y la base tal como vienen
+ *     impresas (migración 20261004170000);
+ *   · no hay orden ni recepción que cruzar (el matching de tres vías no aplica);
+ *   · el asiento debita GASTO y no «mercancía recibida por facturar» (`ap.expense_invoice_posted`);
+ *   · lo autoriza `expense.register`: el paso interior lo autoriza el permiso de la operación
+ *     que lo contiene (RESPUESTA §2.8, familia «permiso anidado»).
+ * No viaja por el contrato público de `POST /v1/supplier-invoices`: solo lo pasa
+ * `registerInvoicedExpense`.
+ */
+export interface FacturaDeGasto {
+  readonly categoria: string;
+  readonly lineas: readonly { readonly tax_category_code: string; readonly base: string }[];
+  readonly adjunto?: string | undefined;
+  readonly recurrente?: boolean | undefined;
+  /**
+   * La cuenta de la que sale el dinero, que en el gasto se conoce en el mismo acto (AF4-01): la
+   * exclusión que la norma condiciona al medio de pago se comprueba contra ella.
+   */
+  readonly cuentaDePago?: { readonly kind: string; readonly name: string } | undefined;
+}
+
+/**
+ * EXCLUSIONES QUE LA NORMA CONDICIONA AL MEDIO DE PAGO (AF4-01, auditoría fiscal 2026-10-04).
+ * PA SNAT/2025/000054 art. 3 num. 8 (reproducción no oficial, ivecofi, leída el 2026-10-04;
+ * cotejo con la Gaceta pendiente): no se retiene en electricidad, agua, aseo y telefonía
+ * «pagados mediante domiciliación a cuentas bancarias de los agentes de retención». Son dos
+ * condiciones, la clase de servicio y el MEDIO DE PAGO. Aquí solo se comprueba lo que el texto
+ * dice y el sistema sabe: que la cuenta de la que sale el dinero es bancaria. La clase de
+ * servicio y qué cuenta como «domiciliación» NO se validan: son criterio (VALIDAR-TRIBUTARIO P-95).
+ *
+ * Decidido por criterio: el código va aquí y no como columna del catálogo `retention_exclusions`.
+ * Alternativa: una columna «exige cuenta bancaria» en el catálogo (migración, y el hash de reglas
+ * de ADR-0079 cambiaría); se deja para cuando haya una segunda exclusión con medio de pago.
+ */
+export const EXCLUSIONES_CON_CUENTA_BANCARIA: readonly string[] = ["servicio_publico_domiciliado"];
+
+/** `company_accounts.kind` de una cuenta bancaria: ni caja (`cash`) ni monedero (`wallet`). */
+export const CUENTA_BANCARIA = "bank";
+
+/**
+ * Las exclusiones que NO se ofrecen cuando el dinero sale de esta cuenta (AF4-01): la pantalla
+ * pregunta al servidor con la cuenta elegida y no decide nada. `null` si la cuenta no es de la
+ * empresa. Es la misma regla que aplica `registerSupplierInvoice` al registrar el gasto.
+ */
+export async function retentionExclusionsNotOfferedFor(
+  sql: TransactionSql,
+  companyId: string,
+  accountId: string,
+): Promise<readonly string[] | null> {
+  const [cuenta] = await sql<{ kind: string }[]>`
+    select kind from public.company_accounts
+     where id = ${accountId} and company_id = ${companyId}`;
+  if (!cuenta) return null;
+  return cuenta.kind === CUENTA_BANCARIA ? [] : EXCLUSIONES_CON_CUENTA_BANCARIA;
+}
+
+interface LineaDeFactura {
+  readonly product_id: string | null;
+  readonly tax_category_code: string | null;
+  readonly goods_receipt_line_id?: string | undefined;
+  readonly description?: string | undefined;
+  readonly quantity: string;
+  readonly unit_price: string;
+  readonly capture_currency?: string | undefined;
+  readonly capture_mode?: "unit" | "total" | undefined;
+}
+
 export async function registerSupplierInvoice(
   uow: UnitOfWork,
   input: RegisterSupplierInvoiceRequest,
+  gasto?: FacturaDeGasto,
 ): Promise<Result<SupplierInvoiceResponse, PurchaseError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Registrar exige un usuario real." });
   }
-  const ctx = await autorizar(sql, actor.userId, input.company_id, "purchase.invoice.register");
+  const ctx = await autorizar(
+    sql,
+    actor.userId,
+    input.company_id,
+    gasto === undefined ? "purchase.invoice.register" : "expense.register",
+  );
   if (!ctx.ok) return ctx;
+  if (gasto !== undefined && (input.lines.length > 0 || input.fiscal_support === false)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "La factura de un gasto lleva líneas de servicio y soporte fiscal.",
+    });
+  }
+  // Una sola forma de línea para el bucle de abajo: la de mercancía trae su producto; la de
+  // servicio, su categoría tributaria y su base (cantidad 1).
+  const lineas: readonly LineaDeFactura[] =
+    gasto === undefined
+      ? input.lines.map((l) => ({ ...l, tax_category_code: null }))
+      : gasto.lineas.map((l) => ({
+          product_id: null,
+          tax_category_code: l.tax_category_code,
+          description: gasto.categoria,
+          quantity: "1",
+          unit_price: l.base,
+        }));
 
   const [prov] = await sql<
     {
@@ -1018,6 +1130,21 @@ export async function registerSupplierInvoice(
             : `La exclusión «${exclusion.code}» la aplica el servidor solo; no se marca.`,
       });
     }
+    // AF4-01 (art. 3 num. 8): la exclusión vale para lo pagado por domiciliación a una cuenta
+    // BANCARIA del agente. En el gasto con factura la cuenta se conoce aquí: si no es de banco,
+    // se rechaza y el gasto se registra reteniendo. La factura registrada SIN pago no trae
+    // cuenta (`gasto` o `cuentaDePago` ausentes) y no se comprueba: queda en P-95.
+    const cuentaDePago = gasto?.cuentaDePago;
+    if (
+      cuentaDePago !== undefined &&
+      cuentaDePago.kind !== CUENTA_BANCARIA &&
+      EXCLUSIONES_CON_CUENTA_BANCARIA.includes(exclusion.code)
+    ) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `Esa exclusión es para servicios pagados por domiciliación desde una cuenta bancaria. Este gasto sale de «${cuentaDePago.name}», que no es una cuenta de banco: se le retiene. Quita la exclusión, o elige la cuenta del banco si de verdad se pagó por domiciliación.`,
+      });
+    }
     // H7 (art. 3 num. 6 y 7): hasta N UT por operación, contra la UT vigente en la fecha de la
     // factura. Sin UT cargada con su fuente no se marca: nunca un tope supuesto.
     if (ex.max_tax_units !== null && ex.ut === null) {
@@ -1135,13 +1262,19 @@ export async function registerSupplierInvoice(
   // facturada aceptaba una SEGUNDA factura por lo mismo, y la deuda con el proveedor se
   // duplicaba. El matching de tres vías solo informaba; el tope acumulado no existía. Se
   // comprueba por línea de recepción cuando viene, y por producto de la orden cuando no.
-  const sobre = await topeDeFacturacion(sql, input);
+  // H-09: la factura de un gasto no tiene orden ni recepción: no hay nada que cruzar.
+  const sobre = gasto === undefined ? await topeDeFacturacion(sql, input) : null;
   if (sobre !== null) return err(sobre);
 
-  const match = matchThreeWay({ lines: entradas, priceTolerancePct: tolerancia.value });
-  if (!match.ok) return err({ code: "VALIDATION_FAILED", message: match.error.message });
+  const match = matchThreeWay({
+    lines: gasto === undefined ? entradas : [],
+    priceTolerancePct: tolerancia.value,
+  });
+  if (!match.ok && gasto === undefined) {
+    return err({ code: "VALIDATION_FAILED", message: match.error.message });
+  }
 
-  const fuera = match.value.filter((r) => r.requiresApproval);
+  const fuera = match.ok ? match.value.filter((r) => r.requiresApproval) : [];
   if (fuera.length > 0) {
     // Fuera del umbral hace falta un permiso propio Y decirlo explícitamente en
     // el cuerpo. Que la pantalla lo pida no basta: se comprueba en servidor.
@@ -1178,7 +1311,8 @@ export async function registerSupplierInvoice(
            functional_currency, fx_rate,
            rate_source, rate_timestamp, rounding_policy_id, rules_version, notes,
            accounting_date, supplier_tax_id_snapshot, supplier_name_snapshot,
-           retention_exclusion_code, retention_exclusion_reason, iva_retention_full_reason)
+           retention_exclusion_code, retention_exclusion_reason, iva_retention_full_reason,
+           expense_category, expense_attachment_path, expense_is_recurring)
         values (${ctx.value.tenantId}, ${input.company_id}, ${input.supplier_id},
                 ${input.purchase_order_id ?? null}, ${input.supplier_document_number ?? null},
                 ${input.supplier_control_number ?? null}, ${input.supplier_document_ref ?? null},
@@ -1195,7 +1329,9 @@ export async function registerSupplierInvoice(
                   where s.id = ${input.supplier_id} and s.company_id = ${input.company_id}),
                 (select s.legal_name from public.suppliers s
                   where s.id = ${input.supplier_id} and s.company_id = ${input.company_id}),
-                ${exclusion?.code ?? null}, ${exclusion?.reason ?? null}, ${motivo100 ?? null})
+                ${exclusion?.code ?? null}, ${exclusion?.reason ?? null}, ${motivo100 ?? null},
+                ${gasto?.categoria ?? null}, ${gasto?.adjunto ?? null},
+                ${gasto?.recurrente ?? false})
         returning id`;
 
       let n = 0;
@@ -1205,15 +1341,28 @@ export async function registerSupplierInvoice(
       let sub = subtotal.value;
       let imp = impuesto.value;
 
-      for (const l of input.lines) {
+      for (const l of lineas) {
         n += 1;
         const cantidad = parseDecimal(l.quantity);
         const precio = Money.of(l.unit_price, input.currency);
         if (!cantidad.ok || !precio.ok) throw new Error("importe no interpretable");
 
-        const [producto] = await sp<{ name: string; tax_category_code: string }[]>`
-          select name, tax_category_code from public.products where id = ${l.product_id}`;
-        if (!producto) throw new Error("producto no encontrado");
+        // La línea de mercancía toma nombre y categoría de su producto; la de servicio (H-09)
+        // trae la categoría, que tiene que ser una del catálogo.
+        const [producto] =
+          l.product_id !== null
+            ? await sp<{ name: string; tax_category_code: string }[]>`
+                select name, tax_category_code from public.products where id = ${l.product_id}`
+            : await sp<{ name: string; tax_category_code: string }[]>`
+                select ${l.description ?? "Gasto"}::text as name, code as tax_category_code
+                  from public.product_tax_categories where code = ${l.tax_category_code}`;
+        if (!producto) {
+          throw new Error(
+            l.product_id !== null
+              ? "producto no encontrado"
+              : `La categoría tributaria «${l.tax_category_code}» no está en el catálogo.`,
+          );
+        }
 
         // La alícuota de COMPRA sale del mismo motor que la de venta, con
         // transaction_type='purchase' (ADR-0038). Sin regla no hay factura.
@@ -1288,10 +1437,11 @@ export async function registerSupplierInvoice(
       }
 
       // Y aquí pasa a `posted`: hasta este UPDATE es un borrador editable, y
-      // desde él es un hecho que el trigger congela.
+      // desde él es un hecho que el trigger congela. Al pasar a `posted` DECLARA DE NUEVO su
+      // versión de reglas (ADR-0079, quinta pasada, B2): se congela en el hecho, no en el borrador.
       await sp`
         update public.supplier_invoices
-           set status = 'posted', posted_at = now(),
+           set status = 'posted', posted_at = now(), rules_version = ${RULES_VERSION},
                subtotal_amount = ${sub.toFixed(8)}, tax_amount = ${imp.toFixed(8)},
                total_amount = ${sub.plus(imp).toFixed(8)},
                amount_transaction_currency = ${sub.plus(imp).toFixed(8)},
@@ -1391,7 +1541,9 @@ export async function registerSupplierInvoice(
     input.company_id,
     "supplier_invoice",
     facturaId,
-    "ap.invoice_posted",
+    // El hecho contable y el evento del outbox llevan EL MISMO nombre (pgTAP 026): la factura de
+    // un gasto publica y audita `ap.expense_invoice_posted`, que es también su plantilla.
+    gasto === undefined ? "ap.invoice_posted" : "ap.expense_invoice_posted",
     {
       supplier_id: input.supplier_id,
       supplier_document_number: input.supplier_document_number ?? null,
@@ -1400,6 +1552,7 @@ export async function registerSupplierInvoice(
       total_amount: detalle.value.total_amount,
       retention_total: detalle.value.retention_total,
       tax_is_recoverable: ivaRecuperable,
+      expense_category: gasto?.categoria ?? null,
       retention_voucher_number: detalle.value.retention_voucher_number,
       iva_retention_full_reason: motivo100 ?? null,
     },
@@ -1468,11 +1621,15 @@ export async function registerSupplierInvoice(
     tenantId: ctx.value.tenantId,
     companyId: input.company_id,
     sourceKind: "purchase_invoice",
-    sourceEvent: "ap.invoice_posted",
+    // H-09: la factura de un gasto debita gasto, no el puente de mercancía por facturar.
+    sourceEvent: gasto === undefined ? "ap.invoice_posted" : "ap.expense_invoice_posted",
     sourceId: facturaId,
     postingDate: fechaContable,
     postedBy: actor.userId,
-    description: `Factura de compra ${input.supplier_document_number}`,
+    description:
+      gasto === undefined
+        ? `Factura de compra ${input.supplier_document_number}`
+        : `Gasto con factura: ${gasto.categoria} (${input.supplier_document_number})`,
     functionalCurrency: ctx.value.functionalCurrency,
     amounts: {
       subtotal: subtotalFunc.value.toFixed(8),
@@ -1493,6 +1650,8 @@ export async function registerSupplierInvoice(
     return err({ code: "VALIDATION_FAILED", message: contable.error.message });
   }
 
+  // Un servicio no pasó por el almacén: no hay recepción que revalorizar.
+  if (gasto !== undefined) return detalle;
   const revalorizada = await revalorizarContraRecepcion(uow, {
     tenantId: ctx.value.tenantId,
     companyId: input.company_id,
@@ -2339,12 +2498,23 @@ export async function registerSupplierCreditNote(
 export async function registerSupplierPayment(
   uow: UnitOfWork,
   input: RegisterSupplierPaymentRequest,
+  /**
+   * H-09: el pago de la factura de un gasto lo autoriza `expense.register`, el permiso de la
+   * operación que lo contiene (RESPUESTA §2.8). Solo lo pasa `registerInvoicedExpense`.
+   */
+  permiso: "purchase.payment.register" | "expense.register" = "purchase.payment.register",
+  /**
+   * SOLO PARA LA VISTA PREVIA (que se deshace siempre): si la cuenta no alcanza, el pago sigue
+   * y el mensaje del control de saldo queda aquí, para enseñar el resumen JUNTO al «no alcanza».
+   * El camino real no lo pasa nunca: sin él, la falta de saldo detiene el pago como siempre.
+   */
+  ensayo?: { sinSaldo: string | null },
 ): Promise<Result<SupplierPaymentResponse, PurchaseError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Pagar exige un usuario real." });
   }
-  const ctx = await autorizar(sql, actor.userId, input.company_id, "purchase.payment.register");
+  const ctx = await autorizar(sql, actor.userId, input.company_id, permiso);
   if (!ctx.ok) return ctx;
 
   const [factura] = await sql<
@@ -2524,9 +2694,25 @@ export async function registerSupplierPayment(
       message: "El pago convertido a la tasa del día no llega a un céntimo.",
     });
   }
-  // El tope. En la moneda de la factura es exacto, como siempre. Cruzado, la conversión del
-  // dinero real (céntimos) no cae exacta: se tolera medio céntimo de la moneda de la factura.
-  const holgura = parseDecimal(cruzado && input.currency !== monedaFactura ? "0.005" : "0");
+  /**
+   * LA TOLERANCIA DE CAJA DEL PAGO CRUZADO (ADR-0063 §2; ADR-0075, nota «el pago cruzado a tasa
+   * real»; D-02, H-09). Espejo del cobro de ventas. De una cuenta en dólares salen céntimos de
+   * dólar: lo redondeado se aparta de lo debido hasta media unidad mínima de la moneda del
+   * DINERO, valorada en la de la factura a la tasa del pago (4,27 Bs a 854,4637). Con medio
+   * céntimo fijo de la moneda de la factura, una factura en Bs pagada desde una cuenta en USD no
+   * cerraba a ninguna tasa real: los E2E usaban 40, donde todo cae exacto.
+   */
+  const toleranciaCaja = toleranciaDeCaja({
+    monedaDinero,
+    monedaDocumento: monedaFactura,
+    tasaDinero: tasa.value.rate,
+    tasaDocumento: tasaFacturaHoy.value.rate,
+  });
+  // El tope. En la moneda de la factura es exacto, como siempre. Cruzado y escrito en la moneda
+  // del dinero, la conversión del dinero real no cae exacta: se tolera el redondeo de caja.
+  const holgura = parseDecimal(
+    cruzado && input.currency !== monedaFactura ? toleranciaCaja.toFixed() : "0",
+  );
   if (saldo.ok && holgura.ok && saldado.minus(saldo.value).greaterThan(holgura.value)) {
     return err({
       code: "VALIDATION_FAILED",
@@ -2573,8 +2759,34 @@ export async function registerSupplierPayment(
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   // P-03 (ADR-0075 §7): el equivalente funcional del pago va al céntimo, half-up — el mismo
   // importe sale de la caja, entra al mayor y baja la CxP. Antes 42.783,125.
-  const funcional = aFuncionalAlCentimo(bruto.value, tasa.value.rate, ctx.value.functionalCurrency);
+  let funcional = aFuncionalAlCentimo(bruto.value, tasa.value.rate, ctx.value.functionalCurrency);
   if (!funcional.ok) return funcional;
+  /**
+   * LO FUNCIONAL DEL PAGO CRUZADO QUE CIERRA ES LO QUE SE SALDA (ADR-0063 §2, como el cobro que
+   * cierra de ventas). La factura vive en la moneda funcional y el dinero sale en divisa,
+   * redondeado a su unidad mínima: «lo que salió × tasa» se aparta de lo saldado hasta la
+   * tolerancia de caja. Dentro de ella, el valor funcional del pago QUE CIERRA es lo saldado: la
+   * cuenta baja por lo que salió EN SU MONEDA (el original, intacto), la cuenta por pagar por lo
+   * que se debía, y no nace una línea de diferencial por el redondeo de caja del último pago — la
+   * valoración de la caja en divisa la recoge la revaluación al cierre (P-100, VALIDAR-CONTABLE).
+   *
+   * SOLO EL QUE CIERRA, igual que ventas. Un ABONO que no cierra se asienta por lo que de verdad
+   * salió («lo que salió × tasa»), y su diferencia con lo cancelado va al diferencial en el acto:
+   * alinearlo dejaba hasta media unidad mínima × tasa (4,27 Bs a 854,4637) POR ABONO, sin límite
+   * de abonos, fuera del mayor hasta el cierre.
+   *
+   * Fuera de la tolerancia no se toca nada y decide el tope de abajo. El descuadre entre el saldo
+   * y el MAYOR no entra aquí: se compara contra lo saldado, no contra lo que el mayor carga, y la
+   * regla 4 lo sigue rechazando.
+   */
+  if (cierra && cruzado && monedaFactura === ctx.value.functionalCurrency) {
+    const saldadoFuncional = toCents(saldado);
+    if (funcional.value.amount.minus(saldadoFuncional).abs().lessThanOrEqualTo(toleranciaCaja)) {
+      const alineado = Money.of(saldadoFuncional.toFixed(2), ctx.value.functionalCurrency);
+      if (!alineado.ok) return err({ code: "VALIDATION_FAILED", message: alineado.error.message });
+      funcional = alineado;
+    }
+  }
 
   /**
    * LAS DOS MONEDAS, SIN MEZCLAR (hallado por e2e-cuenta-de-caja, 2026-09-15). El neto era
@@ -2663,7 +2875,12 @@ export async function registerSupplierPayment(
       motivo: input.overdraft_reason,
       operacion: "supplier_payment",
     });
-    if (!alcanza.ok) return err(alcanza.error);
+    if (!alcanza.ok) {
+      if (ensayo === undefined || alcanza.error.code !== "INSUFFICIENT_FUNDS") {
+        return err(alcanza.error);
+      }
+      ensayo.sinSaldo = alcanza.error.message;
+    }
   }
 
   let pago: Record<string, unknown>;
@@ -2969,5 +3186,397 @@ export async function simplePurchase(
     receipt: recibo.value,
     invoice: factura.value,
     payment: pago,
+  });
+}
+
+// ── La vista previa del pago (D-02) ──────────────────────────────────────────
+
+/**
+ * LA VISTA PREVIA DE UN PAGO A PROVEEDOR (D-02, ola 4). Corre `registerSupplierPayment` dentro de
+ * un savepoint que SIEMPRE se deshace —el patrón de `previewArrival`—: las cifras que enseña la
+ * pantalla son las que el registro escribiría, no las de una copia que pueda divergir. Lo que
+ * falla al pagar falla aquí con el mismo código (sin tasa, sin saldo, por encima del saldo).
+ */
+export async function previewSupplierPayment(
+  uow: UnitOfWork,
+  input: RegisterSupplierPaymentRequest,
+): Promise<Result<SupplierPaymentPreviewResponse, PurchaseError>> {
+  const DESHACER = new Error("vista previa: se deshace siempre");
+  let vista: Result<SupplierPaymentPreviewResponse, PurchaseError> | null = null;
+  try {
+    await uow.sql.savepoint(async (sp) => {
+      // El sobregiro NO se confirma en la vista previa: se ensaya, y si la cuenta no alcanza
+      // el resumen sale igual con su «no alcanza» (el permiso y el motivo son del registro).
+      const ensayo = { sinSaldo: null as string | null };
+      const r = await registerSupplierPayment(
+        { ...uow, sql: sp },
+        sinConfirmarSobregiro(input),
+        "purchase.payment.register",
+        ensayo,
+      );
+      if (!r.ok) {
+        vista = r;
+      } else {
+        const p = await pagoEnsayado(sp, r.value.payment.id);
+        vista = ok({ ...p, balance_after: r.value.balance, insufficient_funds: ensayo.sinSaldo });
+      }
+      throw DESHACER;
+    });
+  } catch (e) {
+    if (e !== DESHACER) throw e;
+  }
+  return vista ?? err({ code: "VALIDATION_FAILED", message: "No se pudo calcular el pago." });
+}
+
+/** El cuerpo de un pago, sin la confirmación del sobregiro: una vista previa no lo confirma. */
+function sinConfirmarSobregiro(
+  input: RegisterSupplierPaymentRequest,
+): RegisterSupplierPaymentRequest {
+  const copia: RegisterSupplierPaymentRequest = { ...input };
+  delete copia.allow_negative_balance;
+  delete copia.overdraft_reason;
+  return copia;
+}
+
+/** Las cifras de un pago recién ensayado: lo que sale, lo que cancela y, si cruza, la tasa. */
+async function pagoEnsayado(
+  sp: TransactionSql,
+  paymentId: string,
+): Promise<{
+  money_amount: string;
+  money_currency: string;
+  settled_amount: string;
+  settled_currency: string;
+  crossed: boolean;
+  fx_rate: string | null;
+  fx_rate_currency: string | null;
+  fx_rate_date: string | null;
+}> {
+  const [p] = await sp<
+    {
+      money_amount: string;
+      money_currency: string;
+      settled_amount: string;
+      settled_currency: string;
+      crossed: boolean;
+      divisa: string | null;
+      fx_rate: string | null;
+      fx_rate_date: string | null;
+    }[]
+  >`
+    select sp.net_amount::text as money_amount, sp.transaction_currency as money_currency,
+           coalesce(sp.settled_amount, sp.gross_amount)::numeric(24,8)::text as settled_amount,
+           i.transaction_currency as settled_currency,
+           sp.transaction_currency <> i.transaction_currency as crossed,
+           x.divisa, f.rate::text as fx_rate, f.rate_date::text as fx_rate_date
+      from public.supplier_payments sp
+      join public.supplier_invoices i on i.id = sp.supplier_invoice_id
+      cross join lateral (
+        select case when i.transaction_currency <> i.functional_currency
+                    then i.transaction_currency
+                    when sp.transaction_currency <> i.functional_currency
+                    then sp.transaction_currency end as divisa) x
+      left join lateral platform.rate_for(
+        sp.company_id, x.divisa, i.functional_currency,
+        (sp.paid_at at time zone 'America/Caracas')::date) f on x.divisa is not null
+     where sp.id = ${paymentId}`;
+  return {
+    money_amount: p!.money_amount,
+    money_currency: p!.money_currency,
+    settled_amount: p!.settled_amount,
+    settled_currency: p!.settled_currency,
+    crossed: p!.crossed,
+    fx_rate: p!.fx_rate,
+    fx_rate_currency: p!.divisa,
+    fx_rate_date: p!.fx_rate_date,
+  };
+}
+
+// ── El gasto con factura fiscal (H-09) ──────────────────────────────────────
+
+/**
+ * UN GASTO CON FACTURA FISCAL ES UNA COMPRA DE SERVICIO (H-09, recorrido 2026-09-24; RESPUESTA
+ * §3 H-09; LIVA art. 33). `POST /v1/expenses` con el bloque `invoice` llega aquí, y aquí NO hay
+ * regla fiscal: se compone de los dos casos de uso que ya la tienen, en la misma transacción.
+ *
+ *   1. `registerSupplierInvoice` registra la factura —libro de compras, crédito fiscal o costo
+ *      según el tipo de la empresa, la retención del agente con sus exclusiones como DATA y su
+ *      comprobante—, con líneas de servicio y el asiento a gasto;
+ *   2. `registerSupplierPayment` paga el saldo entero desde la cuenta elegida: el mismo control
+ *      de saldo y de sobregiro, el mismo diferencial, el mismo asiento.
+ *
+ * No se escribe una fila en `expenses`: el dinero saldría dos veces de la cuenta (el trigger de
+ * `expenses` mueve el saldo) y el gasto estaría dos veces en el mayor. El gasto ES la factura,
+ * marcada con `expense_category`, y el historial de gastos la lista junto a los gastos llanos.
+ *
+ * La empresa sin RIF no lleva libro: su tipo vigente es `no_contribuyente`, el IVA va al costo
+ * y `purchases_book` no la lista. Lo decide `registerSupplierInvoice`, no este envoltorio.
+ *
+ * Si cualquiera de los dos pasos devuelve `err`, `withTransaction` revierte todo: no queda una
+ * factura sin pagar por un saldo que no alcanzó.
+ */
+export async function registerInvoicedExpense(
+  uow: UnitOfWork,
+  input: RegisterExpenseRequest,
+): Promise<Result<ExpenseResponse, PurchaseError>> {
+  const { sql } = uow;
+  const registrada = await facturaDelGasto(uow, input);
+  if (!registrada.ok) return registrada;
+  const { factura, cuenta, saldo } = registrada.value;
+  if (saldo.positivo) {
+    const pagado = await registerSupplierPayment(
+      uow,
+      {
+        company_id: input.company_id,
+        supplier_invoice_id: factura.id,
+        gross_amount: saldo.importe,
+        // En la moneda de la FACTURA: si la cuenta vive en otra, `gross_amount` es lo que se
+        // cancela y de la cuenta sale su equivalente a la tasa BCV del día (ADR-0075 §3).
+        currency: factura.transaction_currency,
+        // Decidido por criterio: el gasto no pregunta el instrumento (pregunta la cuenta), y
+        // «otro» es el único que no presume una moneda ni una forma de pago que nadie eligió.
+        instrument: "otro",
+        account_id: input.account_id,
+        ...(input.paid_at === undefined ? {} : { paid_at: input.paid_at }),
+        ...(input.allow_negative_balance === undefined
+          ? {}
+          : { allow_negative_balance: input.allow_negative_balance }),
+        ...(input.overdraft_reason === undefined
+          ? {}
+          : { overdraft_reason: input.overdraft_reason }),
+      },
+      "expense.register",
+    );
+    if (!pagado.ok) return pagado;
+  }
+
+  const [g] = await sql<Record<string, unknown>[]>`
+    select i.id, i.expense_category as category, i.notes as description,
+           to_char(coalesce(p.paid_at, i.posted_at) at time zone 'utc',
+                   'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as paid_at,
+           ${input.account_id}::uuid as account_id,
+           coalesce(p.net_amount, 0)::numeric(24,8)::text as amount,
+           ${cuenta.currency}::text as currency,
+           coalesce(p.functional_amount, 0)::numeric(24,8)::text as functional_amount,
+           i.functional_currency,
+           coalesce(p.fx_rate, i.fx_rate)::text as fx_rate,
+           i.expense_is_recurring as is_recurring, i.supplier_id, null::uuid as branch_id,
+           i.expense_attachment_path as attachment_path, i.journal_entry_id
+      from public.supplier_invoices i
+      -- El pago del gasto: el más reciente, la MISMA regla que el listado (GET /v1/expenses).
+      left join lateral (
+        select sp.paid_at, sp.net_amount, sp.functional_amount, sp.fx_rate
+          from public.supplier_payments sp
+         where sp.supplier_invoice_id = i.id
+         order by sp.created_at desc, sp.id desc limit 1) p on true
+     where i.id = ${factura.id} and i.company_id = ${input.company_id}`;
+  return ok({
+    ...(g as object),
+    accounting: g!["journal_entry_id"] === null ? "queued" : "posted",
+    supplier_invoice_id: factura.id,
+    invoice: {
+      document_number: factura.supplier_document_number,
+      control_number: factura.supplier_control_number,
+      invoice_date: factura.invoice_date,
+      currency: factura.transaction_currency,
+      subtotal_amount: factura.subtotal_amount,
+      tax_amount: factura.tax_amount,
+      total_amount: factura.total_amount,
+      retention_total: factura.retention_total,
+      retention_voucher_number: factura.retention_voucher_number,
+      tax_is_recoverable: factura.tax_is_recoverable,
+    },
+  } as ExpenseResponse);
+}
+
+/**
+ * LA VISTA PREVIA DEL GASTO CON FACTURA (`POST /v1/expenses/preview`). Toda acción irreversible
+ * resume sus consecuencias antes de confirmar: registra la factura del gasto dentro de un
+ * savepoint que SIEMPRE se deshace —el patrón de `previewArrival` y `previewSupplierPayment`— y
+ * devuelve sus cifras. El pago no se ensaya: lo que saldría de la cuenta es el saldo de la
+ * factura, y si la cuenta alcanza se pregunta al confirmar (ADR-0062 §4).
+ */
+export async function previewInvoicedExpense(
+  uow: UnitOfWork,
+  input: RegisterExpenseRequest,
+): Promise<Result<ExpensePreviewResponse, PurchaseError>> {
+  const DESHACER = new Error("vista previa: se deshace siempre");
+  let vista: Result<ExpensePreviewResponse, PurchaseError> | null = null;
+  try {
+    await uow.sql.savepoint(async (sp) => {
+      const r = await facturaDelGasto({ ...uow, sql: sp }, input);
+      if (!r.ok) {
+        vista = r;
+      } else {
+        const lineas = await sp<
+          { tax_category_code: string; base: string; tax_rate: string; tax_amount: string }[]
+        >`
+          select tax_category_snapshot as tax_category_code,
+                 line_subtotal_transaction::text as base,
+                 tax_rate_snapshot::text as tax_rate, tax_amount::text as tax_amount
+            from public.supplier_invoice_lines
+           where supplier_invoice_id = ${r.value.factura.id}
+           order by line_number`;
+        // El pago, ensayado: cuánto sale de la cuenta EN SU MONEDA (si cruza, a la tasa del día)
+        // y si alcanza. El sobregiro no se confirma aquí.
+        const ensayo = { sinSaldo: null as string | null };
+        let pago: Awaited<ReturnType<typeof pagoEnsayado>> | null = null;
+        let fallo: PurchaseError | null = null;
+        if (r.value.saldo.positivo) {
+          const pagado = await registerSupplierPayment(
+            { ...uow, sql: sp },
+            {
+              company_id: input.company_id,
+              supplier_invoice_id: r.value.factura.id,
+              gross_amount: r.value.saldo.importe,
+              currency: r.value.factura.transaction_currency,
+              instrument: "otro",
+              account_id: input.account_id,
+              ...(input.paid_at === undefined ? {} : { paid_at: input.paid_at }),
+            },
+            "expense.register",
+            ensayo,
+          );
+          if (!pagado.ok) fallo = pagado.error;
+          else pago = await pagoEnsayado(sp, pagado.value.payment.id);
+        }
+        vista =
+          fallo !== null
+            ? err(fallo)
+            : ok({
+                currency: r.value.factura.transaction_currency,
+                lines: [...lineas],
+                subtotal_amount: r.value.factura.subtotal_amount,
+                tax_amount: r.value.factura.tax_amount,
+                total_amount: r.value.factura.total_amount,
+                retention_total: r.value.factura.retention_total,
+                retention_currency: r.value.factura.functional_currency,
+                tax_is_recoverable: r.value.factura.tax_is_recoverable,
+                amount: pago?.money_amount ?? "0.00000000",
+                account_currency: pago?.money_currency ?? r.value.cuenta.currency,
+                fx_rate: pago?.crossed === true ? pago.fx_rate : null,
+                fx_rate_currency: pago?.crossed === true ? pago.fx_rate_currency : null,
+                fx_rate_date: pago?.crossed === true ? pago.fx_rate_date : null,
+                insufficient_funds: ensayo.sinSaldo,
+              });
+      }
+      throw DESHACER;
+    });
+  } catch (e) {
+    if (e !== DESHACER) throw e;
+  }
+  return vista ?? err({ code: "VALIDATION_FAILED", message: "No se pudo calcular el gasto." });
+}
+
+/**
+ * La factura del gasto y su saldo: lo que comparten el registro y su vista previa. Valida el
+ * cuerpo, registra la factura por `registerSupplierInvoice` y lee lo que se le debe al proveedor.
+ */
+async function facturaDelGasto(
+  uow: UnitOfWork,
+  input: RegisterExpenseRequest,
+): Promise<
+  Result<
+    {
+      factura: SupplierInvoiceResponse;
+      cuenta: { currency: string; name: string };
+      saldo: { importe: string; positivo: boolean };
+    },
+    PurchaseError
+  >
+> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Registrar un gasto exige un usuario." });
+  }
+  // El permiso, ANTES de leer nada (familia «permiso anidado», A-07).
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "expense.register");
+  if (!ctx.ok) return ctx;
+  const inv = input.invoice;
+  if (inv === undefined) {
+    return err({ code: "VALIDATION_FAILED", message: "Falta la factura del gasto." });
+  }
+  if (input.amount !== undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Con factura fiscal no se escribe el importe: sale de las bases de la factura, su IVA y lo que se retiene. Quita el importe o registra el gasto sin factura.",
+    });
+  }
+  if (input.supplier_id !== undefined && input.supplier_id !== inv.supplier_id) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "El proveedor del gasto y el de su factura no coinciden.",
+    });
+  }
+  if (input.branch_id !== undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Un gasto con factura fiscal todavía no se asigna a una sucursal: regístralo sin sucursal.",
+    });
+  }
+  const [cuenta] = await sql<
+    { currency: string; name: string; is_active: boolean; kind: string }[]
+  >`
+    select currency, name, is_active, kind from public.company_accounts
+     where id = ${input.account_id} and company_id = ${input.company_id}`;
+  if (!cuenta) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (!cuenta.is_active) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `La cuenta «${cuenta.name}» está desactivada.`,
+    });
+  }
+
+  const ajeno = comprobanteAjeno(input.company_id, input.attachment_path);
+  if (ajeno !== null) return err(ajeno);
+
+  // LA MONEDA DE LA FACTURA ES LA IMPRESA (ADR-0080; revisión de la ola 4): la dice quien
+  // registra y, si calla, es la funcional. NO se hereda de la cuenta: una factura de luz en
+  // bolívares pagada desde una cuenta en dólares entraba al libro como factura en dólares, y
+  // el libro llevaba base × tasa en vez de lo impreso. El pago cruza por su cuenta.
+  const monedaFactura = inv.currency ?? ctx.value.functionalCurrency;
+  const factura = await registerSupplierInvoice(
+    uow,
+    {
+      company_id: input.company_id,
+      supplier_id: inv.supplier_id,
+      supplier_document_number: inv.document_number,
+      supplier_control_number: inv.control_number,
+      invoice_date: inv.invoice_date,
+      currency: monedaFactura,
+      lines: [],
+      ...(input.description === undefined ? {} : { notes: input.description }),
+      ...(inv.retention_exclusion === undefined
+        ? {}
+        : { retention_exclusion: inv.retention_exclusion }),
+      ...(inv.iva_retention_full_reason === undefined
+        ? {}
+        : { iva_retention_full_reason: inv.iva_retention_full_reason }),
+    },
+    {
+      categoria: input.category,
+      lineas: inv.lines,
+      adjunto: input.attachment_path,
+      recurrente: input.is_recurring,
+      cuentaDePago: { kind: cuenta.kind, name: cuenta.name },
+    },
+  );
+  if (!factura.ok) return factura;
+
+  // EL SALDO: el total menos lo retenido, que es lo que se le debe al proveedor y lo que sale
+  // de la cuenta. La cifra la da la misma función que usa toda la cartera, no una resta aquí.
+  const [saldo] = await sql<{ s: string | null; positivo: boolean }[]>`
+    select b.s::numeric(24,8)::text as s, coalesce(b.s, 0) > 0 as positivo
+      from (select platform.supplier_invoice_balance(${input.company_id}, ${factura.value.id})
+                     as s) b`;
+  return ok({
+    factura: factura.value,
+    cuenta: { currency: cuenta.currency, name: cuenta.name },
+    saldo: {
+      importe: saldo?.s ?? "0.00000000",
+      positivo: saldo?.positivo === true && saldo.s !== null,
+    },
   });
 }

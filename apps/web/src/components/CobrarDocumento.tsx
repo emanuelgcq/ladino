@@ -16,7 +16,7 @@ import { Button } from "../ui/button.js";
 import { Input } from "../ui/input.js";
 import { SimpleSelect } from "../ui/select.js";
 import { useToast } from "../ui/toast.js";
-import { FormField, MoneyInput, importeValido } from "./forms.js";
+import { FormField, MoneyInput, importeLimpio as limpiar, importeValido } from "./forms.js";
 import { ExchangeDiffIndicator } from "./ExchangeDiffIndicator.js";
 import { FiscalStatusBadge } from "./FiscalStatusBadge.js";
 import { MensajeError } from "../pages/ventas/comunes.js";
@@ -25,6 +25,7 @@ import { fechaLocal, hoyLocal } from "../fechas.js";
 import { opcionesDeCobro, type FormaDePago, type OpcionDeCobro } from "./formas-de-pago.js";
 import { mostrarTasa, tasaLimpia } from "../tasa.js";
 import { textoDeDeuda } from "./deuda.js";
+import { abrirPdf } from "../pdf.js";
 
 /**
  * EL diálogo de cobro de un documento (M-05): antes había dos —uno en el
@@ -55,6 +56,8 @@ interface Credito {
   amount: string;
   applied_amount: string;
   status: "available" | "applied" | "expired";
+  /** G-05: la moneda del saldo a favor (la del documento que lo originó). */
+  currency: string;
 }
 interface TasaHoy {
   rate: string;
@@ -79,6 +82,8 @@ interface Registrado {
   } | null;
   /** E-03: la Nota de Débito por IGTF que documentó la percepción de este cobro posterior. */
   igtf_debit_note?: { id: string; series: string; document_number: number | null } | null;
+  /** F-10: el saldo a favor que nació de este cobro porque el cliente pagó de más. */
+  customer_credit?: { id: string; amount: string; currency: string } | null;
 }
 
 const CLAVE_CREDITO = "credito";
@@ -164,8 +169,13 @@ export function CobrarDocumento({
   }, [formas.data, creditosDisponibles, saldo.currency]);
 
   const elegida = opciones.find((o) => o.clave === forma) ?? null;
-  const monedaCobro = elegida?.currency ?? saldo.currency;
   const esCredito = elegida?.instrument === "saldo_a_favor";
+  // G-05: un saldo a favor se aplica EN SU MONEDA (la del documento que lo originó).
+  const creditoElegido = creditosDisponibles.find((c) => c.id === creditoId) ?? null;
+  const monedaCobro =
+    esCredito && creditoElegido !== null
+      ? creditoElegido.currency
+      : (elegida?.currency ?? saldo.currency);
   const esEfectivo = elegida?.instrument.startsWith("efectivo") ?? false;
   const cuentaFija = elegida?.account_id;
   const cuentasEnMoneda = (cuentas.data?.accounts ?? []).filter(
@@ -188,7 +198,7 @@ export function CobrarDocumento({
    * mismo cálculo que la caja (`/v1/pos/tender`, ADR-0059). La pantalla no multiplica nada: lo
    * muestra. `saldo` viene en moneda funcional, que es lo que la vista previa espera.
    */
-  const importeLimpio = importe.trim().replace(",", ".");
+  const importeLimpio = limpiar(importe);
   const previa = useQuery({
     queryKey: ["previa-cobro", empresa.id, documentId, saldo.amount, elegida?.clave, importeLimpio],
     enabled: elegida !== null && !esCredito && monedaCobro !== saldo.currency,
@@ -212,6 +222,8 @@ export function CobrarDocumento({
   });
   const sugerida = previa.data?.suggestions[0] ?? null;
   const fila = previa.data?.rows[0] ?? null;
+  // Lo dice el servidor en la vista previa: esta forma de pago lleva IGTF. Sin reglas aquí.
+  const causaIgtf = (sugerida?.igtf ?? null) !== null || (fila?.igtf ?? null) !== null;
 
   function elegirForma(clave: string): void {
     const nueva = opciones.find((o) => o.clave === clave);
@@ -225,6 +237,8 @@ export function CobrarDocumento({
     setCuentaId(null);
     if (nueva.instrument === "saldo_a_favor") {
       setCreditoId(creditosDisponibles.length === 1 ? (creditosDisponibles[0]?.id ?? null) : null);
+      // G-05: el saldo a favor puede estar en otra moneda que el saldo: el importe se teclea.
+      if (creditosDisponibles.some((c) => c.currency !== saldo.currency)) setImporte("");
     } else {
       setCreditoId(null);
     }
@@ -241,7 +255,7 @@ export function CobrarDocumento({
             company_id: empresa.id,
             document_id: documentId,
             currency: monedaCobro,
-            amount: importe.trim().replace(",", "."),
+            amount: limpiar(importe),
             instrument: elegida?.instrument,
             // F-05: lo tecleado es lo ENTREGADO; si la forma causa IGTF, el servidor lo separa.
             ...(esCredito ? {} : { igtf_included: true }),
@@ -266,10 +280,7 @@ export function CobrarDocumento({
     },
   });
 
-  const listo =
-    elegida !== null &&
-    importeValido(importe.trim().replace(",", ".")) &&
-    (!esCredito || creditoId !== null);
+  const listo = elegida !== null && importeValido(importe) && (!esCredito || creditoId !== null);
 
   return (
     <Dialog
@@ -287,6 +298,14 @@ export function CobrarDocumento({
             <DialogDescription>
               Saldo pendiente: {mostrarImporte(saldo)}. Puede ser un abono: lo que se cobre se resta
               de la deuda.
+              {/* Solo cuando es verdad: con un saldo a favor o con una forma que causa IGTF, el
+                  servidor no acepta un pago de más (lo dice lo que la pantalla YA sabe: la forma
+                  elegida y el IGTF que el servidor calculó en la vista previa). */}
+              {esCredito
+                ? " Un saldo a favor se aplica hasta lo que el documento debe: lo demás sigue a favor del cliente."
+                : causaIgtf
+                  ? " Esta forma de pago causa IGTF: se cobra lo que falta y, si entrega de más, se le da el vuelto."
+                  : " Si paga de más, lo que sobre queda como saldo a favor del cliente."}
             </DialogDescription>
             <div className="space-y-3 pt-2">
               <FormField label="¿Cómo pagó?" required>
@@ -310,7 +329,7 @@ export function CobrarDocumento({
                       onValueChange={setCreditoId}
                       options={creditosDisponibles.map((c) => ({
                         value: c.id,
-                        label: `${mostrarImporte({ amount: c.amount, currency: saldo.currency })} · aplicado ${mostrarImporte({ amount: c.applied_amount, currency: saldo.currency })}`,
+                        label: `${mostrarImporte({ amount: c.amount, currency: c.currency })} · aplicado ${mostrarImporte({ amount: c.applied_amount, currency: c.currency })}`,
                       }))}
                       placeholder="¿Qué saldo a favor?"
                     />
@@ -502,6 +521,20 @@ export function CobrarDocumento({
               <Fila etiqueta="Estado del documento">
                 <FiscalStatusBadge estado={resultado.document_status} />
               </Fila>
+              {/* F-10: pagó de más. El sobrante lo calculó el servidor y quedó a favor del cliente. */}
+              {resultado.customer_credit != null && (
+                <p className="rounded-md border border-info/30 bg-info-soft px-3 py-2 text-[0.85rem] text-info-soft-foreground">
+                  Pagó de más:{" "}
+                  <span className="font-mono">
+                    {mostrarImporte({
+                      amount: resultado.customer_credit.amount,
+                      currency: resultado.customer_credit.currency,
+                    })}
+                  </span>{" "}
+                  quedaron como saldo a favor del cliente. Se pueden aplicar a otra venta o
+                  devolverse desde su estado de cuenta.
+                </p>
+              )}
               {resultado.igtf !== null && (
                 <p className="rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-[0.85rem] text-warning-soft-foreground">
                   {resultado.igtf.absorbed ? "La empresa asume " : "De lo recibido, "}
@@ -536,6 +569,18 @@ export function CobrarDocumento({
               )}
             </div>
             <DialogFooter>
+              {/* F-10 «con recibo»: el comprobante NO fiscal del cobro — lo recibido, lo aplicado
+                  y, si pagó de más, el saldo a favor. */}
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  void abrirPdf(`/v1/payments/${resultado.payment.id}/pdf`, empresa.id, (m) =>
+                    toast.error("No se pudo abrir el comprobante", m),
+                  )
+                }
+              >
+                Imprimir el comprobante
+              </Button>
               <Button variant="primary" onClick={() => onCobrado(resultado)}>
                 Listo
               </Button>

@@ -11,7 +11,18 @@ import { Input } from "../ui/input.js";
 import { SimpleSelect } from "../ui/select.js";
 import { useToast } from "../ui/toast.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog.js";
-import { EntityPicker, FormField, importeValido, type EntityOption } from "./forms.js";
+import {
+  EntityPicker,
+  FormField,
+  MotivoDeLectura,
+  cantidadLimpia,
+  cantidadValida,
+  importeLimpio,
+  importeValido,
+  motivoDeCantidad,
+  motivoDeImporte,
+  type EntityOption,
+} from "./forms.js";
 
 /**
  * HACER UN PEDIDO (ADR-0066, entrega iii) — encargar mercancía que TODAVÍA NO HA LLEGADO.
@@ -40,7 +51,6 @@ interface LineaPedido {
   precio: string;
 }
 
-const CANT_RE = /^\d{1,16}(\.\d{1,8})?$/;
 const lineaVacia = (): LineaPedido => ({
   id: crypto.randomUUID(),
   producto: null,
@@ -120,9 +130,9 @@ export function HacerPedido({
   const validas = lineas.filter(
     (l) =>
       l.producto !== null &&
-      CANT_RE.test(l.cantidad.trim().replace(",", ".")) &&
-      !esCero(l.cantidad) &&
-      importeValido(l.precio.trim().replace(",", ".")),
+      cantidadValida(l.cantidad) &&
+      !esCero(cantidadLimpia(l.cantidad)) &&
+      importeValido(l.precio),
   );
   const listo =
     moneda !== null &&
@@ -152,8 +162,8 @@ export function HacerPedido({
           ...(esperado === "" ? {} : { expected_at: esperado }),
           lines: validas.map((l) => ({
             product_id: l.producto!.id,
-            quantity: l.cantidad.trim().replace(",", "."),
-            unit_price: l.precio.trim().replace(",", "."),
+            quantity: cantidadLimpia(l.cantidad),
+            unit_price: importeLimpio(l.precio),
           })),
         }),
       }),
@@ -216,57 +226,62 @@ export function HacerPedido({
 
           <div className="space-y-2">
             {lineas.map((l, i) => (
-              <div key={l.id} className="flex items-start gap-2">
-                <div className="flex-1">
-                  <label htmlFor={`ped-prod-${l.id}`} className="sr-only">
-                    Producto de la línea {i + 1}
-                  </label>
-                  <EntityPicker
-                    id={`ped-prod-${l.id}`}
-                    value={l.producto}
-                    onChange={(v) =>
+              <div key={l.id} className="space-y-1">
+                <div className="flex items-start gap-2">
+                  <div className="flex-1">
+                    <label htmlFor={`ped-prod-${l.id}`} className="sr-only">
+                      Producto de la línea {i + 1}
+                    </label>
+                    <EntityPicker
+                      id={`ped-prod-${l.id}`}
+                      value={l.producto}
+                      onChange={(v) =>
+                        setLineas((prev) =>
+                          prev.map((x) => (x.id === l.id ? { ...x, producto: v } : x)),
+                        )
+                      }
+                      buscar={buscarProducto}
+                      placeholder="Busca el producto…"
+                    />
+                  </div>
+                  <Input
+                    inputMode="decimal"
+                    value={l.cantidad}
+                    onChange={(e) =>
                       setLineas((prev) =>
-                        prev.map((x) => (x.id === l.id ? { ...x, producto: v } : x)),
+                        prev.map((x) => (x.id === l.id ? { ...x, cantidad: e.target.value } : x)),
                       )
                     }
-                    buscar={buscarProducto}
-                    placeholder="Busca el producto…"
+                    placeholder="Cant."
+                    className="w-20"
+                    aria-label={`Cuántos pides de la línea ${i + 1}`}
                   />
+                  <Input
+                    inputMode="decimal"
+                    value={l.precio}
+                    onChange={(e) =>
+                      setLineas((prev) =>
+                        prev.map((x) => (x.id === l.id ? { ...x, precio: e.target.value } : x)),
+                      )
+                    }
+                    placeholder={`Precio c/u${enMoneda}`}
+                    className="w-36"
+                    aria-label={`Precio acordado de cada uno${enMoneda}, línea ${i + 1}`}
+                  />
+                  {lineas.length > 1 && (
+                    <Button
+                      variant="ghost"
+                      size="iconSm"
+                      aria-label={`Quitar la línea ${i + 1}`}
+                      onClick={() => setLineas((prev) => prev.filter((x) => x.id !== l.id))}
+                    >
+                      <Trash2 />
+                    </Button>
+                  )}
                 </div>
-                <Input
-                  inputMode="decimal"
-                  value={l.cantidad}
-                  onChange={(e) =>
-                    setLineas((prev) =>
-                      prev.map((x) => (x.id === l.id ? { ...x, cantidad: e.target.value } : x)),
-                    )
-                  }
-                  placeholder="Cant."
-                  className="w-20"
-                  aria-label={`Cuántos pides de la línea ${i + 1}`}
-                />
-                <Input
-                  inputMode="decimal"
-                  value={l.precio}
-                  onChange={(e) =>
-                    setLineas((prev) =>
-                      prev.map((x) => (x.id === l.id ? { ...x, precio: e.target.value } : x)),
-                    )
-                  }
-                  placeholder={`Precio c/u${enMoneda}`}
-                  className="w-36"
-                  aria-label={`Precio acordado de cada uno${enMoneda}, línea ${i + 1}`}
-                />
-                {lineas.length > 1 && (
-                  <Button
-                    variant="ghost"
-                    size="iconSm"
-                    aria-label={`Quitar la línea ${i + 1}`}
-                    onClick={() => setLineas((prev) => prev.filter((x) => x.id !== l.id))}
-                  >
-                    <Trash2 />
-                  </Button>
-                )}
+                {/* F-06: lo que no se pudo leer se dice junto a su línea. */}
+                <MotivoDeLectura motivo={motivoDeCantidad(l.cantidad)} />
+                <MotivoDeLectura motivo={motivoDeImporte(l.precio)} />
               </div>
             ))}
             <Button

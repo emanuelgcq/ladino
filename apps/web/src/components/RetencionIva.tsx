@@ -65,18 +65,28 @@ export function eleccionCompleta(e: EleccionRetencion): boolean {
 export function RetencionIvaCampos({
   valor,
   onCambio,
+  cuentaId,
 }: {
   valor: EleccionRetencion;
   onCambio: (v: EleccionRetencion) => void;
+  /**
+   * La cuenta de la que sale el dinero, cuando se conoce en el mismo acto (el gasto con factura).
+   * Se le pasa al servidor, que devuelve solo las exclusiones ofrecibles para esa cuenta (AF4-01):
+   * aquí no hay regla, y si la elección ya no vale, el servidor la rechaza con su mensaje.
+   */
+  cuentaId?: string | null;
 }): React.JSX.Element | null {
   const { llamar } = useSesion();
   const agente = useEsAgente();
+  const deCuenta = cuentaId ?? null;
   const catalogo = useQuery({
-    queryKey: ["retention-exclusions"],
+    queryKey: ["retention-exclusions", deCuenta],
     enabled: agente && valor.tipo === "excluida",
     queryFn: () =>
       llamar<{ items: { code: string; description: string; legal_article: string }[] }>(
-        "/v1/retention-exclusions",
+        deCuenta === null
+          ? "/v1/retention-exclusions"
+          : `/v1/retention-exclusions?account_id=${encodeURIComponent(deCuenta)}`,
       ),
   });
   if (!agente) return null;

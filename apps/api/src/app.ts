@@ -4,6 +4,7 @@ import { cors } from "hono/cors";
 import type { Sql } from "@ladino/db";
 import { authMiddleware, type AuthConfig } from "./middleware/auth.js";
 import { contextMiddleware } from "./middleware/scope.js";
+import { originMiddleware } from "./middleware/origin.js";
 import { onErrorResponder } from "./middleware/errors.js";
 import { idempotencyMiddleware } from "./middleware/idempotency.js";
 import { rateLimitMiddleware } from "./middleware/rate-limit.js";
@@ -22,6 +23,7 @@ import { fiscalDeclarationsRoutes } from "./routes/fiscal-declarations.js";
 import { igtfRoutes } from "./routes/igtf.js";
 import { treasuryRoutes } from "./routes/treasury.js";
 import { documentsPdfRoutes } from "./routes/documents-pdf.js";
+import { receiptsPdfRoutes } from "./routes/receipts-pdf.js";
 import { negocioRoutes } from "./routes/negocio.js";
 import { fiscalSetupRoutes } from "./routes/fiscal-setup.js";
 import { contingencyRoutes } from "./routes/contingency.js";
@@ -44,13 +46,15 @@ export interface AppConfig {
   readonly readyTimeoutMs?: number;
   /** Origen permitido para CORS. Por defecto, el dev server de Vite local. */
   readonly corsOrigin?: string;
+  /** El build de la API, para el origen de las actas (A-16). Lo pone `LADINO_BUILD`. */
+  readonly build?: string | undefined;
 }
 
 /**
  * Composición de la API. EL ORDEN DE LOS MIDDLEWARES ES CONTRATO (la decisión
  * D3 de S0.5 — ADR-0012 los enumeraba como lista, no como orden):
  *
- *   onError(mapeo) ⊃ bodyLimit → timeout → auth → rateLimit → contexto → [idempotencia]* → handler
+ *   onError(mapeo) ⊃ bodyLimit → timeout → auth → origen → rateLimit → contexto → [idempotencia]* → handler
  *
  *   · el mapeo vive en app.onError — el único sitio donde Hono entrega las
  *     excepciones. Un handler nunca mapea sus propios errores.
@@ -59,6 +63,8 @@ export interface AppConfig {
  *   · auth ANTES que el contexto: el contexto se construye sobre un actor ya
  *     VERIFICADO. Un contexto pre-auth sería un contexto con datos del cliente
  *     sin comprobar.
+ *   · origen (A-16) justo DESPUÉS de auth y ANTES de todo lo que abre transacción: la sesión
+ *     sale del JWT ya verificado, y el contexto y la idempotencia ya escriben con origen.
  *   · rateLimit justo DESPUÉS de auth: necesita el usuario y debe cortar antes
  *     de que nada abra transacción.
  *   · idempotencia SOLO en rutas mutantes críticas, y DESPUÉS del contexto:
@@ -84,6 +90,7 @@ export function buildApp(cfg: AppConfig): Hono {
   // idempotencia y lleva su propia cota de 6 MB.
   const limiteJson: MiddlewareHandler = bodyLimit({ maxSize: 1024 * 1024 });
   const limiteImagen: MiddlewareHandler = bodyLimit({ maxSize: 6 * 1024 * 1024 });
+  const limiteComprobante: MiddlewareHandler = bodyLimit({ maxSize: 7 * 1024 * 1024 });
   app.use("*", (c, next) => {
     const esSubidaArchivo =
       c.req.method === "POST" &&
@@ -95,6 +102,14 @@ export function buildApp(cfg: AppConfig): Hono {
         c.req.path === "/v1/companies/logo");
     // El Context de un `app.use("*")` colapsa su tercer genérico a `any`; los
     // dos handlers son bodyLimit reales y el dispatch es solo por tamaño.
+    // H-08: el comprobante de un gasto. La cota del CUERPO era de 6 MB, igual que la del
+    // ARCHIVO: como el multipart añade su envoltorio, un archivo de más de 6 MB nunca llegaba al
+    // handler y su mensaje («pesa más de 6 MB…») era código muerto; la persona recibía un 413.
+    // El cuerpo admite 1 MB de holgura y el handler sigue rechazando el archivo de más de 6 MB.
+    if (c.req.method === "POST" && c.req.path === "/v1/expenses/attachment") {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+      return limiteComprobante(c, next);
+    }
     // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     return esSubidaArchivo ? limiteImagen(c, next) : limiteJson(c, next);
   });
@@ -115,6 +130,7 @@ export function buildApp(cfg: AppConfig): Hono {
         "Idempotency-Key",
         "X-Company-Id",
         "X-Request-Id",
+        "X-Ladino-Client",
       ],
       allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
       maxAge: 600,
@@ -160,6 +176,13 @@ export function buildApp(cfg: AppConfig): Hono {
 
   app.use("/v1/*", timeoutMiddleware(cfg.requestTimeoutMs ?? 30_000));
   app.use("/v1/*", authMiddleware(cfg.auth));
+  app.use(
+    "/v1/*",
+    originMiddleware({
+      webOrigin: cfg.corsOrigin ?? "http://127.0.0.1:5174",
+      build: cfg.build,
+    }),
+  );
   app.use("/v1/*", rateLimitMiddleware({ porMinuto: cfg.rateLimitPorMinuto ?? 300 }));
   app.use("/v1/*", contextMiddleware(cfg.sql));
 
@@ -187,6 +210,8 @@ export function buildApp(cfg: AppConfig): Hono {
   inventoryExtensionsRoutes(app, cfg.sql, idempotencia);
   treasuryRoutes(app, cfg.sql, idempotencia, cfg.storage);
   documentsPdfRoutes(app, cfg.sql, cfg.storage);
+  // Ola 4 (F-10, G-15): los comprobantes NO fiscales del cobro y del reembolso de saldo a favor.
+  receiptsPdfRoutes(app, cfg.sql);
   negocioRoutes(app, cfg.sql, idempotencia);
   fiscalSetupRoutes(app, cfg.sql, idempotencia);
   contingencyRoutes(app, cfg.sql, idempotencia);

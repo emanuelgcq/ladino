@@ -7,6 +7,15 @@
  * referencia, está en create-company.ts.
  */
 export {
+  guardarTasaOficial,
+  mensajeFaltaTasa,
+  explicarFaltaDeTasa,
+  type TasaOficialCapturada,
+  type FilaTasaOficial,
+} from "./tasa-oficial.js";
+export { cargarReglaDeRetencion, type ReglaDeRetencion } from "./retention-rules.js";
+export { asignarRegimenFiscal, aceptarIvaGeneral, type FiscalSetupError } from "./fiscal-setup.js";
+export {
   createCompany,
   setCompanyFiscalAddress,
   RULES_VERSION,
@@ -69,8 +78,16 @@ export {
   updateCustomer,
   setCustomerTaxId,
   setCustomerBlocked,
+  setCustomerCreditLimit,
+  setCustomerTaxpayerType,
   type CustomerError,
 } from "./customers.js";
+export {
+  customerStatement,
+  customerOverdue,
+  type CustomerStatement,
+  type CustomerOverdue,
+} from "./customer-statement.js";
 export {
   createQuote,
   createOrder,
@@ -78,6 +95,7 @@ export {
   createInvoice,
   createReceipt,
   annulInvoice,
+  annulmentStatus,
   refundCustomerCredit,
   registerPayment,
   createReturn,
@@ -116,6 +134,10 @@ export {
   applyLandedCost,
   registerSupplierCreditNote,
   registerSupplierPayment,
+  registerInvoicedExpense,
+  previewInvoicedExpense,
+  retentionExclusionsNotOfferedFor,
+  previewSupplierPayment,
   simplePurchase,
   closePurchaseOrder,
   type PurchaseError,
@@ -248,8 +270,14 @@ export {
   type MembersError,
 } from "./members.js";
 export { diaNegocio, ZONA_NEGOCIO } from "./dia-negocio.js";
-export { modoDeVenta, exigeEmpresaQueFactura, exigeEmpresaConRif } from "./modo-venta.js";
+export {
+  modoDeVenta,
+  exigeEmpresaQueFactura,
+  exigeEmpresaConRif,
+  avisoYaFactura,
+} from "./modo-venta.js";
 export { repairCents, type CentRegularization } from "./cent-regularization.js";
+export { repairOverdraftClosings, type OverdraftClosingsRepair } from "./overdraft-closings.js";
 export {
   reversePayment,
   reverseSupportedRetention,

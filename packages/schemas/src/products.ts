@@ -220,6 +220,17 @@ export const CreateProductSimpleRequest = z
     /** Categoría por NOMBRE: se crea al vuelo si no existe. */
     category_name: z.string().trim().min(2).max(80).optional(),
     unit_code: z.string().regex(CODE_RE).optional(),
+    /**
+     * C-02: la misma alta sirve en administración. Lo avanzado es OPCIONAL y pasa tal cual al
+     * alta completa, que es la que lo valida (`CreateProductRequest`): sin clasificación, la de
+     * la empresa.
+     */
+    tax_category_code: z.string().regex(CODE_RE).optional(),
+    reduced_rate_literal: z
+      .string()
+      .regex(/^64(\.[0-9a-z]+)+$/)
+      .optional(),
+    tax_category_justification: z.string().trim().min(10).max(500).optional(),
   })
   .strict();
 export type CreateProductSimpleRequest = z.infer<typeof CreateProductSimpleRequest>;
@@ -241,6 +252,21 @@ export const PriceItemResponse = z
      */
     equivalent_amount: z.string().nullable().optional(),
     equivalent_currency: z.string().nullable().optional(),
+    /**
+     * C-11: el equivalente a la tasa oficial vigente EL DÍA (de Caracas) EN QUE EMPEZÓ A REGIR
+     * el precio, con la tasa, su fecha y su fuente (regla 8). Solo en el historial de la lista.
+     * `historical_rate_status` dice por qué no hay cifra: `missing` (ese día no había tasa) o
+     * `scheduled` (el precio todavía no rige: su día no tiene tasa) o `not_applicable` (la lista
+     * no es USD ni VES: no hay par que convertir). Nunca se rellena con la de hoy.
+     */
+    historical_equivalent_amount: z.string().nullable().optional(),
+    historical_equivalent_currency: z.string().nullable().optional(),
+    historical_rate: z.string().nullable().optional(),
+    historical_rate_date: z.string().nullable().optional(),
+    historical_rate_source: z.string().nullable().optional(),
+    historical_rate_status: z
+      .enum(["available", "missing", "scheduled", "not_applicable"])
+      .optional(),
   })
   .strict();
 export type PriceItemResponse = z.infer<typeof PriceItemResponse>;

@@ -84,3 +84,54 @@ sobre los roles a medida.
 *Decidido por criterio* (§2.16). Alternativas descartadas: (a) 403 en todo el resumen sin
 `ar.read` —el patrón de `with_debt=1`—, que dejaría sin Inicio ni «Mi dinero» a quien solo lleva
 la caja; (c) declarar los totales de deuda incluidos en `treasury.read`, que contradice §2.8.
+
+## Nota de la ola 4 (2026-10-03, A-04): la sonda del menú pregunta por datos, y por un rol
+
+*ADR aplicado según la respuesta del dueño del 2026-09-28* («Contabilidad y Libros aparecen cuando
+hay datos —primer asiento posteado o primer documento fiscal— o cuando el rol es contador. Se
+arregla la sonda, no el texto»).
+
+- La sonda de la divulgación progresiva (`apps/web/src/app/modulos-activos.ts`) ya no da
+  Contabilidad por activa con el plan de cuentas, que toda empresa tiene desde el alta:
+  Contabilidad aparece con el primer asiento **posteado** y Libros con la primera **factura**, o
+  los dos si la persona es contadora. *Decidido por criterio*: cada módulo con su dato;
+  alternativa descartada, que cualquiera de los dos datos encienda los dos.
+- Es la única excepción a «el menú se forma con permisos»: el dueño tiene todos los permisos del
+  contador, así que ningún permiso los distingue. `GET /v1/me/permissions` devuelve por eso
+  `roles`, y la web lo usa SOLO para esta sonda. Autorizar sigue siendo cosa de `puede()` y del
+  servidor; un rol a medida con permisos de contabilidad no es «contador» y ve los módulos cuando
+  hay datos.
+- La sonda es del MENÚ. Las pantallas que preguntan «¿hay contabilidad configurada que yo pueda
+  leer?» (detalle del documento, tablero) usan `useContabilidadConfigurada`, no la sonda.
+- La sonda se cachea cinco minutos; tras emitir una factura o un recibo, o postear un asiento, se
+  vuelve a sondear si el hecho puede encender un módulo apagado (`debeResondear`).
+- Deuda aceptada: los joins de `roles` en `apps/api/src/routes/companies.ts` son una segunda copia
+  de los de `platform.ladino_user_permissions`; los vigila un E2E. La salida limpia, una
+  `platform.ladino_user_roles`, queda anotada en R-76.
+
+## Nota de la ola 4 (2026-10-04): el reparto de los cuatro permisos nuevos de ventas
+
+La ola 4 creó cuatro permisos y los repartió entre los roles de sistema. Los cuatro repartos se
+*decidieron por criterio* (RESPUESTA §2.16) leyendo §2.8, no por orden expresa del dueño: quedan
+aquí juntos para que se puedan revisar de una vez. Lo que dice la base (`role_permissions`, roles
+con `tenant_id is null`) es lo que vale; esta tabla la describe.
+
+| Permiso | Qué gobierna | Roles de sistema | Criterio | Alternativa descartada |
+|---|---|---|---|---|
+| `sales.credit` | vender a crédito: fiar en la caja **y** facturar por administración (`POST /v1/invoices`), por una sola puerta (`exigirFiado`; R-82.1) | cajero, encargado, administrativo, dueño | «quien vende puede fiar; lo acota el límite» del cliente, que el cajero no puede fijar | solo cajero y dueño |
+| `customers.credit.set` | fijar el límite de fiado de un cliente (`PUT /v1/customers/{id}/credit-limit`; deja acta) | administrativo, dueño | quien fía no se fija su propio tope | dárselo también al encargado |
+| `sales.credit_note.direct` | la nota de crédito sin devolución de mercancía (`POST /v1/credit-notes`) | dueño, administrativo (y todo rol propio que tuviera `sales.return.manage`) | acreditar una factura sin que vuelva nada no es una devolución; el cajero inicia devoluciones con mercancía | dejarla bajo `sales.return.manage` |
+| `sales.refund` | devolver dinero a un cliente (`refundCustomerCredit`) | dueño, administrativo | el cajero no saca dinero de la caja; §2.8 dice del administrativo que «anula y aprueba» | solo el dueño (ADR-0068 §8, su estado anterior) |
+
+- Migraciones: `20261004140000` (`sales.credit`, `customers.credit.set`), `20261004160200`
+  (`sales.refund` al administrativo), `20261004160300` (`sales.credit_note.direct`) y
+  `20261004210100` (la descripción de `sales.credit`, que decía «Fiar en la caja» cuando ya
+  gobernaba también la factura de administración). El detalle de cada uno está en ADR-0061 (nota
+  de la ola 4), ADR-0068 §8 y R-82.
+- **Consecuencia negativa aceptada:** un rol propio creado antes de la ola 4 no trae `sales.credit`
+  ni `customers.credit.set`: sus personas dejan de poder fiar —y de facturar por administración,
+  que nace a crédito— hasta que se les conceda (R-82.6). Y el cajero, con `sales.credit`, puede
+  fiar hasta el límite de cada cliente sin que nadie apruebe la venta concreta.
+- **Para revertir:** quitar o añadir filas de `role_permissions` con una migración nueva; ningún
+  dato de negocio depende del reparto.
+- **Verificación:** pgTAP 124 (reparto del fiado y del límite) y `e2e-fiar-con-permiso-y-limite`.

@@ -10,6 +10,7 @@ import {
   correctRetentionVoucher,
   deliverRetentionVoucher,
   leerComprobante,
+  retentionExclusionsNotOfferedFor,
   setRetentionVoucherMode,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
@@ -47,6 +48,7 @@ async function exigeLectura(
   tx: TransactionSql,
   actor: { kind: string; userId?: string },
   companyId: string,
+  adicionales: readonly string[] = [],
 ): Promise<void> {
   if (actor.kind !== "user" || actor.userId === undefined) {
     throw new DominioError({
@@ -54,15 +56,22 @@ async function exigeLectura(
       message: "Consultar exige un usuario real.",
     });
   }
-  const permisos = ["ap.read", "purchase.invoice.register", "retention.receipt.issue"];
+  const permisos = [
+    "ap.read",
+    "purchase.invoice.register",
+    "retention.receipt.issue",
+    ...adicionales,
+  ];
   const [permiso] = await tx<{ ok: boolean }[]>`
     select bool_or(platform.ladino_user_has_permission(${actor.userId}, p, ${companyId})) as ok
       from unnest(${permisos}::text[]) as p`;
   if (!permiso?.ok) {
     throw new DominioError({
       code: "PERMISSION_REQUIRED",
-      message:
-        "Consultar comprobantes de retención exige ap.read, purchase.invoice.register o retention.receipt.issue.",
+      // El mensaje nombra TODOS los permisos que abren esta lectura, también los adicionales
+      // (`expense.register` en el comprobante de un gasto con factura): decir solo tres mandaba
+      // a pedir un permiso que no hacía falta.
+      message: `Consultar comprobantes de retención exige ${permisos.slice(0, -1).join(", ")} o ${permisos.at(-1)}.`,
     });
   }
 }
@@ -96,12 +105,26 @@ export function retentionVoucherRoutes(app: Hono, sql: Sql, idempotencia: Middle
   app.get("/v1/retention-exclusions", async (c) => {
     const { companyId } = requireCompany(c);
     const { actor } = c.get("ladino.auth");
+    // AF4-01: con `account_id` (la cuenta de la que sale el gasto), el servidor quita las
+    // exclusiones que esa cuenta no admite. Qué exclusión exige qué cuenta lo dice el dominio.
+    const cuenta = c.req.query("account_id") ?? "";
     const items = await withTransaction(sql, actor, async ({ sql: tx }) => {
-      await exigeLectura(tx, actor, companyId);
+      // Permiso anidado (RESPUESTA §2.8): quien registra un gasto con factura en una empresa
+      // agente tiene que poder elegir la exclusión. Es un catálogo de la norma, sin datos de la
+      // empresa: `expense.register` lo lee, como ya lee los proveedores.
+      await exigeLectura(tx, actor, companyId, ["expense.register"]);
+      const noOfrecidas =
+        cuenta === ""
+          ? []
+          : await retentionExclusionsNotOfferedFor(tx, companyId, idValido(cuenta));
+      if (noOfrecidas === null) {
+        throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+      }
       return tx<Record<string, unknown>[]>`
         select code, description, legal_norm, legal_article, numeral_verified
           from public.retention_exclusions
          where applies = 'marked'
+           and not (code = any(${[...noOfrecidas]}::text[]))
            and effective_from <= (now() at time zone 'America/Caracas')::date
            and (effective_to is null
                 or effective_to > (now() at time zone 'America/Caracas')::date)

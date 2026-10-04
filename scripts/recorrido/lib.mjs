@@ -238,6 +238,36 @@ export function sql(consulta) {
     .filter(Boolean)
     .map((l) => l.split("\t"));
 }
+/**
+ * R-82.7 · EL MONTAJE DEL FIADO. Desde E-09, fiar exige que el cliente tenga límite; un guion que
+ * fía lo fija ANTES. Es la ÚNICA escritura que un guion hace por la base (lo demás es lectura):
+ * como soporte, sin actor —el trigger deja su acta `system`—, igual que `fiadoDeFixture` de los
+ * E2E. Solo toca a los clientes con nombre que siguen en 0.
+ */
+export function fijarLimiteDeFiado(companyId, limiteUsd = "100000") {
+  if (!/^[0-9a-f-]{36}$/i.test(String(companyId)) || !/^\d+(\.\d+)?$/.test(String(limiteUsd))) {
+    throw new Error("fijarLimiteDeFiado: empresa o límite no válidos");
+  }
+  sql(
+    `update public.customers set credit_limit_usd = ${limiteUsd}
+      where company_id = '${companyId}' and not is_system and credit_limit_usd = 0`,
+  );
+}
+
+/**
+ * P-05 · «¿Cuándo paga?»: la caja pide la fecha al fiar y no deja confirmar sin ella. Rellena el
+ * campo del diálogo «Fiar esta venta» con el día de CARACAS más `dias` (nunca `toISOString()`).
+ * Si el campo no está (el servidor no la pide), no hace nada.
+ */
+export async function rellenarCuandoPaga(page, dias = 15) {
+  const campo = page.getByLabel("¿Cuándo paga?").first();
+  if ((await campo.count()) === 0) return;
+  const dia = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Caracas" }).format(
+    new Date(Date.now() + dias * 86_400_000),
+  );
+  await campo.fill(dia);
+}
+
 export function empresaPorNombre(nombre) {
   const f = sql(
     `select id from public.companies where trade_name = '${nombre.replace(/'/g, "''")}' or legal_name = '${nombre.replace(/'/g, "''")}' limit 1`,

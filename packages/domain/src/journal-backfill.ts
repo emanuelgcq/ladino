@@ -6,6 +6,8 @@ import {
   type AmountContext,
   type ConditionContext,
 } from "./journal-generator.js";
+import { requeueOverdraftClosingFromQueue } from "./overdraft-closings.js";
+import { CASH_CLOSING_KIND } from "./treasury.js";
 
 /**
  * REPROCESAR LA COLA CONTABLE (ADR-0042).
@@ -51,6 +53,8 @@ const TABLA_DE: Record<string, string> = {
   landed_cost_variance: "landed_costs",
   expense: "expenses",
   cash_closing: "cash_closings",
+  // J-02: el cierre en sobregiro es la misma fila con otro origen; encolado, recupera su enlace.
+  cash_closing_overdraft: "cash_closings",
   sales_receipt_return: "documents",
   customer_refund: "customer_refunds",
   // ADR-0062 §3 (migración 61): una transferencia encolada también recupera su enlace.
@@ -84,6 +88,8 @@ function importesDe(ctx: Record<string, unknown>): AmountContext {
     // claves, un hecho encolado perdería sus importes al reprocesarse.
     "revaluation_to_inventory",
     "revaluation_to_variance",
+    // J-02: el cierre de una caja en sobregiro. Sin esta clave, encolado perdería lo del dueño.
+    "owner_contribution",
   ] as const;
   const salida: AmountContext = {};
   for (const k of claves) {
@@ -146,6 +152,36 @@ export async function reprocessPendingJournals(
       pendientes++;
       primerMotivo ??= "El pendiente no guardó fecha o moneda: no se puede reconstruir.";
       continue;
+    }
+    /**
+     * J-02, LA VENTANA CERRADA POR CONSTRUCCIÓN. Una fila de origen `cash_closing` no se reprocesa
+     * con el origen que trae: se lee el CIERRE y el hecho lo decide `hechoContableDelCierre`, la
+     * misma definición del cierre y de la reparación. Si lo esperado fue negativo (la encoló la API
+     * anterior a la 20261004180000), la fila se descarta con su acta y el hecho nace con el origen
+     * del sobregiro —la rama B de la reparación, el mismo código—: nunca como ingreso, se corra
+     * esto antes o después de `scripts/reparar/j-02-sobregiro-al-cierre.mjs`.
+     */
+    if (f.source_kind === CASH_CLOSING_KIND) {
+      let sobregiro: Awaited<ReturnType<typeof requeueOverdraftClosingFromQueue>>;
+      try {
+        sobregiro = await requeueOverdraftClosingFromQueue(sql, input.company_id, f.id, {
+          postedBy: actor.userId,
+          actorType: "user",
+        });
+      } catch (e) {
+        return err({
+          code: "VALIDATION_FAILED",
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+      if (sobregiro !== null) {
+        if (sobregiro.accounting === "posted") contabilizados++;
+        else {
+          pendientes++;
+          primerMotivo ??= sobregiro.reason;
+        }
+        continue;
+      }
     }
     const tabla = TABLA_DE[f.source_kind];
     /**

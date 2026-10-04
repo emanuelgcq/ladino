@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture } from "./_fiado-de-fixture.js";
 
 /**
  * MODO RECIBOS de extremo a extremo (migración 37): el negocio SIN RIF vende
@@ -145,6 +146,8 @@ beforeAll(async () => {
                                            person_type_code, taxpayer_type_code)
              values (${IDENTIFICADO}, ${TENANT}, ${COMPANY}, 'V12345678', 'María Pérez',
                      'natural', 'consumidor_final')`;
+    // E-09: esta empresa de prueba fía (permiso y límite), como lo declararía una real.
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
     const [p] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                    tax_category_code)
@@ -324,7 +327,7 @@ describe("modo recibos", () => {
       await tx`insert into public.company_taxpayer_types
                  (tenant_id, company_id, taxpayer_type_code, effective_from, reason, rules_version)
                values (${TENANT}, ${COMPANY}, 'ordinario', '2000-01-01',
-                       'Fixture E2E: llega el RIF y declara su tipo', 'e2e')`;
+                       'Fixture E2E: llega el RIF y declara su tipo', 'domain-s0.5')`;
       await tx`select pg_advisory_xact_lock(hashtext('ladino-e2e-tax-rules'))`;
       await tx`
         insert into public.tax_rules

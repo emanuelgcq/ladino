@@ -4,6 +4,7 @@ import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture, venceDeFixture } from "./_fiado-de-fixture.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
@@ -166,6 +167,8 @@ beforeAll(async () => {
                 taxpayer_type_code)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, ${`J-CLI-${RUN}`}, 'Cliente e2e igtf',
                      'juridica', 'ordinario')`;
+    // E-09: esta empresa de prueba fía (permiso y límite), como lo declararía una real.
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
 
     const [p] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
@@ -494,6 +497,9 @@ describe("LA CAJA (ADR-0059): IGTF dentro de lo recibido, vuelto y formas mezcla
       warehouse_id: W1,
       lines: [{ product_id: PRODUCTO, quantity: "1" }],
       payments,
+      // P-05: el abono parcial deja saldo y la caja dice cuándo se paga. En las ventas que
+      // quedan pagadas la fecha no significa nada (entrada del fixture, no cifra esperada).
+      due_date: venceDeFixture(),
     });
   const tender = (payments: unknown[]) =>
     pedir("POST", "/v1/pos/tender", {
@@ -733,6 +739,8 @@ describe("IGTF — los bordes", () => {
     const anular = await pedir("POST", `/v1/invoices/${doc["id"]}/annul`, {
       company_id: COMPANY,
       reason: "Factura emitida por error, sin cobrar",
+      // G-10 (PA 00071 art. 36): la persona confirma el original y las copias.
+      originals_in_hand: true,
     });
     expect(anular.status).toBe(200);
     expect(await posicion()).toEqual(antes);

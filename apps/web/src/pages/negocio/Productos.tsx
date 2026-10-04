@@ -23,14 +23,26 @@ import {
   DialogFooter,
   DialogTitle,
 } from "../../ui/dialog.js";
-import { Input } from "../../ui/input.js";
+import { Input, Textarea } from "../../ui/input.js";
+import { SimpleSelect } from "../../ui/select.js";
 import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
-import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
+import {
+  FormField,
+  MoneyInput,
+  cantidadLimpia,
+  cantidadValida,
+  importeLimpio,
+  importeValido,
+  motivoDeCantidad,
+} from "../../components/forms.js";
 import { ImportarProductos } from "../../components/importar-productos.js";
 import { BotonEscanear } from "../../components/EscanerCodigo.js";
 import { tasaLimpia } from "../../tasa.js";
-import { ACEPTA_FOTOS, subirFotoProducto } from "../../components/foto.js";
+import { ACEPTA_FOTOS, fotoSoltada, subirFotoProducto } from "../../components/foto.js";
+import { useConFacturas } from "../../app/modo-venta.js";
+import { CLASIFICACION_DEL_PRODUCTO } from "../../components/capa-fiscal/textos.js";
+import type { TaxCategory, Unit } from "../../lib.js";
 
 /**
  * PRODUCTOS (Fase C, PARTE 7): lo que vendo, con foto. Cuadrícula visual por
@@ -90,7 +102,7 @@ export function ProductosNegocio(): React.JSX.Element {
         queryKey: ["negocio-productos-codigo", empresa.id, codigo],
         queryFn: () =>
           llamar<{ items: ProductoFila[] }>(
-            `/v1/products?with_price=1&with_stock=1&per_page=20&search=${encodeURIComponent(codigo)}`,
+            `/v1/products?only_active=1&with_price=1&with_stock=1&per_page=20&search=${encodeURIComponent(codigo)}`,
           ),
         staleTime: 5_000,
       });
@@ -120,12 +132,15 @@ export function ProductosNegocio(): React.JSX.Element {
    * ninguno — el `total` llegaba del servidor y se tiraba. Ahora se acumulan
    * páginas y la pantalla dice cuántos hay de cuántos.
    */
+  // C-03: esta pantalla es la consulta del mostrador, y lo que se ve aquí se vende. Un producto
+  // inactivo (o en borrador) no sale: el servidor lo filtra con `only_active=1`, igual que en la
+  // caja. Su mercancía sigue en Inventario, con la marca «Inactivo».
   const productos = useInfiniteQuery({
     queryKey: ["negocio-productos", empresa.id, q],
     initialPageParam: 1,
     queryFn: ({ pageParam }) =>
       llamar<{ items: ProductoFila[]; total: number }>(
-        `/v1/products?with_price=1&with_stock=1&per_page=${POR_PAGINA}&page=${pageParam}` +
+        `/v1/products?only_active=1&with_price=1&with_stock=1&per_page=${POR_PAGINA}&page=${pageParam}` +
           (q === "" ? "" : `&search=${encodeURIComponent(q)}`),
       ),
     getNextPageParam: (ultima, todas) => {
@@ -192,7 +207,7 @@ export function ProductosNegocio(): React.JSX.Element {
           <p className="mx-auto mt-1 max-w-sm text-[0.9rem] text-muted-foreground">
             {q === ""
               ? "Los productos se agregan e importan en Administración → Productos."
-              : "Prueba con otra palabra."}
+              : "Prueba con otra palabra. Aquí solo sale lo que se vende: un producto inactivo sigue en Inventario y en Administración → Productos."}
           </p>
         </Card>
       ) : vista === "cuadricula" ? (
@@ -354,7 +369,7 @@ function EquivalenteBs({
   currency: string;
 }): React.JSX.Element | null {
   const { empresa, llamar } = useSesion();
-  const limpio = amount.trim().replace(",", ".");
+  const limpio = importeLimpio(amount);
   const valido = importeValido(limpio) && currency === "USD";
   const debounced = useDebounced(limpio, 350);
   const q = useQuery({
@@ -374,6 +389,15 @@ function EquivalenteBs({
   );
 }
 
+/** C-02: «no elegí clasificación»: el producto nace con la de la empresa (la pone el servidor). */
+const DE_LA_EMPRESA = "empresa";
+
+/**
+ * EL ALTA DE PRODUCTO, UNA SOLA (C-02): la del primer día (/empezar) es la misma que la de
+ * Administración → Productos. Nombre y precio bastan; foto, existencia y costo van a la vista, y
+ * lo avanzado (código, código de barras, categoría, unidad, clasificación, precio al mayor),
+ * plegado en «Más detalles».
+ */
 export function AltaSimple({
   onCerrar,
   onCreado,
@@ -398,6 +422,18 @@ export function AltaSimple({
   const [foto, setFoto] = useState<File | null>(null);
   const [vistaPrevia, setVistaPrevia] = useState<string | null>(null);
   const fotoRef = useRef<HTMLInputElement>(null);
+  // C-10: la foto también se suelta sobre el recuadro.
+  const [arrastrando, setArrastrando] = useState(false);
+  function ponerFoto(f: File | null): void {
+    setFoto(f);
+    setVistaPrevia(f === null ? null : URL.createObjectURL(f));
+  }
+  // C-02: lo avanzado del alta de administración, plegado en «Más detalles». La unidad nace
+  // «unidad» y la clasificación, la de la empresa: las dos las resuelve el servidor.
+  const conFacturas = useConFacturas();
+  const [unidad, setUnidad] = useState("unidad");
+  const [clasif, setClasif] = useState(DE_LA_EMPRESA);
+  const [justificacion, setJustificacion] = useState("");
   // El objectURL de la vista previa se LIBERA al cambiar de foto y al cerrar:
   // sin esto cada foto elegida se quedaba en memoria (auditoría 2026-09-11).
   useEffect(() => {
@@ -418,11 +454,29 @@ export function AltaSimple({
     queryFn: () => llamar<{ items: { id: string; name: string }[] }>("/v1/product-categories"),
   });
 
-  const precioLimpio = precio.trim().replace(",", ".");
-  const existenciaLimpia = existencia.trim().replace(",", ".");
-  const costoLimpio = costo.trim().replace(",", ".");
+  const catalogos = useQuery({
+    queryKey: ["catalogos-producto", conFacturas],
+    staleTime: 300_000,
+    enabled: masDetalles,
+    queryFn: async () => {
+      const [unidades, clasifs] = await Promise.all([
+        llamar<Unit[]>("/v1/units"),
+        conFacturas
+          ? llamar<TaxCategory[]>("/v1/tax-categories")
+          : Promise.resolve<TaxCategory[]>([]),
+      ]);
+      return { unidades, clasifs };
+    },
+  });
+  const pideJustificacion = conFacturas && clasif === "gravado_adicional";
+
+  // F-06: el dinero lo lee el lector de importes; la existencia, el de cantidades («1,250»
+  // unidades es legítimo). Lo que no se puede leer se queda tal cual, no valida y se dice.
+  const precioLimpio = importeLimpio(precio);
+  const existenciaLimpia = cantidadLimpia(existencia);
+  const costoLimpio = importeLimpio(costo);
   const conStock = !esServicio && existenciaLimpia !== "";
-  const mayorLimpio = mayor.trim().replace(",", ".");
+  const mayorLimpio = importeLimpio(mayor);
   const conMayor = ajustes.data?.sells_wholesale === true && mayorLimpio !== "";
   // Un precio al mayor mal escrito NO se descarta en silencio: se avisa y
   // no se envía hasta corregirlo (auditoría 2026-09-11).
@@ -444,7 +498,8 @@ export function AltaSimple({
     importeValido(precioLimpio) &&
     !precioCero &&
     !mayorInvalido &&
-    (!conStock || (importeValido(existenciaLimpia) && importeValido(costoLimpio) && !costoCero));
+    (!pideJustificacion || justificacion.trim().length >= 10) &&
+    (!conStock || (cantidadValida(existencia) && importeValido(costoLimpio) && !costoCero));
 
   // ¿Ya hay uno con ese nombre? No se prohíbe —dos presentaciones pueden llamarse igual—, se
   // avisa antes de agregarlo (h. 3). La búsqueda la hace el servidor.
@@ -486,6 +541,9 @@ export function AltaSimple({
           ...(barras.trim() === "" ? {} : { barcode: barras.trim() }),
           ...(categoria.trim() === "" ? {} : { category_name: categoria.trim() }),
           ...(conMayor ? { wholesale_price: { amount: mayorLimpio, currency: moneda } } : {}),
+          ...(unidad === "unidad" ? {} : { unit_code: unidad }),
+          ...(conFacturas && clasif !== DE_LA_EMPRESA ? { tax_category_code: clasif } : {}),
+          ...(pideJustificacion ? { tax_category_justification: justificacion.trim() } : {}),
         }),
       });
       // El producto YA existe: si la foto falla, no se reintenta el POST
@@ -527,8 +585,30 @@ export function AltaSimple({
             <button
               type="button"
               onClick={() => fotoRef.current?.click()}
-              className="flex size-24 shrink-0 flex-col items-center justify-center gap-1 overflow-hidden rounded-lg border border-dashed border-border bg-surface-muted text-faint-foreground hover:border-accent"
-              aria-label={vistaPrevia !== null ? "Cambiar la foto" : "Agregar foto"}
+              // C-10: soltar una imagen aquí vale lo mismo que elegirla. El botón sigue abriendo
+              // el selector con clic, Enter o Espacio.
+              onDragOver={(e) => {
+                e.preventDefault();
+                setArrastrando(true);
+              }}
+              onDragLeave={() => setArrastrando(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setArrastrando(false);
+                const f = fotoSoltada(e);
+                if (f === null) {
+                  toast.warning("Eso no es una foto", "Suelta una imagen: JPG, PNG o WEBP.");
+                  return;
+                }
+                ponerFoto(f);
+              }}
+              title="Elige una foto o arrástrala aquí"
+              className={`flex size-24 shrink-0 flex-col items-center justify-center gap-1 overflow-hidden rounded-lg border border-dashed bg-surface-muted text-faint-foreground hover:border-accent ${
+                arrastrando ? "border-accent bg-accent-soft" : "border-border"
+              }`}
+              aria-label={
+                vistaPrevia !== null ? "Cambiar la foto" : "Agregar foto: elígela o arrástrala aquí"
+              }
             >
               {vistaPrevia !== null ? (
                 <img src={vistaPrevia} alt="" className="size-full object-cover" />
@@ -548,11 +628,7 @@ export function AltaSimple({
               type="file"
               accept={ACEPTA_FOTOS}
               className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0] ?? null;
-                setFoto(f);
-                setVistaPrevia(f === null ? null : URL.createObjectURL(f));
-              }}
+              onChange={(e) => ponerFoto(e.target.files?.[0] ?? null)}
             />
             <div className="min-w-0 flex-1 space-y-3">
               <FormField label="Nombre" required>
@@ -594,7 +670,8 @@ export function AltaSimple({
             <span className="text-[0.9rem]">
               Es un servicio
               <span className="block text-[0.78rem] text-muted-foreground">
-                Se vende pero no se cuenta: delivery, reparación, hora de trabajo.
+                Se vende pero no se cuenta: delivery, reparación, hora de trabajo. Elígelo bien: si
+                es un producto o un servicio no se podrá cambiar después.
               </span>
             </span>
             <Switch
@@ -609,6 +686,7 @@ export function AltaSimple({
               <FormField
                 label="¿Cuántos tienes hoy?"
                 hint="Puedes dejarlo vacío y cargarlo después."
+                error={motivoDeCantidad(existencia) ?? undefined}
               >
                 {(p) => (
                   <Input
@@ -690,6 +768,57 @@ export function AltaSimple({
                   </>
                 )}
               </FormField>
+              <FormField label="Unidad" hint="Cómo se vende: por unidad, por kilo, por litro…">
+                {(p) => (
+                  <SimpleSelect
+                    id={p.id}
+                    value={unidad}
+                    onValueChange={setUnidad}
+                    options={(catalogos.data?.unidades ?? [{ code: "unidad", name: "Unidad" }]).map(
+                      (u) => ({ value: u.code, label: u.name }),
+                    )}
+                  />
+                )}
+              </FormField>
+              {/* Solo quien factura la ve (A4): quien vende con recibos no la elige, y el producto
+                  nace con la de la empresa.
+                  La pantalla no decide nada: ofrece lo que el servidor dice que se ofrece. */}
+              {conFacturas && (
+                <FormField
+                  label={CLASIFICACION_DEL_PRODUCTO.etiqueta}
+                  hint={CLASIFICACION_DEL_PRODUCTO.ayuda}
+                >
+                  {(p) => (
+                    <SimpleSelect
+                      id={p.id}
+                      value={clasif}
+                      onValueChange={setClasif}
+                      options={[
+                        { value: DE_LA_EMPRESA, label: CLASIFICACION_DEL_PRODUCTO.laDeLaEmpresa },
+                        ...(catalogos.data?.clasifs ?? [])
+                          .filter((t) => t.offered_in_sales)
+                          .map((t) => ({ value: t.code, label: t.name })),
+                      ]}
+                    />
+                  )}
+                </FormField>
+              )}
+              {pideJustificacion && (
+                <FormField
+                  label={CLASIFICACION_DEL_PRODUCTO.suntuarioEtiqueta}
+                  required
+                  hint={CLASIFICACION_DEL_PRODUCTO.suntuarioAyuda}
+                  className="col-span-2"
+                >
+                  {(p) => (
+                    <Textarea
+                      id={p.id}
+                      value={justificacion}
+                      onChange={(e) => setJustificacion(e.target.value)}
+                    />
+                  )}
+                </FormField>
+              )}
               {ajustes.data?.sells_wholesale && (
                 <FormField
                   label="Precio al mayor"

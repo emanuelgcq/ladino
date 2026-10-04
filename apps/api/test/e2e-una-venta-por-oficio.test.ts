@@ -21,7 +21,7 @@ import { diaCaracas } from "./_dia-caracas.js";
  *   · el encargado da de alta un producto CON precio (el precio lo autoriza `product.manage`);
  *   · el administrativo anula una factura sin cobro: 200 y el asiento original REVERSADO, leído
  *     de la base (la reversa la autoriza `sales.invoice.annul`).
- * El fiado con límite de crédito (E-09) queda fuera de este fichero.
+ * El fiado con límite de crédito (E-09) se prueba en `e2e-fiar-con-permiso-y-limite.test.ts`.
  */
 const URL_LOCAL = "postgres://postgres:postgres@127.0.0.1:54322/postgres";
 const URL_API = "postgres://ladino_api:ladino_api@127.0.0.1:54322/postgres";
@@ -377,11 +377,20 @@ describe("una venta por cada oficio", () => {
 
   // ── N-04: el administrativo anula una factura sin cobro ──────────────────
   it("N-04 — el administrativo anula una factura sin cobro: 200 y el asiento original queda REVERSADO", async () => {
+    // E-09: una venta sin cobro es un fiado, y fiar exige que el cliente tenga límite. Lo fija el
+    // propio administrativo (`customers.credit.set`), por el camino real. Es una ENTRADA del caso.
+    const limite = await pedir("PUT", `/v1/customers/${CLIENTE}/credit-limit`, ADMINISTRATIVO, {
+      company_id: COMPANY,
+      credit_limit_usd: "100",
+    });
+    expect(limite.status).toBe(200);
     const emitida = await pedir("POST", "/v1/pos/sales", ADMINISTRATIVO, {
       company_id: COMPANY,
       customer_id: CLIENTE,
       warehouse_id: DEPOSITO,
       lines: [{ product_id: PRODUCTO, quantity: "1" }],
+      // P-05: una venta que deja saldo dice cuándo se paga (entrada del fixture).
+      due_date: diaCaracas(15),
       // SIN payments: factura emitida, sin cobro — la única que se anula
       // (ADR-0061 §8, «una venta cobrada no se anula, se devuelve»).
     });
@@ -396,6 +405,8 @@ describe("una venta por cada oficio", () => {
     const anular = await pedir("POST", `/v1/invoices/${doc.document.id}/annul`, ADMINISTRATIVO, {
       company_id: COMPANY,
       reason: "N-04 — venta de prueba, se anula sin cobro",
+      // G-10 (PA 00071 art. 36): la persona confirma el original y las copias.
+      originals_in_hand: true,
     });
     expect(anular.status).toBe(200);
 

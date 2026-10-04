@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, BookOpenCheck, FileMinus2, FilePlus2, HandCoins, Undo2 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { abrirPdf as abrirPdfApi } from "../../pdf.js";
-import { useModulosActivos } from "../../app/shell.js";
+import { useContabilidadConfigurada } from "../../app/shell.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DualMoney } from "../../components/DualMoney.js";
 import { FiscalStatusBadge } from "../../components/FiscalStatusBadge.js";
@@ -24,7 +24,15 @@ import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
 import { decisionDeCobro, textoDeDeuda } from "../../components/deuda.js";
-import { EntityPicker, type EntityOption } from "../../components/forms.js";
+import {
+  EntityPicker,
+  MotivoDeLectura,
+  leerCantidad,
+  leerImporte,
+  motivoDeCantidad,
+  motivoDeImporte,
+  type EntityOption,
+} from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import { useConFacturas } from "../../app/modo-venta.js";
 import { KIND_LABEL, MensajeError, numeroDe } from "./comunes.js";
@@ -39,6 +47,8 @@ import { errorDePersona } from "../../lib.js";
 import { conLlaveDeIntento, intentoAnteriorPudoQuedar } from "../../llave-intento.js";
 import { RevisaIntentoAnterior } from "../../components/RevisaIntentoAnterior.js";
 import { fechaLocal } from "../../fechas.js";
+import { ANULACION } from "../../components/capa-fiscal/textos.js";
+import { ReversarCobro } from "../../components/ReversarCobro.js";
 
 /** El `source_kind` con el que cada tipo de documento genera su asiento. */
 const SOURCE_KIND: Record<string, string> = {
@@ -98,6 +108,10 @@ interface Pago {
   functional_amount: string;
   instrument: string;
   reference: string | null;
+  /** El comprobante de retención soportada que este abono aplicó, si lo es. */
+  supported_retention_id?: string | null;
+  /** H4 (ADR-0075 §8): si el cobro está reversado, cuándo, por quién y por qué. */
+  reversal?: { reversed_at: string; reversed_by_name: string | null; reason: string } | null;
 }
 interface Diferencia {
   id: string;
@@ -115,6 +129,11 @@ interface Detalle {
   balance: string | null;
   /** ADR-0076 (O-02): quién armó la cuenta del POS que esta venta cerró. */
   pos_cart?: { author_id: string | null; author_name: string | null } | null;
+  /**
+   * G-10 / G-14: si se puede anular AHORA y, si no, por qué y cuál es el camino. Lo decide el
+   * servidor (día de Caracas, cierre de caja, período, cobros); la pantalla solo lo muestra.
+   */
+  annulment?: { allowed: boolean; reason: string | null; message: string | null } | null;
 }
 /** Un documento emitido SOBRE este (nota de crédito, de débito…), del listado. */
 interface DocumentoRelacionado {
@@ -133,14 +152,31 @@ export function DetalleFactura(): React.JSX.Element {
   const { empresa, llamar, puede } = useSesion();
   // Sin RIF: recibos y lenguaje sencillo — nada de correlativos, asientos ni versión de reglas.
   const conFacturas = useConFacturas();
-  const activos = useModulosActivos();
+  // «¿Hay contabilidad configurada que yo pueda leer?» — no la sonda del MENÚ (A-04), que solo se
+  // enciende con el primer asiento posteado: con ella, la primera factura decía «Contabilidad no
+  // configurada» con su asiento ya escrito, y la consulta del asiento ni se lanzaba.
+  const contabilidad = useContabilidadConfigurada();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
   const [anulando, setAnulando] = useState(false);
   const [imprimiendo, setImprimiendo] = useState(false);
   const [motivo, setMotivo] = useState("");
+  /** G-10 (PA 00071 art. 36): la persona confirma que el original y las copias no salieron. */
+  const [papelEnMano, setPapelEnMano] = useState(false);
+  // La confirmación del papel vale para UN intento sobre UN documento: se reinicia al abrir y al
+  // cerrar el diálogo, y al cambiar de `:id` (el componente no se desmonta entre documentos).
+  const abrirAnulacion = (abierto: boolean): void => {
+    setPapelEnMano(false);
+    setAnulando(abierto);
+  };
+  useEffect(() => {
+    setPapelEnMano(false);
+    setAnulando(false);
+  }, [id]);
   const [pagando, setPagando] = useState(false);
+  // La reversa de un cobro o de una retención soportada (ADR-0075 §8): el cobro elegido.
+  const [reversando, setReversando] = useState<Pago | null>(null);
   const [devolviendo, setDevolviendo] = useState(false);
   const [notaCredito, setNotaCredito] = useState(false);
   const [notaDebito, setNotaDebito] = useState(false);
@@ -190,7 +226,7 @@ export function DetalleFactura(): React.JSX.Element {
     queryKey: ["asiento-de", empresa.id, id, kindDocumento],
     enabled:
       detalle.data !== undefined &&
-      activos.contabilidad &&
+      contabilidad.configurada &&
       kindDocumento !== undefined &&
       SOURCE_KIND[kindDocumento] !== undefined,
     queryFn: async () => {
@@ -258,7 +294,7 @@ export function DetalleFactura(): React.JSX.Element {
       </div>
     );
   }
-  const { document: doc, lines, payments, exchange_differences, balance } = detalle.data;
+  const { document: doc, lines, payments, exchange_differences, balance, annulment } = detalle.data;
   const difPorPago = new Map(exchange_differences.map((d) => [d.payment_id, d]));
   const dual = doc.transaction_currency !== doc.functional_currency;
   const pagable = doc.kind === "invoice" && (doc.status === "issued" || doc.status === "paid");
@@ -272,10 +308,13 @@ export function DetalleFactura(): React.JSX.Element {
   const devolvible =
     (doc.kind === "invoice" || doc.kind === "receipt") &&
     (doc.status === "issued" || doc.status === "paid");
+  // G-10 / G-14: si se anula lo dice el SERVIDOR (`annulment`); la pantalla no rehace la regla.
   const anulable =
     (doc.kind === "invoice" || doc.kind === "receipt") &&
     doc.status === "issued" &&
-    payments.length === 0;
+    annulment?.allowed === true;
+  /** Por qué «Anular» no está, en palabras del servidor: se dice, no se esconde (G-14). */
+  const porQueNoSeAnula = annulment != null && !annulment.allowed ? annulment.message : null;
   const nombreDoc = doc.kind === "receipt" ? "recibo" : "factura";
   // Solo la factura, la NC y la ND son fiscales: la cotización y el pedido imprimen «PDF» a secas (H2).
   const esFiscal =
@@ -303,7 +342,12 @@ export function DetalleFactura(): React.JSX.Element {
       await llamar(`/v1/invoices/${doc.id}/annul`, {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ company_id: empresa.id, reason: motivo }),
+        body: JSON.stringify({
+          company_id: empresa.id,
+          reason: motivo,
+          // G-10: solo la factura lleva la confirmación del papel (el recibo no es papel fiscal).
+          ...(doc.kind === "invoice" ? { originals_in_hand: papelEnMano } : {}),
+        }),
       });
       toast.success(
         doc.kind === "receipt" ? "Recibo anulado" : "Factura anulada",
@@ -336,7 +380,7 @@ export function DetalleFactura(): React.JSX.Element {
           <>
             {/* Los permisos son cortesía de UX (ADR-0048): el servidor los exige igual. */}
             {anulable && puede("sales.invoice.annul") && (
-              <Button variant="ghost" onClick={() => setAnulando(true)}>
+              <Button variant="ghost" onClick={() => abrirAnulacion(true)}>
                 <Ban /> Anular
               </Button>
             )}
@@ -392,7 +436,8 @@ export function DetalleFactura(): React.JSX.Element {
                 <Undo2 /> Devolución
               </Button>
             )}
-            {pagable && puede("sales.return.manage") && (
+            {/* G-07: la nota DIRECTA tiene su permiso; el cajero devuelve, no acredita sin mercancía. */}
+            {pagable && puede("sales.credit_note.direct") && (
               <Button variant="ghost" onClick={() => setNotaCredito(true)}>
                 <FileMinus2 /> Nota de crédito…
               </Button>
@@ -416,6 +461,24 @@ export function DetalleFactura(): React.JSX.Element {
           <MensajeError error={errorAccion} />
         </div>
       )}
+
+      {/* G-14: donde «Anular» no aplica, la pantalla dice por qué y ofrece el camino. El texto
+          es del servidor. Solo a quien podría anular o devolver: a los demás no les falta nada. */}
+      {porQueNoSeAnula !== null &&
+        (puede("sales.invoice.annul") || puede("sales.return.manage")) && (
+          <div
+            role="note"
+            aria-label={ANULACION.noSeAnula}
+            className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-[0.88rem]"
+          >
+            <span className="min-w-0 flex-1">{porQueNoSeAnula}</span>
+            {devolvible && puede("sales.return.manage") && (
+              <Button variant="secondary" onClick={() => setDevolviendo(true)}>
+                <Undo2 /> Devolución
+              </Button>
+            )}
+          </div>
+        )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
@@ -494,6 +557,9 @@ export function DetalleFactura(): React.JSX.Element {
                       <TH>Referencia</TH>
                       <TH className="text-right">Importe</TH>
                       <TH className="text-right">Diferencial</TH>
+                      <TH>
+                        <span className="sr-only">Reversa</span>
+                      </TH>
                     </TR>
                   </THead>
                   <TBody>
@@ -530,6 +596,26 @@ export function DetalleFactura(): React.JSX.Element {
                               />
                             )}
                           </TD>
+                          <TD className="whitespace-normal text-right">
+                            {p.reversal != null ? (
+                              <span className="text-[0.82rem] text-muted-foreground">
+                                Reversado el {fechaLocal(p.reversal.reversed_at)}
+                                {p.reversal.reversed_by_name != null &&
+                                  ` por ${p.reversal.reversed_by_name}`}
+                                : {p.reversal.reason}
+                              </span>
+                            ) : p.instrument === "saldo_a_favor" ||
+                              (p.supported_retention_id != null
+                                ? !puede("ar.retention.correct")
+                                : !puede("ar.payment.reverse")) ? null : (
+                              // Solo a quien el servidor se lo permite: el contador corrige la
+                              // retención (ar.retention.correct); la reversa de cobros tiene su
+                              // permiso (ar.payment.reverse).
+                              <Button variant="ghost" size="sm" onClick={() => setReversando(p)}>
+                                Reversar
+                              </Button>
+                            )}
+                          </TD>
                         </TR>
                       );
                     })}
@@ -538,6 +624,19 @@ export function DetalleFactura(): React.JSX.Element {
               )}
             </CardContent>
           </Card>
+
+          {reversando !== null && (
+            <ReversarCobro
+              tipo={reversando.supported_retention_id != null ? "retencion" : "cobro"}
+              id={reversando.supported_retention_id ?? reversando.id}
+              importe={{ amount: reversando.amount, currency: reversando.currency }}
+              onCerrar={() => setReversando(null)}
+              onReversado={() => {
+                setReversando(null);
+                void qc.invalidateQueries({ queryKey: ["documento", empresa.id, id] });
+              }}
+            />
+          )}
 
           {exchange_differences.length > 0 && (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -699,7 +798,9 @@ export function DetalleFactura(): React.JSX.Element {
                 )}
                 {conFacturas && (
                   <div className="pt-1">
-                    {!activos.contabilidad ? (
+                    {contabilidad.cargando ? (
+                      <Skeleton className="h-6 w-40" />
+                    ) : !contabilidad.configurada ? (
                       <p className="text-muted-foreground">Contabilidad no configurada.</p>
                     ) : asiento.isPending ? (
                       <Skeleton className="h-6 w-40" />
@@ -734,11 +835,11 @@ export function DetalleFactura(): React.JSX.Element {
 
       <ConfirmDialog
         open={anulando}
-        onOpenChange={setAnulando}
-        title={`Anular ${doc.kind === "receipt" ? "el recibo" : "la factura"} ${numeroDe(doc)}`}
+        onOpenChange={abrirAnulacion}
+        title={`Anular${doc.kind === "receipt" ? "el recibo" : "la factura"} ${numeroDe(doc)}`}
         confirmLabel={doc.kind === "receipt" ? "Anular el recibo" : "Anular la factura"}
         destructive
-        confirmDisabled={motivo.trim().length < 3}
+        confirmDisabled={motivo.trim().length < 3 || (doc.kind === "invoice" && !papelEnMano)}
         onConfirm={anular}
       >
         <div className="space-y-2">
@@ -760,6 +861,20 @@ export function DetalleFactura(): React.JSX.Element {
             Solo se anula un {nombreDoc} sin cobros. Si ya se cobró, no se anula: registra una
             devolución, que repone la mercancía y devuelve el dinero como saldo a favor o reembolso.
           </p>
+          {doc.kind === "invoice" && (
+            <>
+              <p className="text-[0.88rem] text-muted-foreground">{ANULACION.ayudaPapel}</p>
+              <label className="flex items-start gap-2 text-[0.9rem]">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={papelEnMano}
+                  onChange={(e) => setPapelEnMano(e.target.checked)}
+                />
+                <span>{ANULACION.papelEnMano}</span>
+              </label>
+            </>
+          )}
           <Textarea
             aria-label="Motivo de anulación"
             placeholder="Motivo (obligatorio, mínimo 3 caracteres)…"
@@ -916,7 +1031,13 @@ function Devolucion({
   mostrador: boolean;
   onClose: (hecho: boolean) => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
+  /**
+   * G-07 (RESPUESTA §2.8): la devolución la inicia quien tiene `sales.return.manage`; sacar el
+   * dinero de la caja exige `sales.refund`. Sin él, la devolución deja saldo a favor y la pantalla
+   * lo dice: no ofrece una caja que el servidor va a negar.
+   */
+  const reembolsa = puede("sales.refund");
   const toast = useToast();
   const [cantidades, setCantidades] = useState<Record<string, string>>({});
   const [motivo, setMotivo] = useState("");
@@ -947,6 +1068,7 @@ function Devolucion({
   } | null>(null);
   const cuentas = useQuery({
     queryKey: ["cuentas-reembolso", empresa.id],
+    enabled: reembolsa,
     queryFn: () =>
       llamar<{
         accounts: {
@@ -974,15 +1096,20 @@ function Devolucion({
     if (primero !== undefined) setDeposito((actual) => actual ?? primero);
   }, [depositos.data]);
 
-  const elegidas = lineas
-    .map((l) => ({ linea: l, cantidad: (cantidades[l.id] ?? "").trim().replace(",", ".") }))
-    .filter((x) => x.cantidad !== "" && Number(x.cantidad) > 0);
+  // F-06: la cantidad la lee el lector único. Lo que rechaza no se descarta en silencio: se dice
+  // junto a la lista y no se envía hasta corregirlo.
+  const elegidas = lineas.flatMap((l) => {
+    const leida = leerCantidad(cantidades[l.id] ?? "");
+    return leida.ok && !esCero(leida.cantidad) ? [{ linea: l, cantidad: leida.cantidad }] : [];
+  });
+  const sinLeer = lineas.some((l) => motivoDeCantidad(cantidades[l.id] ?? "") !== null);
   const listo =
     creada !== null ||
     (elegidas.length > 0 &&
+      !sinLeer &&
       motivo.trim().length >= 3 &&
       deposito !== null &&
-      (!mostrador || cajaReembolso !== null));
+      (!mostrador || !reembolsa || cajaReembolso !== null));
 
   /**
    * Cancelar con un borrador ya creado lo CANCELA en el servidor: antes quedaba huérfano, sin
@@ -1012,7 +1139,12 @@ function Devolucion({
    * El pago del saldo a favor, en su propio paso. La llave es por INTENTO (ADR-0076, F-08): el
    * 409 de saldo la estrena, así «confirmar el sobregiro» —otro cuerpo— viaja con la suya.
    */
-  async function reembolsar(creditId: string, monto: string, forzar: string | null): Promise<void> {
+  async function reembolsar(
+    creditId: string,
+    // El total de la nota, que el diálogo enseña. Ya no viaja: el servidor reembolsa todo.
+    _monto: string,
+    forzar: string | null,
+  ): Promise<void> {
     await conLlaveDeIntento(llaveReembolso, (k) =>
       llamar(`/v1/customer-credits/${creditId}/refunds`, {
         method: "POST",
@@ -1020,7 +1152,10 @@ function Devolucion({
         body: JSON.stringify({
           company_id: empresa.id,
           account_id: cajaReembolso,
-          amount: monto,
+          // G-05/G-15: el saldo a favor queda en la moneda del documento; la devolución
+          // reembolsa TODO lo que dejó y el servidor decide cuánto es y a qué tasa sale. No se
+          // manda importe: el cuerpo lleva `whole` o `amount`, nunca los dos.
+          whole: true,
           reason: `Reembolso de la devolución: ${motivo.trim()}`,
           ...(forzar !== null ? { allow_negative_balance: true, overdraft_reason: forzar } : {}),
         }),
@@ -1137,6 +1272,9 @@ function Devolucion({
                 </div>
               ))}
             </div>
+            {lineas.map((l) => (
+              <MotivoDeLectura key={l.id} motivo={motivoDeCantidad(cantidades[l.id] ?? "")} />
+            ))}
             {(depositos.data?.length ?? 0) > 1 && (
               <div className="w-full sm:w-56">
                 <SimpleSelect
@@ -1148,7 +1286,12 @@ function Devolucion({
                 />
               </div>
             )}
-            <div className="w-full sm:w-72">
+            {!reembolsa && (
+              <p className="text-[0.88rem] text-muted-foreground">
+                {mostrador ? ANULACION.sinReembolsoMostrador : ANULACION.sinReembolso}
+              </p>
+            )}
+            <div className={reembolsa ? "w-full sm:w-72" : "hidden"}>
               <SimpleSelect
                 ariaLabel="Devolver el dinero desde"
                 value={cajaReembolso ?? (mostrador ? null : "saldo")}
@@ -1269,10 +1412,13 @@ function NotaCreditoDirecta({
   const [error, setError] = useState<unknown>(null);
   const [ocupado, setOcupado] = useState(false);
 
-  const elegidas = lineas
-    .map((l) => ({ linea: l, cantidad: (cantidades[l.id] ?? "").trim().replace(",", ".") }))
-    .filter((x) => x.cantidad !== "" && Number(x.cantidad) > 0);
-  const listo = elegidas.length > 0 && motivo.trim().length >= 3;
+  // F-06: la cantidad la lee el lector único; lo que rechaza se dice y no se envía.
+  const elegidas = lineas.flatMap((l) => {
+    const leida = leerCantidad(cantidades[l.id] ?? "");
+    return leida.ok && !esCero(leida.cantidad) ? [{ linea: l, cantidad: leida.cantidad }] : [];
+  });
+  const sinLeer = lineas.some((l) => motivoDeCantidad(cantidades[l.id] ?? "") !== null);
+  const listo = elegidas.length > 0 && !sinLeer && motivo.trim().length >= 3;
 
   async function emitir(): Promise<void> {
     setError(null);
@@ -1329,6 +1475,9 @@ function NotaCreditoDirecta({
               </div>
             ))}
           </div>
+          {lineas.map((l) => (
+            <MotivoDeLectura key={l.id} motivo={motivoDeCantidad(cantidades[l.id] ?? "")} />
+          ))}
           <Textarea
             aria-label="Motivo de la nota de crédito"
             rows={2}
@@ -1392,13 +1541,23 @@ function NotaDebito({
     return r.items.map((p) => ({ id: p.id, label: p.name, detalle: p.sku }));
   };
 
-  const completas = filas.filter(
-    (f) =>
-      f.producto !== null &&
-      Number(f.cantidad.trim().replace(",", ".")) > 0 &&
-      Number(f.precio.trim().replace(",", ".")) > 0,
+  // F-06: cantidad y precio los leen los lectores únicos. «1.500» ya no se vuelve 1,5: lo que
+  // no se puede leer se dice junto a su fila y la nota no se emite hasta corregirlo.
+  const completas = filas.flatMap((f) => {
+    const cantidad = leerCantidad(f.cantidad);
+    const precio = leerImporte(f.precio);
+    return f.producto !== null &&
+      cantidad.ok &&
+      !esCero(cantidad.cantidad) &&
+      precio.ok &&
+      !esCero(precio.importe)
+      ? [{ producto: f.producto, cantidad: cantidad.cantidad, precio: precio.importe }]
+      : [];
+  });
+  const sinLeer = filas.some(
+    (f) => motivoDeCantidad(f.cantidad) !== null || motivoDeImporte(f.precio) !== null,
   );
-  const listo = completas.length > 0 && motivo.trim().length >= 3;
+  const listo = completas.length > 0 && !sinLeer && motivo.trim().length >= 3;
 
   async function emitir(): Promise<void> {
     setError(null);
@@ -1412,9 +1571,9 @@ function NotaDebito({
           source_document_id: documento.id,
           reason: motivo.trim(),
           lines: completas.map((f) => ({
-            product_id: f.producto!.id,
-            quantity: f.cantidad.trim().replace(",", "."),
-            unit_price: f.precio.trim().replace(",", "."),
+            product_id: f.producto.id,
+            quantity: f.cantidad,
+            unit_price: f.precio,
           })),
         }),
       });
@@ -1477,6 +1636,12 @@ function NotaDebito({
                 }
               />
             </div>
+          ))}
+          {filas.map((f) => (
+            <MotivoDeLectura key={`cantidad-${f.id}`} motivo={motivoDeCantidad(f.cantidad)} />
+          ))}
+          {filas.map((f) => (
+            <MotivoDeLectura key={`precio-${f.id}`} motivo={motivoDeImporte(f.precio)} />
           ))}
           <Button
             variant="ghost"

@@ -150,6 +150,17 @@ export interface PriceItem {
   /** Equivalente en la otra moneda, del SERVIDOR con la tasa BCV de hoy. */
   equivalent_amount?: string | null;
   equivalent_currency?: string | null;
+  /**
+   * C-11: el equivalente a la tasa oficial del DÍA en que empezó a regir el precio, con su tasa,
+   * su fecha y su fuente; lo calcula el SERVIDOR. Sin cifra, `historical_rate_status` dice por
+   * qué: `missing` (ese día no había tasa) o `scheduled` (el precio todavía no rige).
+   */
+  historical_equivalent_amount?: string | null;
+  historical_equivalent_currency?: string | null;
+  historical_rate?: string | null;
+  historical_rate_date?: string | null;
+  historical_rate_source?: string | null;
+  historical_rate_status?: "available" | "missing" | "scheduled" | "not_applicable";
   effective_from: string;
   effective_to: string | null;
 }
@@ -166,6 +177,8 @@ export interface Customer {
   phone: string | null;
   status: "lead" | "active" | "blocked" | "inactive";
   default_price_list_id: string | null;
+  /** E-09: límite de fiado en USD, como texto. "0.00000000" = no se le fía. */
+  credit_limit_usd?: string;
 }
 export interface Warehouse {
   id: string;
@@ -665,8 +678,12 @@ export interface LandedCostResult {
 }
 export interface ApAging {
   reference_date: string;
-  buckets: { supplier_id: string; bucket: string; document_count: number; amount: string }[];
-  total: string;
+  /** `amount` null = el tramo tiene una factura en divisa que hoy no se puede valorar. */
+  buckets: { supplier_id: string; bucket: string; document_count: number; amount: string | null }[];
+  /** null = falta la tasa de hoy (`total_motivo: "sin_tasa"`). `null` NO es cero. */
+  total: string | null;
+  total_motivo?: "sin_tasa" | null;
+  total_por_moneda?: { currency: string; nominal: string }[];
 }
 export interface SupplierStatement {
   supplier_id: string;
@@ -682,7 +699,10 @@ export interface SupplierStatement {
     balance: string;
     days_outstanding: number;
   }[];
-  total_outstanding: string;
+  /** null = hay deuda en divisa y falta la tasa de hoy; el nominal va en `…_por_moneda`. */
+  total_outstanding: string | null;
+  total_outstanding_motivo?: "sin_tasa" | null;
+  total_outstanding_por_moneda?: { currency: string; nominal: string }[];
   total_retained: string;
   aging: ApAging;
 }
@@ -1142,5 +1162,57 @@ export function vistaDeLlegada(r: {
     total_amount: r.total_amount,
     tasa: r.fx_rate ?? null,
     tasaFecha: r.fx_rate_date ?? null,
+  };
+}
+
+/**
+ * La vista previa de un gasto con factura (POST /v1/expenses/preview): lo que la pantalla enseña
+ * ANTES de confirmar, todo calculado por el servidor. Como en `vistaDeLlegada`, el contrato trae
+ * la tasa con su nombre técnico y aquí se traduce, una vez, al glosario de persona.
+ */
+export interface VistaDeGasto {
+  /** La moneda de la factura: en ella van las bases, el impuesto y el total. */
+  currency: string;
+  lines: { tax_category_code: string; base: string; tax_rate: string; tax_amount: string }[];
+  subtotal_amount: string;
+  tax_amount: string;
+  total_amount: string;
+  retention_total: string;
+  retention_currency: string;
+  tax_is_recoverable: boolean;
+  /** Lo que sale de la cuenta, en la moneda de la cuenta. */
+  amount: string;
+  account_currency: string;
+  /** Si el pago cruza monedas: la tasa del día, de qué divisa y el día en que se publicó. */
+  tasa: string | null;
+  tasaMoneda: string | null;
+  tasaFecha: string | null;
+  /** No nulo = la cuenta no alcanza: el mensaje del servidor. */
+  sinSaldo: string | null;
+}
+
+export function vistaDeGasto(
+  r: Omit<VistaDeGasto, "tasa" | "tasaMoneda" | "tasaFecha" | "sinSaldo"> & {
+    fx_rate?: string | null;
+    fx_rate_currency?: string | null;
+    fx_rate_date?: string | null;
+    insufficient_funds?: string | null;
+  },
+): VistaDeGasto {
+  return {
+    currency: r.currency,
+    lines: r.lines,
+    subtotal_amount: r.subtotal_amount,
+    tax_amount: r.tax_amount,
+    total_amount: r.total_amount,
+    retention_total: r.retention_total,
+    retention_currency: r.retention_currency,
+    tax_is_recoverable: r.tax_is_recoverable,
+    amount: r.amount,
+    account_currency: r.account_currency,
+    tasa: r.fx_rate ?? null,
+    tasaMoneda: r.fx_rate_currency ?? null,
+    tasaFecha: r.fx_rate_date ?? null,
+    sinSaldo: r.insufficient_funds ?? null,
   };
 }

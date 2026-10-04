@@ -82,3 +82,50 @@ select 'fiscal_amount_gaps (documentos fiscales cuyo IVA en Bs no sale de su bas
 -- juzga accounting_coverage_gaps.
 select 'settled_ledger_gaps (saldados con residuo en CxC o CxP del mayor)', count(*)::text
   from platform.settled_ledger_gaps(:'cid');
+-- ADR-0079 (B-06): desde el corte (platform.invariant_cutoffs, contra `created_at`), en TODA tabla que lleva
+-- `rules_version` —documentos, asientos, actas, facturas de proveedor, retenciones, comprobantes, notas de
+-- retiro, historia del tipo de contribuyente, cuentas— toda versión escrita está REGISTRADA en
+-- platform.rules_versions (una versión de reglas o una cadena de sistema declarada); y todo documento fiscal
+-- EMITIDO y todo movimiento contable lleva una versión de REGLAS, nunca una cadena de sistema: `documents` en
+-- issued/paid/annulled, `supplier_invoices` en posted/paid/annulled, `retention_vouchers`, `supplier_retentions`,
+-- `inventory_withdrawal_notes` y `journal_entries` en posted/reversed. Lo anterior al corte conserva la suya y
+-- no se edita (reglas 1 y 2). Migraciones 20261004120000, 120200 y 205000.
+select 'rules_version_gaps (versión de reglas sin registrar, o documento/asiento sin versión de REGLAS)', count(*)::text
+  from platform.rules_version_gaps(:'cid');
+-- B-14 (migraciones 20261004120100 y 205000): toda tasa GLOBAL creada desde el corte tiene su acta en
+-- system_audit_events (`fx.rate.captured`, la del dominio, o `fx.rate.inserted_without_capture`, la que deja la
+-- base al cierre). No depende de la empresa (se repite igual en las tres). Hoy lo sostiene un trigger diferido:
+-- esta consulta es quien lo mira desde fuera.
+select 'global_rate_record_gaps (tasas globales sin acta)', count(*)::text
+  from platform.global_rate_record_gaps();
+-- ADR-0079: el hash de las reglas GLOBALES guardado es el que sale de recalcularlo. No depende de la empresa
+-- (se repite igual en las tres): una fila aquí es una tabla de reglas que cambió sin pasar por su trigger.
+select 'rule_set_drift (hash global de reglas distinto del recalculado)', count(*)::text
+  from platform.rule_set_drift();
+-- J-02 (ADR-0062 §4): un cierre de caja con el saldo esperado EN NEGATIVO (menor que cero en las unidades
+-- mínimas de la moneda de la caja) no tiene vigente el origen `cash_closing` —el sobrante contra resultado—,
+-- ni asentado ni pendiente en la cola: su hecho es `cash_closing_overdraft` (el sobregiro se le debe al dueño).
+-- Sin corte: lo anterior lo lleva a cero scripts/reparar/j-02-sobregiro-al-cierre.mjs, en el post-pull.
+-- Migración 20261004180300.
+select 'overdraft_closing_gaps (cierres en sobregiro asentados o encolados como sobrante)', count(*)::text
+  from platform.overdraft_closing_gaps(:'cid');
+-- F-12 (ola 4; migración 20261004150000): la cartera por documento es la cuenta por cobrar del mayor. Σ por
+-- documento de venta con asiento (total − lo que cancelaron sus cobros vivos con asiento) = saldo de las cuentas
+-- ar_general, sin la revaluación al cierre ni la regularización del céntimo. Lo que está en la cola no entra en
+-- ninguno de los dos lados (lo vigila accounting_coverage_gaps). Sin lista de exclusiones: un asiento manual
+-- sobre la cuenta por cobrar da fila.
+select 'receivables_ledger_gap (cartera por documento ≠ cuenta por cobrar del mayor)', count(*)::text
+  from platform.receivables_ledger_gap(:'cid');
+-- G-10 (ola 4; migración 20261004160200; PA 00071 arts. 22 y 36): desde el corte (platform.invariant_cutoffs,
+-- contra `annulled_at`), toda FACTURA anulada se anuló el mismo día de Caracas de su emisión, en un período de
+-- IVA sin declarar, antes del cierre de su caja, y su acta lleva `originals_in_hand = true`. Es la segunda capa
+-- de la regla que obedece annulInvoice: una anulación hecha por otra vía da fila. Sin su corte, la función lanza.
+select 'annulment_paper_gaps (facturas anuladas fuera de la regla del papel)', count(*)::text
+  from platform.annulment_paper_gaps(:'cid');
+-- Ola 4, tercera ronda de cobros (migraciones 20261004190200 y 190400; ADR-0075 decisión 5): Σ por saldo a favor
+-- no retirado con asiento (lo que nació − lo que bajaron sus usos vivos con asiento) = saldo acreedor de las
+-- cuentas customer_credit_liability, sin la revaluación al cierre ni la regularización del céntimo; un saldo a
+-- favor agotado no carga nada (`exhausted`); y todo saldo a favor vivo nació con asiento o está en la cola
+-- (`unborn`: uno retirado que resucitó). Sin lista de exclusiones: un asiento manual sobre la cuenta da fila.
+select 'customer_credit_ledger_gap (saldos a favor vivos ≠ pasivo de saldos a favor del mayor)', count(*)::text
+  from platform.customer_credit_ledger_gap(:'cid');

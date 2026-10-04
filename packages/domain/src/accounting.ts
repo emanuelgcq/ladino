@@ -117,13 +117,15 @@ async function auditar(
   aggregateId: string,
   evento: string,
   payload: Record<string, JSONValue>,
+  /** Quién lo hizo: una persona, o el sistema (una reparación que corre el dueño de la base). */
+  actorType: "user" | "system" = "user",
 ): Promise<void> {
   await sql`
     insert into public.audit_events
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
        actor_type, occurred_at, rules_version, payload)
     values (${tenantId}, ${companyId}, 'journal_entry', ${aggregateId}, ${evento},
-            'user', now(), ${RULES_VERSION}, ${sql.json(payload)})`;
+            ${actorType}, now(), ${RULES_VERSION}, ${sql.json(payload)})`;
   await sql`
     insert into public.outbox
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
@@ -563,10 +565,13 @@ export async function postJournalEntry(
       const [num] = await sp<{ n: string }[]>`
         select platform.claim_entry_number(${input.company_id},
                extract(year from ${entrada.posting_date}::date)::int)::text as n`;
+      // ADR-0079 (quinta pasada, B2): la versión de reglas se congela en el HECHO contable, que es
+      // el posteo, no el día en que se guardó el borrador. Postear DECLARA DE NUEVO —como ventas
+      // al emitir— y la base sella la vigente (el trigger solo ve el UPDATE si nombra la columna).
       const [e] = await sp<Record<string, unknown>[]>`
         update public.journal_entries
            set status = 'posted', posted_at = now(), posted_by = ${actor.userId},
-               entry_number = ${num!.n}::bigint
+               entry_number = ${num!.n}::bigint, rules_version = ${RULES_VERSION}
          where id = ${entryId} and company_id = ${input.company_id}
         returning ${sp.unsafe(ENTRY_COLUMNS)}`;
       return e!;
@@ -679,6 +684,57 @@ async function reversar(
     });
   }
 
+  return contraAsiento(sql, {
+    tenantId: ctx.value.tenantId,
+    companyId: input.company_id,
+    functionalCurrency: ctx.value.functionalCurrency,
+    entryId,
+    description: original.description,
+    reason: input.reason,
+    fecha: input.posting_date ?? diaNegocio(new Date()),
+    ...(opciones.alCierre === undefined ? {} : { alCierre: opciones.alCierre }),
+    postedBy: actor.userId,
+  });
+}
+
+/**
+ * EL CONTRA-ASIENTO, UNA SOLA IMPLEMENTACIÓN. Lo usan la reversa de una persona (`reversar`,
+ * que autoriza y decide si ese asiento se puede reversar) y la reparación J-02
+ * (`repairOverdraftClosings`, que corre el dueño de la base y postea como el sistema). Va AL
+ * CÉNTIMO (ADR-0075 §7): un original anterior al corte con fracción se reversa redondeado, con
+ * su línea de «Diferencias por redondeo»; el espejo crudo lo rechazaría la base (LAD71).
+ *
+ * `cuentaSiAgrupa`: la cuenta donde reversar una línea asentada en una cuenta que HOY agrupa.
+ * Un cierre de caja anterior a ADR-0070 se asentó en la cuenta de familia (1.1.01), que ya no
+ * recibe asientos (LAD62) y cuyo saldo se trasladó a la subcuenta de la caja: quien llama dice
+ * cuál es esa subcuenta. Se traslada SOLO la línea asentada en el PADRE de esa subcuenta: otra
+ * cuenta del original que hoy agrupe (la contrapartida) NO se redirige a la caja —sería mover a la
+ * caja un importe que es de resultado—; va a su cuenta de siempre y la base la rechaza (LAD62),
+ * como en cualquier reversa. Sin ese parámetro, la reversa va a las cuentas del original.
+ *
+ * No autoriza ni comprueba el estado del original: eso es de quien llama.
+ */
+export async function contraAsiento(
+  sql: TransactionSql,
+  p: {
+    readonly tenantId: string;
+    readonly companyId: string;
+    readonly functionalCurrency: string;
+    readonly entryId: string;
+    /** La descripción del asiento original. */
+    readonly description: string;
+    readonly reason: string;
+    /** El día del contra-asiento (un `date`, YYYY-MM-DD). */
+    readonly fecha: string;
+    /** El contra-asiento va al PERÍODO DE CIERRE de ese ejercicio (reabrir el 13, ADR-0069). */
+    readonly alCierre?: number;
+    /** Quién postea: el usuario, o el uuid nulo del sistema (`SYSTEM_POSTER_ID`). */
+    readonly postedBy: string;
+    /** Quién firma el acta `journal.reversed`. Por omisión, una persona. */
+    readonly actorType?: "user" | "system";
+    readonly cuentaSiAgrupa?: string | null;
+  },
+): Promise<Result<JournalEntryResponse, AccountingError>> {
   const lineasOriginales = await sql<
     {
       account_id: string;
@@ -692,16 +748,21 @@ async function reversar(
       fuente: string;
       hora: string;
     }[]
-  >`select account_id, functional_debit::text as functional_debit,
+  >`select case when ${p.cuentaSiAgrupa ?? null}::uuid is not null
+                     and jl.account_id = (select s.parent_id from public.accounts s
+                                           where s.id = ${p.cuentaSiAgrupa ?? null}::uuid
+                                             and s.company_id = ${p.companyId})
+                then ${p.cuentaSiAgrupa ?? null}::uuid else jl.account_id end as account_id,
+           functional_debit::text as functional_debit,
            functional_credit::text as functional_credit, analytical_dimensions, description,
            amount_transaction_currency::text as original, transaction_currency as moneda,
            fx_rate::text as tasa, rate_source as fuente, rate_timestamp::text as hora
-      from public.journal_lines where entry_id = ${entryId} order by line_number`;
+      from public.journal_lines jl where jl.entry_id = ${p.entryId} order by jl.line_number`;
 
   const entryLines: EntryLine[] = [];
   for (const l of lineasOriginales) {
-    const debito = Money.of(l.functional_debit, ctx.value.functionalCurrency);
-    const credito = Money.of(l.functional_credit, ctx.value.functionalCurrency);
+    const debito = Money.of(l.functional_debit, p.functionalCurrency);
+    const credito = Money.of(l.functional_credit, p.functionalCurrency);
     if (!debito.ok || !credito.ok) {
       return err({ code: "VALIDATION_FAILED", message: "Importe original no interpretable." });
     }
@@ -727,8 +788,8 @@ async function reversar(
   }[] = [];
   let residuo: Decimal = ceroDec.value;
   for (const [i, l] of reversas.value.entries()) {
-    const d = Money.of(toCents(l.debit.amount).toFixed(2), ctx.value.functionalCurrency);
-    const c = Money.of(toCents(l.credit.amount).toFixed(2), ctx.value.functionalCurrency);
+    const d = Money.of(toCents(l.debit.amount).toFixed(2), p.functionalCurrency);
+    const c = Money.of(toCents(l.credit.amount).toFixed(2), p.functionalCurrency);
     if (!d.ok || !c.ok) {
       return err({ code: "VALIDATION_FAILED", message: "Importe original no interpretable." });
     }
@@ -745,7 +806,7 @@ async function reversar(
   if (!residuo.isZero()) {
     const [red] = await sql<{ account_id: string }[]>`
       select s.account_id from public.company_account_settings s
-       where s.company_id = ${input.company_id} and s.purpose = 'rounding_difference'
+       where s.company_id = ${p.companyId} and s.purpose = 'rounding_difference'
          and s.effective_to is null
        order by s.effective_from desc limit 1`;
     if (!red) {
@@ -755,8 +816,8 @@ async function reversar(
           "Falta configurar la cuenta de: rounding_difference. La reversa de este asiento deja un residuo de redondeo que va a «Diferencias por redondeo».",
       });
     }
-    const importe = Money.of(residuo.abs().toFixed(2), ctx.value.functionalCurrency);
-    const cero = Money.of("0", ctx.value.functionalCurrency);
+    const importe = Money.of(residuo.abs().toFixed(2), p.functionalCurrency);
+    const cero = Money.of("0", p.functionalCurrency);
     if (!importe.ok || !cero.ok) {
       return err({ code: "VALIDATION_FAILED", message: "Residuo de redondeo no representable." });
     }
@@ -775,31 +836,31 @@ async function reversar(
     });
   }
 
-  const fecha = input.posting_date ?? diaNegocio(new Date());
+  const fecha = p.fecha;
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   try {
     const contra = await sql.savepoint(async (sp) => {
       const [periodo] =
-        opciones.alCierre === undefined
+        p.alCierre === undefined
           ? await sp<{ id: string }[]>`
-              select platform.period_for_date(${input.company_id}, ${fecha}::date) as id`
+              select platform.period_for_date(${p.companyId}, ${fecha}::date) as id`
           : await sp<{ id: string }[]>`
-              select platform.closing_period_for_year(${input.company_id},
-                     ${opciones.alCierre}::int) as id`;
+              select platform.closing_period_for_year(${p.companyId},
+                     ${p.alCierre}::int) as id`;
       const [e] = await sp<Record<string, unknown>[]>`
         insert into public.journal_entries
           (tenant_id, company_id, period_id, posting_date, source_kind, description, memo,
            is_reversal_of, rules_version)
-        values (${ctx.value.tenantId}, ${input.company_id}, ${periodo!.id}, ${fecha}::date,
-                'manual', ${`Reversión: ${original.description}`}, ${input.reason},
-                ${entryId}, ${RULES_VERSION})
+        values (${p.tenantId}, ${p.companyId}, ${periodo!.id}, ${fecha}::date,
+                'manual', ${`Reversión: ${p.description}`}, ${p.reason},
+                ${p.entryId}, ${RULES_VERSION})
         returning ${sp.unsafe(ENTRY_COLUMNS)}`;
 
       let n = 0;
       for (const l of contraLineas) {
         n += 1;
         const orig = l.orig ?? {
-          moneda: ctx.value.functionalCurrency,
+          moneda: p.functionalCurrency,
           original: "0",
           tasa: "1",
           fuente: "identidad",
@@ -811,7 +872,7 @@ async function reversar(
         // E-11 (ADR-0075 §6): el contra-asiento deshace la línea EN SU MONEDA. Si la original
         // guardó 5 USD a su tasa, la reversa saca 5 USD a esa misma tasa; escribirla en moneda
         // funcional dejaría los dólares dentro de la subcuenta de la caja.
-        const enDivisa = orig.moneda !== ctx.value.functionalCurrency;
+        const enDivisa = orig.moneda !== p.functionalCurrency;
         const debitoTx = enDivisa
           ? l.debit.amount.isZero()
             ? "0"
@@ -828,12 +889,12 @@ async function reversar(
              credit_amount, amount_transaction_currency, transaction_currency, fx_rate,
              functional_amount, functional_currency, rate_source, rate_timestamp,
              functional_debit, functional_credit, analytical_dimensions, description)
-          values (${ctx.value.tenantId}, ${input.company_id}, ${e!["id"] as string}, ${n},
+          values (${p.tenantId}, ${p.companyId}, ${e!["id"] as string}, ${n},
                   ${l.accountId}, ${debitoTx}, ${creditoTx},
                   ${enDivisa ? orig.original : importe.toAmountString()},
-                  ${enDivisa ? orig.moneda : ctx.value.functionalCurrency},
+                  ${enDivisa ? orig.moneda : p.functionalCurrency},
                   ${enDivisa ? orig.tasa : "1"},
-                  ${importe.toAmountString()}, ${ctx.value.functionalCurrency},
+                  ${importe.toAmountString()}, ${p.functionalCurrency},
                   ${enDivisa ? orig.fuente : "identidad"},
                   ${enDivisa ? orig.hora : sp`now()`}::timestamptz,
                   ${l.debit.toAmountString()}, ${l.credit.toAmountString()},
@@ -842,11 +903,11 @@ async function reversar(
       }
 
       const [num] = await sp<{ n: string }[]>`
-        select platform.claim_entry_number(${input.company_id},
+        select platform.claim_entry_number(${p.companyId},
                extract(year from ${fecha}::date)::int)::text as n`;
       const [posteado] = await sp<Record<string, unknown>[]>`
         update public.journal_entries
-           set status = 'posted', posted_at = now(), posted_by = ${actor.userId},
+           set status = 'posted', posted_at = now(), posted_by = ${p.postedBy},
                entry_number = ${num!.n}::bigint
          where id = ${e!["id"] as string}
         returning ${sp.unsafe(ENTRY_COLUMNS)}`;
@@ -855,15 +916,19 @@ async function reversar(
       await sp`
         update public.journal_entries
            set status = 'reversed', reversed_by_entry_id = ${e!["id"] as string}
-         where id = ${entryId}`;
+         where id = ${p.entryId}`;
       return posteado!;
     });
     const conTot = await conTotales(sql, contra);
-    await auditar(sql, ctx.value.tenantId, input.company_id, conTot.id, "journal.reversed", {
-      reversal_of: entryId,
-      reason: input.reason,
-      entry_number: conTot.entry_number,
-    });
+    await auditar(
+      sql,
+      p.tenantId,
+      p.companyId,
+      conTot.id,
+      "journal.reversed",
+      { reversal_of: p.entryId, reason: p.reason, entry_number: conTot.entry_number },
+      p.actorType ?? "user",
+    );
     return ok(conTot);
   } catch (e) {
     const conocido = traducir(e);

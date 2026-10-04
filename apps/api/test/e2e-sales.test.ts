@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture, venceDeFixture } from "./_fiado-de-fixture.js";
 import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
@@ -172,6 +173,7 @@ beforeAll(async () => {
              (${ROL_VENTAS}, 'sales.invoice.issue'),
              (${ROL_VENTAS}, 'sales.invoice.annul'),
              (${ROL_VENTAS}, 'sales.return.manage'),
+             (${ROL_VENTAS}, 'sales.credit_note.direct'),
              (${ROL_VENTAS}, 'inventory.move'),
              (${ROL_VENTAS}, 'fiscal.range.manage'),
              (${ROL_VENTAS}, 'fx.rate.manage'),
@@ -218,6 +220,8 @@ beforeAll(async () => {
              values (${CONSUMIDOR}, ${TENANT}, ${COMPANY}, 'Consumidor final', 'natural',
                      'consumidor_final', true)
              on conflict (id) do nothing`;
+    // E-09: esta empresa de prueba fía (permiso y límite), como lo declararía una real.
+    await fiadoDeFixture(tx, COMPANY, [ROL_VENTAS]);
     const [p] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                    tax_category_code)
@@ -475,6 +479,8 @@ describe("ventas de extremo a extremo", () => {
     const anulada = await pedir("POST", `/v1/invoices/${doc["id"] as string}/annul`, VENDEDOR, {
       company_id: COMPANY,
       reason: "Error de digitación en la cantidad",
+      // G-10 (PA 00071 art. 36): la persona confirma el original y las copias.
+      originals_in_hand: true,
     });
     expect(anulada.status).toBe(200);
     const a = (await anulada.json()) as Record<string, string | number>;
@@ -1204,6 +1210,7 @@ describe("ventas de extremo a extremo", () => {
       series: "C",
       lines: [{ product_id: PROD, quantity: "1" }],
       // SIN payments: eso ES fiar.
+      due_date: venceDeFixture(),
     });
     expect(r.status).toBe(201);
     const v = (await r.json()) as {
@@ -1247,6 +1254,7 @@ describe("ventas de extremo a extremo", () => {
       warehouse_id: W1,
       series: "C",
       lines: [{ product_id: PROD, quantity: "1" }],
+      due_date: venceDeFixture(),
       payments: [{ instrument: "efectivo_usd", amount: "16.00000000", currency: "USD" }],
     });
     expect(r.status).toBe(201);
@@ -1663,6 +1671,7 @@ describe("ventas de extremo a extremo", () => {
       warehouse_id: W1,
       series: "C",
       lines: [{ product_id: PROD, quantity: "1" }],
+      due_date: venceDeFixture(),
     });
     expect(base.status).toBe(201);
     const factura = ((await base.json()) as { document: { id: string } }).document;
@@ -1734,6 +1743,7 @@ describe("ventas de extremo a extremo", () => {
       warehouse_id: W1,
       series: "C",
       lines: [{ product_id: PROD, quantity: "2" }],
+      due_date: venceDeFixture(),
     });
     expect(base.status).toBe(201);
     const factura = ((await base.json()) as { document: { id: string } }).document;
@@ -1780,8 +1790,11 @@ describe("ventas de extremo a extremo", () => {
     const cobro = await pedir("POST", "/v1/payments", VENDEDOR, {
       company_id: COMPANY,
       document_id: factura.id,
-      currency: "VES",
-      amount: "5220.00000000",
+      // G-05 (ola 4): el saldo a favor de una NC conserva la moneda del documento que lo originó
+      // (USD) y se aplica EN SU MONEDA: 116 USD, que a la tasa de 45 son los 5220 Bs de antes.
+      // Cambia la ENTRADA del caso, no lo que se espera de él.
+      currency: "USD",
+      amount: "116.00000000",
       instrument: "saldo_a_favor",
       customer_credit_id: nc.customer_credit_id,
     });
@@ -1825,6 +1838,8 @@ describe("ventas de extremo a extremo", () => {
     });
     expect(alta.status).toBe(201);
     const deudorId = ((await alta.json()) as { id: string }).id;
+    // E-09: un cliente nace con límite de fiado 0; este caso le fía, así que el montaje se lo fija.
+    await fiadoDeFixture(sql, COMPANY);
 
     const fiada = await pedir("POST", "/v1/pos/sales", VENDEDOR, {
       company_id: COMPANY,
@@ -1832,6 +1847,7 @@ describe("ventas de extremo a extremo", () => {
       warehouse_id: W1,
       series: "C",
       lines: [{ product_id: PROD, quantity: "1" }],
+      due_date: venceDeFixture(),
     });
     expect(fiada.status).toBe(201);
     const doc = ((await fiada.json()) as { document: { id: string } }).document;

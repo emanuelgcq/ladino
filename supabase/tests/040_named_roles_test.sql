@@ -114,7 +114,11 @@ select is(
   (select count(*) from platform.ladino_user_permissions(
      'aaaa0040-0000-4000-8000-0000000000a1', 'aaaa0040-0000-4000-8000-0000000000c1')),
   -- 5 → 6 (ADR-0072 §5, F-11): ar.retention.register, decisión del dueño del 2026-09-28.
-  6::bigint, 'un cajero recién asignado tiene EXACTAMENTE sus 6 permisos');
+  -- 6 → 8 (ola 4, respuesta del dueño §2.8 «Oficios»): sales.credit (E-09: el cajero fía con
+  -- permiso de crédito y límite; migración 20261004140000) y sales.return.manage (G-07: el
+  -- cajero inicia devoluciones; migración 20261004160000). La nota de crédito directa
+  -- (sales.credit_note.direct) y el reembolso (sales.refund) NO son suyos.
+  8::bigint, 'un cajero recién asignado tiene EXACTAMENTE sus 8 permisos');
 select ok(
   'sales.invoice.issue' in (select * from platform.ladino_user_permissions(
      'aaaa0040-0000-4000-8000-0000000000a1', 'aaaa0040-0000-4000-8000-0000000000c1')),
@@ -155,8 +159,10 @@ values ('aaaa0040-0000-4000-8000-00000000000a', 'aaaa0040-0000-4000-8000-0000000
 select is(
   (select count(*) from platform.ladino_user_permissions(
      'aaaa0040-0000-4000-8000-0000000000a2', 'aaaa0040-0000-4000-8000-0000000000c1')),
-  15::bigint,
-  'con su almacén asignado, el encargado tiene EXACTAMENTE sus 15 permisos');
+  -- 15 → 16 (ola 4, E-09; migración 20261004140000): sales.credit. Decidido por criterio (el
+  -- encargado ya vende; lo que lo acota es el límite del cliente, que no puede fijar).
+  16::bigint,
+  'con su almacén asignado, el encargado tiene EXACTAMENTE sus 16 permisos');
 
 select * from finish();
 rollback;

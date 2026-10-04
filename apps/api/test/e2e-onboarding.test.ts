@@ -153,9 +153,11 @@ describe("onboarding y miembros de extremo a extremo", () => {
     };
     expect(miembro.assignments.some((a) => a.role_key === "cashier")).toBe(true);
 
-    // La cajera ve EXACTAMENTE sus 6 permisos: vende y cobra, no ve el dinero. El sexto,
+    // La cajera ve EXACTAMENTE sus 8 permisos: vende y cobra, no ve el dinero. El sexto,
     // `ar.retention.register`, lo decidió el dueño (ADR-0072 §5, F-11): quien cobra carga el
-    // comprobante de retención que el cliente entrega al pagar.
+    // comprobante de retención que el cliente entrega al pagar. Los dos de la ola 4 (respuesta
+    // del dueño §2.8 «Oficios»): `sales.credit` (E-09: fía con permiso y límite) y
+    // `sales.return.manage` (G-07: inicia devoluciones). No reembolsa ni emite notas directas.
     const permisos = await pedir("GET", "/v1/me/permissions", CAJERA);
     const { permissions } = (await permisos.json()) as { permissions: string[] };
     expect(permissions.sort()).toEqual(
@@ -163,9 +165,11 @@ describe("onboarding y miembros de extremo a extremo", () => {
         "ar.read",
         "ar.retention.register",
         "customer.manage",
+        "sales.credit",
         "sales.invoice.issue",
         "sales.payment.register",
         "sales.quote.manage",
+        "sales.return.manage",
       ].sort(),
     );
     const resumen = await pedir("GET", "/v1/negocio/resumen", CAJERA);

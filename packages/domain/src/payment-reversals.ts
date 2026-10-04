@@ -252,6 +252,37 @@ export async function reversePayment(
     asientoIgtf = r.value;
   }
 
+  // F-10: si el cobro dejó un SOBRANTE que nació como saldo a favor, la reversa lo retira (el
+  // dinero sale entero de la caja y el contra-asiento deshace el pasivo). Si ese saldo a favor ya
+  // se usó —aplicado o reembolsado—, el cobro no se reversa: primero se deshace ese uso.
+  const [sobrante] = await sql<{ id: string; applied_amount: string }[]>`
+    select id, applied_amount::text as applied_amount from public.customer_credits
+     where company_id = ${input.company_id} and source_payment_id = ${paymentId}
+       and status <> 'expired'
+     for update`;
+  if (sobrante) {
+    // Dinero con Decimal, nunca con `number` (regla 7).
+    const usado = parseDecimal(sobrante.applied_amount);
+    if (!usado.ok || !usado.value.isZero()) {
+      // Dos casos, dos mensajes: una APLICACIÓN se deshace reversando su cobro; un REEMBOLSO no
+      // tiene reversa (el dinero ya se le entregó al cliente).
+      const [uso] = await sql<{ reembolsado: boolean }[]>`
+        select exists (select 1 from public.customer_refunds r
+                        where r.company_id = ${input.company_id}
+                          and r.customer_credit_id = ${sobrante.id}) as reembolsado`;
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          uso?.reembolsado === true
+            ? "Este cobro dejó un saldo a favor que ya se usó: se le devolvió al cliente en dinero, y un reembolso no se deshace. Este cobro ya no se puede reversar."
+            : "Este cobro dejó un saldo a favor que ya se usó: no se puede reversar. Reversa primero el cobro que lo aplicó.",
+      });
+    }
+    await sql`
+      update public.customer_credits set status = 'expired'
+       where id = ${sobrante.id} and company_id = ${input.company_id}`;
+  }
+
   // 2. El saldo a favor que ese cobro consumió vuelve a estar disponible.
   if (pago.customer_credit_id !== null) {
     await sql`
@@ -343,6 +374,8 @@ export async function reversePayment(
     igtf_reversal_entry_id: reversa!.igtf_reversal_entry_id,
     supported_retention_id: pago.supported_retention_id,
     customer_credit_id: pago.customer_credit_id,
+    // El saldo a favor que nació del sobrante de este cobro y que la reversa RETIRÓ (F-10).
+    retired_customer_credit_id: sobrante?.id ?? null,
   };
   const eventos = [
     modo === "supported_retention" ? "ar.retention_reversed" : "ar.payment_reversed",

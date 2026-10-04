@@ -270,8 +270,12 @@ c.caso(
 
 c.caso("D-06", "«Ya llegó la factura» manda el precio que la persona escribe", async () => {
   const web = fuenteSinRif("apps/web/src/pages/negocio/Compras.tsx");
+  // F-06 (ola 4) movió el literal: lo tecleado pasa ahora por el lector único de importes y lo
+  // que no se tocó viaja como lo dio el servidor. El esperado es el mismo: manda `precios[l.id]`.
   v0076.afirmar(
-    web.includes("unit_price: (precios[l.id] ?? l.unit_price_transaction)"),
+    /unit_price:\s*precios\[l\.id\] === undefined\s*\? l\.unit_price_transaction\s*: importeLimpio\(precios\[l\.id\]/.test(
+      web,
+    ),
     "el diálogo sigue mandando siempre el precio de la recepción",
   );
 });
@@ -415,5 +419,164 @@ c.caso("D-07", "ese pago deja la cuenta por pagar de la factura en CERO en el ma
   monedaA.afirmar(abierto !== null, "el pago o la factura quedaron en la cola de asientos");
   monedaA.afirmar(Number(abierto) === 0, `quedan ${abierto} en cuentas por pagar`);
 });
+
+// ── Ola 4 · D-02, el resto de pantalla: la vista previa del pago cruzado ────
+
+c.caso(
+  "D-02",
+  "pagar al proveedor en otra moneda: el servidor dice cuánto sale de la cuenta, a qué tasa y de qué fecha, y la pantalla lo enseña",
+  async () => {
+    const { sql, pedir, afirmar, EMPRESAS, PERSONAS } = v0076;
+    const fs = await import("node:fs");
+    const [f] = await sql`
+      select i.id, platform.supplier_invoice_balance(i.company_id, i.id)::text as saldo
+        from public.supplier_invoices i
+       where i.company_id = ${EMPRESAS.E2} and i.transaction_currency = 'USD'
+         and i.status = 'posted'
+         and platform.supplier_invoice_balance(i.company_id, i.id) >= 1
+       order by i.created_at limit 1`;
+    afirmar(f, "E2 no tiene una factura en USD con saldo: el escenario no es el del recorrido");
+    const [cuenta] = await sql`
+      select id from public.company_accounts
+       where company_id = ${EMPRESAS.E2} and currency = 'VES' and kind = 'bank'
+         and is_active and not is_system
+       order by name limit 1`;
+    afirmar(cuenta, "E2 no tiene un banco en Bs");
+    const [antes] = await sql`
+      select count(*)::int as n from public.supplier_payments where company_id = ${EMPRESAS.E2}`;
+    const r = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/supplier-payments/preview", {
+      company_id: EMPRESAS.E2,
+      supplier_invoice_id: f.id,
+      gross_amount: "1",
+      currency: "USD",
+      instrument: "transferencia",
+      account_id: cuenta.id,
+      allow_negative_balance: true,
+      overdraft_reason: "Recorrido D-02: vista previa del pago cruzado",
+    });
+    afirmar(r.status === 200, `vista previa: ${r.status}: ${r.texto.slice(0, 300)}`);
+    const v = r.json;
+    afirmar(v.crossed === true, "la vista previa no dice que el pago cruza monedas");
+    afirmar(v.money_currency === "VES", `sale de la cuenta en ${v.money_currency}`);
+    afirmar(
+      v.settled_currency === "USD" && Number(v.settled_amount) === 1,
+      `cancela ${v.settled_amount} ${v.settled_currency}`,
+    );
+    afirmar(
+      v.fx_rate !== null &&
+        v.fx_rate_currency === "USD" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(v.fx_rate_date),
+      `la tasa no trae su fecha: ${JSON.stringify(v)}`,
+    );
+    afirmar(Number(v.money_amount) > 1, `lo que sale en Bs no está convertido: ${v.money_amount}`);
+    // La vista previa NO escribe nada.
+    const [despues] = await sql`
+      select count(*)::int as n from public.supplier_payments where company_id = ${EMPRESAS.E2}`;
+    afirmar(despues.n === antes.n, "la vista previa dejó un pago escrito");
+    const web = fs.readFileSync("apps/web/src/pages/compras/Compras.tsx", "utf8");
+    afirmar(
+      web.includes('"/v1/supplier-payments/preview"') &&
+        web.includes('data-testid="pago-cruzado-resumen"'),
+      "la pantalla de pagar al proveedor no enseña el resumen del pago cruzado",
+    );
+  },
+);
+
+// ── Ola 4 · una sola regla de la tasa del día (resto de D-09; migración 20261004195900) ──────
+c.caso(
+  "D-09 (ola 4)",
+  "la tasa del día tiene UNA regla: rate_for aplica el margen, closing_rate y rate_at dicen lo mismo, y el nombre viejo del margen es su alias",
+  async () => {
+    const E2 = v0076.EMPRESAS.E2;
+    const [m] = await v0076.sql`
+      select (select value::int from platform.parameters
+               where key = 'official_rate_max_age_days') as nuevo,
+             (select value::int from platform.parameters
+               where key = 'closing_rate_max_age_days') as viejo,
+             (select max(x.rate_date)::text from public.exchange_rates x
+               where x.company_id is null and x.from_currency = 'USD' and x.to_currency = 'VES')
+               as ultima`;
+    v0076.afirmar(m.nuevo !== null && m.nuevo >= 0, "falta el margen official_rate_max_age_days");
+    v0076.afirmar(m.nuevo === m.viejo, `el alias no vale lo mismo: ${m.nuevo} y ${m.viejo}`);
+    v0076.afirmar(m.ultima !== null, "no hay ninguna tasa oficial en el escenario");
+    // A los dos lados del borde, por la función de abajo: dentro hay fila, fuera no.
+    const [borde] = await v0076.sql`
+      select (select count(*)::int from platform.rate_for(${E2}, 'USD', 'VES',
+                ${m.ultima}::date + ${m.nuevo}::int)) as dentro,
+             (select count(*)::int from platform.rate_for(${E2}, 'USD', 'VES',
+                ${m.ultima}::date + ${m.nuevo}::int + 1)) as fuera`;
+    v0076.afirmar(borde.dentro === 1, "una tasa en el borde del margen no rige");
+    v0076.afirmar(borde.fuera === 0, "rate_for sirve una tasa más vieja que el margen");
+    // Una sola regla: en 60 días alrededor de hoy, closing_rate y rate_at nunca difieren.
+    const [dif] = await v0076.sql`
+      select count(*)::int as n
+        from generate_series((now() at time zone 'America/Caracas')::date - 45,
+                             (now() at time zone 'America/Caracas')::date + 15,
+                             interval '1 day') d
+       where platform.closing_rate(${E2}, 'USD', 'VES', d::date)
+             is distinct from platform.rate_at(${E2}, 'USD', 'VES', d::date)`;
+    v0076.afirmar(dif.n === 0, `closing_rate y rate_at difieren en ${dif.n} días: hay dos reglas`);
+    // Los ayudantes del dominio que convierten dicen el día que falta, con el mismo mensaje.
+    const fuente = (ruta) => fuenteSinRif(ruta);
+    v0076.afirmar(
+      fuente("packages/domain/src/tasa-oficial.ts").includes(
+        "Falta la tasa BCV del ${ddmmaaaa(d)}. Tráela en Mi dinero.",
+      ),
+      "el mensaje de persona de la tasa que falta no está en el dominio",
+    );
+    for (const ruta of ["purchases.ts", "treasury.ts", "sales.ts"])
+      v0076.afirmar(
+        fuente(`packages/domain/src/${ruta}`).includes("mensajeFaltaTasa("),
+        `${ruta} no usa el mensaje de la tasa que falta`,
+      );
+  },
+);
+
+// ── Ola 4 · una lista de cuentas por pagar nunca se cae (migración 20261004200000) ───────────
+// El escenario no se toca (cambiar el margen o las tasas lo cambiaría para todos): lo EJERCEN
+// pgTAP 131 y el E2E de compras. Aquí se comprueba que la base y el código llevan esa definición
+// y que la lectura vive sobre las tres empresas.
+c.caso(
+  "D-09 (ola 4)",
+  "la deuda con el proveedor no lanza por falta de tasa, la pantalla dice «Falta la tasa de hoy» y cambiar el margen deja acta",
+  async () => {
+    const [f] = await v0076.sql`
+      select pg_get_functiondef('platform.supplier_debt_today(uuid, uuid)'::regprocedure) as deuda,
+             pg_get_functiondef('platform.ap_aging(uuid, uuid, date)'::regprocedure) as aging,
+             exists (select 1 from pg_trigger t
+                      where t.tgrelid = 'platform.parameters'::regclass
+                        and t.tgname = 'parameters_a_record' and t.tgenabled <> 'D') as acta`;
+    v0076.afirmar(
+      !/raise\s+exception/i.test(f.deuda),
+      "supplier_debt_today todavía lanza: una factura pagada en divisa tumba la lista",
+    );
+    v0076.afirmar(
+      f.aging.includes("bool_or(s.saldo is null)"),
+      "ap_aging suma sin mirar el NULL: un tramo sin valorar saldría como cero",
+    );
+    v0076.afirmar(f.acta, "falta el trigger parameters_a_record: cambiar el margen no deja acta");
+    for (const e of ["E1", "E2", "E3"]) {
+      const [n] = await v0076.sql`
+        select count(*)::int as n from platform.ap_aging(${v0076.EMPRESAS[e]})`;
+      v0076.afirmar(n.n >= 0, `${e}: ap_aging no respondió`);
+    }
+    const rutas = fuenteSinRif("apps/api/src/routes/purchases.ts");
+    v0076.afirmar(
+      rutas.includes("total_outstanding_motivo") && rutas.includes("total_por_moneda"),
+      "las rutas de cuentas por pagar no dicen el motivo del total nulo ni su nominal",
+    );
+    const web = fuenteSinRif("apps/web/src/pages/compras/Compras.tsx");
+    v0076.afirmar(
+      web.includes("FALTA_LA_TASA") && web.includes("total_outstanding_por_moneda"),
+      "la cuenta del proveedor no pinta «Falta la tasa de hoy» con el nominal",
+    );
+    v0076.afirmar(
+      fuenteSinRif("packages/domain/src/tasa-oficial.ts").includes(
+        "No hay tasa BCV guardada para el",
+      ),
+      "el mensaje de la tasa de un día PASADO sigue mandando a Mi dinero",
+    );
+  },
+);
 
 export default c.correr;

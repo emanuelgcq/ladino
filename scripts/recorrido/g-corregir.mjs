@@ -144,6 +144,9 @@ async function devolucion(page, ev, etq, { lineas, desde, motivo }) {
   await page
     .getByLabel("Motivo de anulación")
     .fill("Se facturó al cliente equivocado; el pedido era de otra tienda.");
+  // G-10 (PA 00071 art. 36): la factura es de hoy y no salió del negocio; la persona confirma
+  // que tiene el original y las copias. Sin la casilla, «Anular la factura» queda apagado.
+  await page.getByLabel(/original y todas las copias/).check();
   await ev(page, "E2-anular-lleno");
   await clic(page.getByRole("button", { name: /^Anular la factura$/ }).last());
   await esperar(page, 3000);
@@ -160,6 +163,9 @@ async function devolucion(page, ev, etq, { lineas, desde, motivo }) {
   const x = await llamar(tk, cid, "POST", `/v1/invoices/${a1}/annul`, {
     company_id: cid,
     reason: "Prueba del recorrido: anular una factura cobrada",
+    // G-10: se confirma el papel para que el 409 hable de la factura (cobrada, de otro día) y no
+    // de la casilla que falta. No se anula: lo que sigue es la devolución, que es lo que ofrece la pantalla.
+    originals_in_hand: true,
   });
   r.anularCobradaApi = { status: x.status, json: JSON.stringify(x.json).slice(0, 400) };
 

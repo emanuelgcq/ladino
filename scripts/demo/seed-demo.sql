@@ -27,6 +27,8 @@ insert into public.role_permissions (role_id, permission_key)
 select 'deade001-0000-4000-8000-00000000ee01', k from (values
   ('sales.quote.manage'), ('sales.order.manage'), ('sales.invoice.issue'),
   ('sales.invoice.annul'), ('sales.payment.register'), ('sales.return.manage'),
+  -- Ola 4: fiar exige su permiso (E-09) y la nota de crédito directa el suyo (G-07).
+  ('sales.credit'), ('sales.credit_note.direct'),
   ('sales.price_list.override'), ('ar.read'),
   ('inventory.move'), ('inventory.adjust'),
   ('fiscal.range.manage'), ('fx.rate.manage'),

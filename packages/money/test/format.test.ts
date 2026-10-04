@@ -4,7 +4,7 @@
  * la entrada raíz, y "solo formateo" deja de ser un comentario en una tabla.
  */
 import { describe, expect, it } from "vitest";
-import { formatMoney, parseUserInput } from "../src/format.js";
+import { formatMoney, parseUserInput, readAmountText } from "../src/format.js";
 import { MoneyErrorCode } from "../src/index.js";
 
 const ves = { amount: "1234.56000000", currency: "VES" } as const;
@@ -60,6 +60,70 @@ describe("parseUserInput", () => {
   it("rechaza basura en vez de adivinar", () => {
     for (const raw of ["", "abc", "1,2,3", "--5", "1e5"]) {
       expect(parseUserInput(raw, "VES").ok).toBe(false);
+    }
+  });
+
+  // F-06: el análisis del importe tecleado vive en un solo sitio, y dice por qué no lee.
+  it("lee el importe a la venezolana y con punto decimal, sin tocar los decimales", () => {
+    const casos: [string, string][] = [
+      ["26.003,58", "26003.58"],
+      ["1.234.567,89", "1234567.89"],
+      ["1,234.56", "1234.56"],
+      ["26003,58", "26003.58"],
+      ["3337.09", "3337.09"],
+      ["1.234.567", "1234567"],
+      [" 1 234,5 ", "1234.5"],
+      ["0.125", "0.125"],
+      ["854.46370000", "854.46370000"],
+      // Revisión 3, punto 8: lo que tiene que seguir leyéndose bien.
+      ["26003.58", "26003.58"],
+      ["1,5", "1.5"],
+      ["1.5", "1.5"],
+      ["0,5", "0.5"],
+      ["0,125", "0.125"],
+      ["1,2345", "1.2345"],
+      ["1234,567", "1234.567"],
+      ["1.234,567", "1234.567"],
+      ["1,234,567.89", "1234567.89"],
+      ["-1.234,56", "-1234.56"],
+    ];
+    for (const [texto, esperado] of casos) {
+      const r = readAmountText(texto);
+      expect(r.ok ? r.value : `rechazado: ${texto}`).toBe(esperado);
+    }
+  });
+
+  it("dice por qué no lee un importe, en vez de adivinar", () => {
+    const casos: [string, string][] = [
+      ["", "EMPTY"],
+      ["   ", "EMPTY"],
+      ["abc", "NOT_A_NUMBER"],
+      ["1e5", "NOT_A_NUMBER"],
+      [".,", "NOT_A_NUMBER"],
+      ["1,2,3", "AMBIGUOUS"],
+      ["1.23.456", "AMBIGUOUS"],
+      // Veintiséis mil tres, o veintiséis con tres milésimas: no se adivina.
+      ["26.003", "AMBIGUOUS"],
+      // La regla es SIMÉTRICA (revisión 3, punto 8): con coma se leían 1,234 y 26,003 — mil
+      // veces menos para quien teclea a la americana.
+      ["1,234", "AMBIGUOUS"],
+      ["26,003", "AMBIGUOUS"],
+      ["-26,003", "AMBIGUOUS"],
+      // Con los dos separadores, los miles van de tres en tres.
+      ["12.34,56", "BAD_GROUPING"],
+      ["1.2.3,4", "BAD_GROUPING"],
+      ["1,23.45", "BAD_GROUPING"],
+      // Antes devolvía ok con «1.234567.89», que no es un número.
+      ["1.234,567.89", "BAD_GROUPING"],
+      ["1.234,5,6", "BAD_GROUPING"],
+      // Faltan los decimales: su motivo propio, no «hasta 16 cifras».
+      ["5,", "INCOMPLETE"],
+      ["5.", "INCOMPLETE"],
+      ["1.234,", "INCOMPLETE"],
+    ];
+    for (const [texto, esperado] of casos) {
+      const r = readAmountText(texto);
+      expect(r.ok ? `leído: ${r.value}` : r.error).toBe(esperado);
     }
   });
 

@@ -21,7 +21,7 @@ export async function declararTipoDeFixture(
        rules_version)
     select c.tenant_id, c.id, coalesce(c.taxpayer_type_code, 'ordinario'), '2000-01-01',
            case when c.taxpayer_type_code = 'especial' then '2000-01-01'::date end,
-           'Fixture E2E: el tipo que la empresa de prueba declara', 'e2e'
+           'Fixture E2E: el tipo que la empresa de prueba declara', 'domain-s0.5'
       from public.companies c
      where c.id = ${companyId} and upper(btrim(c.tax_id)) not like 'PEND-%'
        and not exists (select 1 from public.company_taxpayer_types h where h.company_id = c.id)`;

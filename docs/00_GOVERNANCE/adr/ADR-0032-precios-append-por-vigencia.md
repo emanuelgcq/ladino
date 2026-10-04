@@ -87,3 +87,20 @@ pgTAP 017: solape rechazado (23P01) incluidas dos vigencias abiertas; autocierre
 el dato; LAD35 sobre amount/effective_from/DELETE y 42501 por GRANT para la API; `close_price`
 vivo; `price_at` contra fecha con su variante `now()` demostrando la divergencia; el viaje del
 dinero al límite de 24,8 en packages/db. Variantes rotas: sin el EXCLUDE el solape entra.
+
+## Nota 2026-10-03 — el historial enseña los Bs del día del precio (C-11, recorrido 2026-09-24)
+
+El historial de una lista (`GET /v1/price-lists/:id/prices`) trae, por fila, dos conversiones
+distintas y las dos las calcula el servidor:
+
+- `historical_*`: el equivalente a la tasa oficial vigente **el día de Caracas en que empezó a
+  regir el precio** (`platform.caracas_day(effective_from)` contra `rate_date`: dos fechas, nunca
+  un instante contra medianoche), tomada de `platform.rate_for`, con la tasa, su fecha y su fuente.
+  Si ese día no había tasa guardada, no hay cifra y el estado es `missing`; si el precio está
+  programado y su día no llegó, `scheduled`. Nunca se rellena con la tasa de hoy.
+- `equivalent_*`: la referencia a la tasa de hoy, igual para todas las filas, como antes.
+
+El ancla sigue en USD (ADR-0046): nada de esto se guarda, es lectura. **Decidido por criterio**
+(respuesta del dueño §2.16): «el día en que se fijó el precio» es el día de `effective_from`, que
+es la columna «Desde» que la persona ve. La alternativa era el día de `created_at` (cuando se
+tecleó); difieren solo en un precio programado o cargado con fecha atrasada.

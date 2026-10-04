@@ -153,7 +153,11 @@ select is(
                                -- ADR-0078): el retiro, la pérdida y el conteo publican en el
                                -- outbox el MISMO nombre que su hecho contable (issueStock y
                                -- countStock), registrados en EVENT_CATALOG.md.
-                               'stock.withdrawn', 'stock.shrinkage', 'stock.counted')),
+                               'stock.withdrawn', 'stock.shrinkage', 'stock.counted',
+                               -- El gasto con factura fiscal (20261004170000, H-09, ADR-0080):
+                               -- registerSupplierInvoice publica y audita este nombre —y no
+                               -- `ap.invoice_posted`— cuando la factura es de un gasto.
+                               'ap.expense_invoice_posted')),
   0::bigint,
   'los eventos del preset son los del OUTBOX, con su nombre real: no se inventa un vocabulario paralelo');
 

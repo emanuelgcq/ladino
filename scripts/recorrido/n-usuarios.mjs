@@ -17,9 +17,11 @@ import {
   dialogo,
   esperar,
   estado,
+  fijarLimiteDeFiado,
   guardarEstado,
   login,
   nuevaEvidencia,
+  rellenarCuandoPaga,
   sql,
   cronometrar,
 } from "./lib.mjs";
@@ -172,6 +174,10 @@ await comoRol("cajero", P.cajero, async (page, ev) => {
     await clic(page.getByRole("button", { name: /Guardar y seguir/ }));
     await esperar(page, 1500);
   }
+  // R-82.7: el cliente que el cajero acaba de crear nace con límite 0 (E-09) y el cajero no lo
+  // fija. El montaje se lo fija por debajo, antes de cargar el carrito, para que el guion siga
+  // probando lo que probaba: que el cajero fía por la caja.
+  fijarLimiteDeFiado(E.empresas.E2.id);
   await page.getByLabel("Buscar productos para vender").fill("Harina precocida caja");
   await esperar(page, 1500);
   await clic(page.getByRole("button", { name: /Harina precocida caja/ }).first());
@@ -184,6 +190,7 @@ await comoRol("cajero", P.cajero, async (page, ev) => {
       .first(),
   );
   await esperar(page, 800);
+  await rellenarCuandoPaga(page); // P-05: sin la fecha, la caja no deja confirmar
   await clic(page.getByRole("button", { name: /Fiar y registrar/ }).first());
   await esperar(page, 3000);
   m.fiar = resumen(await ev(page, "cajero-fiar-cliente-nuevo"));

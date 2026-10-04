@@ -275,6 +275,210 @@ describe("tesorería de extremo a extremo", () => {
     expect(((await r.json()) as { code: string }).code).toBe("EXCHANGE_RATE_MISSING");
   });
 
+  // Ola 4. `platform.supplier_debt_today` LANZABA (LAD51) sin tasa, y un error de Postgres
+  // condena la transacción: una sola factura de proveedor en dólares sin tasa del día tumbaba el
+  // resumen ENTERO. Desde 20261004200000 ya NO lanza: devuelve NULL para lo que se debe y no se
+  // puede valorar hoy, y 0 para lo que no se debe. El resumen mira ese NULL (no lo tapa con
+  // `greatest(x, 0)`) y es la FUNCIÓN quien decide si falta la tasa.
+  //
+  // El par SIN tasa es VES→USD: la tabla de tasas es global y otros E2E siembran USD→VES en
+  // paralelo, así que «no hay tasa USD→VES» no se puede sostener aquí; VES→USD no lo siembra
+  // nadie (solo existe la oficial, USD→VES: ADR-0064). La fila del montaje es por eso una factura
+  // en VES con moneda funcional USD: artificial, y ejerce el mismo camino —la moneda de la factura
+  // no tiene tasa hacia su funcional— sin tocar las tasas de nadie.
+  it("ola 4 · una factura de proveedor en divisa SIN tasa no tumba el resumen: 200, `lo_que_debo` null con `sin_tasa` y su nominal", async () => {
+    const [tasas] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.exchange_rates
+       where from_currency = 'VES' and to_currency = 'USD'`;
+    expect(tasas!.n, "alguien sembró una tasa VES→USD: este caso ya no demuestra nada").toBe(0);
+    const proveedor = crypto.randomUUID();
+    const factura = crypto.randomUUID();
+    const saldada = crypto.randomUUID();
+    await sql.begin(async (tx) => {
+      await tx`select set_config('ladino.actor_id', ${GESTOR}, true)`;
+      await tx`insert into public.suppliers
+                 (id, tenant_id, company_id, tax_id, legal_name, supplier_kind, person_type_code,
+                  taxpayer_type_code)
+               values (${proveedor}, ${TENANT}, ${COMPANY},
+                       ${`J${String(Date.now()).slice(-9)}`}, 'Proveedor en dólares sin tasa',
+                       'nacional', 'juridica', 'ordinario')`;
+      // 100 + 16 de IVA = 116,00 en la moneda de la factura, con su tasa de entonces congelada.
+      await tx`insert into public.supplier_invoices
+                 (id, tenant_id, company_id, supplier_id, supplier_document_number,
+                  supplier_control_number, invoice_date, status, posted_at, subtotal_amount,
+                  tax_amount, total_amount, tax_is_recoverable, transaction_currency,
+                  functional_currency, fx_rate, amount_transaction_currency, functional_amount)
+               values (${factura}, ${TENANT}, ${COMPANY}, ${proveedor}, ${`FP-${RUN}`},
+                       ${`CT-${RUN}`}, ${HOY}::date, 'posted', now(), 100, 16, 116, true, 'VES',
+                       'USD', 0.025, 116, 2.9)`;
+    });
+    type Debo = {
+      lo_que_debo: string | null;
+      lo_que_debo_motivo: string | null;
+      lo_que_debo_por_moneda: { currency: string; nominal: string }[];
+    };
+    let visto: Response;
+    let sinApRead: Response;
+    let conLaPagada: Response;
+    try {
+      // Sin ap.read el motivo es el permiso, no la tasa: la factura ni se mira.
+      sinApRead = await pedir("GET", "/v1/negocio/resumen", MIRON);
+      await sql`insert into public.role_permissions (role_id, permission_key)
+                values (${ROL_MIRON}, 'ap.read')`;
+      visto = await pedir("GET", "/v1/negocio/resumen", MIRON);
+      // LA FUNCIÓN DECIDE, no una pre-comprobación. Se retira la factura que se debe y queda
+      // OTRA en la misma divisa sin tasa, `posted` y con saldo CERO (lo retenido la cubre
+      // entera: 2,90 ÷ 0,025 = 116,00). No se le debe nada: no hace falta tasa para decirlo, y
+      // el resumen NO dice `sin_tasa`.
+      await sql.begin(async (tx) => {
+        await tx`select set_config('ladino.actor_id', ${GESTOR}, true)`;
+        await tx`update public.supplier_invoices set status = 'annulled' where id = ${factura}`;
+        await tx`insert into public.supplier_invoices
+                   (id, tenant_id, company_id, supplier_id, supplier_document_number,
+                    supplier_control_number, invoice_date, status, posted_at, subtotal_amount,
+                    tax_amount, total_amount, tax_is_recoverable, transaction_currency,
+                    functional_currency, fx_rate, amount_transaction_currency, functional_amount,
+                    retention_total)
+                 values (${saldada}, ${TENANT}, ${COMPANY}, ${proveedor}, ${`FS-${RUN}`},
+                         ${`CS-${RUN}`}, ${HOY}::date, 'posted', now(), 100, 16, 116, true,
+                         'VES', 'USD', 0.025, 116, 2.9, 2.9)`;
+      });
+      const [saldo] = await sql<{ s: string; estado: string; hoy: string | null }[]>`
+        select platform.supplier_invoice_balance(${COMPANY}, ${saldada})::numeric(24,8)::text as s,
+               (select status from public.supplier_invoices where id = ${saldada}) as estado,
+               platform.supplier_debt_today(${COMPANY}, ${saldada})::numeric(24,8)::text as hoy`;
+      expect({ ...saldo }).toEqual({ s: "0.00000000", estado: "posted", hoy: "0.00000000" });
+      conLaPagada = await pedir("GET", "/v1/negocio/resumen", MIRON);
+    } finally {
+      await sql`delete from public.role_permissions
+                 where role_id = ${ROL_MIRON} and permission_key = 'ap.read'`;
+      // La factura del montaje se retira como se retira una factura: anulada.
+      await sql.begin(async (tx) => {
+        await tx`select set_config('ladino.actor_id', ${GESTOR}, true)`;
+        await tx`update public.supplier_invoices
+                    set status = 'annulled'
+                  where id in (${factura}, ${saldada}) and status <> 'annulled'`;
+      });
+    }
+    expect(sinApRead.status).toBe(200);
+    expect((await sinApRead.json()) as Debo).toMatchObject({
+      lo_que_debo: null,
+      lo_que_debo_motivo: "sin_permiso",
+      lo_que_debo_por_moneda: [],
+    });
+    expect(visto.status, await visto.clone().text()).toBe(200);
+    expect((await visto.json()) as Debo).toMatchObject({
+      lo_que_debo: null,
+      lo_que_debo_motivo: "sin_tasa",
+      lo_que_debo_por_moneda: [{ currency: "VES", nominal: "116.00" }],
+    });
+    // Pagada (saldo 0) y sin tasa: una cifra, sin motivo. Antes la pre-comprobación decía
+    // `sin_tasa` por el mero hecho de existir una factura `posted` en divisa.
+    expect(conLaPagada.status, await conLaPagada.clone().text()).toBe(200);
+    const pagada = (await conLaPagada.json()) as Debo;
+    expect([pagada.lo_que_debo_motivo, pagada.lo_que_debo_por_moneda]).toEqual([null, []]);
+    expect(pagada.lo_que_debo).toMatch(/^\d+\.\d{2}$/);
+  });
+
+  // Revisión de la ola 4 (B3). Una factura en divisa con saldo NEGATIVO (se le retuvo o se le
+  // pagó de más) y sin tasa: `supplier_debt_today` da NULL —no se puede valorar hoy—. El estado
+  // de cuenta respondía total NULL y `sin_tasa` con el nominal VACÍO («falta la tasa», sin deber
+  // nada), y en la MISMA respuesta la antigüedad (`ap_aging`) no la contaba y daba su total.
+  // `sin_tasa` quiere decir «hay DEUDA en divisa y no se puede valorar» (el contrato lo dice así):
+  // las dos lecturas preguntan lo mismo, y solo lo que se debe pide tasa.
+  it("ola 4 · el estado de cuenta de un proveedor con una factura en divisa de saldo NEGATIVO y sin tasa NO dice `sin_tasa` —no se debe nada—, como la antigüedad; con otra que SÍ se debe, las dos lo dicen con el mismo nominal", async () => {
+    const [tasas] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.exchange_rates
+       where from_currency = 'VES' and to_currency = 'USD'`;
+    expect(tasas!.n, "alguien sembró una tasa VES→USD: este caso ya no demuestra nada").toBe(0);
+    const proveedor = crypto.randomUUID();
+    const factura = crypto.randomUUID();
+    await sql.begin(async (tx) => {
+      await tx`select set_config('ladino.actor_id', ${GESTOR}, true)`;
+      await tx`insert into public.suppliers
+                 (id, tenant_id, company_id, tax_id, legal_name, supplier_kind, person_type_code,
+                  taxpayer_type_code)
+               values (${proveedor}, ${TENANT}, ${COMPANY},
+                       ${`J${String(Date.now() + 7).slice(-9)}`}, 'Proveedor con saldo a nuestro favor',
+                       'nacional', 'juridica', 'ordinario')`;
+      // 116,00 de total y 3,00 retenidos en funcional: 3,00 ÷ 0,025 = 120,00 → saldo −4,00.
+      await tx`insert into public.supplier_invoices
+                 (id, tenant_id, company_id, supplier_id, supplier_document_number,
+                  supplier_control_number, invoice_date, status, posted_at, subtotal_amount,
+                  tax_amount, total_amount, tax_is_recoverable, transaction_currency,
+                  functional_currency, fx_rate, amount_transaction_currency, functional_amount,
+                  retention_total)
+               values (${factura}, ${TENANT}, ${COMPANY}, ${proveedor}, ${`FN-${RUN}`},
+                       ${`CN-${RUN}`}, ${HOY}::date, 'posted', now(), 100, 16, 116, true, 'VES',
+                       'USD', 0.025, 116, 2.9, 3.0)`;
+    });
+    const debida = crypto.randomUUID();
+    let estado: Response;
+    let estadoConDeuda: Response;
+    try {
+      const [f] = await sql<{ saldo: string; hoy: string | null; tramos: number }[]>`
+        select platform.supplier_invoice_balance(${COMPANY}, ${factura})::numeric(24,8)::text as saldo,
+               platform.supplier_debt_today(${COMPANY}, ${factura})::text as hoy,
+               (select count(*)::int from platform.ap_aging(${COMPANY}, ${proveedor})) as tramos`;
+      expect({ ...f }).toEqual({ saldo: "-4.00000000", hoy: null, tramos: 0 });
+      await sql`insert into public.role_permissions (role_id, permission_key)
+                values (${ROL_MIRON}, 'ap.read') on conflict do nothing`;
+      estado = await pedir("GET", `/v1/suppliers/${proveedor}/statement`, MIRON);
+      // Y con OTRA factura del mismo proveedor que sí se debe (116,00), sin tasa.
+      await sql.begin(async (tx) => {
+        await tx`select set_config('ladino.actor_id', ${GESTOR}, true)`;
+        await tx`insert into public.supplier_invoices
+                   (id, tenant_id, company_id, supplier_id, supplier_document_number,
+                    supplier_control_number, invoice_date, status, posted_at, subtotal_amount,
+                    tax_amount, total_amount, tax_is_recoverable, transaction_currency,
+                    functional_currency, fx_rate, amount_transaction_currency, functional_amount)
+                 values (${debida}, ${TENANT}, ${COMPANY}, ${proveedor}, ${`FD-${RUN}`},
+                         ${`CD-${RUN}`}, ${HOY}::date, 'posted', now(), 100, 16, 116, true, 'VES',
+                         'USD', 0.025, 116, 2.9)`;
+      });
+      estadoConDeuda = await pedir("GET", `/v1/suppliers/${proveedor}/statement`, MIRON);
+    } finally {
+      await sql`delete from public.role_permissions
+                 where role_id = ${ROL_MIRON} and permission_key = 'ap.read'`;
+      await sql.begin(async (tx) => {
+        await tx`select set_config('ladino.actor_id', ${GESTOR}, true)`;
+        await tx`update public.supplier_invoices set status = 'annulled'
+                  where id in (${factura}, ${debida}) and status <> 'annulled'`;
+      });
+    }
+    type Estado = {
+      total_outstanding: string | null;
+      total_outstanding_motivo: string | null;
+      total_outstanding_por_moneda: { currency: string; nominal: string }[];
+      aging: {
+        buckets: { document_count: number; amount: string | null }[];
+        total: string | null;
+        total_motivo: string | null;
+        total_por_moneda: { currency: string; nominal: string }[];
+      };
+    };
+    const lecturas = (c: Estado): Record<string, unknown> => ({
+      estado: [c.total_outstanding_motivo, c.total_outstanding_por_moneda],
+      antiguedad: [c.aging.total_motivo, c.aging.total_por_moneda],
+    });
+    // Solo la de saldo negativo: nada se debe, nada pide tasa. Las dos lecturas, lo mismo.
+    expect(estado.status, await estado.clone().text()).toBe(200);
+    const cuerpo = (await estado.json()) as Estado;
+    expect(lecturas(cuerpo)).toEqual({ estado: [null, []], antiguedad: [null, []] });
+    expect(Number(cuerpo.total_outstanding)).toBe(0);
+    expect(Number(cuerpo.aging.total)).toBe(0);
+    expect(cuerpo.aging.buckets).toEqual([]);
+    // Con la que se debe: las dos dicen `sin_tasa`, con el mismo nominal (lo que SE DEBE).
+    expect(estadoConDeuda.status, await estadoConDeuda.clone().text()).toBe(200);
+    const conDeuda = (await estadoConDeuda.json()) as Estado;
+    expect(lecturas(conDeuda)).toEqual({
+      estado: ["sin_tasa", [{ currency: "VES", nominal: "116.00" }]],
+      antiguedad: ["sin_tasa", [{ currency: "VES", nominal: "116.00" }]],
+    });
+    expect([conDeuda.total_outstanding, conDeuda.aging.total]).toEqual([null, null]);
+    expect(conDeuda.aging.buckets.map((b) => [b.document_count, b.amount])).toEqual([[1, null]]);
+  });
+
   it("la tasa ni se escribe ni se «confirma» a mano: solo existe la del BCV (ADR-0064 §1)", async () => {
     const keep = await pedir("POST", "/v1/exchange-rates/keep", GESTOR, {
       from_currency: "USD",
@@ -450,6 +654,106 @@ describe("tesorería de extremo a extremo", () => {
       await sql`delete from public.role_permissions
                  where role_id = ${ROL_MIRON} and permission_key in ('ar.read', 'ap.read')`;
     }
+  });
+
+  // Ola 4 (familia de N-05): un `null` del resumen dice POR QUÉ. Un 403 o un null leídos como
+  // «no hay» son ausencia de fallo leída como éxito.
+  it("el null de cada total de deuda lleva su motivo: sin_permiso sin el permiso, null con la cifra", async () => {
+    type Motivos = {
+      lo_que_me_deben: string | null;
+      lo_que_me_deben_motivo: string | null;
+      lo_que_me_deben_por_moneda: unknown[];
+      lo_que_debo: string | null;
+      lo_que_debo_motivo: string | null;
+      lo_que_debo_por_moneda: unknown[];
+    };
+    const deMiron = async (): Promise<Motivos> =>
+      (await (await pedir("GET", "/v1/negocio/resumen", MIRON)).json()) as Motivos;
+    expect(await deMiron()).toMatchObject({
+      lo_que_me_deben: null,
+      lo_que_me_deben_motivo: "sin_permiso",
+      lo_que_me_deben_por_moneda: [],
+      lo_que_debo: null,
+      lo_que_debo_motivo: "sin_permiso",
+      lo_que_debo_por_moneda: [],
+    });
+    try {
+      await sql`insert into public.role_permissions (role_id, permission_key)
+                values (${ROL_MIRON}, 'ar.read'), (${ROL_MIRON}, 'ap.read')`;
+      expect(await deMiron()).toMatchObject({
+        lo_que_me_deben: "0.00",
+        lo_que_me_deben_motivo: null,
+        lo_que_me_deben_por_moneda: [],
+        lo_que_debo: "0.00",
+        lo_que_debo_motivo: null,
+        lo_que_debo_por_moneda: [],
+      });
+    } finally {
+      await sql`delete from public.role_permissions
+                 where role_id = ${ROL_MIRON} and permission_key in ('ar.read', 'ap.read')`;
+    }
+  });
+
+  // N-05: «Mi dinero» le decía al encargado «Todavía no hay tasa BCV» habiéndola, porque la tasa
+  // solo salía del resumen (treasury.read). La tasa del día tiene su lectura propia.
+  it("N-05 · quien solo cierra caja no abre el resumen (403), pero SÍ lee la tasa del día — la misma del resumen", async () => {
+    const vedado = await pedir("GET", "/v1/negocio/resumen", CERRADOR);
+    expect(vedado.status).toBe(403);
+    const r = await pedir("GET", "/v1/negocio/tasa", CERRADOR);
+    expect(r.status, await r.clone().text()).toBe(200);
+    const suya = (await r.json()) as {
+      tasa_del_dia: {
+        rate: string;
+        rate_date: string;
+        source: string;
+        es_de_hoy: boolean;
+        dias_de_antiguedad: number;
+      } | null;
+    };
+    const delGestor = (await (await pedir("GET", "/v1/negocio/resumen", GESTOR)).json()) as {
+      tasa_del_dia: Record<string, unknown> | null;
+    };
+    expect(suya.tasa_del_dia).not.toBeNull();
+    // El objeto ENTERO: una sola consulta sirve a las dos lecturas.
+    expect(suya.tasa_del_dia).toEqual(delGestor.tasa_del_dia);
+    // Y quien no es de la empresa no la lee por aquí. Un usuario REAL, con su propio negocio en
+    // OTRO tenant: en el suyo la lee; en esta empresa recibe el MISMO 404 que por una empresa que
+    // no existe (el alcance no confirma que la empresa exista).
+    const OTRO = crypto.randomUUID();
+    const TENANT_2 = crypto.randomUUID();
+    const COMPANY_2 = crypto.randomUUID();
+    const MEM_2 = crypto.randomUUID();
+    await sql`insert into auth.users (id) values (${OTRO})`;
+    await sql.begin(async (tx) => {
+      await tx`select set_config('ladino.actor_id', ${OTRO}, true)`;
+      await tx`insert into public.tenants (id, name) values (${TENANT_2}, 'Tenant e2e tesorería 2')`;
+      await tx`insert into public.companies
+                 (id, tenant_id, tax_id, legal_name, functional_currency_code, taxpayer_type_code)
+               values (${COMPANY_2}, ${TENANT_2}, ${`J-TESO2-${RUN}`}, 'Otra empresa e2e tesorería',
+                       'VES', 'ordinario')`;
+      await tx`insert into public.memberships (id, tenant_id, user_id)
+               values (${MEM_2}, ${TENANT_2}, ${OTRO})`;
+      await tx`insert into public.user_role_assignments
+                 (id, tenant_id, membership_id, role_id, company_id)
+               values (${crypto.randomUUID()}, ${TENANT_2}, ${MEM_2}, ${ROL_CERRADOR}, null)`;
+    });
+    const comoOtro = async (company: string): Promise<Response> =>
+      app.request("/v1/negocio/tasa", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${await tokenDe(OTRO)}`, "X-Company-Id": company },
+      });
+    const enLaSuya = await comoOtro(COMPANY_2);
+    expect(enLaSuya.status, await enLaSuya.clone().text()).toBe(200);
+    const enLaAjena = await comoOtro(COMPANY);
+    const enNinguna = await comoOtro(crypto.randomUUID());
+    expect(enLaAjena.status).toBe(404);
+    expect(enNinguna.status).toBe(404);
+    const cuerpo = async (r: Response): Promise<{ code: string; message: string }> => {
+      const { code, message } = (await r.json()) as { code: string; message: string };
+      return { code, message };
+    };
+    // Indistinguibles: mismo código y mismo mensaje.
+    expect(await cuerpo(enLaAjena)).toEqual(await cuerpo(enNinguna));
   });
 
   // ── ADR-0067: la cuenta se pregunta, no se adivina ───────────────────────

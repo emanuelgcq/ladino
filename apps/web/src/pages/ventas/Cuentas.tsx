@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { formatearDocumento } from "@ladino/schemas";
 import { useNavigate, useSearchParams } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BarChart, Bar, XAxis, ResponsiveContainer, Cell } from "recharts";
 import { Banknote } from "lucide-react";
 import { useSesion } from "../../app/session.js";
@@ -22,6 +22,7 @@ import { Button } from "../../ui/button.js";
 import { Badge, type BadgeTone } from "../../ui/badge.js";
 import { fechaLocal } from "../../fechas.js";
 import { useConFacturas } from "../../app/modo-venta.js";
+import { ReembolsarSaldoAFavor } from "../../components/ReembolsarSaldoAFavor.js";
 
 /**
  * Estado de cuenta del cliente con su AGING visual. Todas las cifras —saldos,
@@ -51,6 +52,10 @@ interface Statement {
     amount: string;
     applied_amount: string;
     status: string;
+    /** G-05: la moneda del saldo a favor (la del documento que lo originó). */
+    currency: string;
+    /** F-10: nació del sobrante de un cobro, no de una nota de crédito. */
+    from_overpayment: boolean;
   }[];
   /** null = hay deuda en divisa y falta la tasa de hoy; el nominal va en `debt.by_currency`. */
   total_outstanding: string | null;
@@ -63,6 +68,13 @@ interface Aging {
   /** `amount` y `total` null = ese tramo tiene deuda en divisa y falta la tasa de hoy. */
   buckets: { bucket: string; document_count: number; amount: string | null }[];
   total: string | null;
+  /**
+   * P-05: lo VENCIDO a esa fecha, del servidor (los tramos siguen contando días desde la
+   * emisión). «0.00» = nada vencido; null = hay vencido y falta la tasa de hoy. Ausente = API
+   * anterior: no se pinta.
+   */
+  overdue?: string | null;
+  overdue_reason?: "sin_tasa" | null;
 }
 
 export function Cuentas(): React.JSX.Element {
@@ -188,7 +200,9 @@ const ETIQUETA_BUCKET: Record<string, string> = {
 const ESTADO_CREDITO: Record<string, { etiqueta: string; tone: BadgeTone }> = {
   available: { etiqueta: "Disponible", tone: "accent" },
   applied: { etiqueta: "Aplicado", tone: "neutral" },
-  expired: { etiqueta: "Vencido", tone: "destructive" },
+  // `expired` no es un vencimiento por fecha: el saldo a favor se RETIRÓ al reversar el cobro
+  // que lo creó (payment-reversals). Decir «Vencido» le contaba al dueño otra historia.
+  expired: { etiqueta: "Retirado (se reversó su cobro)", tone: "destructive" },
 };
 
 function EstadoDeCuenta({
@@ -201,6 +215,10 @@ function EstadoDeCuenta({
   onAbrirDocumento: (id: string) => void;
 }): React.JSX.Element {
   const conFacturas = useConFacturas();
+  const { puede } = useSesion();
+  const qc = useQueryClient();
+  // G-15: el saldo a favor que se está devolviendo en dinero.
+  const [devolviendo, setDevolviendo] = useState<{ id: string; currency: string } | null>(null);
   const barras = aging.buckets.map((b) => ({
     nombre: ETIQUETA_BUCKET[b.bucket] ?? b.bucket,
     // SOLO altura de barra; la cifra visible es el string del servidor.
@@ -211,6 +229,17 @@ function EstadoDeCuenta({
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      {devolviendo !== null && (
+        <ReembolsarSaldoAFavor
+          creditId={devolviendo.id}
+          moneda={devolviendo.currency}
+          onCerrar={() => setDevolviendo(null)}
+          onReembolsado={() => {
+            setDevolviendo(null);
+            void qc.invalidateQueries();
+          }}
+        />
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Saldo pendiente</CardTitle>
@@ -281,6 +310,21 @@ function EstadoDeCuenta({
               </span>
             ))}
           </div>
+          {aging.overdue !== undefined && (
+            // P-05: la cifra es del servidor; aquí solo se pinta.
+            <p className="mt-2 text-[0.85rem]">
+              <span className="text-muted-foreground">Vencido: </span>
+              {aging.overdue === null ? (
+                <span className="text-warning-soft-foreground">{FALTA_LA_TASA}</span>
+              ) : esCero(aging.overdue) ? (
+                <span className="text-muted-foreground">nada</span>
+              ) : (
+                <span className="font-mono font-medium text-destructive">
+                  {textoDeDeuda(aging.overdue, data.currency)}
+                </span>
+              )}
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -297,6 +341,9 @@ function EstadoDeCuenta({
                   <TH>Estado</TH>
                   <TH className="text-right">Importe</TH>
                   <TH className="text-right">Aplicado</TH>
+                  <TH>
+                    <span className="sr-only">Devolver</span>
+                  </TH>
                 </TR>
               </THead>
               <TBody>
@@ -313,16 +360,31 @@ function EstadoDeCuenta({
                           className="font-mono text-[0.84rem] text-accent-soft-foreground hover:underline"
                           onClick={() => onAbrirDocumento(c.source_document_id)}
                         >
-                          Ver la nota de crédito
+                          {c.from_overpayment
+                            ? "Ver el documento que se pagó de más"
+                            : "Ver la nota de crédito"}
                         </button>
                       </TD>
                       <TD>
                         <Badge tone={e.tone}>{e.etiqueta}</Badge>
                       </TD>
-                      <TDNum>{mostrarImporte({ amount: c.amount, currency: data.currency })}</TDNum>
+                      {/* G-05: en SU moneda, la del documento que lo originó. */}
+                      <TDNum>{mostrarImporte({ amount: c.amount, currency: c.currency })}</TDNum>
                       <TDNum className="text-muted-foreground">
-                        {mostrarImporte({ amount: c.applied_amount, currency: data.currency })}
+                        {mostrarImporte({ amount: c.applied_amount, currency: c.currency })}
                       </TDNum>
+                      <TD className="text-right">
+                        {/* G-15: devolverlo en dinero, solo a quien el servidor se lo permite. */}
+                        {c.status === "available" && puede("sales.refund") && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setDevolviendo({ id: c.id, currency: c.currency })}
+                          >
+                            Devolver en dinero
+                          </Button>
+                        )}
+                      </TD>
                     </TR>
                   );
                 })}
@@ -403,7 +465,11 @@ function EstadoDeCuenta({
                       className={
                         (d.balance === null && d.status === "annulled") || esCero(d.balance)
                           ? "text-faint-foreground"
-                          : "text-warning-soft-foreground"
+                          : // G-04: una nota de crédito RESTA (saldo negativo): no es una deuda y
+                            // no se pinta como advertencia.
+                            d.balance !== null && d.balance.startsWith("-")
+                            ? "text-muted-foreground"
+                            : "text-warning-soft-foreground"
                       }
                     >
                       {/* Una anulada no tiene saldo («—»). Una EMITIDA con saldo nulo debe, y

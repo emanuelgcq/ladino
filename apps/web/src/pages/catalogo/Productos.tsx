@@ -26,10 +26,11 @@ import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { useConFacturas } from "../../app/modo-venta.js";
-import { ACEPTA_FOTOS, subirFotoProducto } from "../../components/foto.js";
+import { ACEPTA_FOTOS, fotoSoltada, subirFotoProducto } from "../../components/foto.js";
+import { AltaSimple } from "../negocio/Productos.js";
 import { errorDePersona } from "../../lib.js";
 import { BotonEscanear } from "../../components/EscanerCodigo.js";
-import type { Product, PriceList, PriceItem, Unit, TaxCategory } from "../../lib.js";
+import type { Product, PriceList, PriceItem, TaxCategory } from "../../lib.js";
 import { sufijoDeArchivo } from "../../app/rif.js";
 
 /**
@@ -128,7 +129,7 @@ export function Productos(): React.JSX.Element {
         title="Productos"
         description={
           sinRif
-            ? "El catálogo: código y unidad de cada producto. El precio se pone en Listas de precios."
+            ? "El catálogo: código y unidad de cada producto. El precio se pone al agregarlo y después se cambia en Listas de precios."
             : "El catálogo: SKU, unidad y clasificación tributaria — la clasificación se congela en cada documento al emitir."
         }
         actions={
@@ -185,7 +186,9 @@ export function Productos(): React.JSX.Element {
         }}
       />
 
-      {creando && <NuevoProducto onCerrar={(hecho) => (setCreando(false), hecho && recargar())} />}
+      {/* C-02: la MISMA alta del primer día, en una pantalla: nombre, precio, foto, existencia y
+          costo a la vista; código, unidad y clasificación, plegados en «Más detalles». */}
+      {creando && <AltaSimple onCerrar={() => setCreando(false)} onCreado={recargar} />}
       {detalle !== null && (
         <DetalleProducto
           producto={detalle}
@@ -193,198 +196,6 @@ export function Productos(): React.JSX.Element {
         />
       )}
     </div>
-  );
-}
-
-function NuevoProducto({ onCerrar }: { onCerrar: (hecho: boolean) => void }): React.JSX.Element {
-  const sinRif = !useConFacturas();
-  const { empresa, llamar } = useSesion();
-  const toast = useToast();
-  const [form, setForm] = useState({
-    sku: "",
-    name: "",
-    kind: "good" as "good" | "service",
-    unit_code: "unidad",
-    tax_category_code: "gravado_general",
-    barcode: "",
-    justificacion: "",
-  });
-  const [error, setError] = useState<unknown>(null);
-  const [guardando, setGuardando] = useState(false);
-
-  const catalogos = useQuery({
-    queryKey: ["catalogos-producto", sinRif],
-    staleTime: 300_000,
-    queryFn: async () => {
-      const [unidades, clasifs] = await Promise.all([
-        llamar<Unit[]>("/v1/units"),
-        sinRif ? Promise.resolve<TaxCategory[]>([]) : llamar<TaxCategory[]>("/v1/tax-categories"),
-      ]);
-      return { unidades, clasifs };
-    },
-  });
-
-  async function guardar(): Promise<void> {
-    setError(null);
-    setGuardando(true);
-    try {
-      await llamar("/v1/products", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          sku: form.sku,
-          name: form.name,
-          kind: form.kind,
-          unit_code: form.unit_code,
-          // Sin RIF no se envía: el producto nace con la clasificación de la empresa, que solo
-          // contará el día que facture.
-          ...(sinRif ? {} : { tax_category_code: form.tax_category_code }),
-          // Hallazgo 10: la adicional (art. 61) exige por qué el bien es suntuario; queda en el acta.
-          ...(!sinRif && form.tax_category_code === "gravado_adicional"
-            ? { tax_category_justification: form.justificacion.trim() }
-            : {}),
-          ...(form.barcode.trim() === "" ? {} : { barcode: form.barcode.trim() }),
-        }),
-      });
-      toast.success("Producto creado", sinRif ? form.name : form.sku);
-      onCerrar(true);
-    } catch (e) {
-      setError(e);
-    } finally {
-      setGuardando(false);
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
-      <DialogContent className="max-w-xl">
-        <DialogTitle>Nuevo producto</DialogTitle>
-        <DialogDescription>
-          {sinRif
-            ? "Si es un producto o un servicio no se podrá cambiar después."
-            : "El tipo (bien/servicio) no podrá cambiarse una vez activo, y la clasificación tributaria elegida es la que se congelará en cada emisión."}
-        </DialogDescription>
-        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <FormField label={sinRif ? "Código" : "SKU"} required>
-            {(a) => (
-              <Input
-                id={a.id}
-                className="font-mono"
-                value={form.sku}
-                onChange={(e) => setForm({ ...form, sku: e.target.value })}
-              />
-            )}
-          </FormField>
-          <FormField label="Nombre" required>
-            {(a) => (
-              <Input
-                id={a.id}
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-            )}
-          </FormField>
-          <FormField label="Tipo" required>
-            {(a) => (
-              <SimpleSelect
-                id={a.id}
-                value={form.kind}
-                onValueChange={(v) => setForm({ ...form, kind: v as "good" | "service" })}
-                options={[
-                  {
-                    value: "good",
-                    label: sinRif ? "Producto (lleva inventario)" : "Bien (con inventario)",
-                  },
-                  { value: "service", label: "Servicio" },
-                ]}
-              />
-            )}
-          </FormField>
-          <FormField label="Unidad" required>
-            {(a) => (
-              <SimpleSelect
-                id={a.id}
-                value={form.unit_code}
-                onValueChange={(v) => setForm({ ...form, unit_code: v })}
-                options={(catalogos.data?.unidades ?? []).map((u) => ({
-                  value: u.code,
-                  label: u.name,
-                }))}
-              />
-            )}
-          </FormField>
-          {/* En modo recibos no se pide (A4): el producto nace con la clasificación
-              por omisión de la empresa, que solo cuenta el día que facture. */}
-          {!sinRif && (
-            <FormField
-              label="Clasificación tributaria"
-              required
-              hint="VALIDAR-TRIBUTARIO: la confirma el contador."
-            >
-              {(a) => (
-                <SimpleSelect
-                  id={a.id}
-                  value={form.tax_category_code}
-                  onValueChange={(v) => setForm({ ...form, tax_category_code: v })}
-                  options={(catalogos.data?.clasifs ?? [])
-                    .filter((t) => t.offered_in_sales)
-                    .map((t) => ({
-                      value: t.code,
-                      label: t.name,
-                    }))}
-                />
-              )}
-            </FormField>
-          )}
-          {!sinRif && form.tax_category_code === "gravado_adicional" && (
-            <FormField
-              label="Por qué es suntuario"
-              required
-              hint="La alícuota adicional (LIVA art. 61) no tiene una lista con fuente: escribe la razón. Queda en el acta."
-            >
-              {(a) => (
-                <Textarea
-                  id={a.id}
-                  value={form.justificacion}
-                  onChange={(e) => setForm({ ...form, justificacion: e.target.value })}
-                />
-              )}
-            </FormField>
-          )}
-          <FormField label="Código de barras">
-            {(a) => (
-              <div className="flex gap-2">
-                <Input
-                  id={a.id}
-                  className="font-mono"
-                  value={form.barcode}
-                  onChange={(e) => setForm({ ...form, barcode: e.target.value })}
-                />
-                <BotonEscanear onCodigo={(c) => setForm((f) => ({ ...f, barcode: c }))} />
-              </div>
-            )}
-          </FormField>
-        </div>
-        {error !== null && (
-          <div className="mt-3">
-            <MensajeError error={error} />
-          </div>
-        )}
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onCerrar(false)} disabled={guardando}>
-            Cancelar
-          </Button>
-          <Button
-            variant="primary"
-            disabled={guardando || form.sku.trim() === "" || form.name.trim() === ""}
-            onClick={() => void guardar()}
-          >
-            {guardando ? "Creando…" : "Crear producto"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -612,10 +423,24 @@ function DetalleProducto({
               </ul>
             )}
             {puede("product.manage") && (
-              <div className="rounded-md border border-border bg-surface-muted/40 p-3">
+              <div
+                className="rounded-md border border-border bg-surface-muted/40 p-3"
+                // C-10: soltar una imagen aquí vale lo mismo que elegirla con el botón.
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const f = fotoSoltada(e);
+                  if (f === null) {
+                    toast.warning("Eso no es una foto", "Suelta una imagen: JPG, PNG o WEBP.");
+                    return;
+                  }
+                  if (!subiendoFoto) void cambiarFoto(f);
+                }}
+              >
                 <p className="text-[0.85rem] font-medium">Foto del producto</p>
                 <p className="text-[0.8rem] text-muted-foreground">
-                  La que se ve en la caja y en el catálogo. Del teléfono o de la galería.
+                  La que se ve en la caja y en el catálogo. Del teléfono o de la galería, o
+                  arrástrala aquí.
                 </p>
                 <input
                   ref={fotoRef}

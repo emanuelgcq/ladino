@@ -264,6 +264,10 @@ Pendiente y no decidido: el TTL concreto (`expires_at` no tiene default a propó
   - `GET /v1/retention-exclusions` — las exclusiones del art. 3 de la PA SNAT/2025/000054 que la
     persona puede MARCAR (`applies = marked`, vigentes hoy), con norma, numeral y si está verificado.
     Lectura: `ap.read`, `purchase.invoice.register` o `retention.receipt.issue`.
+    Con `?account_id=` (la cuenta de la que sale un gasto con factura; AF4-01, 2026-10-04) no trae
+    las exclusiones que esa cuenta no admite: el servicio público domiciliado (art. 3 num. 8) solo
+    se ofrece para una cuenta bancaria. Cuenta ajena o inexistente: 404. Sin el parámetro, igual
+    que antes.
   - `GET /v1/retention-vouchers?from&to&supplier_id` — comprobantes con estado (`issued` / `annulled`),
     vencimiento de entrega, entrega y total retenido. Misma lectura.
   - `GET /v1/retention-vouchers/{id}` y `GET /v1/retention-vouchers/{id}/pdf` — el comprobante con
@@ -313,7 +317,24 @@ Pendiente y no decidido: el TTL concreto (`expires_at` no tiene default a propó
   FUNCIONAL (iguales a `functional_debit` / `functional_credit`); el importe original va en
   `original_amount`, con `transaction_currency` y `fx_rate`.
 
+**Ola 4 · el fiado tiene una sola puerta (R-82 punto 1; cambia el COMPORTAMIENTO, no la forma).** `POST /v1/invoices` emite una factura que nace sin cobro: es fiado, y pasa por la misma regla que `POST /v1/pos/sales`. Respuestas nuevas de ese endpoint: 403 `PERMISSION_REQUIRED` si quien emite no tiene `sales.credit`; 409 `CREDIT_LIMIT_EXCEEDED` si el cliente tiene límite 0 o la factura lo deja por encima de su límite; 409 `EXCHANGE_RATE_MISSING` si falta la tasa oficial de hoy (la deuda no se puede medir); 422 `VALIDATION_FAILED` al «Consumidor final». Ningún rechazo deja documento ni gasta número. El cuerpo y la respuesta 201 no cambian. `POST /v1/fiscal/contingency-invoices` y `POST /v1/debit-notes` no pasan por la regla.
+
 **Última ronda (aditivo, ola 3).** `GET /v1/customers/{id}/statement`: `documents[].balance` y `documents[].debt_nominal` pueden ser `null` (no «0») cuando no se pueden calcular, y `debt.unvalued_documents` dice cuántos documentos quedan fuera de `debt.by_currency`. La respuesta de las dos reversas: `debt.nominal` y `debt.functional_today` pueden ser `null`. `GET /v1/igtf/perceptions`: `total_functional` incluye lo percibido cuyo cobro se reversó después del fin del período, y `pending_refund_functional` / `pending_refund_count` lo dicen aparte. **Corrección (20261003230000, sin cambio de forma):** «después del fin del período» es después del fin de la QUINCENA DE LA PERCEPCIÓN, no del `to` de la consulta; el total de un rango es la suma de sus percepciones y Σ quincenas = mes. `GET /v1/supplier-invoices`: `items[].balance` es `null` en una factura sin asentar (borrador o anulada).
+
+**Ola 4 (aditivo): «no hay» no es «no puedes ver» (N-05, P-05).**
+- `GET /v1/negocio/tasa` (nuevo): `{ tasa_del_dia }`, el mismo objeto del resumen (o `null` si nunca se cargó), para cualquier miembro de la empresa. No exige `treasury.read`: quien cierra su caja la necesita sin ver el dinero del negocio.
+- `GET /v1/negocio/resumen`: cada total de deuda en `null` dice su motivo en `lo_que_me_deben_motivo` / `lo_que_debo_motivo` (`"sin_permiso"` | `"sin_tasa"`; `null` cuando hay cifra) y, con `sin_tasa`, el nominal conocido en `…_por_moneda` (`[{ currency, nominal }]`; vacía en los demás casos). Sin tasa para una factura de proveedor en divisa el resumen ya no falla: `lo_que_debo` va en `null` con `sin_tasa`.
+- `GET /v1/customers`: `sort` = `name` (por omisión) | `debt_desc` | `debt_asc`. Los dos de deuda exigen `with_debt=1` (y por tanto `ar.read`); el cliente cuya deuda no se pudo valorar (`debt: null`) va arriba en los dos sentidos. Un valor desconocido, o deuda sin `with_debt`, es 422 `VALIDATION_FAILED`: nunca cae en silencio al orden por nombre.
+
+**Ola 4 (aditivo): el fiado tiene vencimiento (P-05, E-22; migración `20261004210000`).**
+- `POST /v1/pos/sales`: `due_date` (`AAAA-MM-DD`, opcional en el esquema). **Si la venta deja saldo y no viene, 422 `VALIDATION_FAILED`** («Di cuándo paga el cliente…», `details.reason = "due_date_required"`) y no se emite nada. Anterior al día de la venta (día de Caracas): 422 (`due_date_before_sale`, con `details.sale_day`); un día que no existe: 422 (`due_date_invalid`). En una venta que queda pagada se guarda y no significa nada. La comprobación va DESPUÉS de la regla del fiado: a quien no se le puede fiar se le responde eso (403/409), no la falta de fecha.
+- `POST /v1/invoices` (y el recibo de administración): `due_date` opcional. Sin ella el documento vence el día de su emisión. Misma validación de la fecha.
+- `DocumentResponse.due_date` (`string | null`): el vencimiento acordado; inmutable tras emitir (LAD06 en la base).
+- `POST /v1/pos/quote`: `credit_due_date` = `{ required, min } | null`. `null` en la venta de mostrador; con cliente, `required: true` (fiar por la caja exige la fecha) y `min` = hoy en Caracas. Va aparte de `credit`, cuya forma no cambia.
+- `GET /v1/customers?with_debt=1`: cada cliente trae `overdue` (lo vencido de su deuda en la moneda de la empresa a la tasa de hoy; `"0.00"` = nada vencido) y `overdue_reason` (`"sin_tasa"` cuando `overdue` es `null`: hay vencido y no se puede valorar hoy; nunca 0). `sort` admite además `overdue_desc` | `overdue_asc` (exigen `with_debt=1` y `ar.read`, 403 `PERMISSION_REQUIRED` sin él): lo no valorado arriba; en `overdue_desc`, a igual vencido, por deuda total y después por nombre.
+- `GET /v1/customers/{id}/aging` y `…/statement` (`aging`): `overdue` y `overdue_reason`, a la fecha de referencia. Los tramos NO cambian: siguen contando días desde la emisión. `statement.documents[]`: `due_date` (el acordado o, sin él, el día de emisión) y `overdue` (debe y su vencimiento es anterior a hoy).
+- **Vencido** = la deuda de `platform.document_debt` (la única función de deuda) de los documentos con `coalesce(due_date, día de Caracas de la emisión) < hoy de Caracas`. Vencer hoy no es estar vencido.
+- `GET /v1/documents/{id}/pdf`: la factura o el recibo con saldo imprime «A CRÉDITO», «Saldo pendiente: …» (el de la fecha en que se imprime) y «Vence: dd/mm/aaaa». En el recibo, siempre; en la factura, solo en la copia de cortesía (no en `destino=papel` ni `vista`).
 
 ### `POST /v1/payments`: `amount` es lo ENTREGADO, por omisión (2026-10-02, ADR-0072 parte 2)
 
@@ -345,6 +366,26 @@ nada. Mensajes (`ERROR_CATALOG.md`):
 - `POST /v1/supplier-payments`: «Este pago no cuadra con lo que la factura todavía debe. No se
   registró: revisa la factura.»
 
+### Productos y precios: el alta única y el historial con la tasa de su día (C-02 y C-11, ola 4)
+
+- **`POST /v1/products/simple`** acepta, además de lo que ya recibía, tres campos OPCIONALES:
+  `tax_category_code`, `reduced_rate_literal` y `tax_category_justification`. Pasan tal cual al
+  alta completa, que los valida igual que `POST /v1/products`: clasificación activa y ofrecida en
+  ventas, literal de la lista cerrada para la reducida y justificación para la adicional (422
+  `VALIDATION_FAILED` con el motivo). Sin `tax_category_code`, el producto nace con la de la
+  empresa. Permiso: `product.manage`, el mismo del alta.
+- **`GET /v1/tax-categories`** dice en `offered_in_sales` lo que la pantalla puede ofrecer: la
+  reducida sale en `false` mientras `tax_reduced_rate_literals` no tenga un literal (P-51).
+- **`GET /v1/price-lists/{id}/prices`** añade por fila, sin quitar nada:
+  - `historical_equivalent_amount` y `historical_equivalent_currency`: el equivalente a la tasa
+    oficial vigente el día de Caracas en que empezó a regir el precio (`effective_from`);
+  - `historical_rate`, `historical_rate_date`, `historical_rate_source`: esa tasa, su fecha y su
+    fuente (`platform.rate_for`);
+  - `historical_rate_status`: `available`; `missing` (ese día no había tasa guardada); `scheduled`
+    (el precio aún no rige y su día no tiene tasa); `not_applicable` (la lista no es USD ni VES).
+    En los tres últimos, la cifra y la tasa van en `null`: nunca se rellenan con la de hoy.
+  - `equivalent_amount`, `equivalent_currency` y `rate` siguen siendo la referencia de HOY.
+
 ## Observabilidad
 
 Cada request emite log estructurado con `request_id`, `tenant_id`, `company_id`, `user_id`,
@@ -354,3 +395,23 @@ Cada request emite log estructurado con `request_id`, `tenant_id`, `company_id`,
 
 En rutas caras y autenticadas la clave de rate limit es el `user_id`, **no la IP**:
 la IP se falsifica y además penaliza a oficinas completas tras un NAT.
+
+## La empresa y el menú: dos campos de la ola 4 (2026-10-03, A-04 y A-05)
+
+Contrato AMPLIADO; el detalle campo a campo está en `openapi.json`.
+
+- **`PUT /v1/companies/tax-id`** acepta `legal_name` (opcional en el esquema). **Al poner el PRIMER
+  RIF** —la empresa tiene el marcador `PEND-…`— el servidor lo EXIGE: sin él, `422 VALIDATION_FAILED`
+  «Con tu RIF, dinos la razón social tal como aparece en él…». La razón social se guarda junto al
+  RIF, en la misma transacción, y deja acta `company.profile_updated`. **Con RIF ya puesto**,
+  enviar `legal_name` es `422`: la razón social se cambia por `PATCH /v1/companies/profile`, con
+  motivo si hay documentos emitidos (ADR-0050, nivel 2).
+- **`POST /v1/companies/tax-id/correct`** sobre una empresa sin RIF es `422` («…todavía no tiene
+  RIF, así que no hay nada que corregir…»): la corrección no es el camino del primer RIF.
+- **`GET /v1/me/permissions`** devuelve, además de `permissions`, **`roles`**: las claves de los roles
+  de sistema con los que la persona actúa en la empresa de `X-Company-Id` (`owner`, `accountant`,
+  `cashier`…). **No autoriza nada**: la autorización sigue siendo por permiso y por operación. Existe
+  para la divulgación progresiva del menú (ADR-0048). Quien no pertenece a la empresa recibe el 404
+  de siempre, sin `roles`.
+- Web y API se despliegan en la misma ventana: la API nueva responde 422 al primer RIF de una web
+  que no envíe `legal_name`, y la API vieja rechaza el campo (esquema `strict`). Ver R-76.

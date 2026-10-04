@@ -1,8 +1,9 @@
 import { err, ok, type Result } from "@ladino/core";
 import { fechaContableDe } from "./fecha-contable.js";
 import { diaNegocio } from "./dia-negocio.js";
+import { explicarFaltaDeTasa, mensajeFaltaTasa } from "./tasa-oficial.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
-import { Money, minorUnitsOf, parseDecimal, toCents } from "@ladino/money";
+import { Money, minorUnitsOf, parseDecimal, toCents, type Decimal } from "@ladino/money";
 import { formatMoney } from "@ladino/money/format";
 import type {
   CreateCompanyAccountRequest,
@@ -23,7 +24,7 @@ import type {
 } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
-import { generateJournalFromDocument } from "./journal-generator.js";
+import { generateJournalFromDocument, type AmountContext } from "./journal-generator.js";
 
 /**
  * TESORERÍA (migraciones 29–31) — RIGOR MÁXIMO: es dinero.
@@ -327,17 +328,18 @@ async function tasaHoy(
   dia?: string,
 ): Promise<Result<{ rate: string; source: string }, TreasuryError>> {
   if (desde === hasta) return ok({ rate: "1", source: "identidad" });
-  const [t] = await sql<{ rate: string | null; source: string | null }[]>`
-    select f.rate::text as rate, f.source
-      from platform.rate_for(${companyId}, ${desde}, ${hasta},
-             coalesce(${dia ?? null}::date, (now() at time zone 'America/Caracas')::date)) f`;
-  if (!t?.rate) {
-    return err({
-      code: "EXCHANGE_RATE_MISSING",
-      message: `No hay tasa BCV de ${desde} a ${hasta}. Tráela en Mi dinero.`,
-    });
+  // El día se resuelve UNA vez y es el mismo para la regla y para el mensaje: sin tasa dentro
+  // del margen (`platform.rate_for`, la única regla) la fila llega con la tasa en NULL. La
+  // consulta SIEMPRE devuelve una fila (subconsulta de una fila + `left join … on true`).
+  const [t] = await sql<{ dia: string; hoy: string; rate: string | null; source: string | null }[]>`
+    select d.dia::text as dia, d.hoy::text as hoy, f.rate::text as rate, f.source
+      from (select h.hoy, coalesce(${dia ?? null}::date, h.hoy) as dia
+              from (select (now() at time zone 'America/Caracas')::date as hoy) h) d
+      left join lateral platform.rate_for(${companyId}, ${desde}, ${hasta}, d.dia) f on true`;
+  if (t!.rate === null) {
+    return err({ code: "EXCHANGE_RATE_MISSING", message: mensajeFaltaTasa(t!.dia, t!.hoy) });
   }
-  return ok({ rate: t.rate, source: t.source ?? "manual" });
+  return ok({ rate: t!.rate, source: t!.source ?? "manual" });
 }
 
 async function auditarTesoreria(
@@ -349,13 +351,17 @@ async function auditarTesoreria(
   evento: string,
   payload: Record<string, JSONValue>,
 ): Promise<void> {
+  // H-15: el acta y su evento de outbox viajan en UNA sentencia. Un CTE con INSERT se ejecuta
+  // siempre (Postgres lo corre hasta el final aunque nadie lea su resultado): son las dos filas
+  // de antes, en la misma transacción, con un viaje menos.
   await sql`
-    insert into public.audit_events
-      (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
-       actor_type, occurred_at, rules_version, payload)
-    values (${tenantId}, ${companyId}, ${aggregateType}, ${aggregateId}, ${evento},
-            'user', now(), ${RULES_VERSION}, ${sql.json(payload)})`;
-  await sql`
+    with acta as (
+      insert into public.audit_events
+        (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+         actor_type, occurred_at, rules_version, payload)
+      values (${tenantId}, ${companyId}, ${aggregateType}, ${aggregateId}, ${evento},
+              'user', now(), ${RULES_VERSION}, ${sql.json(payload)})
+    )
     insert into public.outbox
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
     values (${tenantId}, ${companyId}, ${aggregateType}, ${aggregateId}, ${evento}, 1,
@@ -628,6 +634,25 @@ export async function updatePaymentMethod(
 
 // ── Gastos ──────────────────────────────────────────────────────────────────
 
+/**
+ * LA RUTA DEL COMPROBANTE ES DE ESTA EMPRESA (revisión de la ola 4). `attachment_path` era texto
+ * libre: un gasto de la empresa A podía guardar la ruta de un comprobante de B, y quien leyera
+ * el gasto de A tendría enlazado un documento ajeno. La subida (`POST /v1/expenses/attachment`)
+ * escribe siempre bajo `<empresa>/receipts/`: lo que no empiece así no lo subió esta empresa.
+ */
+export function comprobanteAjeno(
+  companyId: string,
+  ruta: string | undefined,
+): { code: "VALIDATION_FAILED"; message: string } | null {
+  if (ruta === undefined) return null;
+  if (ruta.startsWith(`${companyId}/receipts/`) && !ruta.includes("..")) return null;
+  return {
+    code: "VALIDATION_FAILED",
+    message:
+      "Ese comprobante no es de esta empresa. Vuelve a adjuntarlo desde el formulario del gasto.",
+  };
+}
+
 const EXPENSE_POLICY_ID = "treasury:expense:8:HALF_UP";
 
 export async function registerExpense(
@@ -643,27 +668,64 @@ export async function registerExpense(
   if (ctx.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
   }
-  const cuenta = await cuentaDe(sql, input.company_id, input.account_id);
-  if (!cuenta.ok) return cuenta;
+  const ajeno = comprobanteAjeno(input.company_id, input.attachment_path);
+  if (ajeno !== null) return err(ajeno);
+  const fecha = input.paid_at ?? new Date().toISOString();
+  /**
+   * H-15 (recorrido 2026-09-24): UNA lectura donde había cinco viajes. postgres.js no hace
+   * pipelining dentro de una transacción, así que cada sentencia es un viaje de ida y vuelta a
+   * la base; con la base en otra región son decenas de milisegundos cada uno. La cuenta, la
+   * moneda funcional, el día de Caracas del pago, el de hoy y la versión de reglas iban en cinco
+   * sentencias: van en una. Mismas lecturas, mismos errores y en el mismo orden.
+   */
+  const [base] = await sql<
+    {
+      cuenta_id: string | null;
+      currency: string | null;
+      name: string | null;
+      is_active: boolean | null;
+      moneda: string;
+      dia_pago: string;
+      hoy: string;
+    }[]
+  >`
+    select ca.id as cuenta_id, ca.currency, ca.name, ca.is_active,
+           c.functional_currency_code as moneda,
+           ((${fecha}::timestamptz) at time zone 'America/Caracas')::date::text as dia_pago,
+           (now() at time zone 'America/Caracas')::date::text as hoy,
+           set_config('ladino.rules_version', ${RULES_VERSION}, true) as reglas
+      from public.companies c
+      left join public.company_accounts ca
+        on ca.id = ${input.account_id} and ca.company_id = c.id
+     where c.id = ${input.company_id}`;
+  // La cuenta, validada como en `cuentaDe`: existe en ESTA empresa y está activa.
+  if (!base || base.cuenta_id === null || base.currency === null) {
+    return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  }
+  if (base.is_active !== true) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `La cuenta «${base.name ?? ""}» está desactivada.`,
+    });
+  }
+  const cuenta = { value: { id: base.cuenta_id, currency: base.currency, name: base.name ?? "" } };
+  const funcionalCode = base.moneda;
 
-  const [empresa] = await sql<{ moneda: string }[]>`
-    select functional_currency_code as moneda from public.companies where id = ${input.company_id}`;
-  const funcionalCode = empresa!.moneda;
-
+  // H-09: el importe solo es opcional para el gasto CON factura, que no pasa por aquí.
+  if (input.amount === undefined || input.invoice !== undefined) {
+    return err({ code: "VALIDATION_FAILED", message: "Falta el importe del gasto." });
+  }
   const importe = Money.of(input.amount, cuenta.value.currency);
   if (!importe.ok) return err({ code: "VALIDATION_FAILED", message: importe.error.message });
-  const fecha = input.paid_at ?? new Date().toISOString();
   // Regla 8: la tasa es la EFECTIVA a la fecha del pago (día de Caracas), no la
   // de hoy — un gasto fechado el 1 se convertía con la tasa del 8 (auditoría
   // 2026-09-11, M-15).
-  const [diaPago] = await sql<{ dia: string }[]>`
-    select ((${fecha}::timestamptz) at time zone 'America/Caracas')::date::text as dia`;
   const tasa = await tasaHoy(
     sql,
     input.company_id,
     cuenta.value.currency,
     funcionalCode,
-    diaPago!.dia,
+    base.dia_pago,
   );
   if (!tasa.ok) return tasa;
   const tasaDec = parseDecimal(tasa.value.rate);
@@ -691,11 +753,8 @@ export async function registerExpense(
     // período en curso; el gasto conserva su paid_at.
     fechaContable = await fechaContableDe(sql, input.company_id, diaNegocio(input.paid_at));
   } else {
-    const [hoy] = await sql<{ d: string }[]>`
-      select (now() at time zone 'America/Caracas')::date::text as d`;
-    fechaContable = hoy!.d;
+    fechaContable = base.hoy;
   }
-  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
   let gasto: Record<string, unknown>;
   try {
@@ -775,6 +834,65 @@ export async function registerExpense(
 // ── Cierre de caja ──────────────────────────────────────────────────────────
 
 const CLOSING_POLICY_ID = "treasury:cash_closing:8:HALF_UP";
+
+/** El evento del outbox de TODO cierre de caja: el cierre ocurrió, cuadre o no. */
+export const CASH_CLOSING_EVENT = "treasury.cash_register.closed";
+/** El origen de siempre: sobrante o faltante contra «Faltantes y sobrantes de caja». */
+export const CASH_CLOSING_KIND = "cash_closing";
+/**
+ * J-02: el cierre de una caja en sobregiro. MISMO evento, otro hecho contable: como
+ * `purchase_revaluation / ap.invoice_posted`, el hecho va en el origen (migración 20261004180200).
+ */
+export const CASH_CLOSING_OVERDRAFT_KIND = "cash_closing_overdraft";
+
+/**
+ * QUÉ HECHO CONTABLE ES UN CIERRE CON DIFERENCIA (J-02, migraciones 20261004180000 a 180200).
+ *
+ * Una caja en NEGATIVO no tuvo un sobrante: alguien pagó de su bolsillo dinero que el sistema no
+ * tenía cargado (ADR-0062 §4). Como lo contado nunca es negativo, cerrar una caja en sobregiro
+ * siempre la sube, y esa subida se parte en dos: lo que la lleva de su saldo negativo a CERO es
+ * dinero del dueño (pasivo, «Cuentas por pagar a socios»), y solo lo contado POR ENCIMA de cero es
+ * sobrante. Sin sobregiro, el hecho y sus importes son los de siempre. Pura: una sola definición
+ * para el cierre y para la reparación de los cierres viejos.
+ *
+ * Todo en la moneda funcional y al céntimo; `total` es la diferencia ya convertida, y el sobrante
+ * es `total − del dueño`, de modo que el asiento cuadra sin residuo.
+ */
+export function hechoContableDelCierre(
+  esperado: Decimal,
+  difFuncional: Decimal,
+  tasa: Decimal,
+  escalaFuncional: number,
+  /** Las unidades mínimas de la moneda DE LA CAJA: «en negativo» se decide en ellas. */
+  escalaCaja: number,
+): {
+  readonly sourceKind: string;
+  readonly palabra: string;
+  readonly amounts: AmountContext;
+} {
+  // «En negativo» es MENOR QUE CERO en las unidades mínimas de la caja, y lo decide esta función.
+  // No `isNegative()`: un saldo de −0,004 redondea a −0, que para Decimal «es negativo», y un
+  // sobrante normal se asentaría con el origen del sobregiro (revisión de J-02, reproducido).
+  const enLaCaja = esperado.toDecimalPlaces(escalaCaja, 4);
+  if (!enLaCaja.lt(0)) {
+    return {
+      sourceKind: CASH_CLOSING_KIND,
+      palabra: difFuncional.isNegative() ? "faltante" : "sobrante",
+      // Con SIGNO: la plantilla decide el lado con if_positive / if_negative.
+      amounts: { functional_amount: difFuncional.toFixed(8) },
+    };
+  }
+  const delDueno = enLaCaja.negated().times(tasa).toDecimalPlaces(escalaFuncional, 4);
+  return {
+    sourceKind: CASH_CLOSING_OVERDRAFT_KIND,
+    palabra: "sobregiro cubierto por el dueño",
+    amounts: {
+      total: difFuncional.toFixed(8),
+      owner_contribution: delDueno.toFixed(8),
+      functional_amount: difFuncional.minus(delDueno).toFixed(8),
+    },
+  };
+}
 
 export async function closeCashRegister(
   uow: UnitOfWork,
@@ -899,19 +1017,28 @@ export async function closeCashRegister(
   // Con diferencia cero no hay hecho contable: ni asiento ni cola.
   let accounting: "posted" | "queued" | "none" = "none";
   let entryId: string | null = null;
+  // J-02 (revisión, punto 7): lo que puso el dueño se dice SOLO si el cierre tiene su asiento (o
+  // su fila de cola) del origen del sobregiro. La pantalla no afirma lo que el mayor no dice.
+  let ownerContribution: string | null = null;
   if (!diferencia.isZero()) {
+    const hecho = hechoContableDelCierre(
+      esperado.value,
+      difFuncional,
+      tasaDec.value,
+      minorUnitsOf(funcionalCode),
+      escalaCaja,
+    );
     const generado = await generateJournalFromDocument(sql, {
       tenantId: ctx.value.tenantId,
       companyId: input.company_id,
-      sourceKind: "cash_closing",
-      sourceEvent: "treasury.cash_register.closed",
+      sourceKind: hecho.sourceKind,
+      sourceEvent: CASH_CLOSING_EVENT,
       sourceId: cierre["id"] as string,
       postingDate: cierre["closing_date"] as string,
       postedBy: actor.userId,
-      description: `Cierre de caja ${cuenta.name}: ${diferencia.isNegative() ? "faltante" : "sobrante"}`,
+      description: `Cierre de caja ${cuenta.name}: ${hecho.palabra}`,
       functionalCurrency: funcionalCode,
-      // Con SIGNO: la plantilla decide el lado con if_positive / if_negative.
-      amounts: { functional_amount: difFuncional.toFixed(8) },
+      amounts: hecho.amounts,
       backlink: { table: "cash_closings", id: cierre["id"] as string },
     });
     if (!generado.ok) {
@@ -919,6 +1046,9 @@ export async function closeCashRegister(
     }
     accounting = generado.value.kind === "queued" ? "queued" : "posted";
     entryId = generado.value.kind === "queued" ? null : generado.value.entryId;
+    if (hecho.sourceKind === CASH_CLOSING_OVERDRAFT_KIND) {
+      ownerContribution = esperado.value.negated().toFixed(escalaCaja);
+    }
   }
 
   await auditarTesoreria(
@@ -940,6 +1070,7 @@ export async function closeCashRegister(
 
   return ok({
     ...(cierre as object),
+    owner_contribution: ownerContribution,
     journal_entry_id: entryId,
     accounting,
   } as CashClosingResponse);
@@ -993,7 +1124,7 @@ export async function previsualizarConversion(
   if (!t) {
     return err({
       code: "EXCHANGE_RATE_MISSING",
-      message: `No hay tasa de ${ancla} a ${funcional} todavía. Confírmala en Mi dinero.`,
+      message: await explicarFaltaDeTasa(sql, ancla, funcional, fecha),
     });
   }
   const [calc] = await sql<{ in_functional: string; in_anchor: string }[]>`

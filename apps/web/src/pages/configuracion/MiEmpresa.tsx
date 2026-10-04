@@ -572,6 +572,11 @@ function DialogoRif({
   // mandaba a «Editar» a buscar un campo que, sin RIF, ni siquiera se llama «fiscal».
   const [direccion, setDireccion] = useState("");
   const pideDireccion = sinRif && modo === "poner" && !hayDireccion;
+  // A-05 (ADR-0050): el PRIMER RIF llega con la razón social. Sin RIF, la que hay guardada es el
+  // nombre del negocio, y la factura imprime la razón social: se pide aquí, vacía, y el servidor
+  // la exige (422 si falta).
+  const pideRazon = sinRif && modo === "poner";
+  const [razon, setRazon] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   // La función compartida (A-08): normaliza igual que el servidor y avisa del dígito
@@ -599,7 +604,10 @@ function DialogoRif({
             return llamar(`/v1/companies/tax-id`, {
               method: "PUT",
               headers: { "Idempotency-Key": crypto.randomUUID() },
-              body: JSON.stringify({ tax_id: normalizado }),
+              body: JSON.stringify({
+                tax_id: normalizado,
+                ...(pideRazon ? { legal_name: razon.trim() } : {}),
+              }),
             });
           })(),
     onSuccess: () => {
@@ -624,7 +632,7 @@ function DialogoRif({
           {esCorreccion
             ? "Solo para un error de tipeo descubierto tarde. Exige motivo y deja acta. Los documentos ya emitidos no se reemiten; si el RIF anterior era erróneo, esas facturas no cumplen el art. 13.5 de la PA 00071: consulta con tu asesor si procede anular y reemitir."
             : sinRif
-              ? "Con tu RIF activas las facturas. La razón social y la dirección fiscal tienen que estar cargadas."
+              ? "Con tu RIF activas las facturas. Escribe la razón social y la dirección fiscal como aparecen en él: son las que salen impresas."
               : "Si todavía no has emitido documentos, el cambio es directo y queda auditado. Si ya emitiste, el camino es «Corregir RIF», con el motivo."}
           {/* A-10: el texto del dueño (RESPUESTA §3 A-10), siempre que hay un RIF que cambiar. */}
           {!sinRif && " Actualiza tu RIF ante el SENIAT dentro del mes siguiente (COT art. 35)."}
@@ -655,6 +663,22 @@ function DialogoRif({
             <p role="status" className="text-[0.85rem] text-warning-soft-foreground">
               {avisoDigito}
             </p>
+          )}
+          {pideRazon && (
+            <FormField
+              label="Razón social"
+              required
+              hint="El nombre legal, tal como aparece en tu RIF. Es el que sale en tus facturas; el nombre de tu negocio no cambia."
+            >
+              {(p) => (
+                <Input
+                  {...p}
+                  placeholder="Inversiones La Bendición, C.A."
+                  value={razon}
+                  onChange={(ev) => setRazon(ev.target.value)}
+                />
+              )}
+            </FormField>
           )}
           {pideDireccion && (
             <FormField
@@ -706,7 +730,8 @@ function DialogoRif({
               // Sin dirección fiscal el servidor responde 422: el botón ya no invita a fallar
               // (QA de pantalla 2026-09-15, h. 80).
               (sinRif && !esCorreccion && !hayDireccion && !pideDireccion) ||
-              (pideDireccion && direccion.trim().length < 5)
+              (pideDireccion && direccion.trim().length < 5) ||
+              (pideRazon && razon.trim().length < 3)
             }
             onClick={() => enviar.mutate()}
           >

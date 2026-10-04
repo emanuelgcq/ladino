@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpenCheck, CalendarX2, Import, Pencil, Plus, Trash2 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { useRefrescarModulos } from "../../app/shell.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
 import { DatePicker, FormField } from "../../components/forms.js";
@@ -86,6 +87,7 @@ const ORIGEN_ASIENTO: { value: string; label: string }[] = [
   { value: "payment_made", label: "Pago realizado" },
   { value: "expense", label: "Gasto" },
   { value: "cash_closing", label: "Cierre de caja" },
+  { value: "cash_closing_overdraft", label: "Cierre de caja en negativo" },
   { value: "inventory_move", label: "Movimiento de inventario" },
   { value: "landed_cost", label: "Costo en destino" },
   { value: "igtf_perception", label: "Percepción IGTF" },
@@ -760,6 +762,7 @@ function Diario(): React.JSX.Element {
       llamar<{ items: JournalEntry[]; total: number }>(`/v1/journal-entries?${consulta}`),
   });
   const recargar = () => void qc.invalidateQueries({ queryKey: ["diario", empresa.id] });
+  const refrescarModulos = useRefrescarModulos();
 
   async function postear(id: string): Promise<void> {
     setError(null);
@@ -771,6 +774,8 @@ function Diario(): React.JSX.Element {
       });
       toast.success("Asiento posteado", "Ya está en el mayor y es inmutable.");
       recargar();
+      // A-04: el primer asiento posteado enciende Contabilidad en el menú de quien no la veía.
+      refrescarModulos("asiento");
     } catch (e) {
       setError(e);
       throw e;

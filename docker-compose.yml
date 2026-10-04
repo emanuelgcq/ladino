@@ -34,6 +34,8 @@ services:
       - ./api.env
     environment:
       NODE_ENV: production
+      # El build que dicen las actas (A-16): export LADINO_BUILD=$(git rev-parse --short HEAD).
+      LADINO_BUILD: ${LADINO_BUILD:-sin-declarar}
       PORT: "3000"
       LADINO_AUTH_MODE: jwks
     networks:
@@ -88,6 +90,8 @@ services:
       - ./worker.env
     environment:
       NODE_ENV: production
+      # El build que dicen las actas (A-16): el mismo valor que la API.
+      LADINO_BUILD: ${LADINO_BUILD:-sin-declarar}
       WORKER_INTERVAL_MS: "2000"
     # Solo la red interna: el worker no recibe tráfico de nadie.
     networks:

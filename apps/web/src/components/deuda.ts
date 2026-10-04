@@ -30,6 +30,30 @@ export function estadoDeDeuda(valor: string | null | undefined): EstadoDeDeuda {
   return "debe";
 }
 
+/** Por qué un total del resumen viene en `null` (`GET /v1/negocio/resumen`, `…_motivo`). */
+export type MotivoSinTotal = "sin_permiso" | "sin_tasa";
+
+export type EstadoDeTotal = "cargando" | "cifra" | "oculta" | "sin_tasa";
+
+/**
+ * Qué hace la tarjeta de «Lo que me deben» / «Lo que debo» con lo que mandó el servidor (ola 4,
+ * la familia de N-05: «no hay» no es «no puedes ver» ni «no se puede calcular»):
+ *   · todavía sin respuesta            → «cargando» (se pinta con «…»);
+ *   · una cifra, también «0.00»        → «cifra»;
+ *   · `null` por `sin_tasa`            → «sin_tasa»: la tarjeta SE PINTA y dice que falta la tasa,
+ *                                        con el nominal por moneda, que sí se conoce;
+ *   · `null` por `sin_permiso`         → «oculta»: la tarjeta no se pinta;
+ *   · `null` sin motivo (API anterior) → «oculta», lo que hacía antes de existir el motivo.
+ */
+export function estadoDeTotal(
+  valor: string | null | undefined,
+  motivo: MotivoSinTotal | null | undefined,
+): EstadoDeTotal {
+  if (valor === undefined) return "cargando";
+  if (valor !== null) return "cifra";
+  return motivo === "sin_tasa" ? "sin_tasa" : "oculta";
+}
+
 /** El importe vestido, o el texto único cuando el servidor no pudo valorarlo. */
 export function textoDeDeuda(amount: string | null | undefined, currency: string): string {
   if (amount === null || amount === undefined) return FALTA_LA_TASA;

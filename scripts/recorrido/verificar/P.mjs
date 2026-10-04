@@ -193,4 +193,214 @@ c.caso(
   },
 );
 
+// Ola 4 (familia de N-05: «no hay» contra «no puedes ver»): el `null` de un total de deuda dice
+// su motivo en un campo aparte. Sin permiso: `sin_permiso`. Con cifra: motivo `null`.
+c.caso(
+  "P-04 (motivo)",
+  "cada total de deuda en null dice por qué: sin_permiso para quien no tiene el permiso de su libro",
+  async () => {
+    let vistos = 0;
+    for (const [nombre, correo] of Object.entries(PERSONAS)) {
+      const r = await pedir(correo, "E2", "GET", "/v1/negocio/resumen");
+      if (r.status !== 200) continue;
+      vistos += 1;
+      const [p] = await sql`
+        select platform.ladino_user_has_permission(u.id, 'ar.read', ${EMPRESAS.E2}) as ar,
+               platform.ladino_user_has_permission(u.id, 'ap.read', ${EMPRESAS.E2}) as ap
+          from auth.users u where u.email = ${correo}`;
+      for (const [campo, tiene] of [
+        ["lo_que_me_deben", p.ar],
+        ["lo_que_debo", p.ap],
+      ]) {
+        const v = r.json[campo];
+        const motivo = r.json[`${campo}_motivo`];
+        const porMoneda = r.json[`${campo}_por_moneda`];
+        afirmar(Array.isArray(porMoneda), `${nombre}: ${campo}_por_moneda no es una lista`);
+        if (!tiene) {
+          afirmar(
+            v === null && motivo === "sin_permiso" && porMoneda.length === 0,
+            `${nombre}: ${campo} sin permiso → ${JSON.stringify({ v, motivo, porMoneda })}`,
+          );
+        } else {
+          // Con permiso: o la cifra (motivo null), o falta la tasa y va el nominal por moneda.
+          afirmar(
+            (typeof v === "string" && motivo === null) || (v === null && motivo === "sin_tasa"),
+            `${nombre}: ${campo} con permiso → ${JSON.stringify({ v, motivo })}`,
+          );
+        }
+      }
+    }
+    afirmar(vistos > 0, "sin datos: nadie de E2 pudo abrir el resumen");
+  },
+);
+
+// P-05 (ola 4): «Te deben…» lleva a la lista ORDENADA por deuda, mayor primero, y se puede
+// ordenar. La deuda es la de la única función (`platform.customer_debt_today`) y exige `ar.read`.
+c.caso(
+  "P-05",
+  "la lista de clientes de E2 se ordena por deuda, mayor primero y al revés; el recordatorio lleva ahí",
+  async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const lista = (orden) =>
+      pedir(
+        PERSONAS.duenoE2E3,
+        "E2",
+        "GET",
+        `/v1/customers?with_debt=1&per_page=100&sort=${orden}`,
+      );
+    const desc = await lista("debt_desc");
+    afirmar(desc.status === 200, `sort=debt_desc dio ${desc.status}: ${desc.texto.slice(0, 160)}`);
+    const deudas = desc.json.items.map((i) => i.debt);
+    afirmar(deudas.length >= 2, `E2 solo tiene ${deudas.length} cliente(s)`);
+    // Comparación en la base (numeric), no en JS: ¿está la lista en orden no creciente?
+    const [ord] = await sql`
+      with f as (select d, o from unnest(${deudas.filter((d) => d !== null)}::numeric[])
+                   with ordinality as t(d, o))
+      select coalesce(bool_and(d <= ant), true) as ok, max(d)::text as mayor
+        from (select d, lag(d) over (order by o) as ant from f) x where ant is not null`;
+    afirmar(ord.ok === true, `la lista no va de mayor a menor: ${deudas.join(", ")}`);
+    // El primero con cifra es el que más debe según LA función de deuda.
+    const [maximo] = await sql`
+      select round(max(platform.customer_debt_today(cu.company_id, cu.id)), 2)::text as m
+        from public.customers cu where cu.company_id = ${EMPRESAS.E2}`;
+    const primera = deudas.find((d) => d !== null);
+    afirmar(primera === maximo.m, `encabeza ${primera}; la mayor deuda de E2 es ${maximo.m}`);
+    afirmar(primera !== "0.00", "sin datos: nadie debe en E2, el orden no se demuestra");
+    // Lo que no se pudo valorar (null) va ARRIBA: debe, y no se sabe cuánto.
+    const primerNoNulo = deudas.findIndex((d) => d !== null);
+    afirmar(
+      deudas.slice(primerNoNulo).every((d) => d !== null),
+      "un cliente sin valorar quedó debajo de uno valorado",
+    );
+    const asc = await lista("debt_asc");
+    afirmar(asc.status === 200, `sort=debt_asc dio ${asc.status}`);
+    const alReves = asc.json.items.map((i) => i.debt).filter((d) => d !== null);
+    afirmar(alReves[alReves.length - 1] === maximo.m, "debt_asc no termina en la mayor deuda");
+    // Ruidoso antes que silencioso: un orden desconocido, o por deuda sin pedir la deuda, es 422.
+    const raro = await lista("saldo");
+    afirmar(raro.status === 422, `un sort desconocido dio ${raro.status}`);
+    const sinDeuda = await pedir(PERSONAS.duenoE2E3, "E2", "GET", "/v1/customers?sort=debt_desc");
+    afirmar(sinDeuda.status === 422, `sort=debt_desc sin with_debt dio ${sinDeuda.status}`);
+    // Y respeta ar.read: el almacenista no ordena por lo que no puede ver.
+    const almacen = await pedir(
+      PERSONAS.almacenista,
+      "E2",
+      "GET",
+      "/v1/customers?with_debt=1&sort=debt_desc",
+    );
+    afirmar(almacen.status === 403, `el almacenista ordenó por deuda: ${almacen.status}`);
+    // La lista por nombre (la de siempre) no cambió.
+    const nombre = await pedir(PERSONAS.duenoE2E3, "E2", "GET", "/v1/customers?per_page=100");
+    const nombres = nombre.json.items.map((i) => i.legal_name);
+    const [mismo] = await sql`
+      select array_agg(legal_name order by legal_name, id) as n
+        from public.customers where company_id = ${EMPRESAS.E2}`;
+    afirmar(
+      JSON.stringify(nombres) === JSON.stringify(mismo.n.slice(0, 100)),
+      "la lista sin sort dejó de ir por nombre",
+    );
+    // La pantalla: el recordatorio y «Ver quién me debe» llevan a la lista ya ordenada.
+    const leer = (...p) => fs.readFileSync(path.join(raiz, "apps", "web", "src", ...p), "utf8");
+    afirmar(
+      leer("pages", "negocio", "Inicio.tsx").includes('"/admin/clientes?orden=vencido"'),
+      "el recordatorio «Te deben…» no lleva a la lista ordenada por deuda vencida",
+    );
+    afirmar(
+      leer("pages", "clientes", "Clientes.tsx").includes("debt_desc"),
+      "la lista de clientes no pide el orden por deuda",
+    );
+  },
+);
+
+// P-05 (ola 4, el vencimiento): la lista se ordena por deuda VENCIDA. Lo vencido es la deuda de
+// la única función sobre los documentos cuyo vencimiento —o, sin él, su día de emisión— ya pasó
+// (`platform.customer_overdue_today`, migración 20261004210000).
+c.caso(
+  "P-05",
+  "la lista de clientes de E2 se ordena por deuda vencida; lo vencido nunca pasa de lo que se debe; exige ar.read",
+  async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const r = await pedir(
+      PERSONAS.duenoE2E3,
+      "E2",
+      "GET",
+      "/v1/customers?with_debt=1&per_page=100&sort=overdue_desc",
+    );
+    afirmar(r.status === 200, `sort=overdue_desc dio ${r.status}: ${r.texto.slice(0, 160)}`);
+    const filas = r.json.items;
+    afirmar(
+      filas.every((i) => "overdue" in i && "overdue_reason" in i),
+      "la lista con deuda no trae lo vencido",
+    );
+    // Sin valorar (null con motivo) arriba; después, no creciente. Comparado en la base (numeric).
+    afirmar(
+      filas.every((i) => (i.overdue === null) === (i.overdue_reason === "sin_tasa")),
+      "un vencido nulo sin motivo, o un motivo con cifra",
+    );
+    const primerValorado = filas.findIndex((i) => i.overdue !== null);
+    const valorados = primerValorado < 0 ? [] : filas.slice(primerValorado);
+    afirmar(
+      valorados.every((i) => i.overdue !== null),
+      "un cliente con lo vencido sin valorar quedó debajo de uno valorado",
+    );
+    const [ord] = await sql`
+      with f as (select v, o from unnest(${valorados.map((i) => i.overdue)}::numeric[])
+                   with ordinality as t(v, o))
+      select coalesce(bool_and(v <= ant), true) as ok
+        from (select v, lag(v) over (order by o) as ant from f) x where ant is not null`;
+    afirmar(ord.ok, "la lista por vencido no va de mayor a menor");
+    // Lo vencido es PARTE de la deuda: nunca la supera (misma función de deuda).
+    const [cota] = await sql`
+      select coalesce(bool_and(v <= d), true) as ok
+        from unnest(${valorados.filter((i) => i.debt !== null).map((i) => i.overdue)}::numeric[],
+                    ${valorados.filter((i) => i.debt !== null).map((i) => i.debt)}::numeric[])
+             as t(v, d)`;
+    afirmar(cota.ok, "a algún cliente se le dice más vencido que deuda");
+    // Y la lista cuadra con la función, cliente por cliente (hoy, en Caracas).
+    const [dif] = await sql`
+      select count(*)::int as n
+        from unnest(${valorados.map((i) => i.id)}::uuid[],
+                    ${valorados.map((i) => i.overdue)}::numeric[]) as t(id, v)
+       where v <> (select round(coalesce(sum(o.functional_today), 0), 2)
+                     from platform.customer_overdue_today(${EMPRESAS.E2}, t.id) o)`;
+    afirmar(dif.n === 0, `${dif.n} cliente(s) con un vencido distinto del de la función`);
+
+    const almacen = await pedir(
+      PERSONAS.almacenista,
+      "E2",
+      "GET",
+      "/v1/customers?with_debt=1&sort=overdue_desc",
+    );
+    afirmar(almacen.status === 403, `el almacenista ordenó por vencido: ${almacen.status}`);
+    const raro = await pedir(
+      PERSONAS.duenoE2E3,
+      "E2",
+      "GET",
+      "/v1/customers?with_debt=1&sort=vencido",
+    );
+    afirmar(raro.status === 422, `un sort desconocido dio ${raro.status}`);
+
+    const leer = (...p) => fs.readFileSync(path.join(raiz, "apps", "web", "src", ...p), "utf8");
+    afirmar(
+      leer("pages", "negocio", "Dinero.tsx").includes('"/admin/clientes?orden=vencido"'),
+      "«Ver quién me debe» no lleva a la lista ordenada por deuda vencida",
+    );
+    const clientes = leer("pages", "clientes", "Clientes.tsx");
+    afirmar(
+      clientes.includes("overdue_desc") && clientes.includes("Vencido"),
+      "la lista de clientes no tiene la columna «Vencido» ni pide su orden",
+    );
+    afirmar(
+      leer("pages", "negocio", "Vender.tsx").includes("¿Cuándo paga?"),
+      "la caja no pregunta «¿Cuándo paga?» al fiar",
+    );
+  },
+);
+
 export default c.correr;

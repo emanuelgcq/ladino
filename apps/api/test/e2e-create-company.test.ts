@@ -156,7 +156,14 @@ describe("POST /v1/companies — la plantilla, de extremo a extremo", () => {
     // ...y el del trigger M4 — DOS hechos, no un duplicado. Y el del trigger
     // lleva la rules_version REAL del caso de uso, no 'db-guard': el paso 5
     // fijó el GUC antes de persistir.
-    expect(eventos.every((e) => e.rules_version === RULES_VERSION)).toBe(true);
+    // ADR-0079 (B-06): lo que queda guardado ya no es la cadena fija que declara el dominio, sino
+    // la versión vigente —semver + hash del conjunto de reglas— que la base pone en su lugar. Las
+    // dos actas llevan LA MISMA, y no es ni la cadena fija ni 'db-guard'.
+    const versiones = new Set(eventos.map((e) => e.rules_version));
+    expect(versiones.size).toBe(1);
+    const [version] = [...versiones];
+    expect(version).toMatch(/^\d+\.\d+\.\d+\+[0-9a-f]{16}$/);
+    expect(version).not.toBe(RULES_VERSION);
 
     // 3. El outbox, en LA MISMA transacción.
     const [ob] = await sql<{ event_type: string; schema_version: number }[]>`

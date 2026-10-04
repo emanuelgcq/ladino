@@ -5,6 +5,7 @@ import { Input } from "../../ui/input.js";
 import { ConfirmDialog } from "../ConfirmDialog.js";
 import { useSesion } from "../../app/session.js";
 import { useToast } from "../../ui/toast.js";
+import { DETALLE_FORMAL } from "./textos.js";
 
 /**
  * EL TIPO DE CONTRIBUYENTE DE LA EMPRESA (QA de pantalla 2026-09-15, h. 62).
@@ -42,7 +43,8 @@ const OPCIONES: readonly { value: string; titulo: string; detalle: string }[] = 
   {
     value: "formal",
     titulo: "Formal",
-    detalle: "Contribuyente formal: el IVA de tus compras no es crédito fiscal, va al costo.",
+    // M-10: dice qué significa antes de elegirlo (el texto, en textos.ts). Sigue en OCULTOS.
+    detalle: DETALLE_FORMAL,
   },
 ];
 

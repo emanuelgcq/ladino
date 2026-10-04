@@ -16,7 +16,12 @@ import { useToast } from "../../ui/toast.js";
 import {
   EntityPicker,
   FormField,
+  MotivoDeLectura,
+  cantidadLimpia,
+  cantidadValida,
+  importeLimpio,
   importeValido,
+  motivoDeCantidad,
   type EntityOption,
 } from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
@@ -113,7 +118,6 @@ interface AvanceDePedido {
   quantity_pending: string;
 }
 
-const CANT_RE = /^\d{1,16}(\.\d{1,8})?$/;
 const lineaVacia = (): Linea => ({
   id: crypto.randomUUID(),
   producto: null,
@@ -343,7 +347,9 @@ export function LlegoMercancia(): React.JSX.Element {
             compuesto: f?.is_composed ?? false,
             lleva_paquete: f?.tracks_lots ?? false,
             lleva_vencimiento: f?.tracks_expiry ?? false,
-            cantidad: sinCerosSobrantes(falta.get(l.id) ?? "0"),
+            // F-06: se propone con COMA decimal, como la escribe la persona. Con punto, lo que
+            // falta de «1.125» kilos lo rechazaría el lector por ambiguo sin que nadie lo tecleara.
+            cantidad: sinCerosSobrantes(falta.get(l.id) ?? "0").replace(".", ","),
             ordenLineaId: l.id,
           };
         }),
@@ -390,10 +396,10 @@ export function LlegoMercancia(): React.JSX.Element {
     (l) =>
       l.producto !== null &&
       !l.compuesto &&
-      CANT_RE.test(l.cantidad.trim().replace(",", ".")) &&
-      !esCero(l.cantidad) &&
+      cantidadValida(l.cantidad) &&
+      !esCero(cantidadLimpia(l.cantidad)) &&
       // A ciegas no hay costo que validar: lo pone el pedido.
-      (l.ordenLineaId !== null || importeValido(l.costo.trim().replace(",", "."))) &&
+      (l.ordenLineaId !== null || importeValido(l.costo)) &&
       (!l.lleva_paquete || l.paquete.trim() !== "") &&
       (!l.lleva_vencimiento || l.vence !== ""),
   );
@@ -433,7 +439,7 @@ export function LlegoMercancia(): React.JSX.Element {
           }),
       lines: lineasValidas.map((l) => ({
         product_id: l.producto!.id,
-        quantity: l.cantidad.trim().replace(",", "."),
+        quantity: cantidadLimpia(l.cantidad),
         // A CIEGAS: la línea del pedido va, el costo NO. El servidor lo lee del pedido y el
         // contrato rechaza que viaje un importe con ella.
         ...(l.ordenLineaId !== null
@@ -441,8 +447,8 @@ export function LlegoMercancia(): React.JSX.Element {
           : {
               // Uno de los dos, nunca los dos: el otro lo calcula el servidor.
               ...(l.por === "unidad"
-                ? { unit_amount: l.costo.trim().replace(",", ".") }
-                : { amount: l.costo.trim().replace(",", ".") }),
+                ? { unit_amount: importeLimpio(l.costo) }
+                : { amount: importeLimpio(l.costo) }),
               // En qué moneda lo escribió. Si no es la del documento, el servidor convierte
               // con la tasa del día del hecho y guarda las dos cosas (migración 71).
               ...(l.monedaCosto === moneda ? {} : { capture_currency: l.monedaCosto }),
@@ -848,6 +854,8 @@ export function LlegoMercancia(): React.JSX.Element {
                     </Button>
                   )}
                 </div>
+                {/* F-06: lo que no se pudo leer se dice junto a su línea. */}
+                <MotivoDeLectura motivo={motivoDeCantidad(l.cantidad)} />
 
                 {l.compuesto && (
                   <p role="alert" className="text-[0.85rem] text-warning-soft-foreground">

@@ -17,9 +17,11 @@ import {
   dialogo,
   esperar,
   estado,
+  fijarLimiteDeFiado,
   guardarEstado,
   login,
   nuevaEvidencia,
+  rellenarCuandoPaga,
   sql,
   cronometrar,
 } from "./lib.mjs";
@@ -145,6 +147,9 @@ async function venta(page, ev, clave, v) {
     await esperar(page, 800);
   }
   r.cliente = await identificar(page, ev, etq, v.cliente);
+  // R-82.7: fiar exige límite (E-09). Con el cliente ya identificado (o recién creado) y ANTES de
+  // cargar el carrito: la cotización que decide si «Fiar» se ofrece se pide después.
+  if (v.fiar) fijarLimiteDeFiado(E.empresas[clave].id);
   for (const [p, c] of v.lineas) await agregar(page, p, c);
   if (v.documento) {
     await clic(page.getByLabel("Tipo de documento"));
@@ -180,6 +185,8 @@ async function venta(page, ev, clave, v) {
     if (v.fiar) {
       await clic(d.getByRole("button", { name: /Fiar (todo|lo que falta)/ }).first());
       await esperar(page, 800);
+      // P-05: la caja pide «¿Cuándo paga?» y no deja confirmar sin la fecha.
+      await rellenarCuandoPaga(page);
       await ev(page, `${etq}-fiar-confirmar`);
       await clic(page.getByRole("button", { name: /Fiar y registrar/ }).first());
     } else {

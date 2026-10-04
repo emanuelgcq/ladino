@@ -6,6 +6,12 @@ import { useSesion } from "../../app/session.js";
 import { errorDePersona } from "../../lib.js";
 import { mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
+import {
+  FALTA_LA_TASA,
+  estadoDeTotal,
+  nominalPorMoneda,
+  type MotivoSinTotal,
+} from "../../components/deuda.js";
 import { Button } from "../../ui/button.js";
 import { Card, CardContent } from "../../ui/card.js";
 import { fechaRelativa } from "./comunes.js";
@@ -33,8 +39,14 @@ interface Resumen {
   ganado_desde_contabilidad: boolean;
   pendientes_de_contabilizar: number;
   lineas_sin_costo_mes: number;
-  /** null = el rol no tiene ar.read / ap.read: la tarjeta no se pinta (nunca «0»). */
+  /**
+   * null = sin ar.read / ap.read (la tarjeta no se pinta, nunca «0») O falta la tasa de hoy para
+   * valorar lo que está en divisa (se pinta y lo dice). Cuál, en `…_motivo`: decide
+   * `estadoDeTotal`. Los campos nuevos son opcionales: una API anterior no los manda.
+   */
   lo_que_me_deben: string | null;
+  lo_que_me_deben_motivo?: MotivoSinTotal | null;
+  lo_que_me_deben_por_moneda?: { currency: string; nominal: string }[];
   lo_que_debo: string | null;
   mi_dinero: { currency: string; balance: string }[];
   por_agotarse: number;
@@ -128,11 +140,15 @@ export function Inicio(): React.JSX.Element {
     if (r.lo_que_me_deben !== null && !esCero(r.lo_que_me_deben) && puedeVerDeuda) {
       recordatorios.push({
         texto: `Te deben ${mostrarImporte({ amount: r.lo_que_me_deben, currency: moneda })}. Un mensaje a tiempo cobra la mitad.`,
-        // La deuda vive en la administración (decisión del dueño, 2026-09-05).
-        a: "/admin/clientes",
+        // La deuda vive en la administración (decisión del dueño, 2026-09-05). P-05: a la lista
+        // YA ORDENADA por deuda VENCIDA, lo vencido primero — el texto dice que el tiempo
+        // importa (el orden por deuda total queda en la cabecera «Deuda»).
+        a: "/admin/clientes?orden=vencido",
       });
     }
   }
+  const deben = estadoDeTotal(r?.lo_que_me_deben, r?.lo_que_me_deben_motivo);
+  const debenPorMoneda = nominalPorMoneda(r?.lo_que_me_deben_por_moneda);
 
   // El resumen no cargó: se dice y se reintenta, en vez de un «…» eterno
   // (auditoría 2026-09-11).
@@ -251,24 +267,39 @@ export function Inicio(): React.JSX.Element {
             )}
           </CardContent>
         </Card>
-        {/* Sin ar.read el servidor manda null: la tarjeta no se pinta (nunca «0»). */}
-        {(r === null || r.lo_que_me_deben !== null) && (
+        {/* Sin ar.read la tarjeta no se pinta (nunca «0»); sin tasa SÍ, y lo dice (estadoDeTotal). */}
+        {deben !== "oculta" && (
           <Card>
             <CardContent className="py-4">
               <div className="flex items-center gap-2 text-muted-foreground">
                 <ArrowDownToLine className="size-4" />
                 <span className="text-[0.85rem]">Lo que me deben</span>
               </div>
-              <p className="mt-1 text-xl font-semibold tabular-nums">
-                {r !== null && r.lo_que_me_deben !== null
-                  ? mostrarImporte({ amount: r.lo_que_me_deben, currency: moneda })
-                  : "…"}
-              </p>
-              {/* Lo fiado se debe en dólares y se cobra a la tasa del día del pago (regla
-                del dueño): por eso esta cifra sube o baja con la tasa (h. 71). */}
-              <p className="text-[0.75rem] text-faint-foreground">
-                En dólares de referencia, a la tasa de hoy: cambia cuando cambia la tasa.
-              </p>
+              {deben === "sin_tasa" ? (
+                <>
+                  <p className="mt-1 text-[0.95rem] font-semibold text-warning-soft-foreground">
+                    {FALTA_LA_TASA}
+                  </p>
+                  <p className="text-[0.75rem] text-faint-foreground">
+                    {debenPorMoneda === ""
+                      ? "Tráela en Mi dinero para ver esta cifra en bolívares."
+                      : `Lo que se conoce, sin convertir: ${debenPorMoneda}. Tráela en Mi dinero.`}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="mt-1 text-xl font-semibold tabular-nums">
+                    {r !== null && r.lo_que_me_deben !== null
+                      ? mostrarImporte({ amount: r.lo_que_me_deben, currency: moneda })
+                      : "…"}
+                  </p>
+                  {/* Lo fiado se debe en dólares y se cobra a la tasa del día del pago (regla
+                    del dueño): por eso esta cifra sube o baja con la tasa (h. 71). */}
+                  <p className="text-[0.75rem] text-faint-foreground">
+                    En dólares de referencia, a la tasa de hoy: cambia cuando cambia la tasa.
+                  </p>
+                </>
+              )}
               {puedeVerDeuda ? (
                 <Link
                   to="/clientes"

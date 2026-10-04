@@ -397,11 +397,18 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
           from public.accounts a join public.companies c on c.id = a.company_id
          where a.id = ${accountId} and a.company_id = ${companyId}`;
       if (!cuenta) return null;
-      // El saldo de apertura lo calcula el ESQUEMA sobre los asientos crudos.
-      const [apertura] = await tx<{ balance: string }[]>`
+      // El saldo de apertura lo calcula el ESQUEMA sobre los asientos crudos: lo acumulado ANTES
+      // del rango, día contra día (`posting_date` es `date`; «antes de desde» es `<= desde − 1`).
+      // K-07: sin «desde» el rango empieza en el primer asiento y NO hay nada antes: el inicial
+      // es cero. `null::date - 1` es null, y `recompute_ledger` lee un tope null como «sin tope»:
+      // devolvía el saldo entero, el inicial salía igual al final y `running_balance` lo contaba
+      // dos veces. Inicial + movimientos = final, siempre.
+      const [apertura] =
+        desde === null
+          ? [{ balance: "0" }]
+          : await tx<{ balance: string }[]>`
         select coalesce(balance, 0)::text as balance from platform.recompute_ledger(
-          ${companyId}, ${accountId}, null,
-          ${desde === null ? null : desde}::date - 1)`;
+          ${companyId}, ${accountId}, null, ${desde}::date - 1)`;
       const movimientos = await tx<Record<string, unknown>[]>`
         select e.id as entry_id, e.entry_number::int as entry_number,
                e.posting_date::text as posting_date, e.description,

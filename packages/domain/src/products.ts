@@ -506,7 +506,10 @@ export async function createProductSimple(
     { default_tax_category_code: string; default_warehouse_id: string | null }[]
   >`select default_tax_category_code, default_warehouse_id
       from public.company_settings where company_id = ${input.company_id}`;
-  const clasificacion = ajustes?.default_tax_category_code ?? "gravado_general";
+  // C-02: la clasificación pedida, o la de la empresa. La valida `createProduct` (activa,
+  // ofrecida en ventas, literal o justificación), igual que en el alta completa.
+  const clasificacion =
+    input.tax_category_code ?? ajustes?.default_tax_category_code ?? "gravado_general";
   const [empresa] = await sql<{ moneda: string }[]>`
     select functional_currency_code as moneda from public.companies where id = ${input.company_id}`;
   const funcional = empresa!.moneda;
@@ -562,6 +565,12 @@ export async function createProductSimple(
       // catálogo. Desde 2026-09-10 lo dice el propio alta, así que ya no hace
       // falta una segunda escritura para activarlo.
       status: "active",
+      ...(input.reduced_rate_literal === undefined
+        ? {}
+        : { reduced_rate_literal: input.reduced_rate_literal }),
+      ...(input.tax_category_justification === undefined
+        ? {}
+        : { tax_category_justification: input.tax_category_justification }),
       ...(categoryId === undefined ? {} : { category_id: categoryId }),
       ...(input.barcode === undefined ? {} : { barcode: input.barcode }),
     });

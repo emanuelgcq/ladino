@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Dialog as BaseDialog } from "@base-ui-components/react/dialog";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Building2,
   Check,
   ChevronDown,
   ChevronRight,
@@ -35,9 +34,17 @@ import {
   type NavItem,
 } from "./nav.js";
 import { rifParaMostrar, tieneRif } from "./rif.js";
-import { sondearModulosActivos, type ModulosActivos } from "./modulos-activos.js";
+import {
+  ROL_CONTADOR,
+  debeResondear,
+  sondearContabilidadConfigurada,
+  sondearModulosActivos,
+  type HechoDeModulo,
+  type ModulosActivos,
+} from "./modulos-activos.js";
 import { CommandPalette } from "./palette.js";
 import { LogoLadino } from "../components/LogoLadino.js";
+import { InsigniaEmpresa } from "../components/InsigniaEmpresa.js";
 import { esOscuroAhora, setTema, temaActual } from "../theme.js";
 import { useInstalarApp } from "../instalar.js";
 import { useToast } from "../ui/toast.js";
@@ -87,18 +94,53 @@ export function setMostrarTodos(empresaId: string, v: boolean): void {
 
 /**
  * Divulgación progresiva con DATOS, no con un flag: un módulo avanzado aparece
- * si la empresa tiene filas o configuración en él — y si el rol puede leerlas.
- * La sonda vive en modulos-activos.ts (sin dependencias) y su test la ejercita
- * como un cajero puro: todo 403, cero errores.
+ * si la empresa tiene DATOS en él (A-04: un asiento posteado, una factura) — y si
+ * el rol puede leerlos —, o si la persona es contadora. La sonda vive en
+ * modulos-activos.ts (sin dependencias) y su test la ejercita como un cajero
+ * puro: todo 403, cero errores.
  */
 export function useModulosActivos(): ModulosActivos {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, roles } = useSesion();
+  const esContador = roles.includes(ROL_CONTADOR);
   const q = useQuery({
-    queryKey: ["modulos-activos", empresa.id],
+    queryKey: ["modulos-activos", empresa.id, esContador],
     staleTime: 5 * 60_000,
-    queryFn: () => sondearModulosActivos(llamar),
+    queryFn: () => sondearModulosActivos(llamar, { esContador }),
   });
   return q.data ?? { compras: false, contabilidad: false, libros: false };
+}
+
+/**
+ * Tras emitir un documento o postear un asiento: si ese hecho puede encender un módulo que el
+ * menú todavía no enseña, se vuelve a sondear ya (la sonda se cachea cinco minutos).
+ */
+export function useRefrescarModulos(): (hecho: HechoDeModulo) => void {
+  const { empresa } = useSesion();
+  const qc = useQueryClient();
+  return useCallback(
+    (hecho: HechoDeModulo) => {
+      const clave = ["modulos-activos", empresa.id];
+      const sondas = qc.getQueriesData<ModulosActivos>({ queryKey: clave });
+      if (sondas.some(([, datos]) => debeResondear(datos, hecho))) {
+        void qc.invalidateQueries({ queryKey: clave });
+      }
+    },
+    [qc, empresa.id],
+  );
+}
+
+/**
+ * La pregunta de las PANTALLAS, no la del menú: ¿hay contabilidad configurada que esta persona
+ * pueda leer? `cargando` deja a la pantalla pintar un esqueleto en vez de «no configurada».
+ */
+export function useContabilidadConfigurada(): { configurada: boolean; cargando: boolean } {
+  const { empresa, llamar } = useSesion();
+  const q = useQuery({
+    queryKey: ["contabilidad-configurada", empresa.id],
+    staleTime: 5 * 60_000,
+    queryFn: () => sondearContabilidadConfigurada(llamar),
+  });
+  return { configurada: q.data ?? false, cargando: q.isPending };
 }
 
 /**
@@ -534,7 +576,9 @@ function CompanySwitcher(): React.JSX.Element {
         aria-label="Cambiar de empresa"
         className="flex min-w-0 max-w-64 items-center gap-2 rounded-sm px-2 py-2 text-[0.9rem] font-medium hover:bg-surface-muted lg:py-1"
       >
-        <Building2 className="size-4 shrink-0 text-muted-foreground max-sm:hidden" />
+        {/* O-05: el logo o la inicial sobre el color de la empresa, también en el teléfono: es la
+            señal de en qué negocio se está. */}
+        <InsigniaEmpresa empresa={empresa} />
         <span className="truncate">{empresa.trade_name ?? empresa.legal_name}</span>
       </MenuTrigger>
       <MenuContent align="start" className="w-72 max-w-[calc(100vw-1.5rem)]">
@@ -551,6 +595,7 @@ function CompanySwitcher(): React.JSX.Element {
         )}
         {visibles.map((c) => (
           <MenuItem key={c.id} onClick={() => setEmpresa(c)}>
+            <InsigniaEmpresa empresa={c} />
             <span className="min-w-0 flex-1">
               <span className="block truncate">{c.legal_name}</span>
               <span className="block truncate text-[0.78rem] text-muted-foreground">
@@ -614,9 +659,13 @@ function Migas(): React.JSX.Element {
   const etiqueta = (r: string, seg: string | undefined): string =>
     CRUMBS[r] ?? (seg !== undefined && /^[0-9a-f-]{20,}$/i.test(seg) ? "Detalle" : (seg ?? ""));
   const rutas = partes.map((_, i) => "/" + partes.slice(0, i + 1).join("/"));
+  // K-10: «Inicio» es el inicio DE QUIEN LO PULSA (ADR-0048). El contador no tiene treasury.read
+  // y /inicio le daba «No se pudo cargar cómo va el negocio» con un «Reintentar» que no puede
+  // funcionar: su inicio es su contabilidad, el mismo destino que al entrar por «/».
+  const { puede } = useSesion();
   return (
     <div className="flex h-8 items-center gap-1 overflow-x-auto whitespace-nowrap border-b border-border bg-background px-3 text-[0.82rem] text-muted-foreground max-sm:hidden sm:px-4 md:px-6">
-      <Link to="/inicio" className="hover:text-foreground">
+      <Link to={rutaInicial(puede)} className="hover:text-foreground">
         Inicio
       </Link>
       {rutas.map((r, i) => (

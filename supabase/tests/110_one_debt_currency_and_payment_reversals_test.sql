@@ -563,13 +563,20 @@ select is(
   platform.closing_rate('aaaa0110-0000-4000-8000-0000000000a2', 'USD', 'VES',
                         platform.caracas_day(now()) + 8),
   null::numeric, 'a 8 días ya no hay tasa de cierre: el cierre se detiene');
+-- Desde la migración 20261004195900 el margen vive en `rate_for` (una sola regla) y `rate_at` ya
+-- no sirve la tasa rancia. La variante rota es ahora «sin el margen»: se ensancha el parámetro
+-- y la tasa de hace 8 días vuelve. Cambió la ENTRADA, no la cifra esperada.
+savepoint margen_ancho;
+update platform.parameters set value = 30 where key = 'official_rate_max_age_days';
 select is(
   platform.rate_at('aaaa0110-0000-4000-8000-0000000000a2', 'USD', 'VES',
                    platform.caracas_day(now()) + 8),
   50::numeric,
-  'ROTO (lo que usaba el cierre): rate_at devuelve la tasa rancia sin avisar — por eso no sirve aquí');
+  'ROTO (lo que usaba el cierre): sin el margen, rate_at devuelve la tasa rancia sin avisar — por eso no sirve aquí');
+rollback to savepoint margen_ancho;
 savepoint sin_parametro;
-delete from platform.parameters where key = 'closing_rate_max_age_days';
+delete from platform.parameters
+ where key in ('closing_rate_max_age_days', 'official_rate_max_age_days');
 select is(
   platform.closing_rate('aaaa0110-0000-4000-8000-0000000000a2', 'USD', 'VES',
                         platform.caracas_day(now())),

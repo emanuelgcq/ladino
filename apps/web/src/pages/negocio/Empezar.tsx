@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronRight, FileSpreadsheet, Plus, Store } from "lucide-react";
@@ -18,6 +18,14 @@ import { CrearCuenta } from "./Dinero.js";
 import { IvaQueCobras, type IvaDelCatalogo } from "../../components/capa-fiscal/IvaQueCobras.js";
 import { TipoDeContribuyente } from "../../components/capa-fiscal/TipoDeContribuyente.js";
 import { porcentajeAFraccion, fraccionAPorcentaje } from "./comunes.js";
+import {
+  pasoGuardado,
+  pasoInicial,
+  pasoPedido,
+  recordarPaso,
+  sinPaso,
+  traePaso,
+} from "./empezar-paso.js";
 import {
   CompletarImprenta,
   FormularioTalonario,
@@ -73,7 +81,27 @@ export function Empezar(): React.JSX.Element {
   const tipoContribuyente = miEmpresa.data?.taxpayer_type_code ?? null;
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [paso, setPaso] = useState(0);
+  // A-02 (regla del dueño, 2026-09-28): el alta con RIF llega con `?paso=facturas` y abre DIRECTO
+  // el paso de las facturas («Así facturo» y el talonario); la caja en pausa enlaza aquí igual.
+  // B-10: sin ese parámetro, el asistente vuelve al paso en que la persona iba (por pestaña y por
+  // empresa); antes arrancaba siempre en el 1.
+  const [paso, setPasoCrudo] = useState(() =>
+    pasoInicial(window.location.search, pasoGuardado(empresa.id)),
+  );
+  const setPaso = (i: number): void => {
+    setPasoCrudo(i);
+    recordarPaso(empresa.id, i);
+  };
+  // El enlace se CONSUME una vez: el paso que pidió queda como el recordado y `?paso=` sale de la
+  // URL (con replace, sin ensuciar el historial). Si se quedara, mandaría sobre lo recordado en
+  // cada recarga: quien llegó por la banda y avanzó volvería siempre al paso del enlace.
+  useEffect(() => {
+    const busqueda = window.location.search;
+    if (!traePaso(busqueda)) return;
+    const pedido = pasoPedido(busqueda);
+    if (pedido !== null) recordarPaso(empresa.id, pedido);
+    void navigate({ search: sinPaso(busqueda) }, { replace: true });
+  }, [empresa.id, navigate]);
 
   const productos = useQuery({
     queryKey: ["empezar-productos", empresa.id],
@@ -146,7 +174,8 @@ export function Empezar(): React.JSX.Element {
   const AYUDAS = [
     "Con dos o tres basta para arrancar. Puedes traerlos desde Excel.",
     "Dónde te pagan: efectivo, pago móvil, tu cuenta del banco.",
-    "Un toque al día y todos tus precios quedan al día.",
+    // B-09: la tasa se actualiza sola (ADR-0064 §1); aquí no se promete un «toque al día».
+    "Con ella tus precios en dólares salen en bolívares.",
     conRif
       ? "Cómo factura tu negocio, con su norma delante. Tú decides."
       : "Tus ventas salen como recibos. Cuando tengas RIF, das facturas.",
@@ -154,21 +183,8 @@ export function Empezar(): React.JSX.Element {
   return (
     <div className="fixed inset-0 z-40 overflow-y-auto bg-background">
       <header className="sticky top-0 z-10 bg-background/90 backdrop-blur-sm">
-        <div className="mx-auto flex h-14 max-w-2xl items-center gap-4 px-6">
+        <div className="mx-auto flex h-14 max-w-2xl items-center justify-between gap-4 px-6">
           <LogoLadino alto="h-6" />
-          {/* La escalera, en versión hilo: estado REAL de cada paso, clicable. */}
-          <div className="flex flex-1 items-center justify-center gap-1.5">
-            {pasos.map((p, i) => (
-              <button
-                key={p.titulo}
-                onClick={() => setPaso(i)}
-                aria-label={`${p.titulo}${p.listo ? " — listo" : ""}`}
-                className={`h-1.5 rounded-full transition-all duration-300 ${
-                  paso === i ? "w-10" : "w-6"
-                } ${p.listo ? "bg-accent" : paso === i ? "bg-border-strong" : "bg-border"}`}
-              />
-            ))}
-          </div>
           <button
             onClick={() => void navigate("/")}
             className="rounded-md px-2 py-1 text-[0.82rem] text-faint-foreground transition-colors hover:text-foreground"
@@ -176,6 +192,37 @@ export function Empezar(): React.JSX.Element {
             Ir a la app
           </button>
         </div>
+        {/* La escalera: estado REAL de cada paso, clicable, y CON SU NOMBRE (M-07: antes eran
+            cuatro barritas iguales y había que pulsar a ciegas). */}
+        <nav
+          aria-label="Pasos para empezar"
+          className="mx-auto grid max-w-2xl grid-cols-4 gap-1.5 px-6 pb-2"
+        >
+          {pasos.map((p, i) => (
+            <button
+              key={p.titulo}
+              onClick={() => setPaso(i)}
+              aria-label={`${p.titulo}${p.listo ? " — listo" : ""}`}
+              aria-current={paso === i ? "step" : undefined}
+              title={p.titulo}
+              className="group flex min-h-11 flex-col gap-1 rounded-md py-1 text-left"
+            >
+              <span
+                className={`h-1.5 w-full rounded-full transition-colors duration-300 ${
+                  p.listo ? "bg-accent" : paso === i ? "bg-border-strong" : "bg-border"
+                }`}
+              />
+              <span
+                className={`truncate text-[0.72rem] leading-tight ${
+                  paso === i ? "font-medium text-foreground" : "text-faint-foreground"
+                } group-hover:text-foreground`}
+              >
+                {i + 1}. {p.titulo}
+                {p.listo ? " ✓" : ""}
+              </span>
+            </button>
+          ))}
+        </nav>
       </header>
 
       <main className="mx-auto max-w-2xl px-6 pb-24 pt-8">
@@ -223,6 +270,14 @@ export function Empezar(): React.JSX.Element {
                 <Button variant="secondary" className="mt-3" onClick={() => void fiscal.refetch()}>
                   Reintentar
                 </Button>
+              </CardContent>
+            </Card>
+          )}
+          {/* B-12: mientras /v1/fiscal/setup responde, el paso dice que está cargando. */}
+          {paso === 3 && fiscal.isPending && (
+            <Card role="status" aria-live="polite">
+              <CardContent className="py-6 text-center text-[0.9rem] text-muted-foreground">
+                Cargando cómo {conRif ? "factura" : "vende"} tu negocio…
               </CardContent>
             </Card>
           )}

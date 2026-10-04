@@ -12,6 +12,7 @@
  * última tasa publicada.
  */
 import { withTransaction, type createClient } from "@ladino/db";
+import { guardarTasaOficial } from "@ladino/domain";
 import { tasaOficialBcv, BcvNoDisponible, type BcvConfig } from "./bcv.js";
 
 type Sql = ReturnType<typeof createClient>;
@@ -74,17 +75,11 @@ export async function asegurarTasaOficial(sql: Sql, bcv: BcvConfig): Promise<Res
   // distingue si la tasa la trajo una persona o el refresco — y no debe.
   // Escrita dentro de withTransaction con el actor de sistema: era la única
   // escritura del repo fuera del punto de entrada único (created_by nulo).
-  const fuente = `BCV oficial vía DolarAPI (${tasa.actualizada})`;
-  const insertada = await withTransaction(sql, { kind: "system" }, async ({ sql: tx }) => {
-    const [fila] = await tx<{ id: string }[]>`
-      insert into public.exchange_rates
-        (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
-      values ('USD', 'VES', ${tasa.rate}, ${fuente}, ${tasa.rateDate}::date, now())
-      on conflict on constraint exchange_rates_day_key do nothing
-      returning id`;
-    return fila ?? null;
-  });
-  return insertada ? "guardada" : "publicacion_repetida";
+  // B-14: guardar la tasa y dejar su acta es UNA regla y vive en el dominio (guardarTasaOficial).
+  const { nueva } = await withTransaction(sql, { kind: "system" }, ({ sql: tx }) =>
+    guardarTasaOficial(tx, tasa, { trigger: "refresh" }),
+  );
+  return nueva ? "guardada" : "publicacion_repetida";
 }
 
 /**

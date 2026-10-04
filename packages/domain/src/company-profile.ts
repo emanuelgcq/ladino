@@ -204,7 +204,7 @@ export async function setCompanyTaxId(
   companyId: string,
   input: SetCompanyTaxIdRequest,
 ): Promise<Result<{ tax_id: string }, CompanyProfileError>> {
-  return cambiarRif(uow, companyId, input.tax_id, null, false);
+  return cambiarRif(uow, companyId, input.tax_id, null, false, input.legal_name ?? null);
 }
 
 /** La corrección EXCEPCIONAL (nivel 3): motivo obligatorio, acta propia. */
@@ -222,6 +222,7 @@ async function cambiarRif(
   taxIdCrudo: string,
   reason: string | null,
   esCorreccion: boolean,
+  razonSocial: string | null = null,
 ): Promise<Result<{ tax_id: string }, CompanyProfileError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
@@ -244,11 +245,31 @@ async function cambiarRif(
   const taxId = documento.normalizado;
 
   const actual = await perfilActual(sql, companyId);
+  const esPrimero = actual.tax_id.startsWith("PEND-");
+  // La corrección es para un RIF mal tecleado: no es el camino del PRIMER RIF, que llega con su
+  // razón social (A-05) y esta puerta no tiene por dónde recibirla. Se dice cuál es la puerta.
+  if (esCorreccion && esPrimero) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Esta empresa todavía no tiene RIF, así que no hay nada que corregir: ponlo en «Poner mi RIF», con su razón social.",
+    });
+  }
+  // A-05: con RIF ya puesto, la razón social tiene su propia puerta (el perfil, con motivo si hay
+  // documentos). Aquí se RECHAZA en vez de ignorarla en silencio — y antes del atajo de abajo, que
+  // respondería 200 sin haberla guardado.
+  const razon = razonSocial === null ? null : razonSocial.trim();
+  if (!esPrimero && razon !== null) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "La razón social se cambia en «Editar», no al cambiar el RIF: si ya emitiste documentos, pide un motivo y deja acta.",
+    });
+  }
   // Hallazgo 5: el MISMO RIF con otra grafía (el guardado antes de la reparación P-02 puede
   // llevar guiones) no es un cambio: ok, sin escribir — ni acta ni outbox.
   if (normalizarDocumento(actual.tax_id) === taxId) return ok({ tax_id: actual.tax_id });
 
-  const esPrimero = actual.tax_id.startsWith("PEND-");
   if (!esPrimero && !esCorreccion && (await tieneDocumentos(sql, companyId))) {
     return err({ code: "VALIDATION_FAILED", message: COPY_RIF_BLOQUEADO });
   }
@@ -260,11 +281,26 @@ async function cambiarRif(
       message: "Antes del RIF, carga la dirección fiscal: es la que sale en tus facturas.",
     });
   }
+  // A-05 (ADR-0050: «RIF real exige razón social y domicilio fiscal»; PA 00071 art. 13.5). Quien
+  // nació sin RIF tiene como razón social el nombre del negocio (onboarding.ts): el PRIMER RIF
+  // llega con la suya, o la primera factura congela el nombre comercial como razón social del
+  // emisor. Todo ANTES de escribir.
+  if (esPrimero && (razon === null || razon === "")) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Con tu RIF, dinos la razón social tal como aparece en él: es el nombre que sale en tus facturas.",
+    });
+  }
+  const cambiaRazon = esPrimero && razon !== null && razon !== actual.legal_name;
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   try {
     await sql.savepoint(async (sp) => {
       await sp`update public.companies set tax_id = ${taxId} where id = ${companyId}`;
+      if (cambiaRazon) {
+        await sp`update public.companies set legal_name = ${razon} where id = ${companyId}`;
+      }
     });
   } catch (e) {
     if ((e as { code?: string }).code === "23505") {
@@ -296,6 +332,20 @@ async function cambiarRif(
       values (${scope.value.tenantId}, ${companyId}, 'company', ${companyId},
               'company.tax_id_corrected', 'user', now(), ${RULES_VERSION},
               ${sql.json({ from: actual.tax_id, to: taxId, reason })})`;
+  }
+  // A-05: la razón social que llegó con el primer RIF deja la MISMA acta que cambiarla en el
+  // perfil (company.profile_updated, con el valor anterior y el nuevo).
+  if (cambiaRazon) {
+    await sql`
+      insert into public.audit_events
+        (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+         actor_type, occurred_at, rules_version, payload)
+      values (${scope.value.tenantId}, ${companyId}, 'company', ${companyId},
+              'company.profile_updated', 'user', now(), ${RULES_VERSION},
+              ${sql.json({
+                cambios: { legal_name: { from: actual.legal_name, to: razon } },
+                origin: "first_tax_id",
+              })})`;
   }
   await sql`
     insert into public.outbox

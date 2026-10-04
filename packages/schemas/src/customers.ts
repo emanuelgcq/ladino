@@ -64,6 +64,26 @@ export const SetCustomerBlockedRequest = z
   .strict();
 export type SetCustomerBlockedRequest = z.infer<typeof SetCustomerBlockedRequest>;
 
+/**
+ * E-09: el límite de fiado, en USD (el fiado se ancla en USD). Importe como string, hasta el
+ * céntimo. Permiso propio (`customers.credit.set`); el alta no lo acepta: un cliente nace en 0.
+ */
+export const SetCustomerCreditLimitRequest = z
+  .object({
+    company_id: uuid,
+    credit_limit_usd: z
+      .string()
+      .regex(/^\d{1,12}(\.\d{1,2})?$/, "Importe en USD, hasta el céntimo"),
+  })
+  .strict();
+export type SetCustomerCreditLimitRequest = z.infer<typeof SetCustomerCreditLimitRequest>;
+
+/** E-14: la clasificación fiscal del cliente se cambia aparte, con `customer.tax_id.manage`. */
+export const SetCustomerTaxpayerTypeRequest = z
+  .object({ company_id: uuid, taxpayer_type_code: z.string().regex(CODE_RE) })
+  .strict();
+export type SetCustomerTaxpayerTypeRequest = z.infer<typeof SetCustomerTaxpayerTypeRequest>;
+
 export const CustomerResponse = z
   .object({
     id: uuid,
@@ -79,6 +99,8 @@ export const CustomerResponse = z
     phone: z.string().nullable(),
     status: CustomerStatus,
     default_price_list_id: uuid.nullable(),
+    /** E-09: límite de fiado en USD. "0.00000000" = no se le fía. */
+    credit_limit_usd: z.string(),
     created_at: z.string().datetime({ offset: true }),
     /**
      * Extras del listado de Fase C: `is_system` marca al Consumidor final
@@ -88,6 +110,13 @@ export const CustomerResponse = z
     is_system: z.boolean().optional(),
     /** null = debe algo en divisa y falta la tasa de hoy para decirlo en la moneda de la empresa. */
     debt: z.string().nullable().optional(),
+    /**
+     * P-05 (solo con `with_debt=1`): lo VENCIDO de esa deuda, en la moneda de la empresa a la
+     * tasa de hoy. «0.00» = nada vencido. null = hay vencido y no se puede valorar hoy; el motivo
+     * va en `overdue_reason` (`sin_tasa`). Nunca 0 por «no se sabe».
+     */
+    overdue: z.string().nullable().optional(),
+    overdue_reason: z.enum(["sin_tasa"]).nullable().optional(),
   })
   .strict();
 export type CustomerResponse = z.infer<typeof CustomerResponse>;

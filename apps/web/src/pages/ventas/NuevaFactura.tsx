@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { CreateInvoiceRequest, formatearDocumento, filasDeDescripcion } from "@ladino/schemas";
 import { useSesion } from "../../app/session.js";
+import { useRefrescarModulos } from "../../app/shell.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DualMoney } from "../../components/DualMoney.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
@@ -56,11 +57,20 @@ const nuevaLinea = (): LineaForm => ({
 export function NuevaFactura(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const navigate = useNavigate();
+  const refrescarModulos = useRefrescarModulos();
   const toast = useToast();
 
   const [cliente, setCliente] = useState<EntityOption | null>(null);
   const [listaId, setListaId] = useState<string>("");
   const [almacenId, setAlmacenId] = useState<string>("");
+  // P-05: «Vence», opcional y solo de la FACTURA (ni la cotización ni el pedido la llevan). La
+  // regla —no anterior al día de la emisión; sin fecha, vence al emitirse— es del servidor.
+  const [vence, setVence] = useState<string>("");
+  const conVencimiento = (): object => ({
+    ...(cuerpo() as object),
+    warehouse_id: almacenId,
+    ...(vence === "" ? {} : { due_date: vence }),
+  });
   const [lineas, setLineas] = useState<LineaForm[]>([nuevaLinea()]);
   const [error, setError] = useState<unknown>(null);
   const [erroresCampo, setErroresCampo] = useState<Record<string, string>>({});
@@ -154,9 +164,7 @@ export function NuevaFactura(): React.JSX.Element {
         `filas impresas; esta ocupa ${filas}).`;
     }
     // El MISMO esquema Zod del contrato (packages/schemas), reutilizado aquí.
-    const parsed = CreateInvoiceRequest.safeParse(
-      conAlmacen ? { ...(cuerpo() as object), warehouse_id: almacenId } : undefined,
-    );
+    const parsed = CreateInvoiceRequest.safeParse(conAlmacen ? conVencimiento() : undefined);
     if (conAlmacen && !parsed.success && Object.keys(errores).length === 0) {
       errores["lineas"] = parsed.error.issues[0]?.message ?? "Revisa los datos.";
     }
@@ -211,12 +219,14 @@ export function NuevaFactura(): React.JSX.Element {
       const doc = await llamar<DocumentoCreado>("/v1/invoices", {
         method: "POST",
         headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({ ...(cuerpo() as object), warehouse_id: almacenId }),
+        body: JSON.stringify(conVencimiento()),
       });
       toast.success(
-        `Factura ${doc.series}-${String(doc.document_number ?? "")} emitida`,
+        `Factura${doc.series}-${String(doc.document_number ?? "")} emitida`,
         "Kardex descargado y asiento generado en la misma transacción.",
       );
+      // A-04: la primera factura enciende Contabilidad y Libros en el menú, sin esperar la caché.
+      refrescarModulos("factura");
       void navigate(`/admin/ventas/${doc.id}`);
     } catch (e) {
       setError(e);
@@ -298,6 +308,19 @@ export function NuevaFactura(): React.JSX.Element {
                       value: w.id,
                       label: `${w.code} — ${w.name}`,
                     }))}
+                  />
+                )}
+              </FormField>
+              <FormField
+                label="Vence"
+                hint="Opcional. Sin fecha, la deuda de esta factura vence el día en que se emite."
+              >
+                {(a) => (
+                  <Input
+                    {...a}
+                    type="date"
+                    value={vence}
+                    onChange={(e) => setVence(e.target.value)}
                   />
                 )}
               </FormField>

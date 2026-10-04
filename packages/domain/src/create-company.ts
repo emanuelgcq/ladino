@@ -25,6 +25,11 @@ import { registrarDigitoDudoso, validarRif, type DocumentoLeido } from "./docume
  * regla 3 de CLAUDE.md exige versión de reglas en TODO evento de auditoría, y
  * el trigger M4 la lee del GUC. Se declara la del paquete.
  */
+// ADR-0079 (B-06): desde la migración 20261004120000 esta cadena ya no es lo que queda guardado.
+// Es la DECLARACIÓN del dominio —«esto lo escribe un caso de uso»—, y la base la sustituye, en un
+// solo sitio (`platform.stamp_rules_version`), por la versión vigente: semver + hash del conjunto
+// de reglas de la empresa. No se cambia el literal: es el que reconoce ese trigger, y el que manda
+// también la API desplegada antes de la migración.
 export const RULES_VERSION = "domain-s0.5";
 
 /** El marcador que genera el registro (onboarding.ts): `PEND-` + 10 hex del tenant. */

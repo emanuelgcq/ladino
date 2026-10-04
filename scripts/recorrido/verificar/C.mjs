@@ -187,4 +187,188 @@ c.caso(
   },
 );
 
+// ── Ola 4 · C-02, C-03, C-10 y C-11 ─────────────────────────────────────────────
+const fsC = await import("node:fs");
+const fuente = (rel) => fsC.readFileSync(path.join(RAIZ, rel), "utf8");
+const { pedir } = await import("./_app.mjs");
+
+c.caso(
+  "C-02",
+  "administración abre la MISMA alta del primer día, y la API le acepta lo avanzado",
+  async () => {
+    const admin = fuente("apps/web/src/pages/catalogo/Productos.tsx");
+    afirmar(
+      /import \{ AltaSimple \} from "\.\.\/negocio\/Productos\.js"/.test(admin) &&
+        admin.includes("<AltaSimple"),
+      "Administración → Productos no usa el alta simple",
+    );
+    afirmar(
+      !admin.includes("function NuevoProducto"),
+      "sigue habiendo un segundo diálogo de alta en administración",
+    );
+    const alta = fuente("apps/web/src/pages/negocio/Productos.tsx");
+    afirmar(
+      alta.includes('label="Unidad"') && alta.includes("CLASIFICACION_DEL_PRODUCTO.etiqueta"),
+      "el alta simple no trae lo avanzado (unidad y clasificación) en «Más detalles»",
+    );
+    // El servidor recibe la clasificación por el alta simple y la valida como el alta completa:
+    // la adicional sin justificación se rechaza con el mensaje del caso de uso (no crea nada).
+    const r = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/products/simple", {
+      company_id: EMPRESAS.E2,
+      name: "Recorrido C-02 (no debe crearse)",
+      price: { amount: "1.00", currency: "USD" },
+      unit_code: "kg",
+      tax_category_code: "gravado_adicional",
+    });
+    afirmar(r.status === 422, `esperaba 422, llegó ${r.status}: ${r.texto.slice(0, 200)}`);
+    afirmar(
+      String(r.json?.message).includes("art. 61"),
+      `el rechazo no es el del caso de uso: ${r.json?.message}`,
+    );
+    const [n] = await sql`
+      select count(*)::int as n from public.products
+       where company_id = ${EMPRESAS.E2} and name = 'Recorrido C-02 (no debe crearse)'`;
+    afirmar(n.n === 0, "el alta rechazada dejó un producto");
+    // La pantalla ofrece lo que el servidor dice: la reducida no sale sin un literal (P-51).
+    const cats = await pedir(PERSONAS.duenoE2E3, "E2", "GET", "/v1/tax-categories");
+    const [lit] = await sql`select count(*)::int as n from public.tax_reduced_rate_literals`;
+    const reducida = cats.json.find((t) => t.code === "gravado_reducida");
+    afirmar(
+      reducida && reducida.offered_in_sales === lit.n > 0,
+      `la reducida se ofrece=${reducida?.offered_in_sales} con ${lit.n} literal(es)`,
+    );
+    afirmar(
+      /\.filter\(\(t\) => t\.offered_in_sales\)/.test(alta),
+      "el alta ofrece clasificaciones que el servidor no marca como ofrecibles",
+    );
+    afirmar(
+      alta.includes("no se podrá cambiar después"),
+      "el alta ya no avisa de que el tipo (producto o servicio) no se cambia",
+    );
+  },
+);
+
+c.caso(
+  "C-03",
+  "E2 · un producto inactivo con existencia no sale en el mostrador ni en la caja; sí en inventario",
+  async () => {
+    const [pausado] = await sql`
+      select p.id, p.name from public.products p
+       where p.company_id = ${EMPRESAS.E2} and p.status = 'inactive' and p.system_code is null
+         and exists (select 1 from public.stock_balances b
+                      where b.product_id = p.id and b.quantity > 0)
+       limit 1`;
+    afirmar(pausado, "el escenario no tiene un producto inactivo con existencia en E2");
+    const q = encodeURIComponent(pausado.name);
+    // La consulta de la caja y la del mostrador (/productos): la misma, con only_active=1.
+    const caja = await pedir(
+      PERSONAS.duenoE2E3,
+      "E2",
+      "GET",
+      `/v1/products?only_active=1&with_price=1&with_stock=1&per_page=60&search=${q}`,
+    );
+    afirmar(caja.status === 200, `la búsqueda de la caja dio ${caja.status}`);
+    afirmar(
+      !caja.json.items.some((i) => i.id === pausado.id),
+      `«${pausado.name}», inactivo, sale en la búsqueda de la caja`,
+    );
+    const mostrador = fuente("apps/web/src/pages/negocio/Productos.tsx");
+    const consultas = mostrador.match(/\/v1\/products\?[^`"]*with_price=1[^`"]*/g) ?? [];
+    afirmar(consultas.length >= 2, "no encuentro las consultas de /productos");
+    afirmar(
+      consultas.every((u) => u.includes("only_active=1")),
+      "/productos pide el catálogo sin only_active=1: enseña lo que no se vende",
+    );
+    // Sigue en inventario, con su estado y su existencia.
+    const inventario = await pedir(
+      PERSONAS.duenoE2E3,
+      "E2",
+      "GET",
+      `/v1/products?with_stock=1&per_page=100&search=${q}`,
+    );
+    const fila = inventario.json.items.find((i) => i.id === pausado.id);
+    afirmar(fila, "el inactivo desapareció del listado de inventario");
+    afirmar(fila.status === "inactive", `el listado lo trae como ${fila.status}`);
+    afirmar(Number(fila.stock_quantity) > 0, "el listado de inventario perdió su existencia");
+    afirmar(
+      fuente("apps/web/src/pages/negocio/Inventario.tsx").includes("Inactivo · no se vende"),
+      "Inventario ya no marca el inactivo",
+    );
+    afirmar(
+      fuente("apps/web/src/pages/catalogo/Productos.tsx").includes(
+        "Seguirá en el inventario con su existencia",
+      ),
+      "inactivar con existencia ya no avisa",
+    );
+  },
+);
+
+c.caso("C-10", "la foto del producto se puede soltar, y el botón sigue eligiéndola", async () => {
+  const alta = fuente("apps/web/src/pages/negocio/Productos.tsx");
+  afirmar(
+    alta.includes("onDrop=") && alta.includes("fotoSoltada(e)") && alta.includes("onDragOver="),
+    "el recuadro de la foto del alta no acepta soltar un archivo",
+  );
+  afirmar(
+    alta.includes("onClick={() => fotoRef.current?.click()}"),
+    "el recuadro de la foto dejó de abrir el selector (teclado)",
+  );
+  afirmar(
+    fuente("apps/web/src/pages/catalogo/Productos.tsx").includes("fotoSoltada(e)"),
+    "la ficha del producto en administración no acepta soltar la foto",
+  );
+});
+
+c.caso(
+  "C-11",
+  "E2 · cada precio del historial trae los Bs a la tasa de SU día (o dice por qué no) y la de hoy aparte",
+  async () => {
+    const listas = await pedir(PERSONAS.duenoE2E3, "E2", "GET", "/v1/price-lists");
+    afirmar(listas.status === 200 && listas.json.length > 0, "E2 no tiene listas de precios");
+    let vistos = 0;
+    for (const lista of listas.json) {
+      const r = await pedir(PERSONAS.duenoE2E3, "E2", "GET", `/v1/price-lists/${lista.id}/prices`);
+      afirmar(r.status === 200, `el historial de ${lista.name} dio ${r.status}`);
+      for (const i of r.json.items) {
+        vistos += 1;
+        // La tasa que rige el día de Caracas del precio, preguntada aparte a la base.
+        const [t] = await sql`
+          select f.rate::text as rate, f.rate_date::text as rate_date,
+                 platform.caracas_day(${i.effective_from}::timestamptz)
+                   > platform.caracas_day(now()) as programado
+            from (select 1) uno
+            left join lateral platform.rate_for(${EMPRESAS.E2}, 'USD', 'VES',
+                        platform.caracas_day(${i.effective_from}::timestamptz)) f on true`;
+        if (t.programado) {
+          afirmar(
+            i.historical_rate_status === "scheduled" && i.historical_equivalent_amount === null,
+            `un precio programado trae cifra histórica (${i.historical_equivalent_amount})`,
+          );
+        } else if (t.rate === null) {
+          afirmar(
+            i.historical_rate_status === "missing" && i.historical_equivalent_amount === null,
+            `sin tasa ese día y la celda trae ${i.historical_equivalent_amount}`,
+          );
+        } else {
+          afirmar(
+            i.historical_rate_status === "available" &&
+              i.historical_rate === t.rate &&
+              i.historical_rate_date === t.rate_date,
+            `el precio del ${i.effective_from} usa la tasa ${i.historical_rate} (${i.historical_rate_date}), y la de su día es ${t.rate} (${t.rate_date})`,
+          );
+          afirmar(i.historical_equivalent_amount !== null, "con tasa y sin cifra histórica");
+        }
+      }
+    }
+    afirmar(vistos > 0, "E2 no tiene ningún precio que mirar");
+    const pantalla = fuente("apps/web/src/pages/catalogo/Precios.tsx");
+    afirmar(
+      pantalla.includes("historical_equivalent_amount") &&
+        pantalla.includes("el día del precio") &&
+        pantalla.includes("Hoy, como referencia"),
+      "la pantalla de precios no separa los Bs del día del precio de la referencia de hoy",
+    );
+  },
+);
+
 export default c.correr;

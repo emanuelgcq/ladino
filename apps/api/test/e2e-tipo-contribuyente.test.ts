@@ -3,6 +3,7 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture } from "./_fiado-de-fixture.js";
 import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 
 /**
@@ -127,9 +128,15 @@ beforeAll(async () => {
           "ar.read",
           "fiscal.range.manage",
           "company.settings.manage",
+          // R-82.1: la factura de administración nace fiada.
+          "sales.credit",
         ],
       ],
-      [CAJERO, "cajero", ["sales.invoice.issue", "ar.retention.register", "ar.read"]],
+      [
+        CAJERO,
+        "cajero",
+        ["sales.invoice.issue", "ar.retention.register", "ar.read", "sales.credit"],
+      ],
       [COBRADOR, "cobrador", ["sales.payment.register", "ar.read"]],
     ];
     for (const [usuario, nombre, permisos] of roles) {
@@ -186,6 +193,8 @@ beforeAll(async () => {
                 taxpayer_type_code, default_price_list_id)
              values (${CLIENTE_MINI}, ${TENANT}, ${COMPANY}, ${`J${String(Date.now() + 11).slice(-9)}`},
                      'Agente mínimo e2e', 'juridica', 'ordinario', ${lv!.id})`;
+    // R-82.1: los clientes de la empresa de prueba tienen límite de fiado.
+    await fiadoDeFixture(tx, COMPANY);
     await tx`update public.customers set default_price_list_id = ${l!.id} where id = ${CLIENTE}`;
     await tx`insert into public.company_fiscal_regimes
                (tenant_id, company_id, regime_code, effective_from)

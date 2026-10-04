@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router";
 import {
   Banknote,
   ChevronLeft,
@@ -14,8 +15,14 @@ import {
   X,
 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { useRefrescarModulos } from "../../app/shell.js";
 import { useConFacturas } from "../../app/modo-venta.js";
-import { AvisoFacturacion } from "../../components/capa-fiscal/AvisoFacturacion.js";
+import {
+  AvisoFacturacion,
+  AvisoYaFacturas,
+} from "../../components/capa-fiscal/AvisoFacturacion.js";
+import { CajaEnPausa, useCajaEnPausa } from "../../components/capa-fiscal/CajaEnPausa.js";
+import { CLIENTE_ESPECIAL } from "../../components/capa-fiscal/textos.js";
 import { FilasImpuesto } from "../../components/capa-fiscal/FilasImpuesto.js";
 import {
   IgtfCobradoEnVenta,
@@ -57,7 +64,13 @@ import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog.js";
 import { Input } from "../../ui/input.js";
 import { SimpleSelect } from "../../ui/select.js";
 import { useToast } from "../../ui/toast.js";
-import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
+import {
+  FormField,
+  MoneyInput,
+  importeLimpio,
+  importeValido,
+  leerCantidad as leerCantidadTecleada,
+} from "../../components/forms.js";
 import {
   ETIQUETA_FORMA,
   FORMAS_BASE,
@@ -190,7 +203,7 @@ export function Vender(): React.JSX.Element {
 }
 
 function VenderDeEmpresa(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const [busqueda, setBusqueda] = useState("");
   const buscarRef = useRef<HTMLInputElement>(null);
@@ -402,19 +415,27 @@ function VenderDeEmpresa(): React.JSX.Element {
   const qc = useQueryClient();
   const q = useDebounced(busqueda.trim(), 200);
 
+  // E-07: la cuadrícula cotiza por la lista del CLIENTE de la cuenta activa — la misma que
+  // aplicará el carrito. Sin cliente, el precio de mostrador (y la cuadrícula lo dice).
+  const clienteDePrecios = activa.cliente?.id ?? null;
+  const deCliente = clienteDePrecios === null ? "" : `&customer_id=${clienteDePrecios}`;
   const productos = useQuery({
-    queryKey: ["pos-productos", empresa.id, q],
+    queryKey: ["pos-productos", empresa.id, q, clienteDePrecios],
     queryFn: () =>
       llamar<{ items: ProductoFila[] }>(
-        `/v1/products?only_active=1&with_price=1&with_stock=1&per_page=60${q === "" ? "" : `&search=${encodeURIComponent(q)}`}`,
+        `/v1/products?only_active=1&with_price=1&with_stock=1&per_page=60${deCliente}${q === "" ? "" : `&search=${encodeURIComponent(q)}`}`,
       ),
   });
+  // E-13: el producto agotado que se intentó vender — la caja no vende sin existencia y ofrece
+  // la puerta de la mercancía (ADR-0066).
+  const [agotado, setAgotado] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const puedeRecibir = puede(["inventory.move", "purchase.receive", "purchase.invoice.register"]);
   const ajustes = useQuery({
     queryKey: ["ajustes", empresa.id],
     staleTime: 5 * 60_000,
     queryFn: () =>
       llamar<{
-        block_sale_without_stock: boolean;
         allow_unidentified_sales: boolean;
         default_warehouse_id: string | null;
         rows_per_free_form: number;
@@ -423,6 +444,9 @@ function VenderDeEmpresa(): React.JSX.Element {
   // Quien da recibos (la regla de app/rif.ts): el POS es el MISMO; cambia el documento, y
   // desaparece todo lo de impuestos.
   const modoRecibos = !useConFacturas();
+  // A-02: quien factura y no tiene talonario con papel tiene la caja en pausa (lo impone el
+  // servidor al cobrar; aquí se dice antes y «Cobrar» no se ofrece). La regla, en capa-fiscal.
+  const pausa = useCajaEnPausa();
 
   const depositos = useQuery({
     queryKey: ["depositos", empresa.id],
@@ -483,9 +507,11 @@ function VenderDeEmpresa(): React.JSX.Element {
     // inventario del servidor al emitir.
     const existencia = p.kind === "good" ? (p.stock_quantity ?? "0") : null;
     if (existencia !== null && compararImportes(existencia, "0") <= 0) {
+      // E-13: no se vende sin existencia. La salida es la llegada de mercancía, y se ofrece.
+      setAgotado(p.name);
       return negar(
         `${p.name}: sin existencia`,
-        "Registra la entrada de mercancía antes de venderlo.",
+        "La caja no vende sin existencia. Registra la llegada de la mercancía y vuelve a venderlo.",
       );
     }
     const actual = cuentasRef.current.find((c) => c.id === activa.id) ?? activa;
@@ -538,7 +564,10 @@ function VenderDeEmpresa(): React.JSX.Element {
       lineas: c.lineas
         .map((l) =>
           l.product_id === productId
-            ? { ...l, qty: leerCantidad(cantidadTexto(l.qty + delta)) ?? 0 }
+            ? // `cantidadTexto` lo escribe la máquina, siempre con punto decimal: NO pasa por el
+              // lector de lo tecleado (F-06), que rechazaría «1.125» por ambiguo y dejaría la
+              // línea en cero. Lo que baja de cero lo quita el filtro de abajo.
+              { ...l, qty: Number(cantidadTexto(l.qty + delta)) }
             : l,
         )
         .filter((l) => l.qty > 0),
@@ -552,7 +581,12 @@ function VenderDeEmpresa(): React.JSX.Element {
   function fijarQty(productId: string, texto: string): boolean {
     const nueva = leerCantidad(texto);
     if (nueva === null) {
-      toast.warning("Cantidad no válida", "Escribe un número, por ejemplo 2 o 0,5.");
+      // F-06: el motivo lo da el lector («1.250» se puede leer de dos maneras), no una frase fija.
+      const leida = leerCantidadTecleada(texto);
+      toast.warning(
+        "Cantidad no válida",
+        leida.ok ? "Escribe un número, por ejemplo 2 o 0,5." : leida.motivo,
+      );
       return false;
     }
     const linea = activa.lineas.find((l) => l.product_id === productId);
@@ -602,10 +636,10 @@ function VenderDeEmpresa(): React.JSX.Element {
     let encontrados: ProductoFila[];
     try {
       const r = await qc.fetchQuery({
-        queryKey: ["pos-productos", empresa.id, codigo],
+        queryKey: ["pos-productos", empresa.id, codigo, clienteDePrecios],
         queryFn: () =>
           llamar<{ items: ProductoFila[] }>(
-            `/v1/products?only_active=1&with_price=1&with_stock=1&per_page=60&search=${encodeURIComponent(codigo)}`,
+            `/v1/products?only_active=1&with_price=1&with_stock=1&per_page=60${deCliente}&search=${encodeURIComponent(codigo)}`,
           ),
         staleTime: 5_000,
       });
@@ -677,7 +711,8 @@ function VenderDeEmpresa(): React.JSX.Element {
     !cotizacion.isFetching &&
     deposito !== null &&
     clienteResuelto &&
-    !excedeForma;
+    !excedeForma &&
+    pausa === null;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "F2" && puedeCobrar && activa.editable !== false) {
@@ -694,6 +729,10 @@ function VenderDeEmpresa(): React.JSX.Element {
   return (
     <div className="space-y-2">
       {modoRecibos && <AvisoFacturacion />}
+      {/* M-09: cuando la banda de recibos se va, la caja dice que ahora se factura. Cuándo aplica
+          lo decide el servidor; con la caja en pausa manda el aviso de la pausa. */}
+      {!modoRecibos && pausa === null && <AvisoYaFacturas />}
+      {pausa !== null && <CajaEnPausa motivo={pausa} />}
       {/*
         Altura FIJA, no mínima: con `min-h` la cuadrícula crecía con el catálogo
         —300 productos daban una página de 3.870 px— y el carrito se estiraba con
@@ -731,6 +770,37 @@ function VenderDeEmpresa(): React.JSX.Element {
               onCodigo={(c) => encolarCodigo(c, false)}
             />
           </div>
+          {/* E-07: de quién son los precios de las tarjetas. */}
+          <p className="shrink-0 text-[0.8rem] text-muted-foreground" data-testid="pos-precios-de">
+            {activa.cliente === null
+              ? "Precio de mostrador"
+              : `Precios de ${activa.cliente.legal_name}`}
+          </p>
+          {/* E-13: la caja no vende sin existencia; ofrece la puerta de la mercancía. */}
+          {agotado !== null && (
+            <div
+              className="flex shrink-0 flex-wrap items-center gap-2 rounded-md border border-border bg-warning-soft px-3 py-2 text-[0.85rem] text-warning-soft-foreground"
+              role="status"
+              data-testid="pos-agotado"
+            >
+              <span className="min-w-0 flex-1">
+                <strong>{agotado}</strong> está agotado: la caja no vende sin existencia.
+                {puedeRecibir ? "" : " Pide a quien recibe la mercancía que registre la llegada."}
+              </span>
+              {puedeRecibir && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void navigate("/admin/llego-mercancia")}
+                >
+                  Registrar llegada rápida
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={() => setAgotado(null)}>
+                Cerrar
+              </Button>
+            </div>
+          )}
           {productos.isLoading ? (
             <p className="text-muted-foreground">Cargando…</p>
           ) : items.length === 0 ? (
@@ -1297,8 +1367,11 @@ function IdentificarCliente({
   const [nombre, setNombre] = useState("");
   const [telefono, setTelefono] = useState("");
   const [direccion, setDireccion] = useState("");
+  // E-14: «no» por defecto. Solo se pregunta a un J y solo cuando el negocio factura.
+  const [especial, setEspecial] = useState(false);
 
   const esEmpresa = prefijo === "J" || prefijo === "G";
+  const preguntaEspecial = prefijo === "J" && conFacturas;
   const documento = `${prefijo ?? "V"}${digitos.trim().toUpperCase()}`;
 
   // El cajero teclea la letra al inicio y el prefijo se pone solo:
@@ -1343,7 +1416,8 @@ function IdentificarCliente({
           tax_id: documento,
           legal_name: nombre.trim(),
           person_type_code: tipo.persona,
-          taxpayer_type_code: tipo.contribuyente,
+          taxpayer_type_code:
+            preguntaEspecial && especial ? CLIENTE_ESPECIAL.codigo : tipo.contribuyente,
           ...(telefono.trim() === "" ? {} : { phone: telefono.trim() }),
           ...(direccion.trim() === "" ? {} : { fiscal_address: direccion.trim() }),
         }),
@@ -1355,6 +1429,7 @@ function IdentificarCliente({
       setNombre("");
       setTelefono("");
       setDireccion("");
+      setEspecial(false);
       setDigitos("");
       onCliente(c);
     },
@@ -1511,6 +1586,21 @@ function IdentificarCliente({
               />
             )}
           </FormField>
+          {preguntaEspecial && (
+            <FormField label={CLIENTE_ESPECIAL.pregunta} hint={CLIENTE_ESPECIAL.ayuda}>
+              {(p) => (
+                <SimpleSelect
+                  id={p.id}
+                  value={especial ? "si" : "no"}
+                  onValueChange={(v) => setEspecial(v === "si")}
+                  options={[
+                    { value: "no", label: CLIENTE_ESPECIAL.no },
+                    { value: "si", label: CLIENTE_ESPECIAL.si },
+                  ]}
+                />
+              )}
+            </FormField>
+          )}
           <div className="flex items-center gap-2">
             <Button
               variant="primary"
@@ -1598,6 +1688,7 @@ function Cobrar({
   // E-01 (ADR-0071): la serie la dicta el TALONARIO. Con uno solo, el servidor lo usa; con
   // varios, la caja elige y recuerda el último (por empresa, en este equipo).
   const conFacturas = useConFacturas();
+  const refrescarModulos = useRefrescarModulos();
   const talonarios = useQuery({
     queryKey: ["talonarios-caja", empresa.id],
     enabled: conFacturas,
@@ -1631,6 +1722,10 @@ function Cobrar({
   }
   // El paso de confirmación del FIADO: la consecuencia dicha antes de emitir.
   const [fiando, setFiando] = useState(false);
+  // P-05: «¿Cuándo paga?». La caja solo MANDA la fecha; que haga falta y desde qué día vale lo
+  // dice el servidor en la cotización (`credit_due_date`), y él la exige igual al cobrar.
+  const [vence, setVence] = useState("");
+  const pideVencimiento = cotizacion.credit_due_date?.required === true;
   // LA LLAVE ES POR INTENTO DE COBRO (ADR-0076, M-01), nunca el id de la cuenta: con el id, un
   // segundo cobro de la misma cuenta devolvía la respuesta del primero (M-02) o chocaba 24 h
   // (M-04). Se conserva ante un fallo de red —la respuesta perdida devuelve la MISMA venta— y se
@@ -1708,7 +1803,8 @@ function Cobrar({
   // ── La vista previa del SERVIDOR (ADR-0059): cuánto abona cada forma, su
   // impuesto a las transacciones, el vuelto, lo que falta y cuánto pedir en cada forma.
   // Es el MISMO cálculo que hará la venta; la pantalla no suma dinero.
-  const limpio = (v: string): string => v.trim().replace(",", ".");
+  // F-06: lo tecleado lo lee el lector único de importes; «1.500» no se vuelve 1,5.
+  const limpio = (v: string): string => importeLimpio(v);
   const conMonto = pagos
     .map((p, i) => ({ p, i, monto: limpio(p.amount) }))
     .filter((x) => importeValido(x.monto) && compararImportes(x.monto, "0") > 0);
@@ -1756,8 +1852,28 @@ function Cobrar({
   const completo = estado?.completo === true;
   const todosConMonto = pagos.length > 0 && conMonto.length === pagos.length;
   const listo = alDia && todosConMonto && !hayError && completo;
+  // E-09: el fiado lo dice el servidor en la cotización (permiso + límite del cliente). La caja
+  // no suma: «Fiar todo» se ofrece si el servidor dijo que la cuenta entera cabe; «Fiar lo que
+  // falta», si queda algo disponible — y el que decide es el servidor al cobrar. Una cotización
+  // sin `credit` (API anterior) no cierra nada aquí: lo cierra el servidor.
+  const credito = cotizacion.credit ?? null;
+  const fiadoCerrado: string | null =
+    clienteNombre === null || cotizacion.credit === undefined || credito === null
+      ? null
+      : !credito.permitted
+        ? "Tu usuario no tiene permiso para fiar: cobra la venta completa, o pídeselo a quien administra."
+        : compararImportes(credito.limit_usd, "0") <= 0
+          ? "A este cliente todavía no se le fía: su límite de fiado es 0. Lo fija quien administra, en la ficha del cliente."
+          : credito.available_usd === null
+            ? "No se puede calcular cuánto debe este cliente (falta la tasa de hoy): ahora no se le puede fiar."
+            : compararImportes(credito.available_usd, "0") <= 0
+              ? `Este cliente ya llegó a su límite de fiado (${mostrarImporte({ amount: credito.limit_usd, currency: "USD" })}): cobra la venta completa.`
+              : pagos.length === 0 && !credito.covers_total
+                ? `Esta cuenta no cabe entera en su fiado: le quedan ${mostrarImporte({ amount: credito.available_usd, currency: "USD" })}. Cobra una parte y fía lo que falta.`
+                : null;
   const puedeFiar =
     clienteNombre !== null &&
+    fiadoCerrado === null &&
     alDia &&
     !hayError &&
     !completo &&
@@ -1808,6 +1924,8 @@ function Cobrar({
             attempt_id: k,
             ...(serieVenta === undefined ? {} : { series: serieVenta }),
             ...(clienteId === null ? {} : { customer_id: clienteId }),
+            // P-05: solo al fiar, y solo si el servidor dijo que la pide.
+            ...(fiando && pideVencimiento && vence !== "" ? { due_date: vence } : {}),
             lines: lineas,
             payments: pagos.map((p) => ({
               instrument: p.instrument,
@@ -1822,7 +1940,12 @@ function Cobrar({
         }),
       );
     },
-    onSuccess: (v) => onVendida(v),
+    onSuccess: (v) => {
+      onVendida(v);
+      // A-04: la primera venta enciende en el menú lo que ya tiene datos (factura: Contabilidad y
+      // Libros; recibo: Contabilidad), sin esperar a que caduque la sonda.
+      refrescarModulos(conFacturas ? "factura" : "recibo");
+    },
     // E-17: sin números de control el aviso va DENTRO del cobro, con su camino (enlace o a quién
     // pedírselo); un toast encima sería el segundo aviso (G-16).
     onError: (e) => {
@@ -1858,14 +1981,32 @@ function Cobrar({
               {pagos.length === 0 ? "" : " (lo recibido se abona ahora)"}. Lo cobras después desde
               la ficha del cliente (Administración → Clientes) o desde la venta.
             </p>
+            {pideVencimiento && (
+              <FormField
+                label="¿Cuándo paga?"
+                required
+                hint="La fecha queda guardada con la venta y sale en el recibo o en el PDF de cortesía de la factura. Decide cuándo esta deuda cuenta como vencida."
+              >
+                {(p) => (
+                  <Input
+                    {...p}
+                    type="date"
+                    autoFocus
+                    value={vence}
+                    min={cotizacion.credit_due_date?.min}
+                    onChange={(e) => setVence(e.target.value)}
+                  />
+                )}
+              </FormField>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" onClick={() => setFiando(false)}>
                 Volver
               </Button>
               <Button
                 variant="primary"
-                autoFocus
-                disabled={vender.isPending}
+                autoFocus={!pideVencimiento}
+                disabled={vender.isPending || (pideVencimiento && vence === "")}
                 onClick={() => vender.mutate()}
               >
                 {vender.isPending ? "Registrando…" : "Fiar y registrar"}
@@ -2067,6 +2208,28 @@ function Cobrar({
               Sin cliente identificado la venta se cobra completa. Para fiar, identifica al cliente.
             </p>
           )}
+          {!completo && clienteNombre !== null && fiadoCerrado !== null && (
+            <p
+              className="text-center text-[0.78rem] text-muted-foreground"
+              data-testid="pos-fiado-cerrado"
+            >
+              {fiadoCerrado}
+            </p>
+          )}
+          {!completo &&
+            clienteNombre !== null &&
+            fiadoCerrado === null &&
+            credito !== null &&
+            credito.available_usd !== null && (
+              <p
+                className="text-center text-[0.78rem] text-muted-foreground"
+                data-testid="pos-fiado-disponible"
+              >
+                Puede fiar hasta{" "}
+                {mostrarImporte({ amount: credito.available_usd, currency: "USD" })} (límite{" "}
+                {mostrarImporte({ amount: credito.limit_usd, currency: "USD" })}).
+              </p>
+            )}
         </div>
       </DialogContent>
     </Dialog>
@@ -2286,7 +2449,9 @@ function CantidadEditable({
   const [texto, setTexto] = useState(() => cantidadTexto(cantidad).replace(".", ","));
   useEffect(() => setTexto(cantidadTexto(cantidad).replace(".", ",")), [cantidad]);
   const fijar = () => {
-    if (texto.replace(",", ".") === cantidadTexto(cantidad)) return;
+    // F-06: la misma cantidad, leída por el lector único, no es un cambio.
+    const leida = leerCantidad(texto);
+    if (leida !== null && cantidadTexto(leida) === cantidadTexto(cantidad)) return;
     if (!onFijar(texto)) setTexto(cantidadTexto(cantidad).replace(".", ","));
   };
   return (

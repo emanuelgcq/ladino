@@ -17,6 +17,7 @@
  * locales de pantalla; si se restauran de la nube, el nombre lo trae la
  * cotización y la decisión se vuelve a tomar.
  */
+import { leerCantidad as leerCantidadTecleada } from "./components/forms.js";
 
 export interface ClientePos {
   id: string;
@@ -315,7 +316,7 @@ export function cantidadTexto(n: number): string {
 
 /** Cantidad tecleada por la persona (con coma o punto), o null si no es válida. */
 export function leerCantidad(texto: string): number | null {
-  const t = texto.trim().replace(",", ".");
-  if (!/^\d{1,16}(\.\d{1,8})?$/.test(t)) return null;
-  return Number(t);
+  // F-06: el lector único de cantidades. «1.250» ya no se lee como 1,25: se rechaza por ambiguo.
+  const leida = leerCantidadTecleada(texto);
+  return leida.ok ? Number(leida.cantidad) : null;
 }

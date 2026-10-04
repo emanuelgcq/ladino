@@ -128,6 +128,27 @@ describe("puesta a punto fiscal", () => {
     const otra = await pedir("POST", "/v1/fiscal/regime", GERENTE, { regime_code: "sin_emision" });
     expect(otra.status).toBe(409);
 
+    // RESPUESTA §2.15: la asignación deja UN acta (la del 409 no ocurrió y no deja ninguna), con
+    // quién, a qué régimen y una versión de reglas registrada (ADR-0079).
+    const actas = await sql<
+      { to: string; origin: string; created_by: string; rules_version: string }[]
+    >`
+      select payload->>'to' as "to", payload->>'origin' as origin, created_by, rules_version
+        from public.audit_events
+       where company_id = ${COMPANY} and event_type like 'fiscal.regime.%'`;
+    expect(actas).toHaveLength(1);
+    expect(actas[0]).toMatchObject({
+      to: "formatos_libres",
+      origin: "empezar",
+      created_by: GERENTE,
+    });
+    expect(actas[0]!.rules_version).toMatch(/^\d+\.\d+\.\d+\+[0-9a-f]{16}$/);
+    // H5: el acta de un cambio de regla lleva la versión NUEVA —la de la empresa al terminar—,
+    // no la anterior al cambio (el acta se escribía antes de insertar el régimen).
+    const [vigente] = await sql<{ version: string }[]>`
+      select version from platform.current_rules_version(${COMPANY})`;
+    expect(actas[0]!.rules_version).toBe(vigente!.version);
+
     const estado = await pedir("GET", "/v1/fiscal/setup", GERENTE);
     expect(((await estado.json()) as { current_regime: string }).current_regime).toBe(
       "formatos_libres",
@@ -175,12 +196,18 @@ describe("puesta a punto fiscal", () => {
     expect(cuerpo.accepted_on).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
     // El acta es de ESTA empresa aunque las reglas globales ya existieran.
-    const actas = await sql<{ payload: { rate: string; accepted_by: string } }[]>`
-      select payload from public.audit_events
+    const actas = await sql<
+      { payload: { rate: string; accepted_by: string }; rules_version: string }[]
+    >`
+      select payload, rules_version from public.audit_events
        where company_id = ${COMPANY} and event_type = 'fiscal.iva.accepted'`;
     expect(actas).toHaveLength(1);
     expect(actas[0]!.payload.rate).toBe("0.16");
     expect(actas[0]!.payload.accepted_by).toBe(GERENTE);
+    // H5: el acta lleva la versión de reglas que queda tras aceptar, no la de antes.
+    const [vigente] = await sql<{ version: string }[]>`
+      select version from platform.current_rules_version(${COMPANY})`;
+    expect(actas[0]!.rules_version).toBe(vigente!.version);
 
     // Y la regla general de venta está activa y VE-iva la resuelve.
     const estado = await pedir("GET", "/v1/fiscal/setup", GERENTE);

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSesion } from "../app/session.js";
-import { MoneyInput, importeValido } from "./forms.js";
+import { MoneyInput, importeLimpio, importeValido } from "./forms.js";
 import { fechaLocal } from "../fechas.js";
 import { tasaLimpia } from "../tasa.js";
 
@@ -54,7 +54,7 @@ export function MoneyDualInput({
   const [enAncla, setEnAncla] = useState(valor.currency === ANCLA ? valor.amount : "");
   const { llamar, empresa } = useSesion();
 
-  const limpio = valor.amount.trim().replace(",", ".");
+  const limpio = importeLimpio(valor.amount);
   const vista = useQuery({
     // La tasa es de la empresa: la clave la lleva, o dos empresas compartirían la vista (H10).
     queryKey: ["dual", empresa.id, limpio, valor.currency, fecha],

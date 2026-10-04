@@ -100,7 +100,8 @@ export const NAV_ADMIN: NavGroup[] = [
         to: "/admin/ventas",
         label: "Ventas",
         icon: Receipt,
-        permiso: ["sales.invoice.annul", "accounting.read"],
+        // G-07: quien inicia devoluciones (también el cajero) llega a la venta desde aquí.
+        permiso: ["sales.invoice.annul", "sales.return.manage", "accounting.read"],
       },
       {
         to: "/admin/cuentas",

@@ -8,12 +8,13 @@ import {
   useState,
 } from "react";
 import type { EmailOtpType, Session } from "@supabase/supabase-js";
-import { Building2, LogOut } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { api, supabase, LlamadaApiError, type Company } from "../lib.js";
 import { Button } from "../ui/button.js";
 import { Input, Label } from "../ui/input.js";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../ui/card.js";
 import { LogoLadino } from "../components/LogoLadino.js";
+import { InsigniaEmpresa } from "../components/InsigniaEmpresa.js";
 import { rifParaMostrar } from "./rif.js";
 import { Registro } from "../pages/registro/Registro.js";
 import {
@@ -44,6 +45,12 @@ export interface Sesion {
    * se enseña — esconder es cortesía, el control vive en la API.
    */
   readonly puede: (permiso: string | readonly string[]) => boolean;
+  /**
+   * A-04: las claves de los roles de sistema de la persona en la empresa activa (`accountant`,
+   * `owner`…). NO autoriza nada —eso es `puede`—: solo lo usa la sonda del menú, porque el
+   * contador ve Contabilidad y Libros desde el primer día y el dueño tiene sus mismos permisos.
+   */
+  readonly roles: readonly string[];
   /** ADR-0077 §2 (A-13): abre el asistente de «Crear otra empresa», en un tenant nuevo. */
   readonly crearOtraEmpresa: () => void;
 }
@@ -160,6 +167,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   const [companies, setCompanies] = useState<Company[] | null>(null);
   const [empresa, setEmpresaState] = useState<Company | null>(null);
   const [permisos, setPermisos] = useState<ReadonlySet<string> | null>(null);
+  // A-04: llegan con los permisos, en la misma respuesta, y cambian con ellos.
+  const [roles, setRoles] = useState<readonly string[]>([]);
   const [error, setError] = useState("");
 
   // El enlace de «recuperar contraseña» abre una sesión de RECUPERACIÓN:
@@ -275,9 +284,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     let vigente = true;
     setPermisos(null);
     setErrorPermisos(null);
-    void api<{ permissions: string[] }>(s, "/v1/me/permissions", { companyId: empresaId })
+    void api<{ permissions: string[]; roles?: string[] }>(s, "/v1/me/permissions", {
+      companyId: empresaId,
+    })
       .then((r) => {
-        if (vigente) setPermisos(new Set(r.permissions));
+        if (!vigente) return;
+        setRoles(r.roles ?? []);
+        setPermisos(new Set(r.permissions));
       })
       .catch((e: unknown) => {
         if (!vigente) return;
@@ -318,9 +331,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   const valor = useMemo<Sesion | null>(
     () =>
       session && empresa && companies && permisos !== null
-        ? { session, companies, empresa, setEmpresa, llamar, puede, crearOtraEmpresa }
+        ? { session, companies, empresa, setEmpresa, llamar, puede, roles, crearOtraEmpresa }
         : null,
-    [session, empresa, companies, permisos, setEmpresa, llamar, puede, crearOtraEmpresa],
+    [session, empresa, companies, permisos, roles, setEmpresa, llamar, puede, crearOtraEmpresa],
   );
 
   if (enlace !== null) {
@@ -939,7 +952,7 @@ function SelectorEmpresa({
                   onClick={() => onElegir(c)}
                   className="flex w-full items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-accent hover:bg-accent-soft/40"
                 >
-                  <Building2 className="size-4 shrink-0 text-muted-foreground" />
+                  <InsigniaEmpresa empresa={c} className="size-8 text-[0.9rem]" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{c.legal_name}</span>
                     <span className="block text-[0.8rem] text-muted-foreground">

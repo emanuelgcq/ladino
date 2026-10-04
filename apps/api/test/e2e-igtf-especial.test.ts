@@ -4,6 +4,7 @@ import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { sembrarTasaOficial, borrarTasasOficiales } from "./_tasa-oficial.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture } from "./_fiado-de-fixture.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
@@ -154,6 +155,8 @@ async function sembrar(e: Empresa): Promise<void> {
                 taxpayer_type_code, fiscal_address)
              values (${e.cliente}, ${e.tenant}, ${e.company}, ${`J-CIE-${e.tipo}-${RUN}`},
                      'Cliente del especial', 'juridica', 'ordinario', 'Calle 8, Maracay')`;
+    // R-82.1: la factura de administración nace fiada — la empresa de prueba declara que fía.
+    await fiadoDeFixture(tx, e.company, [ROL]);
     const [p] = await tx<{ id: string }[]>`
       insert into public.products (tenant_id, company_id, sku, name, kind, status, unit_code,
                                    tax_category_code)
@@ -601,6 +604,7 @@ describe("revisión 1 · lo pendiente es la deuda de hoy, no el saldo de la emis
                values (${cliente}, ${SPE.tenant}, ${SPE.company}, ${`J-CUS-${RUN}`},
                        'Cliente en dólares', 'juridica', 'ordinario', 'Calle 9, Valencia',
                        ${l!.id})`;
+      await fiadoDeFixture(tx, SPE.company);
       SPE_USD.producto = p!.id;
     });
     const f = await pedir(SPE, "POST", "/v1/invoices", {

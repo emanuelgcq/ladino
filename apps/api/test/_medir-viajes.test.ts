@@ -4,6 +4,7 @@ import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
+import { fiadoDeFixture, venceDeFixture } from "./_fiado-de-fixture.js";
 
 /**
  * MEDIDOR DE ROUND-TRIPS — herramienta temporal, NO es un test de verdad.
@@ -137,6 +138,9 @@ beforeAll(async () => {
                 taxpayer_type_code, fiscal_address)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, ${`J-CLI-${RUN}`}, 'Cliente medicion',
                      'juridica', 'ordinario', 'Av. Principal, Caracas')`;
+    // Las dos ventas que se miden dejan saldo (un abono en divisa): desde E-09 eso es fiar, y
+    // exige el permiso, el límite del cliente y la fecha en que paga.
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
 
     const [l] = await tx<{ id: string }[]>`
       insert into public.price_lists (tenant_id, company_id, name, currency_code)
@@ -232,6 +236,7 @@ describe("MEDICION de round-trips", () => {
       warehouse_id: W1,
       lines: PRODUCTOS.map((id) => ({ product_id: id, quantity: "1" })),
       payments: [{ instrument: "efectivo_usd", amount: "1.00", currency: "USD" }],
+      due_date: venceDeFixture(),
     });
     expect(calentar.status, await calentar.clone().text()).toBe(201);
 
@@ -242,6 +247,7 @@ describe("MEDICION de round-trips", () => {
       warehouse_id: W1,
       lines: PRODUCTOS.map((id) => ({ product_id: id, quantity: "2" })),
       payments: [{ instrument: "efectivo_usd", amount: "5.00", currency: "USD" }],
+      due_date: venceDeFixture(),
     });
     expect(r.status).toBe(201);
 

@@ -4,6 +4,8 @@ import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
+import { fiadoDeFixture } from "./_fiado-de-fixture.js";
+import { borrarTasasOficiales, sembrarTasaOficial } from "./_tasa-oficial.js";
 
 /**
  * EL GANCHO — R-20 cerrado, demostrado de extremo a extremo.
@@ -41,6 +43,9 @@ const ROL = crypto.randomUUID();
 const MEM = crypto.randomUUID();
 const ASIG = crypto.randomUUID();
 const RUN = Date.now().toString(36);
+// La regla del fiado (R-82.1) mide el límite en USD: facturar a crédito necesita la tasa oficial
+// del día también cuando la factura va en bolívares. En una base limpia no hay ninguna.
+const FUENTE_TASA_FIADO = `BCV e2e-accounting-hooks-fiado-${RUN}`;
 const HOY = diaCaracas();
 const AYER = diaCaracas(-1);
 const FUENTE_TASA = `Carga E2E contabilidad ${RUN}`;
@@ -91,6 +96,7 @@ beforeAll(async () => {
   sqlApi = createClient(URL_API);
   app = buildApp({ sql: sqlApi, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
   await sql`insert into auth.users (id) values (${CONTADOR}) on conflict (id) do nothing`;
+  await sembrarTasaOficial(sql, { rate: "40", rate_date: HOY, source: FUENTE_TASA_FIADO });
   await sql`delete from public.exchange_rates where source = ${FUENTE_TASA}`;
 
   await sql.begin(async (tx) => {
@@ -134,6 +140,8 @@ beforeAll(async () => {
                 taxpayer_type_code)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, ${`J-CLI-${RUN}`}, 'Cliente e2e conta',
                      'juridica', 'ordinario')`;
+    // R-82.1: la factura de administración nace fiada — la empresa de prueba declara que fía.
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
     await tx`insert into public.suppliers
                (id, tenant_id, company_id, tax_id, legal_name, supplier_kind, person_type_code,
                 taxpayer_type_code)
@@ -211,6 +219,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await borrarTasasOficiales(sql, FUENTE_TASA_FIADO);
   await sql.end();
   await sqlApi.end();
 });
@@ -769,6 +778,8 @@ describe("el gancho contable — R-20", () => {
     const anulada = await pedir("POST", `/v1/invoices/${doc["id"]!}/annul`, {
       company_id: COMPANY,
       reason: "Prueba del gancho contable",
+      // G-10 (PA 00071 art. 36): la persona confirma el original y las copias.
+      originals_in_hand: true,
     });
     expect(anulada.status).toBe(200);
 
@@ -841,5 +852,75 @@ describe("el gancho contable — R-20", () => {
     expect(cierre.status).toBe(422);
     const e = (await cierre.json()) as { message: string };
     expect(e.message).toMatch(/pendientes de contabilizar|borrador/i);
+  });
+});
+
+/**
+ * ADR-0079, quinta pasada. Este fichero emite ventas, registra facturas de proveedor, cobra, paga
+ * y postea asientos: es donde el invariante de la versión de reglas se mira desde un E2E, y no
+ * solo desde el recorrido.
+ */
+describe("la versión de reglas — ADR-0079", () => {
+  const vigente = async (): Promise<string> =>
+    (
+      await sql<{ version: string }[]>`
+        select version from platform.current_rules_version(${COMPANY})`
+    )[0]!.version;
+
+  it("B2: un asiento manual guardado como borrador y posteado tras un cambio de regla lleva la versión del día del POSTEO", async () => {
+    const cuentas = await sql<{ code: string; id: string }[]>`
+      select code, id from public.accounts
+       where company_id = ${COMPANY} and code in ('1.1.03', '4.1.01')`;
+    const de = (c: string) => cuentas.find((x) => x.code === c)!.id;
+    const borrador = await pedir("POST", "/v1/journal-entries", {
+      company_id: COMPANY,
+      posting_date: HOY,
+      description: "Borrador que se postea otro día (e2e ADR-0079)",
+      lines: [
+        { account_id: de("1.1.03"), debit: "12.00" },
+        { account_id: de("4.1.01"), credit: "12.00" },
+      ],
+    });
+    expect(borrador.status).toBe(201);
+    const { id } = (await borrador.json()) as { id: string };
+    const versionDe = async (): Promise<{ status: string; rules_version: string }> =>
+      (
+        await sql<{ status: string; rules_version: string }[]>`
+          select status, rules_version from public.journal_entries where id = ${id}`
+      )[0]!;
+    const guardado = await versionDe();
+    expect(guardado).toEqual({ status: "draft", rules_version: await vigente() });
+
+    // Cambia una regla de la empresa: su versión de reglas es otra.
+    await sql.begin(async (tx) => {
+      await tx`select set_config('ladino.actor_id', ${CONTADOR}, true)`;
+      await tx`insert into public.company_settings (tenant_id, company_id, absorb_igtf)
+               values (${TENANT}, ${COMPANY}, true)
+               on conflict (company_id)
+               do update set absorb_igtf = not public.company_settings.absorb_igtf`;
+    });
+    const nueva = await vigente();
+    expect(nueva).not.toBe(guardado.rules_version);
+
+    const posteo = await pedir("POST", `/v1/journal-entries/${id}/post`, { company_id: COMPANY });
+    expect(posteo.status).toBe(200);
+    expect(await versionDe()).toEqual({ status: "posted", rules_version: nueva });
+  });
+
+  it("rules_version_gaps = 0 sobre todo lo que este fichero emitió, registró y posteó", async () => {
+    const gaps = await sql<{ table_name: string; rules_version: string; problem: string }[]>`
+      select table_name, rules_version, problem from platform.rules_version_gaps(${COMPANY})`;
+    expect(gaps).toEqual([]);
+    // Y no es un cero vacío: hay documentos emitidos, facturas de proveedor y asientos posteados.
+    const [n] = await sql<{ docs: number; compras: number; asientos: number }[]>`
+      select (select count(*)::int from public.documents
+               where company_id = ${COMPANY} and status in ('issued', 'paid', 'annulled')) as docs,
+             (select count(*)::int from public.supplier_invoices
+               where company_id = ${COMPANY} and status in ('posted', 'paid')) as compras,
+             (select count(*)::int from public.journal_entries
+               where company_id = ${COMPANY} and status in ('posted', 'reversed')) as asientos`;
+    expect(n!.docs).toBeGreaterThan(2);
+    expect(n!.compras).toBeGreaterThan(0);
+    expect(n!.asientos).toBeGreaterThan(5);
   });
 });

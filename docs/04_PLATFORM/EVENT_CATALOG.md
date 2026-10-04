@@ -120,7 +120,11 @@ Cada evento incluye schema version.
 - `treasury.cash_register.closed` — lo emite `closeCashRegister()`. El payload lleva
   `{account_id, closing_date, expected_amount, counted_amount, difference, reason}`
   (importes como string). Con diferencia cero el evento SÍ se emite —el cierre es un
-  hecho aunque cuadre—, pero no genera asiento: no hay hecho contable.
+  hecho aunque cuadre—, pero no genera asiento: no hay hecho contable. Es el `source_event` de
+  DOS plantillas del preset, que se distinguen por el origen: `cash_closing` (sobrante o faltante
+  contra «Faltantes y sobrantes de caja») y `cash_closing_overdraft` (J-02, migración
+  20261004180200: la caja estaba en negativo; lo que la lleva a cero va a «Cuentas por pagar a
+  socios» y lo contado por encima de cero es sobrante). El evento es uno solo: el cierre ocurrió.
 
 - `treasury.transfer.registered` — lo emite `transferBetweenAccounts()` (migración 61,
   ADR-0062 §3): mover dinero entre dos cuentas de la MISMA moneda — repartir lo que entró
@@ -182,6 +186,13 @@ contable correspondiente en el preset `ve_basico`. El vocabulario lo asevera el 
   cuenta (ADR-0065 §3). Desde la migración 20261002110000 (ADR-0072 §3) su payload trae además
   `retention_voucher_number` (el comprobante emitido al registrar, o null) e
   `iva_retention_full_reason` (el supuesto del art. 5 por el que se retuvo el 100 %, o null).
+- `ap.expense_invoice_posted` — se registró la factura de un GASTO (compra de servicio: luz,
+  teléfono, alquiler) desde `POST /v1/expenses` con `invoice` (H-09, migración 20261004170000,
+  ADR-0080). Es el hecho de `ap.invoice_posted` para una factura con `expense_category`: mismo
+  agregado (`supplier_invoice`), mismo payload —más `expense_category`—, auditoría y outbox. Se
+  publica EN VEZ de `ap.invoice_posted`, nunca además: un consumidor que quiera todas las
+  facturas de proveedor escucha los dos. Su asiento (`purchase_invoice / ap.expense_invoice_posted`)
+  debita gasto y no «mercancía recibida por facturar».
 - `ap.retention_excluded` — una empresa agente marcó una exclusión del art. 3 de la PA
   SNAT/2025/000054 al registrar la factura; payload `exclusion_code` y `reason` (auditoría y outbox,
   agregado `supplier_invoice`).
@@ -244,6 +255,12 @@ Clientes (migración 18, ADR-0033) — casos de uso de `customers.ts`, `schema_v
 
 - customer.created · customer.updated · customer.blocked · customer.unblocked (payload `{reason}`)
 - customer.tax_id_established — lo escribe el **trigger M4** al alta con RIF (red del esquema)
+- customer.credit_limit_set (E-09, migración 20261004140000) — el acta la escribe el **trigger**
+  `customers_credit_limit_guard` con `{credit_limit_usd_anterior, credit_limit_usd_nuevo, currency,
+  legal_name}`; `setCustomerCreditLimit` NO la duplica: emite solo el evento de outbox del mismo
+  nombre con `{customer_id, company_id, credit_limit_usd}`
+- customer.taxpayer_type_changed (E-14) — `setCustomerTaxpayerType`, payload `{from, to}`, en
+  `audit_events` y en outbox
 - customer.tax_id_changed — lo escribe el **trigger M4** con `{tax_id_anterior, tax_id_nuevo,
   legal_name}`; el caso de uso `setCustomerTaxId` NO lo duplica en `audit_events`: emite solo el
   evento de outbox del mismo nombre (la misma partición que `company.tax_id_established`)

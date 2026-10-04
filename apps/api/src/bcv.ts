@@ -18,6 +18,7 @@
  *      cuela la familia de bugs fecha-contra-reloj (CLAUDE.md §3) — y a
  *      medianoche VET el día UTC coincide, así que el corte es estable.
  */
+import { createHash } from "node:crypto";
 
 export interface BcvConfig {
   /** Base de DolarAPI, p. ej. https://ve.dolarapi.com — los tests apuntan a un mock local. */
@@ -31,6 +32,10 @@ export interface TasaBcv {
   readonly rateDate: string;
   /** El instante completo publicado, para la fuente citada. */
   readonly actualizada: string;
+  /** B-14, para el acta: la URL exacta consultada, cuándo respondió y el SHA-256 de su cuerpo. */
+  readonly sourceUrl: string;
+  readonly capturedAt: string;
+  readonly responseSha256: string;
 }
 
 /** `promedio` del cuerpo crudo, como string exacto. `null` si no está o no es tasa. */
@@ -53,8 +58,9 @@ export class BcvNoDisponible extends Error {}
 /** Trae la tasa oficial. Lanza `BcvNoDisponible` con el motivo si no se pudo. */
 export async function tasaOficialBcv(cfg: BcvConfig): Promise<TasaBcv> {
   let cuerpo: string;
+  const sourceUrl = `${cfg.url}/v1/dolares/oficial`;
   try {
-    const r = await fetch(`${cfg.url}/v1/dolares/oficial`, {
+    const r = await fetch(sourceUrl, {
       signal: AbortSignal.timeout(8000),
       headers: { Accept: "application/json" },
     });
@@ -69,7 +75,14 @@ export async function tasaOficialBcv(cfg: BcvConfig): Promise<TasaBcv> {
   if (rate === null || fecha === null) {
     throw new BcvNoDisponible("la respuesta no trae promedio o fecha reconocibles");
   }
-  return { rate, rateDate: diaCaracasDe(fecha), actualizada: fecha };
+  return {
+    rate,
+    rateDate: diaCaracasDe(fecha),
+    actualizada: fecha,
+    sourceUrl,
+    capturedAt: new Date().toISOString(),
+    responseSha256: createHash("sha256").update(cuerpo).digest("hex"),
+  };
 }
 
 /**

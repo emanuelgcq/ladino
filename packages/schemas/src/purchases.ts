@@ -574,6 +574,37 @@ export const SupplierPaymentResponse = z
   .strict();
 export type SupplierPaymentResponse = z.infer<typeof SupplierPaymentResponse>;
 
+/**
+ * D-02 (ola 4): LA VISTA PREVIA DE UN PAGO A PROVEEDOR (`POST /v1/supplier-payments/preview`).
+ * El mismo caso de uso que registra, deshecho al terminar: cuánto sale de la cuenta en SU moneda,
+ * cuánto cancela de la factura en la suya, y —si el pago cruza monedas— a qué tasa BCV y de qué
+ * fecha. La pantalla lo enseña antes de confirmar y no calcula nada.
+ */
+export const SupplierPaymentPreviewResponse = z
+  .object({
+    /** Lo que sale de la cuenta, en la moneda de la cuenta. */
+    money_amount: z.string(),
+    money_currency: z.string(),
+    /** Lo que cancela de la factura, en la moneda de la factura. */
+    settled_amount: z.string(),
+    settled_currency: z.string(),
+    /** El pago cruza monedas (la del dinero no es la de la factura). */
+    crossed: z.boolean(),
+    /** La tasa BCV del día del pago de la divisa a la moneda funcional, y la fecha en que se publicó. */
+    fx_rate: z.string().nullable(),
+    fx_rate_currency: z.string().nullable(),
+    fx_rate_date: z.string().nullable(),
+    /** El saldo de la factura después del pago, en su moneda. */
+    balance_after: z.string(),
+    /**
+     * No nulo = la cuenta no alcanza: el mensaje del control de saldo. El resumen se devuelve
+     * igual, para que se vea cuánto sale y a qué tasa ANTES de confirmar el sobregiro.
+     */
+    insufficient_funds: z.string().nullable(),
+  })
+  .strict();
+export type SupplierPaymentPreviewResponse = z.infer<typeof SupplierPaymentPreviewResponse>;
+
 export const ApAgingResponse = z
   .object({
     reference_date: z.string(),
@@ -583,11 +614,17 @@ export const ApAgingResponse = z
           supplier_id: uuid,
           bucket: z.enum(["0-30", "31-60", "61-90", "90+"]),
           document_count: z.number().int().nonnegative(),
-          amount: z.string(),
+          /** null = el tramo tiene una factura en divisa que hoy no se puede valorar (sin tasa). */
+          amount: z.string().nullable(),
         })
         .strict(),
     ),
-    total: z.string(),
+    /** null = hay deuda en divisa y falta la tasa de hoy. `null` NO es cero. */
+    total: z.string().nullable(),
+    /** Por qué `total` viene en null. Hoy solo `sin_tasa`; null si `total` es una cifra. */
+    total_motivo: z.enum(["sin_tasa"]).nullable(),
+    /** Solo con `sin_tasa`: lo que se debe en cada moneda, sin convertir. Si no, vacía. */
+    total_por_moneda: z.array(z.object({ currency: z.string(), nominal: z.string() }).strict()),
   })
   .strict();
 export type ApAgingResponse = z.infer<typeof ApAgingResponse>;
@@ -615,7 +652,15 @@ export const SupplierStatementResponse = z
         })
         .strict(),
     ),
-    total_outstanding: z.string(),
+    /**
+     * null = hay deuda en divisa y falta la tasa de hoy (la última guardada es más vieja que el
+     * margen). `null` NO es cero: el nominal va en `total_outstanding_por_moneda`.
+     */
+    total_outstanding: z.string().nullable(),
+    total_outstanding_motivo: z.enum(["sin_tasa"]).nullable(),
+    total_outstanding_por_moneda: z.array(
+      z.object({ currency: z.string(), nominal: z.string() }).strict(),
+    ),
     total_retained: z.string(),
     aging: ApAgingResponse,
   })

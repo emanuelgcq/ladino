@@ -30,7 +30,7 @@ import { mostrarImporte } from "../../money.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { errorDePersona } from "../../lib.js";
 import type { PriceList, PriceItem, Product } from "../../lib.js";
-import { fechaHoraLocal } from "../../fechas.js";
+import { fechaHoraLocal, fechaLocal } from "../../fechas.js";
 import { tasaLimpia } from "../../tasa.js";
 import { esCero } from "../../components/decimal-compare.js";
 
@@ -67,7 +67,7 @@ export function Precios(): React.JSX.Element {
     <div>
       <PageHeader
         title="Listas de precios"
-        description="Los precios se ponen en dólares y se mantienen solos: la caja convierte a bolívares con la tasa BCV del día, y el recibo o la factura sale siempre en bolívares. La columna en Bs es la conversión de hoy, como referencia."
+        description="Los precios se ponen en dólares y se mantienen solos: la caja convierte a bolívares con la tasa BCV del día, y el recibo o la factura sale siempre en bolívares. El historial enseña cada precio en Bs a la tasa del día en que empezó a regir y, aparte, lo que sería hoy, como referencia."
         actions={
           puede("price_list.manage") ? (
             <Button variant="primary" onClick={() => setCreando(true)}>
@@ -346,17 +346,62 @@ function PreciosDeLista({
         ),
       },
       {
-        // La CONVERSIÓN la calcula el servidor con la tasa BCV de HOY —
-        // también para filas históricas (la tasa se ancla al documento, no al
-        // precio), y el encabezado lo dice. Sin tasa: «sin tasa del día».
-        id: "equivalente",
+        // C-11: lo que ese precio ERA en la otra moneda el día en que empezó a regir, con la
+        // tasa oficial de ese día (su fecha a la vista). La cifra, la tasa y el motivo cuando no
+        // hay cifra vienen del servidor: aquí no se convierte nada ni se rellena con la de hoy.
+        id: "equivalente-del-dia",
         header: () => (
           <span className="block text-right">
             {lista.currency_code === "VES" ? "En dólares" : "En bolívares"}
+            <span className="block text-[0.72rem] font-normal text-muted-foreground">
+              el día del precio
+            </span>
+          </span>
+        ),
+        enableSorting: false,
+        cell: (c) => {
+          const f = c.row.original;
+          if (
+            f.historical_equivalent_amount != null &&
+            f.historical_equivalent_currency != null &&
+            f.historical_rate != null
+          ) {
+            return (
+              <span className="block text-right tabular-nums">
+                {mostrarImporte({
+                  amount: f.historical_equivalent_amount,
+                  currency: f.historical_equivalent_currency,
+                })}
+                <span className="block text-[0.72rem] text-muted-foreground">
+                  {tasaLimpia(f.historical_rate, f.historical_rate_source ?? undefined)}
+                  {" · "}
+                  {fechaLocal(f.historical_rate_date)}
+                </span>
+              </span>
+            );
+          }
+          return (
+            <span className="block text-right text-[0.82rem] text-muted-foreground">
+              {f.historical_rate_status === "scheduled"
+                ? "Todavía no rige: su día aún no tiene tasa"
+                : f.historical_rate_status === "missing"
+                  ? "Sin tasa guardada para ese día"
+                  : "—"}
+            </span>
+          );
+        },
+      },
+      {
+        // La REFERENCIA de hoy: la misma tasa BCV vigente para todas las filas, también las
+        // viejas. No es lo que se cobró: es lo que ese precio sería hoy. Sin tasa: «sin tasa del día».
+        id: "equivalente",
+        header: () => (
+          <span className="block text-right">
+            Hoy, como referencia
             {tasa !== null ? (
               <span
                 className="block text-[0.72rem] font-normal text-muted-foreground"
-                title="Conversión de hoy, también para los precios anteriores."
+                title="Conversión a la tasa de hoy, igual para todos los precios: es una referencia, no lo que se cobró."
               >
                 {tasaLimpia(tasa.rate)}
               </span>

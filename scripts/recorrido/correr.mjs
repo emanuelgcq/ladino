@@ -41,7 +41,7 @@ const EMPRESAS = {
 };
 const BLOQUES = "ABCDEFGHIJKLMNOP".split("");
 /** Filas de invariante (no INFORME) que `invariantes.sql` devuelve por empresa: súbela al añadir una. */
-const INVARIANTES_ESPERADOS = 21;
+const INVARIANTES_ESPERADOS = 28;
 const ESQUEMAS = ["public", "platform", "auth", "storage", "supabase_migrations"];
 
 function correr(cmd, args, { entrada, silencioso = false } = {}) {
@@ -200,6 +200,16 @@ export function restaurar() {
       { silencioso: true },
     ),
     "reparación ADR-0075 (divisa del mayor)",
+  );
+  // J-02: los cierres en sobregiro ya asentados como ingreso pasan a «Cuentas por pagar a socios»
+  // (reversa + asiento nuevo). Después de las subcuentas de ADR-0070: la reversa las usa.
+  obligatorio(
+    correr(
+      process.execPath,
+      [path.join(RAIZ, "scripts", "reparar", "j-02-sobregiro-al-cierre.mjs")],
+      { silencioso: true },
+    ),
+    "reparación J-02 (sobregiro al cierre)",
   );
   const docs = psql("select count(*) from public.documents").stdout.trim();
   console.log(`✓ escenario restaurado (${docs} documentos)`);

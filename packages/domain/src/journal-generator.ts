@@ -78,6 +78,8 @@ export interface AmountContext {
   /** La factura de proveedor distinta de lo recibido (ADR-0060 §2): lo que revaloriza y lo que va a variación. */
   readonly revaluation_to_inventory?: string;
   readonly revaluation_to_variance?: string;
+  /** J-02: lo que lleva de negativo a cero una caja en sobregiro al cerrarla. Se le debe al dueño. */
+  readonly owner_contribution?: string;
 }
 
 /** Las banderas que responden los predicados. Ocho preguntas, ni una más. */
@@ -445,8 +447,19 @@ export async function generateJournalFromDocument(
       l.account_purpose === "ap_general" &&
       amounts["net_amount"] !== undefined
         ? "net_amount"
-        : l.amount_source;
-    const bruto = amounts[fuente] ?? (fuente === "exchange_difference" ? "0" : undefined);
+        : // G-15 (20261004150000): la plantilla del reembolso pasó a bajar el pasivo por «total».
+          // Un reembolso encolado por la API anterior solo trae «functional_amount» (saldo y caja
+          // en la misma moneda, mismo importe): ese es su total. Solo ese hecho.
+          input.sourceKind === "customer_refund" &&
+            l.amount_source === "total" &&
+            amounts["total"] === undefined
+          ? "functional_amount"
+          : l.amount_source;
+    // «exchange_difference» y «credit_surplus» (F-10, el sobrante de un cobro) valen 0 cuando el
+    // hecho no los aporta: un cobro sin sobrante, o una fila de la cola anterior a la plantilla.
+    const bruto =
+      amounts[fuente] ??
+      (fuente === "exchange_difference" || fuente === "credit_surplus" ? "0" : undefined);
     if (bruto === undefined) {
       // La plantilla pide un importe que este documento no tiene. No es un
       // fallo del documento: es una plantilla mal configurada para él.

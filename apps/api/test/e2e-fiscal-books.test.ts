@@ -3,6 +3,8 @@ import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
 import { diaCaracas } from "./_dia-caracas.js";
+import { fiadoDeFixture } from "./_fiado-de-fixture.js";
+import { borrarTasasOficiales, sembrarTasaOficial } from "./_tasa-oficial.js";
 import { declararTipoDeFixture } from "./_tipo-de-fixture.js";
 
 /**
@@ -40,6 +42,9 @@ const ROL = crypto.randomUUID();
 const MEM = crypto.randomUUID();
 const ASIG = crypto.randomUUID();
 const RUN = Date.now().toString(36);
+// La regla del fiado (R-82.1) mide el límite en USD: facturar a crédito necesita la tasa oficial
+// del día también cuando la factura va en bolívares. En una base limpia no hay ninguna.
+const FUENTE_TASA_FIADO = `BCV e2e-fiscal-books-fiado-${RUN}`;
 const HOY = diaCaracas();
 const AYER = diaCaracas(-1);
 // El período que se consulta: de ayer a hoy. Explícito y no «el mes en curso»,
@@ -104,6 +109,7 @@ beforeAll(async () => {
   sqlApi = createClient(URL_API);
   app = buildApp({ sql: sqlApi, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
   await sql`insert into auth.users (id) values (${CONTADOR}) on conflict (id) do nothing`;
+  await sembrarTasaOficial(sql, { rate: "40", rate_date: HOY, source: FUENTE_TASA_FIADO });
 
   await sql.begin(async (tx) => {
     await tx`select set_config('ladino.actor_id', ${CONTADOR}, true)`;
@@ -119,7 +125,7 @@ beforeAll(async () => {
              values (${ROL}, null, ${`e2elibros_${RUN}`}, 'Contador libros e2e', true)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
              (${ROL}, 'sales.invoice.issue'), (${ROL}, 'sales.invoice.annul'),
-             (${ROL}, 'sales.return.manage'),
+             (${ROL}, 'sales.return.manage'), (${ROL}, 'sales.credit_note.direct'),
              (${ROL}, 'ar.read'), (${ROL}, 'supplier.manage'),
              (${ROL}, 'purchase.invoice.register'), (${ROL}, 'ap.read'),
              (${ROL}, 'inventory.move'), (${ROL}, 'fiscal.range.manage'),
@@ -143,6 +149,8 @@ beforeAll(async () => {
                 taxpayer_type_code)
              values (${CLIENTE}, ${TENANT}, ${COMPANY}, ${`J-CLI-${RUN}`}, 'Cliente e2e libros',
                      'juridica', 'ordinario')`;
+    // R-82.1: la factura de administración nace fiada — la empresa de prueba declara que fía.
+    await fiadoDeFixture(tx, COMPANY, [ROL]);
     await tx`insert into public.suppliers
                (id, tenant_id, company_id, tax_id, legal_name, supplier_kind, person_type_code,
                 taxpayer_type_code)
@@ -250,6 +258,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await sql`delete from public.book_format_adapters where code = ${ADAPTADOR_FALSO}`;
+  await borrarTasasOficiales(sql, FUENTE_TASA_FIADO);
   await sql.end();
   await sqlApi.end();
 });
@@ -345,6 +354,8 @@ describe("libros fiscales — el snapshot ampliado llega al libro", () => {
     const anul = await pedir("POST", `/v1/invoices/${doc["id"]}/annul`, {
       company_id: COMPANY,
       reason: "error de digitación en la cantidad",
+      // G-10 (PA 00071 art. 36): la persona confirma el original y las copias.
+      originals_in_hand: true,
     });
     expect(anul.status).toBe(200);
 
@@ -593,6 +604,8 @@ describe("libros fiscales — el CSV que se entrega: la NC resta y la anulada no
     const anul = await pedir("POST", `/v1/invoices/${anulada["id"]}/annul`, {
       company_id: COMPANY,
       reason: "No salió del establecimiento",
+      // G-10 (PA 00071 art. 36): la persona confirma el original y las copias.
+      originals_in_hand: true,
     });
     expect(anul.status).toBe(200);
 

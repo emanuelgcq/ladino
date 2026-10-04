@@ -97,6 +97,18 @@ end $$;
 --   · E2 · Distribuidora Andina: ordinario, desde su inicio de actividades;
 --   · E3 · Tornillo: especial, providencia notificada el 2026-09-24, rige desde ese día.
 -- E1 no tiene RIF: es no_contribuyente por hecho y no declara nada.
+-- La cadena con la que este guion firma lo que escribe se DECLARA en el registro de versiones
+-- (ADR-0079, migración 20261004120200): `rules_version_gaps` mira toda tabla con `rules_version`
+-- y una cadena sin registrar lo pone en rojo. Es una cadena del recorrido LOCAL: por eso se
+-- registra aquí y no en una migración.
+-- Vale SOLO como procedencia de la historia del tipo de contribuyente (la única tabla donde este
+-- guion la escribe). En un documento fiscal o un asiento no valdría: desde la migración
+-- 20261004205000 el trigger la sustituye por la versión de reglas vigente, y registrarla aquí no
+-- lo cambia.
+insert into platform.rules_versions (version, kind, note)
+values ('recorrido-2026-09-24', 'system',
+        'Guion de corrección del escenario del recorrido local (scripts/recorrido/corregir-escenario-post.sql).')
+on conflict (version) do nothing;
 insert into public.company_taxpayer_types
   (tenant_id, company_id, taxpayer_type_code, effective_from, notified_on, reason, rules_version)
 select c.tenant_id, c.id, v.tipo,

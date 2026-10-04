@@ -278,4 +278,86 @@ c.caso(
   },
 );
 
+// ── K-07 (ola 4): el mayor. Saldo inicial + movimientos = saldo final ────────
+// La cuenta con más movimientos de E2, vista por el contador. Las sumas las hace Postgres.
+async function mayorDeE2(rango) {
+  const [cuenta] = await sql`
+    select l.account_id from public.journal_lines l
+      join public.journal_entries e on e.id = l.entry_id
+     where l.company_id = ${EMPRESAS.E2} and e.status in ('posted', 'reversed')
+     group by l.account_id order by count(*) desc, l.account_id limit 1`;
+  afirmar(cuenta, "E2 no tiene asientos: el caso no mide nada");
+  const [hoy] = await sql`select platform.caracas_day(now())::text as d`;
+  const r = await pedir(
+    PERSONAS.contador,
+    "E2",
+    "GET",
+    `/v1/ledger?account=${cuenta.account_id}&${rango}to=${hoy.d}`,
+  );
+  afirmar(r.status === 200, `mayor: ${r.status} ${r.texto.slice(0, 200)}`);
+  const [s] = await sql`
+    select (${r.json.opening_balance}::numeric
+            + coalesce((select sum((x->>'debit')::numeric - (x->>'credit')::numeric)
+                          from jsonb_array_elements(${sql.json(r.json.movements)}::jsonb) x), 0)
+            = ${r.json.closing_balance}::numeric) as cuadra,
+           ${r.json.opening_balance}::numeric = 0 as inicial_cero,
+           ${r.json.opening_balance}::numeric = ${r.json.closing_balance}::numeric as inicial_es_final,
+           ${r.json.movements.at(-1)?.running_balance ?? r.json.closing_balance}::numeric
+             = ${r.json.closing_balance}::numeric as acumulado_termina_en_final,
+           coalesce((select balance from platform.recompute_ledger(
+                       ${EMPRESAS.E2}, ${cuenta.account_id}, null, '2026-09-24'::date)), 0)
+             = ${r.json.opening_balance}::numeric as inicial_es_lo_anterior_al_25`;
+  return { mayor: r.json, ...s };
+}
+
+c.caso(
+  "K-07",
+  "el mayor de E2 sin «desde»: inicial 0, y inicial + movimientos = final",
+  async () => {
+    const m = await mayorDeE2("");
+    afirmar(m.mayor.movements.length > 1, "la cuenta no tiene movimientos: el caso no mide nada");
+    afirmar(m.inicial_cero, `sin «desde» el inicial es ${m.mayor.opening_balance}`);
+    afirmar(!m.inicial_es_final, "el inicial sale igual al final con movimientos en medio");
+    afirmar(m.cuadra, "inicial + movimientos ≠ final");
+    afirmar(m.acumulado_termina_en_final, "el último running_balance no es el saldo final");
+  },
+);
+
+c.caso(
+  "K-07",
+  "el mayor de E2 desde el 25/09: el inicial es lo acumulado hasta el 24, y cuadra",
+  async () => {
+    const m = await mayorDeE2("from=2026-09-25&");
+    afirmar(m.inicial_es_lo_anterior_al_25, `inicial ${m.mayor.opening_balance}`);
+    afirmar(m.cuadra, "inicial + movimientos ≠ final");
+    afirmar(m.acumulado_termina_en_final, "el último running_balance no es el saldo final");
+  },
+);
+
+// ── K-10 (ola 4): la miga «Inicio» lleva a cada rol a SU inicio ─────────────
+c.caso("K-10", "la miga «Inicio» usa el aterrizaje del rol, no /inicio fijo", async () => {
+  const fs = await import("node:fs");
+  const leer = (rel) => fs.readFileSync(new URL(`../../../${rel}`, import.meta.url), "utf8");
+  const shell = leer("apps/web/src/app/shell.tsx");
+  afirmar(
+    /<Link to=\{rutaInicial\(puede\)\} className="hover:text-foreground">\s*Inicio/.test(shell),
+    "la miga «Inicio» no usa rutaInicial(puede)",
+  );
+  afirmar(!/<Link to="\/inicio"[^>]*>\s*Inicio/.test(shell), "la miga sigue fija en /inicio");
+  // El contador no tiene treasury.read (por eso /inicio era su callejón) y sí crea asientos: su
+  // inicio es la contabilidad. Se comprueba contra SUS permisos reales en E2.
+  const [p] = await sql`
+    select platform.ladino_user_has_permission(u.id, 'treasury.read', ${EMPRESAS.E2}) as tesoreria,
+           platform.ladino_user_has_permission(u.id, 'sales.invoice.issue', ${EMPRESAS.E2}) as vende,
+           platform.ladino_user_has_permission(u.id, 'accounting.entry.create', ${EMPRESAS.E2}) as asienta
+      from auth.users u where u.email = ${PERSONAS.contador}`;
+  afirmar(p && !p.tesoreria, "el contador tiene treasury.read: el caso ya no mide el callejón");
+  afirmar(!p.vende && p.asienta, "el contador no aterrizaría en /admin/contabilidad");
+  const nav = leer("apps/web/src/app/nav.ts");
+  afirmar(
+    /if \(puede\("accounting\.entry\.create"\)\) return "\/admin\/contabilidad";/.test(nav),
+    "rutaInicial ya no lleva al contador a su contabilidad",
+  );
+});
+
 export default c.correr;

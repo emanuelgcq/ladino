@@ -277,3 +277,279 @@ Migración `20261003230000_igtf_reversal_counts_against_its_own_fortnight.sql` (
 
 **Abierto (se añade):**
 - La anulación de una factura con IGTF percibido (la otra vía a `pendiente_reintegro`) no guarda su instante y no deja fila en `payment_reversals`: esa percepción no cuenta en ningún total. La rama hoy no se alcanza (una factura con cobros no se anula, ADR-0061); si llega a alcanzarse, la percepción necesita una columna con el instante para que las dos vías usen una sola regla (P-89, pregunta d).
+
+## Nota de aplicación — ola 4 · cobros: el pago de más, el saldo a favor en su moneda, su reembolso y la cartera contra el mayor (2026-10-04; F-07, F-10, F-12, G-04, G-05, G-15)
+
+ADR aplicado según la respuesta del dueño del 2026-09-28. Migraciones `20261004150000_a_credit_in_favor_keeps_its_currency.sql`, `20261004190000_an_overpayment_is_born_as_a_credit_in_favor.sql`, `20261004190100_the_refund_keeps_the_rate_of_its_day.sql` y, de la tercera ronda, `20261004190200`, `190300`, `190400` y `190500` (ver «Tercera ronda» al pie de esta nota): **siete**, no dos. Las cabeceras de la 150000 y la 190000 dicen que con la API anterior el reembolso o el cobro «respondería 422»: no es así, **queda en la cola de pendientes** (el generador encola cuando la plantilla pide un importe que no recibe); una migración creada no se edita, se corrige aquí y en R-84. HOMOLOGATION_IMPACT YES (cambian asientos de cobros y reembolsos; ningún documento fiscal cambia).
+
+- **§4 · el saldo a favor conserva la moneda del documento (G-05).** `customer_credits` guarda `fx_rate`, `rate_source` y `functional_amount` (lo que el mayor cargó al pasivo al nacer) y, si nació de un cobro, `source_payment_id`. La nota de crédito y la devolución lo crean en la moneda de la nota, con su tasa (la de la factura que corrige). **Los saldos a favor que ya existían están en bolívares y se quedan en bolívares**: para ellos «sin tasa» es la identidad. No hay conversión ni lista de perdones.
+- **Aplicarlo** (`registerPayment`, instrumento `saldo_a_favor`): a un documento de la MISMA moneda, nominal contra nominal — el cobro vale lo que el pasivo llevaba (la tasa con que nació), no la tasa del día, y la diferencia con lo que el documento cargó a cuentas por cobrar es el diferencial de siempre. A un documento de OTRA moneda, a la BCV del día de la aplicación: el documento baja por lo que el saldo a favor vale hoy y el pasivo por lo que llevaba; la diferencia va al diferencial (sin fila en `exchange_gain_loss`: lo lleva el asiento).
+- **Reembolsarlo (G-15)** (`refundCustomerCredit`, permiso `sales.refund`): sale de la caja en la moneda de la cuenta que se elija, a la tasa del día. `customer_refunds` guarda el dinero que salió en sus importes de siempre y, aparte, lo consumido del saldo a favor (`credit_amount`, `credit_currency`, `credit_functional_amount`) y el diferencial (`exchange_difference`). La plantilla `ar.credit_refunded` baja el pasivo por `total` (a la tasa con que nació) y lleva dos líneas de diferencial. `whole: true` reembolsa todo lo disponible sin que quien llama conozca la moneda.
+- **Revaluación al cierre (§6):** `platform.fx_revaluation_items` añade la partida `customer_credit`: lo que queda de cada saldo a favor en divisa a la fecha, contra lo que llevaba a su tasa de nacimiento más lo ya revaluado; pasivo, como las cuentas por pagar.
+- **El pago de más (F-10):** se acepta. El documento se salda por lo que debía (`settled_transaction_amount`), lo que entra en la caja es lo recibido, y el sobrante nace como saldo a favor en la moneda del documento y a la tasa del cobro. `payments.credited_functional_amount` guarda la parte que no abonó el documento y `platform.document_balance` la resta. El asiento lleva la línea `credit_surplus` (haber, pasivo de saldos a favor). La respuesta trae `customer_credit`.
+- **F-07, no reproducido.** El cobro en USD que cierra un documento en USD a otra tasa deja la cuenta por cobrar en cero y un asiento que cuadra sin diferencial doble (prueba «F-07» de `e2e-moneda-diferencial`). Lo que queda de ADR-0063 §2: dentro de la tolerancia de caja, el valor en bolívares del cobro es lo pendiente y no `importe × tasa`; la diferencia (menos de medio céntimo de divisa, unos 4 Bs) queda en la valoración de la caja y la recoge la revaluación al cierre. No se cambió: es una decisión de ADR-0063.
+- **§5 · el estado de cuenta (G-04):** una nota de crédito o un recibo de devolución no pasan por la función de deuda: su saldo es lo que queda de su saldo a favor, en negativo (en divisa, a la tasa de hoy para mostrar).
+- **Invariante `platform.receivables_ledger_gap(empresa)` (F-12):** Σ por documento de venta con asiento (total − lo que cancelaron sus cobros vivos con asiento) = saldo de las cuentas `ar_general` del mayor, sin la revaluación al cierre ni la regularización del céntimo; la ND por IGTF no carga cartera; lo que está en la cola va aparte. Lo que canceló cada cobro se guarda al cobrar (`payments.cancelled_functional_amount`) y se comprueba contra lo que se asienta. Cero filas, sin exclusiones.
+
+**Decidido por criterio (§2.16), con su alternativa:**
+1. *El sobrante de un pago de más queda en la moneda del DOCUMENTO*, no en la del pago (G-05: el saldo a favor conserva la moneda del documento que lo originó). **Alternativa:** en la moneda del pago.
+2. *Un pago de más en divisa que causa IGTF se rechaza* (se entrega el vuelto). No hay norma citada sobre el IGTF de un anticipo. **Alternativa:** percibir el IGTF sobre todo lo recibido. VALIDAR-TRIBUTARIO, PENDIENTES_ASESOR.
+3. *Una retención de IVA no deja sobrante*, y a un documento que no debe nada no se le cobra. **Alternativa:** aceptar también esos como anticipo.
+4. *La reversa de un cobro con sobrante retira el saldo a favor* (`expired`) y se rechaza si ya se usó. **Alternativa:** dejar el saldo a favor vivo y reversar solo la parte que abonó el documento.
+5. ~~*El pasivo baja por importe × tasa de nacimiento, al céntimo, en cada uso.*~~ **INVERTIDA en la tercera ronda (2026-10-04), con el dato que la tumba:** no era «un céntimo». Una nota de crédito con IVA nace por su total EN BOLÍVARES (el IVA se calcula en Bs, E-05), que no es importe × tasa: un saldo de 2,78 USD a 854,4637 cargó 2.378,82 al pasivo y 2,78 × 854,4637 = 2.375,41 — agotado, quedaban **3,41 Bs** en el pasivo para siempre, y la revaluación no los limpiaba (partía de `resto × tasa`). **Decisión vigente (decidida por criterio):** cada uso —aplicar o reembolsar— baja el pasivo por la PARTE PROPORCIONAL de `functional_amount` (al céntimo), y el uso que AGOTA el saldo se lleva lo que el mayor todavía carga: el pasivo de cada saldo a favor termina en 0,00. **Alternativa (la decisión anterior):** importe × tasa de nacimiento en cada uso. VALIDAR-CONTABLE P-99.
+6. *El invariante de cartera no tiene corte:* para los cobros anteriores lee lo que su asiento acreditó. **Alternativa:** un corte en `platform.invariant_cutoffs` y comparar solo movimientos posteriores.
+7. *`whole: true`* en el reembolso, para que la devolución no tenga que conocer la moneda del saldo a favor. **Alternativa:** que la respuesta de confirmar la devolución traiga el importe y la moneda del saldo a favor.
+8. *«26.003» (un punto y tres cifras) se rechaza por ambiguo* en vez de leerse como 26,003 o como 26.003,00. **Alternativa:** leerlo siempre a la venezolana (un precio «1.250» tecleado con punto decimal pasaría a ser mil doscientos cincuenta).
+
+**Abierto:**
+- El invariante de cartera no cubre cuentas por pagar ni las dos monedas (Σ originales).
+- No hay documento imprimible del reembolso ni del anticipo («con recibo»): existen la fila, su acta y su asiento.
+- El reembolso desde el estado de cuenta no ofrece confirmar un sobregiro.
+- El campo de dinero deja el importe con punto decimal después de leerlo; los demás formularios que no usan `MoneyInput` siguen con su `replace(",", ".")`.
+- G-18 (la nota de crédito sobre una factura fiada baja primero su deuda) no es de este bloque: si la nota pasa a abonar cuentas por cobrar directamente, `receivables_ledger_gap` tiene que contarla.
+
+**Segunda ronda (2026-10-04) — lo que cierra de la lista de arriba y lo que deja dicho:**
+- *Cerrado:* los comprobantes imprimibles, los dos **no fiscales** (`apps/api/src/routes/receipts-pdf.ts`): `GET /v1/payments/:id/pdf` (recibido, aplicado y «Saldo a favor: …» en su moneda) y `GET /v1/customer-refunds/:id/pdf` (lo devuelto del saldo, lo que salió de la caja y en qué moneda, la tasa del día que el reembolso GUARDÓ —20261004190100—, la cuenta, quién y el motivo). Sin número de control, sin impuesto, sin serie, y sin el marcador «todavía sin RIF». **No hay correlativo legible:** ni `payments` ni `customer_refunds` tienen uno; se imprime el identificador entero y sus ocho últimos caracteres como referencia. Un número propio por empresa sería una columna y una secuencia nuevas: decisión del dueño.
+- *Cerrado:* el reembolso desde el estado de cuenta ofrece confirmar el sobregiro como las demás salidas de dinero (D-11: 409 `INSUFFICIENT_FUNDS` que dice qué hacer; con `treasury.overdraft` y motivo, sale y deja su acta).
+- *Cerrado:* el cuerpo del reembolso lleva EXACTAMENTE uno de `amount` | `whole` (422 con su mensaje si van los dos o ninguno).
+- *Cerrado:* aplicar un saldo a favor en divisa a un documento en moneda funcional deja su fila en `exchange_gain_loss`: el reporte cuenta lo mismo que el asiento. Entre dos divisas distintas se rechaza (serían dos diferenciales y la tabla guarda uno por cobro).
+- *Un saldo a favor se aplica EN SU MONEDA* (regla anterior a esta ola): quien lo aplica manda `currency` = la del saldo. Con G-05 el saldo de una NC sobre un documento en USD nace en USD; aplicarlo declarando bolívares responde 422.
+- *El invariante con cartera real:* pgTAP 125 (f) monta factura fiada, cobro parcial, cobro con sobrante, nota de crédito, factura en cola y cobro reversado, y lleva DENTRO cuatro variantes rotas (reversa a medias, asiento manual sobre la cuenta por cobrar, cobro que guarda una cifra y asienta otra, factura anulada por debajo del caso de uso), cada una con su cifra.
+- *G-18, lo que cambiaría:* hoy una NC acredita el pasivo de saldos a favor y no toca `ar_general`, por eso no entra en el enunciado. El día que una NC sobre factura fiada abone la cuenta por cobrar, el enunciado pasa a ser «Σ total − Σ cancelado por cobros vivos − Σ **lo que cada NC vigente con asiento abonó a la cuenta por cobrar de su documento de origen**», y ese importe tiene que GUARDARSE en la nota al emitirla (como `payments.cancelled_functional_amount`), no deducirse del asiento: si se lee del mismo asiento que se comprueba, el invariante se da la razón a sí mismo. Y `document_balance` tiene que restar lo mismo, o `settled_ledger_gaps` y este dejan de decir lo mismo.
+
+**Tercera ronda (2026-10-04) — lo que la revisión en contexto limpio pidió:**
+- *Un saldo a favor retirado se queda retirado.* La reversa de un cobro con sobrante deja su saldo a favor `expired`, pero `registerPayment` leía `status` y no lo comprobaba: el saldo retirado se podía aplicar, la reversa de esa aplicación lo devolvía a `available`, y entonces se reembolsaba en efectivo. Ahora el dominio solo aplica o reembolsa un saldo `available` (422 con su mensaje), y el esquema lo prohíbe por escrito: trigger `customer_credits_retired` (23514) — una fila `expired` no cambia de estado ni de importes (20261004190200).
+- *El pasivo termina en cero* (decisión 5, invertida arriba). `payments.credit_functional_amount` guarda lo que cada aplicación bajó del pasivo (el reembolso ya lo guardaba); `platform.customer_credit_uses` es la única definición de «uso» y `platform.customer_credit_carried` lo que el mayor todavía carga por un saldo. Aplicado a un documento de su MISMA moneda, el cobro «vale» esa parte del pasivo; lo que se aparta de importe × tasa NO es deuda del documento: la cuenta por cobrar baja a la tasa del documento y la diferencia va a «Diferencias por redondeo» (misma tasa) o al diferencial (otra tasa). La cota del diferencial del cierre (regla 4) se mide sin ese ajuste.
+- *La revaluación* (`fx_revaluation_items`, partida `customer_credit`) parte de `customer_credit_carried` a la fecha, no de `resto × tasa de nacimiento`. Misma cifra en el caso limpio; el texto de `carried` y `adjustment` de esa partida sale ahora a ocho decimales («188.25000000»): quien los lee los interpreta como número.
+- *Invariante `platform.customer_credit_ledger_gap(empresa)`:* Σ por saldo a favor no retirado con asiento (lo que nació − lo que bajaron sus usos vivos con asiento) = saldo acreedor de las cuentas `customer_credit_liability`, sin la revaluación al cierre ni la regularización del céntimo; un saldo agotado no carga nada (fila `exhausted`); y todo saldo a favor vivo nació con asiento o está en la cola (fila `unborn`). Cero filas, sin exclusiones ni corte. La fila `unborn` la añadió la 20261004190400 porque **la variante rota del pgTAP lo destapó**: con el trigger quitado y un saldo resucitado, la primera versión decía cero — el asiento de nacimiento de un resucitado está reversado y no entraba en ningún lado de la comparación.
+- *Aplicar un saldo a favor tiene tope* (antes no: 100 aplicados a un documento que debía 60 consumían los 100 y dejaban la cuenta por cobrar en −40). **Decidido por criterio:** se RECHAZA con 422 que dice cuánto se puede aplicar; no se consume nada. **Alternativa:** recortar en silencio a lo pendiente y registrar un cobro por menos de lo pedido (un importe distinto del que la persona escribió, sin aviso).
+- *20261004190300:* las funciones nuevas son `security invoker` y redondean con `platform.round_cents`, que no tenía EXECUTE para `ladino_api`: la migración se aplicó limpia y aplicar un saldo a favor respondía 404 (42501). Lo vio el E2E, que corre como la API; el pgTAP 133 ejerce ahora ese camino bajo el rol.
+- *20261004190500:* la función del trigger nació sin su `revoke … from public` y quedó ejecutable por `anon`; lo cazó el gate del catálogo («ninguna función de platform es ejecutable por anon», que vale por ser cero), no el test de la migración. Tres correcciones a una migración escrita en la misma sesión (190300, 190400, 190500): es CLAUDE.md §3 —«una migración que arregla otra necesita su propia auditoría completa»— cumpliéndose otra vez.
+- *F-06, decisión 8 ampliada (decidido por criterio):* la regla es SIMÉTRICA — un único separador seguido de exactamente tres cifras se rechaza sea punto o coma («26.003», «1,234», «26,003»). **Alternativa descartada:** «una coma sola siempre es decimal» (quien teclea a la americana metía mil veces menos). Con los dos separadores se valida el agrupamiento de tres (`BAD_GROUPING`: «12.34,56», «1.234,567.89» ya no devuelve algo que no es un número) y «5,» / «5.» tienen su motivo (`INCOMPLETE`). `readAmountText` es el lector de DINERO: una cantidad o una tasa con tres decimales legítimos no debe leerse con ella.
+- *Abierto de esta ronda:* la regla de valoración del estado de cuenta sigue como SQL en el handler (`apps/api/src/routes/sales.ts`, `/v1/customers/:id/statement`): no se movió; sin test de pago de más con IGTF ni con retención (hace falta una empresa especial con IGTF activo); el marcador `PEND-` sigue sin una empresa sin RIF que lo ejerza; si los redondeos de varios usos parciales suman más de lo que el saldo cargó, el último uso baja 0,00 del pasivo (no se ha visto; lo acusaría `customer_credit_ledger_gap`).
+
+**Cuarta ronda (2026-10-04) — lo que cierra de «Abierto de esta ronda», sin cambiar una cifra ni una decisión:** la regla de valoración del estado de cuenta (G-04, G-05) y lo vencido (P-05, `vencidoDe`) salieron del handler: son las lecturas con nombre `customerStatement` y `customerOverdue` de `packages/domain/src/customer-statement.ts`, con el mismo SQL, sentencia por sentencia; el handler autentica, autoriza, llama y mapea. Sin migración. Los cuatro tests que faltaban viven en `apps/api/test/e2e-cobros-cuarta-pasada.test.ts`: el pago de más con IGTF (TRES caminos lo rechazan con el mismo `VALIDATION_FAILED/422` y tres mensajes distintos, todos en la moneda del pago: por omisión lo corta `pasoDeCobro` —«esta forma de pago no da vuelto» o, en efectivo, «entrega el vuelto»—; la regla F-10 + IGTF de esta nota solo habla con `igtf_included: false`), el comprobante de retención que sobra, el marcador `PEND-` con una empresa sin RIF fundada por `/v1/onboarding`, y un saldo de 2,22 USD usado en ocho partes (siete bajan 256,34 Bs y la que agota, 102,53: el pasivo termina en 0,00). *Abierto:* `platform.customer_credit_carried` responde el importe de nacimiento para un saldo RETIRADO aunque el mayor cargue cero (sus llamadores filtran los retirados antes; R-84.15).
+
+**F-06, cierre de la familia (2026-10-04) — un solo lector de números tecleados en TODA la web:** la decisión 8 valía para `MoneyInput` y `CobrarDocumento`; ahora vale para toda la web. Ningún fichero de `apps/web/src` cambia la coma por el punto por su cuenta (eran 48 sitios en 14 ficheros: «1.500» se volvía 1,5 y «1.234,56» viajaba como «1.234.56»). El **dinero** (importe, precio, costo, límite, pago, base, monto retenido) lo lee `leerImporte` / `importeLimpio`, con la regla simétrica de arriba. Las **cantidades, tasas y porcentajes** los lee el lector hermano `leerCantidad` / `cantidadLimpia` (los dos en `apps/web/src/components/forms.tsx`, sobre `readAmountText`): una sola coma es el decimal lleve las cifras que lleve («1,250 kg» = 1,25), y un solo PUNTO con exactamente tres cifras se rechaza por ambiguo («1.250»). Lo que un lector rechaza no se envía y su motivo se pinta junto al campo. Lo sostiene `apps/web/test/lector-unico.test.ts` (gate de fuente: cero atajos fuera de `forms.tsx`, con su variante rota) y `lector-de-cantidades.test.ts`. **Decidido por criterio:** el COSTO unitario y el precio de compra son dinero y usan el lector de importes; un costo con exactamente tres decimales («1,255») se rechaza por ambiguo y hay que escribirlo con cuatro («1,2550»). **Alternativa:** leerlos con el lector de cantidades (coma con tres cifras = decimal), que aceptaría «1,255» pero leería como 1,25 el «1,250» de quien agrupa miles con coma. **Abierto:** el formulario de orden de compra de `pages/compras/Compras.tsx` manda cantidad, precio y peso tal como se teclean, sin lector (no usaba el atajo y no entró en esta pasada); los campos que no son `MoneyInput` enseñan el motivo mientras se escribe, no al salir del campo.
+
+## Nota de aplicación — ola 4 · una sola regla de la tasa del día (2026-10-04)
+
+ADR aplicado según la respuesta del dueño del 2026-09-28; el alcance, **decidido por criterio**.
+Migración `20261004195900_the_rate_of_the_day_has_one_rule.sql`; riesgo R-85; P-22 y P-88.
+
+**Qué pasaba.** El §6 (H7) puso el margen de antigüedad solo en la tasa de cierre
+(`platform.closing_rate`) y la ola 3 lo extendió a la llegada. Todo lo demás —venta, cobro, factura
+de proveedor, pago, gasto, transferencia— seguía pasando por `platform.rate_for`, que servía la
+última oficial con cualquier antigüedad. Dos reglas para «la tasa del día».
+
+**Decisión.** La regla vive en UN sitio: `platform.rate_for` devuelve la oficial más reciente no
+posterior a la fecha y no más antigua que `platform.parameters.official_rate_max_age_days` (7).
+`rate_at` y `closing_rate` son esa consulta reducida al número; `closing_rate` ya no filtra por su
+cuenta. Fuera del margen, quien convierte se detiene (`EXCHANGE_RATE_MISSING` / LAD51) y quien solo
+muestra dice «Falta la tasa de hoy». El parámetro se renombra; `closing_rate_max_age_days` queda de
+alias (un trigger mantiene los dos iguales) hasta la ola Z. Sube la versión de reglas a 1.2.0
+(ADR-0079).
+
+**Por qué ahí.** `rate_for` es por donde ya pasa todo. La alternativa —que cada llamador pase por
+`closing_rate`— deja la función sin margen viva para el siguiente que la use, y obliga a tocar más
+de veinte consultas en ficheros que otras familias están editando.
+
+**Alternativas descartadas.** (a) Margen 0 con calendario de días hábiles: no hay calendario
+bancario cargado. (b) Un margen por tipo de operación (más laxo para mostrar, más estricto para
+facturar): serían otra vez dos reglas. (c) No acotar y solo avisar: es lo que había.
+
+**Consecuencias negativas.** Con la fuente caída más de 7 días no se opera en divisa, y no hay
+carga a mano. Las lecturas que recalculan a una fecha pasada (saldo de un cobro viejo en otra
+moneda, historial de precios) pierden la cifra donde antes usaban una tasa vencida. La deuda con
+proveedores a la tasa de hoy lanza en vez de decir «falta». Detalle en R-85.
+
+**No decidido aquí.** El valor del margen (P-22, P-88) y LIVA art. 25 para el día no hábil.
+
+**Revisión en contexto limpio (2026-10-04) — migración `20261004200000_a_payables_list_never_falls.sql`.**
+La regla se dio por buena; lo que sigue se **decidió por criterio** y corrige la consecuencia
+«la deuda con proveedores lanza» de arriba, que deja de valer:
+
+- **Una lista nunca se cae, tampoco en compras.** `platform.supplier_debt_today` no lanza por una
+  tasa: una factura pagada o sin saldo debe 0 sin pedirla; una con saldo y sin tasa dentro del
+  margen devuelve NULL. `platform.ap_aging` lleva el tramo en NULL y cuenta la factura. Las rutas
+  `GET /v1/suppliers/:id/statement` y `/aging` sirven `null` con `sin_tasa` y el nominal por moneda
+  (el mismo trato que §5 dio a clientes y que el resumen ya daba a «Lo que debo»). *Alternativa
+  descartada:* que la lectura siga lanzando y la API la envuelva en un `savepoint` — deja la
+  excepción viva para el siguiente llamador. *Coste:* NULL no es cero y `sum()` lo descarta en
+  silencio; quien sume tiene que mirarlo, y la API anterior no lo hace (R-85.3): la migración se
+  aplica justo después del `git pull`. Con tasa dentro del margen, las cifras son las de antes
+  (una factura `paid` con residuo sigue valorándose a la tasa; solo sin tasa se dice 0, por §4).
+- **Las que convierten para ESCRIBIR siguen deteniéndose**: el saldo estricto
+  (`document_balance_transaction`), la base del cierre, la revaluación (`fx_revaluation_items`) y la
+  regularización de la divisa. Solo las lecturas de lista y de pantalla devuelven NULL.
+- **El mensaje dice lo que se puede hacer.** Para un día pasado no se promete «Tráela en Mi
+  dinero» (ADR-0064 §1: Mi dinero solo trae la de hoy). Cargar la oficial de un día pasado es hoy
+  una operación de plataforma sin pantalla: **decisión abierta del dueño** (R-85.8, P-22).
+- **Cambiar el margen deja acta** (`platform.parameter_changed` en `system_audit_events`; R-85.9).
+  No sube el semver de las reglas (ADR-0079): ninguna regla cambió.
+
+## Nota de aplicación — ola 4 · el pago cruzado a tasa real (2026-10-04; D-02, H-09, R-80 punto 11)
+
+Sin migración. `packages/domain/src/purchases.ts` (`registerSupplierPayment`) y
+`packages/domain/src/tolerancia-de-caja.ts` (nueva, pura).
+
+**Qué pasaba.** Una factura de proveedor en Bs pagada desde una cuenta en USD se rechazaba con 409
+`SETTLEMENT_MISMATCH` a casi cualquier tasa real. Lo que sale de la cuenta se redondea al céntimo
+de dólar, y «lo que salió × tasa» se aparta de lo debido hasta medio céntimo de dólar × tasa. La
+cota de la regla 4 solo contaba la unidad mínima de la moneda de la FACTURA: con la factura en Bs
+(tasa 1) eran unos 0,03 Bs. Y escrito en dólares, el pago que debía cerrar quedaba como abono: la
+holgura del tope era medio céntimo de Bs. Los E2E del pago cruzado usaban 40 Bs/USD, donde toda
+conversión cae exacta.
+
+**El ejemplo.** Gasto con factura, neto 1.240,00 Bs, cuenta en USD, tasa 854,4637:
+
+| | |
+|---|---|
+| 1.240,00 ÷ 854,4637 | 1,4512… → salen **1,45 USD** |
+| 1,45 × 854,4637 | 1.238,97 Bs |
+| redondeo de caja | 1,03 Bs |
+| cota de la regla 4 (una línea, primer pago, tasa 1) | 0,03 Bs → **409** |
+| tolerancia de caja: 0,005 USD × 854,4637 | 4,27 Bs → **cierra** |
+
+**La regla, espejo del cobro de ventas (ADR-0063 §2, «el cobro que cierra»).** Cuando el pago
+cruza, la tolerancia de caja es media unidad mínima de la moneda del DINERO, convertida a la
+moneda de la factura con las dos tasas del día del pago; nunca menos que media unidad mínima de la
+moneda de la factura (la holgura que ya había). Dentro de ella:
+
+1. *El tope de «el pago supera el saldo» y el «cierra»* (pago escrito en la moneda del dinero) usan
+   esa tolerancia en vez de medio céntimo fijo de la moneda de la factura. El pago que cierra salda
+   EXACTAMENTE lo que se debía.
+2. *Lo funcional del pago es lo que se salda*, cuando la factura vive en la moneda funcional: la
+   cuenta baja por lo que salió EN SU MONEDA (1,45 USD, el original de la línea, intacto), la
+   cuenta por pagar por lo que se debía (1.240,00), y el asiento tiene dos líneas. No nace una
+   línea de diferencial ni de redondeo por un redondeo de caja: la caja en USD queda valorada a
+   854,4637 con 1,03 Bs de diferencia, y eso lo recoge la revaluación al cierre (§6), como en
+   ventas. **Solo en el pago que CIERRA** (corregido en la re-revisión, ver más abajo): un abono
+   que no cierra se asienta por lo que salió, con su diferencia en el acto.
+3. *La regla 4 no se abre.* La alineación se hace contra lo SALDADO (el saldo del documento), no
+   contra lo que el mayor carga: si el mayor y el saldo se apartan —aunque sea en 3,00 Bs, menos
+   que la tolerancia de caja—, el pago que cerraría sigue respondiendo `SETTLEMENT_MISMATCH`. Y un
+   céntimo de dólar de más sigue siendo «el pago supera el saldo».
+
+**Decidido por criterio (§2.16), con su alternativa.**
+
+- *La tolerancia no se redondea hacia arriba a la unidad mínima del documento* y se compara con
+  `<=`: es lo que hace ventas (`registerPayment`), y manda ventas. **Alternativa:** redondearla
+  hacia arriba (4,28 en vez de 4,2723); con la factura en USD y el dinero en Bs subiría la holgura
+  de 0,005 a 0,01 USD, el doble de la de ventas.
+- *La alineación de lo funcional solo se aplica con la factura en moneda funcional.* Con la factura
+  en USD y el dinero en Bs el dinero es más fino que el documento y no hay nada que alinear (probado
+  a 854,4637: cierra sin diferencial). **Alternativa:** alinear contra «lo que el mayor carga + el
+  diferencial esperado» en cualquier combinación: taparía descuadres del mayor dentro de la
+  tolerancia, que es justo lo que la regla 4 existe para decir.
+- *La función de la tolerancia vive aparte* (`tolerancia-de-caja.ts`) y la usa compras. Ventas
+  conserva su cálculo en línea, que da la misma cifra; unificarlo es un cambio en `sales.ts` que no
+  se hizo aquí.
+
+**Consecuencias negativas.** El valor funcional de la línea de caja de un pago cruzado ya no es
+«original × tasa del día» al céntimo: se aparta hasta medio céntimo de la divisa × tasa (4,27 Bs a
+854,4637) por pago, hasta la siguiente revaluación. Quien pague una factura en Bs desde una cuenta
+en USD dejando menos que esa tolerancia la deja PAGADA, no con un resto de 2 Bs. `fx_rate` de la
+fila del pago sigue siendo la tasa del día, y `functional_amount` ya no es exactamente
+`net_amount × fx_rate` en esos pagos (igual que en los cobros de ventas desde ADR-0063).
+
+**Verificación.** `apps/api/test/e2e-moneda-diferencial.test.ts`, bloque «compras: el pago cruzado
+a TASA REAL» (casos a, c, d, e, e2 y el espejo de ventas), `apps/api/test/e2e-gasto-con-factura.test.ts`
+(«a TASA REAL») y `packages/domain/test/tolerancia-de-caja.test.ts`. Tras cada caso:
+`settled_ledger_gaps`, `treasury_currency_gaps`, `treasury_ledger_gaps` y `cent_gaps` en cero, y la
+comprobación cuadrada.
+
+### Re-revisión en contexto limpio (2026-10-04): la alineación es solo del pago que cierra
+
+**Qué pasaba.** La primera versión alineaba lo funcional también en el ABONO que no cierra cuando
+se escribía en Bs lo que se cancela y la cuenta vivía en USD: un abono de 500,00 Bs sacaba 0,59 USD
+(504,13 Bs a 854,4637) y cancelaba 500,00, sin asentar los 4,13 Bs. Hasta 4,27 Bs POR ABONO, sin
+límite de abonos, fuera del mayor hasta el cierre. En HEAD (f16e8c6) esa diferencia se asentaba en
+el acto, y ventas alinea solo «el cobro que cierra»: un abono de ventas que no cierra queda en
+`importe × tasa` al céntimo.
+
+**Decidido por criterio.** En compras la alineación se aplica SOLO al pago que cierra el documento
+(`registerSupplierPayment`: la condición lleva `cierra`). Un abono que no cierra se asienta como en
+HEAD: lo funcional es lo que salió × tasa, la cuenta por pagar baja por lo cancelado y la diferencia
+va al diferencial cambiario en ese asiento. **Alternativa descartada:** alinear también los abonos
+(lo que había): menos líneas en el asiento, a cambio de un residuo acumulable sin tope fuera del
+mayor.
+
+| Tres abonos en Bs desde la cuenta en USD y el que cierra (factura de 1.438,40 Bs) | sale | funcional | diferencia |
+|---|---|---|---|
+| abono 500,00 | 0,59 USD | 504,13 | 4,13 pérdida |
+| abono 300,00 | 0,35 USD | 299,06 | 0,94 ganancia |
+| abono 200,00 | 0,23 USD | 196,53 | 3,47 ganancia |
+| cierra 438,40 | 0,51 USD | 438,40 (alineado; 0,51 × tasa = 435,78) | — |
+
+**Lo que queda abierto (P-100, VALIDAR-CONTABLE).** El residuo del redondeo de la moneda del dinero
+se asienta hoy como diferencial cambiario en el abono y se deja a la revaluación en el pago que
+cierra: dos tratos para el mismo origen. Si es diferencial o «Diferencias por redondeo» (5.1.10,
+§7), y si el del cierre puede esperar a la revaluación, lo dice el asesor.
+
+**Deuda técnica anotada: una sola función de tolerancia para los dos lados.** Esta ola no toca el
+cobro de ventas. `toleranciaDeCaja` (compras) y el cálculo en línea de `registerPayment` (ventas)
+dan la misma cifra SOLO cuando el documento vive en la moneda funcional y el dinero vale al menos
+una unidad de ella (documento en Bs, dinero en USD a 854,4637: 4,27231850 en los dos). Con el
+documento en divisa difieren: ventas mide en moneda funcional y sin suelo (documento en USD cobrado
+en Bs: 0,005 Bs); compras, en la moneda del documento y con suelo (0,005 USD, 4,27 Bs). El párrafo
+de arriba que decía «da la misma cifra» vale solo para el caso común. El test unitario
+`tolerancia-de-caja.test.ts` fija la igualdad en ese caso, documenta la diferencia y comprueba que
+`sales.ts` sigue diciendo la fórmula que copia. Unificarlas es elegir una de las dos semánticas
+para el documento en divisa: decisión pendiente, no un refactor.
+
+**Verificación añadida.** Casos d2 (el abono asienta su diferencia), d3 (tres abonos y el que
+cierra: cada línea de diferencial, la cuenta por pagar en cero, 1,68 USD salidos de la caja y los
+cuatro invariantes en cero), e (el tope, exacto: 422 `VALIDATION_FAILED` con su mensaje literal) y
+e2 (`SETTLEMENT_MISMATCH` con la cuenta por pagar cargada de más Y de menos, por las dos formas de
+escribir el pago).
+
+## Nota de aplicación — ola 4 · el vencimiento: lo vencido es la deuda de siempre, filtrada (2026-10-04; P-05, E-22)
+
+**Decidido por criterio** (RESPUESTA §2.16: lo que promete la pantalla; menor sorpresa; lo
+reversible; lo que hacen Valery, Saint, Profit y Galac, donde cada factura a crédito lleva su
+vencimiento). La respuesta del dueño da por hecho que una venta fiada VENCE (ordena la lista por
+«deuda vencida» y lo imprime el recibo) y el producto no tenía con qué decirlo.
+
+1. **El dato.** `documents.due_date` (`date`, nullable; migración `20261004210000`). Se escribe AL
+   EMITIR, con lo que traiga la petición, y queda congelada: un trigger propio de la columna
+   (`documents_06_due_date_frozen`, LAD06), porque `platform.assert_document_immutable` enumera
+   columnas y no la conoce (no compara la fila entera). CHECK: no anterior al día de Caracas de
+   la emisión (dos `date`).
+2. **La caja exige; la administración ofrece.** `quickSale`: si la venta deja saldo y no viene
+   `due_date`, 422 «Di cuándo paga el cliente» y la transacción entera se deshace. Si queda
+   pagada, la fecha que venga se guarda y no significa nada. `POST /v1/invoices`: opcional; sin
+   ella el documento vence el día de su emisión. No hay plazo por omisión escrito en código: el
+   vencimiento lo decide una persona.
+3. **Lo vencido NO es una segunda regla de deuda** (§5): es `platform.document_debt` sobre los
+   documentos con `platform.document_due_day(due_date, issued_at) < hoy`, donde «hoy» es un `date`
+   (el día de Caracas, o el parámetro `p_today` de `platform.customer_overdue_today`). Vencer hoy
+   no es estar vencido. Sin tasa de hoy, lo vencido en divisa lleva su nominal y el funcional en
+   NULL con motivo `sin_tasa`: nunca 0.
+4. **Lo anterior al corte.** Un documento sin fecha (todo lo emitido antes, y la factura de
+   administración que no la trae) vence el día de su emisión: una deuda sin plazo acordado es
+   exigible desde que nace. Para lo viejo, «vencido» coincide con «debe» desde el día siguiente.
+5. **El papel** (E-22). La venta con saldo imprime «A CRÉDITO», «Saldo pendiente» (el de la
+   función de deuda A LA FECHA EN QUE SE IMPRIME, en la moneda del documento y, si hay tasa, su
+   valor en bolívares) y «Vence». Son leyendas no fiscales: no cambian base, IVA ni numeración.
+   Van en el recibo y en la copia de cortesía de la factura; **no** en `destino=papel` ni
+   `vista` de la factura: el tope de filas de la forma libre (PA 00071 art. 33) está medido
+   contra el cuerpo actual y tres renglones más podrían sacar de la hoja una factura que cabe
+   justa.
+6. **No hay invariante nuevo.** «Toda venta de caja con saldo lleva vencimiento» no se puede
+   enunciar sobre el esquema: el documento no dice de forma fiable si nació en la caja
+   (`cart_id` es opcional) y la factura de administración puede no llevarla. La regla vive en el
+   dominio con su E2E; la lista de invariantes sigue igual.
+
+**Alternativas descartadas:** (a) vencido = más de N días desde la emisión para todos (un umbral
+inventado, fijo en código); (b) un plazo de crédito por cliente o por empresa que calcule la
+fecha (más dato y más pantalla; queda como comodidad futura: la fecha propuesta podrá salir de
+ahí); (c) ordenar por la deuda más antigua sin decir «vencido» (no cumple el texto del dueño ni
+el recibo de E-22); (d) abrir una escritura única en la guarda del documento para borrar la
+fecha de una venta que quedó pagada (toca la inmutabilidad por un dato que no significa nada).
+
+**Verificación.** pgTAP 132 (CHECK a las 23:30 de Caracas; el día de vencimiento a las 20:30 y a
+las 23:30; lo vencido con `p_today`; sin tasa; LAD06; aislamiento como `ladino_api` con el usuario
+de dos tenants; variantes rotas del trigger, del CHECK, de la RLS y del día UTC),
+`e2e-el-fiado-vence.test.ts` (11 casos) y las comprobaciones E-22 y P-05 del recorrido. Riesgos
+abiertos: R-86.

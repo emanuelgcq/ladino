@@ -56,6 +56,40 @@ export async function exigeEmpresaConRif(
   });
 }
 
+/**
+ * M-09 (respuesta del dueño, 2026-09-28): la caja de un negocio que PASÓ de recibos a facturas
+ * dice «Ya facturas con tu RIF» durante 30 días y hasta su primera factura, lo que tarde más.
+ *
+ * Lo decide el servidor, con días de Caracas en los dos lados de la resta (dos `date`, nunca un
+ * instante contra una medianoche). «Impresa» se lee como EMITIDA, decidido por criterio: Ladino
+ * no guarda cuándo se imprime un documento; la alternativa era registrar cada `?destino=papel`.
+ * Un negocio que nació con RIF nunca tuvo la banda de recibos: no recibe esta.
+ */
+export async function avisoYaFactura(sql: TransactionSql, companyId: string): Promise<boolean> {
+  const [fila] = await sql<{ aviso: boolean }[]>`
+    select exists (
+      select 1
+        from public.company_fiscal_regimes r
+        join public.fiscal_regimes fr on fr.code = r.regime_code
+       where r.company_id = ${companyId}
+         and 'invoice' = any (fr.allowed_kinds)
+         and r.effective_from <= now()
+         and (r.effective_to is null or r.effective_to > now())
+         and exists (select 1
+                       from public.company_fiscal_regimes a
+                       join public.fiscal_regimes fa on fa.code = a.regime_code
+                      where a.company_id = r.company_id
+                        and 'receipt' = any (fa.allowed_kinds)
+                        and a.effective_from < r.effective_from)
+         and (platform.caracas_day(now()) - platform.caracas_day(r.effective_from) < 30
+              or not exists (select 1 from public.documents d
+                              where d.company_id = r.company_id and d.kind = 'invoice'
+                                and d.status in ('issued', 'paid')
+                                and d.issued_at >= r.effective_from))
+    ) as aviso`;
+  return fila?.aviso === true;
+}
+
 export async function exigeEmpresaQueFactura(
   sql: TransactionSql,
   companyId: string,

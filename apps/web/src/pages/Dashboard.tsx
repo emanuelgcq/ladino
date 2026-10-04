@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { ArrowLeftRight, Banknote, PackageSearch, Receipt, Scale, Wallet } from "lucide-react";
 import { useSesion } from "../app/session.js";
-import { useModulosActivos } from "../app/shell.js";
+import { useContabilidadConfigurada } from "../app/shell.js";
 import { PageHeader } from "../components/PageHeader.js";
 import { KpiCard, type KpiDelta } from "../components/KpiCard.js";
 import { DataTable } from "../components/DataTable.js";
@@ -85,11 +85,11 @@ const mesDe = (d: Date): { from: string; to: string } => {
 
 export function Dashboard(): React.JSX.Element {
   const { empresa, llamar } = useSesion();
-  // PENDIENTE: `useModulosActivos` devuelve `{ contabilidad: false }` MIENTRAS
-  // CARGA y no expone `isPending` (app/shell.tsx). Durante ese instante las dos
-  // primeras tarjetas enseñan la rama «sin contabilidad» y luego saltan a la
-  // otra. Cuando el hook exponga el estado de carga, aquí va un skeleton.
-  const activos = useModulosActivos();
+  // El tablero pregunta «¿hay contabilidad configurada que yo pueda leer?», no lo que pregunta el
+  // menú (A-04: ahí Contabilidad aparece con el primer asiento posteado o con el rol de contador).
+  // PENDIENTE: mientras carga vale `false` y las dos primeras tarjetas enseñan un instante la rama
+  // «sin contabilidad»; el hook ya expone `cargando` para poner ahí un skeleton.
+  const activos = { contabilidad: useContabilidadConfigurada().configurada };
   const navigate = useNavigate();
 
   const hoy = new Date();

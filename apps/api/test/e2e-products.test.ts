@@ -728,4 +728,166 @@ describe("productos de extremo a extremo", () => {
       expect(s.image_url).toContain("token=");
     },
   );
+
+  // ── Recorrido 2026-09-24, bloque C ────────────────────────────────────────
+
+  it("C-11 · el historial enseña los Bs a la tasa del DÍA DEL PRECIO; la de hoy va aparte", async () => {
+    // Tres tasas viejas con fuente propia (se borran en afterAll por su prefijo) y la de hoy.
+    // La del 11 de junio existe para el caso hostil: un precio fijado el 11 a las 02:00 UTC es
+    // del día 10 en Caracas, y le toca la tasa del 10.
+    const FUENTE = "BCV e2e-productos historial";
+    await sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext('ladino-e2e-rates'))`;
+      await tx`
+        insert into public.exchange_rates
+          (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+        values ('USD', 'VES', 36.5, ${FUENTE}, '2024-03-10', now()),
+               ('USD', 'VES', 40.25, ${FUENTE}, '2024-06-10', now()),
+               ('USD', 'VES', 41, ${FUENTE}, '2024-06-11', now())`;
+      await tx`
+        insert into public.exchange_rates
+          (from_currency, to_currency, rate, source, rate_date, rate_timestamp)
+        select 'USD', 'VES', 50, ${FUENTE}, ${diaCaracas(-1)}::date, now()
+         where not exists (
+           select 1 from public.exchange_rates
+            where company_id is null and from_currency = 'USD' and to_currency = 'VES'
+              and rate_date >= ${diaCaracas(-1)}::date)`;
+    });
+
+    const token = await tokenDe(GESTOR);
+    const alta = await pedir("POST", "/v1/products/simple", {
+      token,
+      key: crypto.randomUUID(),
+      body: {
+        company_id: COMPANY,
+        name: `Historial ${RUN}`,
+        price: { amount: "1.00000000", currency: "USD" },
+      },
+    });
+    expect(alta.status).toBe(201);
+    const producto = ((await alta.json()) as { product: { id: string } }).product;
+    const lista = await pedir("POST", "/v1/price-lists", {
+      token,
+      key: crypto.randomUUID(),
+      body: { company_id: COMPANY, name: `Historial e2e ${RUN}`, currency_code: "USD" },
+    });
+    expect(lista.status).toBe(201);
+    const lid = ((await lista.json()) as { id: string }).id;
+
+    const programado = `${diaCaracas(3)}T16:00:00Z`;
+    for (const [amount, effective_from] of [
+      ["8", "2019-01-15T16:00:00Z"], // antes de toda tasa
+      ["10", "2024-03-15T16:00:00Z"], // rige la del 10 de marzo: 36,5
+      ["12", "2024-06-11T02:00:00Z"], // 10 de junio en Caracas: 40,25, no 41
+      ["15", programado], // todavía no rige: su día no tiene tasa
+    ] as const) {
+      const r = await pedir("POST", `/v1/price-lists/${lid}/prices`, {
+        token,
+        key: crypto.randomUUID(),
+        body: { company_id: COMPANY, product_id: producto.id, amount, effective_from },
+      });
+      expect(r.status, await r.clone().text()).toBe(201);
+    }
+
+    const res = await pedir("GET", `/v1/price-lists/${lid}/prices?product_id=${producto.id}`, {
+      token,
+    });
+    expect(res.status).toBe(200);
+    const cuerpo = (await res.json()) as {
+      rate: { rate: string } | null;
+      items: Record<string, string | null>[];
+    };
+    const de = (amount: string): Record<string, string | null> =>
+      cuerpo.items.find((i) => Number(i["amount"]) === Number(amount))!;
+
+    // El día del precio, con SU tasa, su fecha y su fuente.
+    expect(de("10")["historical_equivalent_amount"]).toBe("365.00");
+    expect(de("10")["historical_equivalent_currency"]).toBe("VES");
+    expect(de("10")["historical_rate"]).toBe("36.50000000");
+    expect(de("10")["historical_rate_date"]).toBe("2024-03-10");
+    expect(de("10")["historical_rate_source"]).toBe(FUENTE);
+    expect(de("10")["historical_rate_status"]).toBe("available");
+    // El día es el de Caracas, no el de UTC.
+    expect(de("12")["historical_equivalent_amount"]).toBe("483.00");
+    expect(de("12")["historical_rate_date"]).toBe("2024-06-10");
+    // Sin tasa ese día: se dice, no se inventa.
+    expect(de("8")["historical_equivalent_amount"]).toBeNull();
+    expect(de("8")["historical_rate"]).toBeNull();
+    expect(de("8")["historical_rate_status"]).toBe("missing");
+    // Un precio programado no toma la tasa de hoy como si fuera la suya.
+    expect(de("15")["historical_equivalent_amount"]).toBeNull();
+    expect(de("15")["historical_rate_status"]).toBe("scheduled");
+    // Y la referencia de HOY sigue aparte, igual para todas las filas: la misma tasa.
+    expect(cuerpo.rate).not.toBeNull();
+    expect(de("10")["equivalent_amount"]).not.toBe("365.00");
+    expect(de("8")["equivalent_amount"]).not.toBeNull();
+    expect(de("15")["equivalent_currency"]).toBe("VES");
+    // (Una lista que no sea USD ni VES saldría con not_applicable; hoy no se puede crear:
+    // el catálogo de monedas solo tiene esas dos, así que esa rama no se ejerce aquí.)
+  });
+
+  it("C-02 · la reducida no se OFRECE mientras su lista cerrada no tenga un literal (P-51)", async () => {
+    const token = await tokenDe(GESTOR);
+    const cats = await pedir("GET", "/v1/tax-categories", { token, company: null });
+    expect(cats.status).toBe(200);
+    const lista = (await cats.json()) as { code: string; offered_in_sales: boolean }[];
+    const reducida = lista.find((t) => t.code === "gravado_reducida")!;
+    const [lit] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.tax_reduced_rate_literals`;
+    // Lo que la pantalla ofrece lo decide el servidor: sin literal, no se ofrece.
+    expect(reducida.offered_in_sales).toBe(lit!.n > 0);
+    expect(lista.find((t) => t.code === "gravado_general")!.offered_in_sales).toBe(true);
+    if (lit!.n === 0) {
+      // Y lo que no se ofrece, tampoco entra por el alta simple.
+      const r = await pedir("POST", "/v1/products/simple", {
+        token,
+        key: crypto.randomUUID(),
+        body: {
+          company_id: COMPANY,
+          name: `Reducida simple ${RUN}`,
+          price: { amount: "3.00000000", currency: "USD" },
+          tax_category_code: "gravado_reducida",
+        },
+      });
+      expect(r.status).toBe(422);
+      expect(((await r.json()) as { message: string }).message).toContain("art. 64");
+    }
+  });
+
+  it("C-02 · el alta simple acepta la clasificación del producto y la valida como el alta completa", async () => {
+    const token = await tokenDe(GESTOR);
+    const exento = await pedir("POST", "/v1/products/simple", {
+      token,
+      key: crypto.randomUUID(),
+      body: {
+        company_id: COMPANY,
+        name: `Exento simple ${RUN}`,
+        price: { amount: "3.00000000", currency: "USD" },
+        tax_category_code: "exento",
+        unit_code: "kg",
+      },
+    });
+    expect(exento.status, await exento.clone().text()).toBe(201);
+    const p = ((await exento.json()) as { product: Record<string, unknown> }).product;
+    expect(p["tax_category_code"]).toBe("exento");
+    expect(p["unit_code"]).toBe("kg");
+
+    // La adicional sin justificación se rechaza con el mensaje del caso de uso, y no queda nada.
+    const suntuario = await pedir("POST", "/v1/products/simple", {
+      token,
+      key: crypto.randomUUID(),
+      body: {
+        company_id: COMPANY,
+        name: `Suntuario simple ${RUN}`,
+        price: { amount: "3.00000000", currency: "USD" },
+        tax_category_code: "gravado_adicional",
+      },
+    });
+    expect(suntuario.status).toBe(422);
+    expect(((await suntuario.json()) as { message: string }).message).toContain("art. 61");
+    const [n] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.products
+       where company_id = ${COMPANY} and name = ${`Suntuario simple ${RUN}`}`;
+    expect(n!.n).toBe("0");
+  });
 });

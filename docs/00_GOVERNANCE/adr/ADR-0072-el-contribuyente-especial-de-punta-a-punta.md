@@ -285,3 +285,41 @@ H-04, H-12 y L-03. Decidido por criterio (respuesta del dueño §2.16), cada pun
     línea por alícuota). La migración 20261002110300 se reescribió una vez ANTES de aplicarse: su
     primer intento falló en su propia comprobación (contaba 8 filas en vez de 7) y no llegó a
     `schema_migrations`.
+
+## Nota de aplicación — M-10 (el contribuyente formal, ola 4, 2026-10-03)
+
+ADR aplicado según la respuesta del dueño del 2026-09-28 (§3 M-10) y su cláusula: «si
+`docs/02_COMPLIANCE` no tiene la fuente al llegar a este hallazgo, la opción "Formal" se oculta
+hasta tenerla». La fuente de la periodicidad de la PA SNAT/2003/1677 no llegó (REGULATORY_STATUS
+§2-bis: «parcial»; PENDIENTES_ASESOR P-38), así que **el punto 0 de la nota anterior sigue en
+pie: `formal` no se declara ni emite.**
+
+Lo único que cambia (migración 20261004110000, pgTAP 121):
+
+1. **La base rechaza la línea gravada de un formal** (LIVA art. 8) en la factura y en la nota de
+   débito, al emitir (`platform.assert_document_issuance`) y si se agrega después
+   (`platform.assert_formal_line`, trigger `document_lines_formal`), con el texto de la respuesta
+   y `LAD99` (422). Hasta ahora el trigger aceptaba `formal` como tipo que emite y nada le impedía
+   vender gravado: la prohibición dependía de que el tipo no existiera. *Alternativa:* no escribir
+   nada hasta tener la fuente, y que la guarda nazca con el resto de M-10.
+2. **La nota de crédito queda fuera de la guarda**: revierte un débito que existió cuando la
+   empresa era ordinaria. *Alternativa:* rechazarla también (P-38, pregunta 5).
+3. **No se abre a medias.** Sin relaciones ni informativa, un formal que facturara quedaría con
+   libros de IVA y declaración mensual, que es justo lo que la PA 1677 no dice. Reabrir `formal`
+   es: ampliar el CHECK `company_taxpayer_types_declarable_chk`, quitar el 422 de
+   `setCompanyTaxpayerType`, sumarlo a `TIPOS_QUE_FACTURAN`, la leyenda «Contribuyente formal» en
+   el PDF, las relaciones, la informativa con su calendario como data, y quitarlo de `OCULTOS` en
+   la pantalla (el texto que lo explica ya está en `capa-fiscal/textos.ts`).
+
+**`book_ledger_reconciliation()` no cambia y no gana ninguna excepción.** Hoy no existe ninguna
+empresa formal. El día que exista, su «relación» no puede ser una lista de perdones del invariante:
+o la relación sale de las mismas filas que el libro (y entonces el invariante vale cero tal como
+está, porque un formal no tiene débito ni crédito fiscal que conciliar), o el enunciado del
+invariante se cambia para decir «libro **o relación** = mayor + cola». Esa decisión es de quien
+construya las relaciones, con la respuesta de P-38 delante.
+
+**Borde anotado en la revisión (2026-10-03), sin migración:** `platform.assert_formal_line()` mira
+los documentos en estado `issued` o `paid`, mientras que `platform.assert_document_lines_immutable()`
+trata también `annulled`. Hoy es inocuo: un formal no existe, y a una factura anulada no le agrega
+líneas ningún camino del dominio. Quien reabra `formal` decide si la segunda puerta debe cubrir
+también `annulled`, y lo prueba en el pgTAP 121 junto a su variante rota.

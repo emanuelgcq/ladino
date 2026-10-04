@@ -8,7 +8,9 @@ import {
   DateRangePicker,
   EntityPicker,
   FormField,
+  importeLimpio,
   importeValido,
+  motivoDeImporte,
   type EntityOption,
 } from "../../components/forms.js";
 import { Button } from "../../ui/button.js";
@@ -768,9 +770,9 @@ export function CargarRetencion({
           receipt_number: numero.trim(),
           retained_on: fecha,
           ...(entrega === "" ? {} : { received_on: entrega }),
-          base: base.trim().replace(",", "."),
+          base: importeLimpio(base),
           rate: porcion,
-          amount: monto.trim().replace(",", "."),
+          amount: importeLimpio(monto),
         }),
       });
       toast.success("Comprobante cargado", "La factura quedó abonada por el importe retenido.");
@@ -790,8 +792,8 @@ export function CargarRetencion({
     cliente !== null &&
     factura !== null &&
     numero.trim() !== "" &&
-    importeValido(base.trim().replace(",", ".")) &&
-    importeValido(monto.trim().replace(",", "."));
+    importeValido(base) &&
+    importeValido(monto);
 
   if (!puede("ar.retention.register")) return null;
   if (!abierto) {
@@ -912,7 +914,7 @@ export function CargarRetencion({
             entregaron después de declarar la quincena de la retención, la retención se descuenta en
             el período de la entrega (PA SNAT/2025/000054 art. 7).
           </p>
-          <FormField label="Base (el IVA de la factura)">
+          <FormField label="Base (el IVA de la factura)" error={motivoDeImporte(base) ?? undefined}>
             {(a) => (
               <Input
                 id={a.id}
@@ -938,7 +940,10 @@ export function CargarRetencion({
               />
             )}
           </FormField>
-          <FormField label="Monto retenido (el del comprobante)">
+          <FormField
+            label="Monto retenido (el del comprobante)"
+            error={motivoDeImporte(monto) ?? undefined}
+          >
             {(a) => (
               <Input
                 id={a.id}
