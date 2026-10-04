@@ -337,7 +337,7 @@ Migración nueva y campo en la compra.
 
 ---
 
-## P-20 · El fiado cobrado a otra tasa — DECIDIDO (2026-09-28, D-07/G-11)
+## P-20 · El fiado cobrado a otra tasa — DECIDIDO (2026-09-28, D-07/G-11) · NORMA LEÍDA EN CONTRA (2026-10-03): espera al asesor
 
 El diferencial entre la tasa del documento y la del pago se reconoce **al pagar**, en «Ganancia /
 Pérdida en diferencial cambiario», **sin nota de débito ni de crédito**. Las NC y ND que corrigen
@@ -345,6 +345,25 @@ una factura van a la tasa de la factura.
 **Aviso de norma:** el art. 51 del Reglamento de la LIVA, leído solo en reproducción no oficial,
 diría que esa diferencia es corrección de precio documentable con ND o NC. Si el asesor confirma
 su vigencia y alcance, **manda la norma** sobre esta decisión (VALIDAR-TRIBUTARIO).
+
+**Ampliada (auditoría fiscal de moneda, AF-M07 y AF-M08, 2026-10-03; VALIDAR-TRIBUTARIO, RLIVA
+art. 51).** El art. 51 del Reglamento de la LIVA se leyó el 2026-10-03 en tres reproducciones no
+oficiales coincidentes (pandectasdigital; gerenciaytributos 2020, 2021 y 2025): si el precio está,
+según el contrato, sujeto a modificación del tipo de cambio, la diferencia al pagar es corrección
+de precio, ajusta la base imponible y se documenta con nota de débito o de crédito. No se halló
+derogación ni doctrina numerada del SENIAT; la fuente menciona una sentencia del TSJ de 2009
+(Zaramella & Pavan Construction Company) en sentido contrario, sin número. **Aplicada (ola 3,
+ADR-0075 §4):** diferencial contable sin documento, ahora también en compras, en el cobro que
+cierra y en la revaluación. **Preguntas exactas:** (1) «Con el precio pactado en USD y la factura
+emitida en Bs a la tasa BCV del día, ¿el cobro en Bs a la tasa de otro día obliga a emitir nota de
+débito o de crédito con IVA por la diferencia (RLIVA art. 51), o es un resultado financiero ajeno
+al IVA?» (2) «¿Cambia la respuesta si el cliente paga en la misma divisa del precio?» (3) «Si hay
+nota: ¿en qué período entra, lleva retención de IVA cuando el cliente es agente, y se emite una
+por cobro o una al cierre de la deuda?» (4) «En compras: si el proveedor emite la nota de débito
+por diferencia de tasa, ¿el comprador reconoce además pérdida cambiaria, o la nota la sustituye?»
+**Mientras no haya respuesta:** no se libera emisión fiscal productiva con cobros a otra tasa; si
+el asesor confirma el art. 51, manda la norma y el diferencial se rehace con nota. **Dónde se
+toca:** `registerPayment` (sales.ts), `registerSupplierPayment` (purchases.ts), ADR-0064 §3.
 
 ## P-21 · La fecha de la tasa en la factura — CERRADA (2026-09-28, G-11/2.7)
 
@@ -367,6 +386,13 @@ Las NC y ND que corrigen imprimen «Tasa BCV de la factura N° … del dd/mm/aaa
 plataforma carga la oficial del día.
 
 **Dónde se toca:** `platform.rate_for` (migración 66), `apps/api/src/tasa-oficial.ts`.
+
+**Ampliada (AF-M02, 2026-10-03).** LIVA art. 25 (leído en la versión G.O. 38.263; numeración 2020
+sin cotejar): el día no hábil para el sector financiero se convierte a la tasa del día hábil
+inmediatamente SIGUIENTE. `platform.rate_for` toma la última con fecha no posterior. **Pregunta
+adicional:** «Una factura de sábado, domingo o feriado, ¿va a la tasa que el BCV publicó el último
+día hábil con fecha valor del día hábil siguiente?» **Hecho por verificar en código:** qué fecha
+guarda `exchange_rates.rate_date` (publicación o fecha valor; `apps/api/src/tasa-oficial.ts`).
 
 ---
 
@@ -455,6 +481,11 @@ construirlo (numeración, formato, entrega) y la compra dejaría de estar «fuer
 
 **Dónde se toca:** ADR-0066 §2 · migración 69 (`fiscal_support`) · `purchases_book`.
 
+**Ampliada (auditoría fiscal de la ola 3, 2026-10-03). Pregunta adicional:** «Dado que el art. 2 de
+la PA 00071 obliga a facturar a toda persona jurídica y a la natural cuando la factura prueba el
+desembolso, ¿qué soporte debe conservar el comprador de una compra sin factura para deducir el costo
+en ISLR?»
+
 ---
 
 ## P-28 · ¿Se retiene sobre una compra sin soporte fiscal? (VALIDAR-TRIBUTARIO)
@@ -530,8 +561,9 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
   (VALIDAR-TRIBUTARIO):** «¿La devolución TOTAL el mismo día del cobro debe tratarse como anulación
   —percepción indebida, restitución al cliente y reintegro (PA SNAT/2022/000013 art. 4; COT arts.
   205-210)— o se entera igual porque el pago ocurrió?». Hoy: se entera igual (VALIDAR-TRIBUTARIO). Amplía P-9. **Corrección (revisión):**
-  la anulación tampoco restituye hoy: una factura con cobros no se anula, y la restitución con la
-  venta viva va a la ola 3 con la reversa de cobros (R-61); ver P-67.
+  la anulación tampoco restituye hoy: una factura con cobros no se anula. **Ola 3 (2026-10-03):** la
+  restitución con la venta viva ya existe, por la reversa del cobro (ADR-0075 §8); ver P-67. Una
+  devolución sigue sin restituir (G-06).
 - **P-32 · E-02 / H-01** — Procedimiento para regularizar IGTF no percibido y retenciones no
   practicadas en períodos vencidos. **Aplicada:** enterar en la quincena en que se debió, con los
   recargos del COT; comprobante con la fecha real. **Alternativa:** la que indique el asesor.
@@ -588,7 +620,9 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
 - **P-36 · K-08 / P-03** — Redondeo half-up al céntimo y cuenta «Diferencias por redondeo»;
   códigos de diferencial cambiario, mermas y faltantes, retiros y aportes del dueño.
   **Aplicada:** half-up; cuentas de resultado propias. **Alternativa:** half-even; códigos del
-  contador.
+  contador. *La parte del redondeo y de «Diferencias por redondeo» es la misma pregunta que P-79,
+  que trae el texto exacto y dónde se toca: se responde allí. Aquí quedan los códigos de
+  diferencial cambiario, mermas y faltantes, retiros y aportes.*
 - **P-37 · L-05** — Dos arrastres separados en la declaración del especial. **Aplicada:**
   separados (migración 20261002120000, 2026-10-02): las retenciones soportadas se descuentan solo
   de la cuota tributaria positiva y lo que sobra pasa como «retenciones acumuladas por descontar»;
@@ -630,15 +664,20 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
   la PA 000013 limita la percepción a pagos "sin mediación de instituciones financieras"? ¿Un pago
   por Zelle cuenta como pago con mediación de una institución financiera (extranjera)?»
 - **P-67 · G-06 / H3 (VALIDAR-TRIBUTARIO; PA SNAT/2022/000013 art. 4)** — Restitución de un IGTF
-  indebido con la venta viva. **Aplicada:** no existe todavía; va a la ola 3 con la reversa de cobros
-  (R-61). **Pregunta exacta:** «¿Con qué soporte se documenta la restitución al cliente de un IGTF
-  percibido indebidamente cuando la venta sigue viva?»
+  indebido con la venta viva. **Aplicada (ola 3, 2026-10-03; ADR-0075 §8):** la reversa del cobro que
+  lo percibió marca la percepción `pendiente_reintegro`, revierte su asiento y saca de la caja lo
+  percibido (se restituye al cliente), con acta. Deja de estar pendiente de construir; sigue
+  pendiente de validar. **Pregunta exacta:** «¿Con qué soporte se documenta la restitución al cliente
+  de un IGTF percibido indebidamente cuando la venta sigue viva, y cómo se presenta el reintegro si
+  esa percepción ya se enteró?» **Ampliada (AF-M11, 2026-10-03).** Ver P-89, preguntas (a) a (c):
+  la respuesta decide si `pendiente_reintegro` se aplica a todo cobro reversado o solo al ya
+  enterado.
 - **P-41 · B-19** — Ejercicio y UT de referencia para las 1.500 UT del art. 8 de la PA 00071.
   **Aplicada:** ingresos brutos del ejercicio anterior a la UT vigente en ese ejercicio (hoy Bs 43
   → Bs 64.500). **Alternativa:** UT vigente al evaluar.
 - **P-42 · A-06 / P-16** — Redacción definitiva de la leyenda del recibo no fiscal. **Aplicada:**
   la de P-16.
-- **P-43 · I-11** — Retiros (LIVA art. 4.3): base imponible (valor de mercado) y documento.
+- **P-43 · I-11** — Retiros (LIVA art. 4.3): base imponible (valor de mercado) y documento. **Desglosada en P-75 y P-76** (ADR-0078).
   **Aplicada:** débito sobre el valor de mercado y «Nota de retiro» numerada al libro de ventas.
   **Alternativa:** base al costo; documento que indique el asesor.
 - **P-44 · B-11** — La alícuota general: **manda la norma sobre el documento del dueño**. Se fija
@@ -807,6 +846,13 @@ Ninguna bloquea: la lectura aplicada es la conservadora y el comportamiento es d
 Si el tiempo con el asesor es corto, este es el orden por **coste de resolverlo
 tarde**:
 
+Antes de ese orden, las dos normas leídas que contradicen lo construido (auditoría fiscal de
+moneda, 2026-10-03):
+
+- **P-20** (RLIVA art. 51): ¿el diferencial cambiario al cobrar exige nota de débito o de crédito
+  con IVA?
+- **P-76** (RLIVA art. 31): el retiro de inventario exige factura; se rehace en la ola 5.
+
 1. **P-3** (arrastre combinado vs. separado) — migración sobre tabla con historia.
 2. **P-4** y **P-25** (prorrata: método y denominador) — cambian cifras ya generadas.
 3. **P-7** (layout del TXT) — bloquea la primera carga real al portal.
@@ -861,4 +907,193 @@ cómo se reparte entre sus hijas; se corrige con un asiento manual entre subcuen
   completo. La fuente citada era la PA SNAT/2025/000091, que es de los especiales. **Pregunta
   exacta:** «¿Qué artículo de la LIVA (o de su Reglamento) fija el período de imposición mensual del
   contribuyente ordinario?» (P-68 y P-70 son los números asignados por la coordinación; P-71 y P-72
-  ya estaban ocupados, por eso este es P-73.)
+  ya estaban ocupados, por eso este es P-73.) **Ampliada (auditoría fiscal de la ola 3,
+  2026-10-03):** LIVA art. 32 (versión 2005): período de un mes calendario; RLIVA art. 59. Falta
+  cotejar la numeración 2020.
+
+## Salidas y retiros de inventario (ADR-0078, migración 20261003110000, 2026-10-03)
+
+- **P-75 · El valor de mercado del retiro (VALIDAR-TRIBUTARIO; LIVA art. 4.3).** **Aplicada,
+  decidida por criterio:** el consumo propio, el regalo, la donación y la muestra causan débito
+  fiscal sobre el **precio de la lista de precios principal (detal) vigente**, convertido a bolívares
+  con la tasa del día y redondeado al céntimo, por la alícuota de la categoría del producto. Sin
+  precio en esa lista, la salida se rechaza con un mensaje que lo dice. **Alternativa:** el costo
+  del kardex (lo que hacen algunos ERP cuando no hay precio). **Pregunta exacta:** «En el retiro de
+  bienes del art. 4.3 de la LIVA, ¿la base imponible es el precio corriente de venta al detal del día
+  del retiro, el costo de adquisición o el que fije el art. 23 de la LIVA (valor de mercado)? ¿Cambia
+  si el bien se regala a un tercero o se consume en la empresa?» **Dónde se toca:**
+  `valorDeRetiro` en `packages/domain/src/inventory.ts`. **Ampliada (auditoría fiscal de la ola 3,
+  AF3-05, 2026-10-03):** RLIVA art. 43 (reproducción): la base del retiro es el precio de venta
+  asignado según documentos y registros, nunca inferior al de mercado. Respalda la lista detal;
+  falta confirmar el piso de mercado.
+- **P-76 · La Nota de retiro como documento interno (VALIDAR-SENIAT; PA 00071, PA 102).**
+  **Aplicada:** la Nota de retiro lleva correlativo propio por empresa (serie «NR»), **no consume
+  número de control de la imprenta** y va al libro de ventas como venta a la propia empresa (RIF
+  de la empresa como adquirente). En una empresa sin RIF no se emite: solo la salida de kardex y el
+  gasto. **Pregunta exacta:** «El RLIVA art. 31 manda emitir factura por el retiro y registrarla en
+  la columna especial del Libro de Ventas. ¿Se emite sobre forma libre con número de control a
+  nombre del propio contribuyente? ¿Qué es hoy la "columna especial"?» **Dónde se toca:**
+  `public.inventory_withdrawal_notes` y `platform.sales_book`. **Ampliada (auditoría fiscal de la
+  ola 3, AF3-01, 2026-10-03):** RLIVA art. 31 (reproducción): factura obligatoria. Manda la norma
+  sobre la decisión 2 de ADR-0078: se rehace en la ola 5. **Decisión (2026-10-03):** manda la norma
+  (RESPUESTA §0: si un texto normativo vigente contradice una decisión, manda la norma). La Nota de
+  retiro interna se rehace como FACTURA con número de control y columna especial del Libro de
+  Ventas en la ola 5; hasta entonces los retiros no se liberan en producción.
+- **P-77 · Las cuentas de las salidas (VALIDAR-CONTABLE; RLIVA art. 14).** **Aplicada:** merma,
+  rotura, vencido y faltante justificado → 5.1.08 «Pérdidas por mermas y faltantes de
+  inventario»; retiros → 5.1.09 «Retiros de inventario (uso propio, obsequios, donaciones y
+  muestras)», con el IVA del retiro como gasto del mismo retiro. **Pregunta exacta:** «¿Confirma los
+  códigos 5.1.08 y 5.1.09? ¿El IVA autoliquidado del retiro es gasto del retiro (no deducible) o va a
+  otra cuenta? ¿Qué evidencia exige el RLIVA art. 14 para que la merma sea faltante justificado?»
+  **Ampliada (revisión, 20261003110100):** la salida por merma, rotura, vencido o faltante exige ahora
+  una referencia de evidencia (sin ella, 422), y el faltante de un CONTEO con motivo va a 5.1.08, no
+  a 5.1.04. **Pregunta adicional:** «Un faltante de inventario SIN justificar (sin motivo ni
+  evidencia), ¿se presume venta omitida (débito fiscal a cargo de la empresa) según el RLIVA o el
+  COT? Si es así, ¿con qué base: costo o precio de venta?» **Ampliada (auditoría fiscal de la ola 3,
+  AF3-04, 2026-10-03). Pregunta adicional:** «¿Toda merma, rotura o vencimiento justificado se
+  registra en el Libro de Ventas como no gravada al precio de compra, o solo el caso fortuito? ¿El
+  aviso de 3 días aplica a mermas ordinarias? ¿Entra ese renglón en la prorrata?» La pregunta del
+  faltante sin justificar pasa a P-81.
+- **P-78 · El retiro exento en la prorrata (VALIDAR-TRIBUTARIO; LIVA arts. 4.3 y 34).** **Aplicada,
+  decidida por criterio (lectura literal: el retiro está asimilado a venta):** el retiro de un bien
+  exento o exonerado entra en el libro y en la declaración como venta sin impuesto, y por tanto
+  cuenta en el denominador de la prorrata. **Pregunta exacta:** «¿El retiro de bienes exentos o
+  exonerados (LIVA art. 4.3) entra en el denominador de la prorrata del art. 34, o solo los
+  retiros gravados?» **Dónde se toca:** la rama de las notas en `platform.recompute_iva_period`
+  (20261003110000).
+
+
+## El mayor al céntimo (ADR-0075 §7, migración 20261003140000, 2026-10-03)
+
+- **P-79 · Half-up y la cuenta «Diferencias por redondeo» (VALIDAR-CONTABLE).** **Aplicada según la
+  respuesta del dueño del 2026-09-28:** todo importe funcional del mayor y del kardex al céntimo con
+  redondeo comercial (half-up) y el residuo de conversión de cada asiento a 5.1.10 «Diferencias por
+  redondeo». **Pregunta exacta:** «¿El redondeo comercial (half-up) al céntimo es el que corresponde
+  al importe en bolívares de cada asiento, o debe ser half-even? ¿La diferencia de redondeo va a una
+  cuenta de resultado propia (5.1.10) o a otra, y con qué código?» **Dónde se toca:** `toCents`,
+  `platform.round_cents`, el papel `rounding_difference`. *Es la misma pregunta que la primera
+  mitad de P-36 (K-08 / P-03): una sola respuesta cierra las dos.* **Ampliada (auditoría fiscal de
+  la ola 3, AF3-10, 2026-10-03):** Precedente no vinculante: Resolución BCV 21-08-01 (G.O. 42.191),
+  half-up, por una sola vez para la reexpresión. Sin norma permanente hallada.
+- **P-80 · El libro de compras y la declaración al céntimo (VALIDAR-TRIBUTARIO).** **Aplicada:** el
+  libro de compras convierte con round(importe × tasa, 2) (antes a 8 decimales). Las declaraciones ya
+  generadas no se reescriben (append-only). **Pregunta exacta:** «¿El crédito fiscal y el excedente se
+  declaran redondeando cada factura al céntimo o el total del período? Si una declaración presentada
+  llevó decimales de más, ¿hace falta sustitutiva o basta con arrastrar el excedente al céntimo?»
+  **Ampliada (auditoría fiscal de la ola 3, AF3-09 y AF3-11, 2026-10-03). Pregunta adicional:**
+  «Según LIVA art. 50, ¿la diferencia de céntimos de una declaración presentada se ajusta en el
+  período en que se detecta, sin sustitutiva, salvo que cambie el impuesto a pagar?» **Hecho
+  (AF3-09, según la auditoría):** el libro de compras va al céntimo y `recompute_iva_period` sigue a
+  8 decimales (20261003110000:611, :624, :636); su destino es el arreglo del céntimo
+  (20261003190000).
+
+## Auditoría fiscal de la ola 3: faltantes y uso en el giro (2026-10-03)
+
+- **P-81 · AF3-02 · El faltante de conteo (VALIDAR-TRIBUTARIO; LIVA art. 4.3, RLIVA arts. 13, 14 y
+  31).** **Aplicada:** va a 5.1.08 con motivo y evidencia (exigida desde la migración
+  20261003110200), sin débito. Norma leída (reproducción): el faltante no justificado es retiro
+  gravable; el art. 13 lo da por vendido en el período anterior a la comprobación, al costo más el
+  porcentaje de utilidad bruta del último balance; el art. 31 manda facturarlo. **Pregunta exacta:**
+  «El faltante detectado en un conteo sin la documentación del art. 14 RLIVA: ¿se grava como retiro
+  al costo más el porcentaje de utilidad bruta, imputado al período anterior, y con qué documento?»
+  **Dónde se toca:** `countStock` (inventory.ts), `CountStockRequest`, plantilla `stock.counted`.
+- **P-82 · AF3-03 · Uso en el giro y traslado al activo fijo (VALIDAR-TRIBUTARIO; LIVA art. 4.3 in
+  fine).** **Aplicada:** no existen como motivo; «consumo propio» siempre causa débito. **Pregunta
+  exacta:** «¿Qué soporte exige el uso de mercancía en el giro del negocio y el traslado al activo
+  fijo para que no sean retiro gravado? ¿Se revierte el crédito fiscal?» **Dónde se toca:**
+  `ExitReason`, CHECK `inventory_moves_exit_reason_chk`.
+
+## Moneda y diferencial (ADR-0075 §1-4, migración 20261003170000, 2026-10-03)
+
+- **P-83 · Las cuentas del diferencial cambiario (VALIDAR-CONTABLE).** **Aplicada según la respuesta del dueño (§2.7):** el diferencial entre la tasa del documento y la del pago se reconoce AL PAGAR, en ventas y en compras, contra los papeles `exchange_gain` (4.1.02) y `exchange_loss` (5.1.02) del plan. **Pregunta al contador:** ¿son esos los códigos y los nombres («Ganancia / Pérdida en diferencial cambiario») que quiere en el plan de la empresa, y el diferencial de las COMPRAS va a las mismas cuentas que el de las ventas o a unas propias? ¿El céntimo del abono por retención que cierra una factura va bien en «Diferencias por redondeo» (5.1.10)? **Ampliada (AF-M15, 2026-10-03).** El diferencial REALIZADO (cobros y pagos) y el NO REALIZADO (revaluación al cierre) caen en las mismas cuentas 4.1.02 / 5.1.02. **Pregunta adicional al contador:** «¿Quiere cuentas separadas para la diferencia en cambio realizada y la no realizada, para poder conciliar la renta fiscal?» Ver P-92.
+- **P-84 · Los residuos anteriores al corte (VALIDAR-CONTABLE).** Antes de la migración 20261003170000 el pago a proveedor en divisa a otra tasa dejaba la diferencia en cuentas por pagar (H-02: 000123 y F-88771 del recorrido), y el cobro que cerraba una factura en divisa podía dejar ±0,01 en cuentas por cobrar (F-15). El sistema NO los regulariza solo: `platform.settled_ledger_gaps` vigila lo saldado desde el corte. **Pregunta al contador:** ¿se regularizan con un asiento manual por documento contra diferencial cambiario, con uno global al corte, o se dejan para la revaluación del cierre (ADR-0075 §6)?
+- **P-85 · El IVA en Bs de una venta en divisa y su tolerancia (VALIDAR-TRIBUTARIO; PA 00071 art. 13.14, LIVA art. 25).** **Aplicada según la respuesta del dueño (§2.7, E-05):** por línea, base en Bs = round(base en divisa × tasa BCV del día, 2) e IVA en Bs = round(base en Bs × alícuota, 2); el total en divisa (lo que el cliente debe) conserva su IVA redondeado al céntimo de la divisa. Las dos cifras se separan hasta media unidad de la divisa × tasa por línea (unos 4 Bs por línea a la tasa actual), y esa separación se reconoce como diferencial al cobrar. **Pregunta al asesor:** (1) ¿el débito fiscal de la factura, el libro y la declaración es ese IVA en Bs, y no la conversión del IVA en divisa? (2) ¿Es aceptable que la contraprestación en divisa impresa en la factura, convertida a la tasa, no coincida al céntimo con el total en Bs, o la factura debe imprimir un total en divisa derivado del total en Bs? (3) Las facturas emitidas ANTES del cambio (IVA en Bs = IVA en divisa × tasa; diferencias de hasta 3,43 Bs en el recorrido) ¿se dejan como están o exigen nota de crédito/débito? **Añadido por la revisión de moneda (ola 3, «el cobro y el cierre»; aplicado, decidido por criterio):** a la tasa de la factura —el mismo día—, lo que se le cobra en Bs al cliente ES el total en Bs impreso en la factura (o la parte proporcional de lo que quede), y pagarlo la cierra sin diferencial; solo a otra tasa (otro día) la deuda en Bs es saldo en divisa × tasa de ese día. **(4)** ¿Es correcto que el mismo día se cobre el total en Bs de la factura aunque difiera en céntimos o bolívares de «total en divisa × tasa»? La **alternativa** descartada: cobrar siempre saldo en divisa × tasa del día, con lo que el mismo día se le cobraría al cliente una cifra distinta de la que su factura dice, y la diferencia iría a diferencial cambiario. **Ampliada (AF-M03, 2026-10-03).** Norma leída (LIVA arts. 20 y 36 en versión 2005; art. 23 en fuente secundaria): la base es el precio facturado, y todo lo cobrado en adición al precio se suma a la base. Eso respalda cobrar el total en Bs impreso y no una cifra mayor. **(5)** «Cuando el cliente paga el mismo día en la divisa de la factura, lo que entra (total en divisa × tasa) difiere del total en Bs en céntimos o bolívares. ¿Esa diferencia va a redondeo, o el total en divisa debe derivarse del total en Bs para que no exista?» **(6)** «¿Es admisible que "Total en dólares × tasa impresa" no dé el "TOTAL Bs" de la misma factura (PA 00071 art. 13.14)?»
+
+- **P-86 · E-11 / J-04 / R-61 (VALIDAR-CONTABLE y VALIDAR-TRIBUTARIO; ADR-0075 §6 y §8, ola 3)** —
+  1. **Revaluación al cierre (VEN-NIF PYME secc. 30).** **Aplicada:** al cerrar un mes, las cajas y
+     las cuentas por cobrar y por pagar en divisa se llevan a la oficial vigente a la fecha de cierre,
+     no más antigua que `closing_rate_max_age_days` (7 días, dato); la fecha es el menor entre el fin
+     del período y hoy; ver P-88,
+     contra ganancia o pérdida en diferencial cambiario; el ajuste es acumulado y no se reversa al
+     abrir el período siguiente. **Pregunta exacta:** «¿La revaluación mensual de partidas monetarias
+     en divisa se deja acumulada o se reversa el primer día del período siguiente, y va a las mismas
+     cuentas del diferencial realizado o a cuentas propias de diferencial no realizado?»
+  2. **IGTF documentado con nota de débito.** **Aplicada:** el cobro no se reversa (409). **Pregunta
+     exacta:** «¿Un IGTF percibido indebidamente que se documentó con nota de débito se corrige con una
+     nota de crédito de esa nota de débito?»
+  3. **Retención soportada corregida.** **Aplicada:** se anula el comprobante y se vuelve a cargar con
+     el mismo número. **Pregunta exacta:** «¿El agente de retención que corrige un comprobante emite
+     uno nuevo con otro número, o el mismo número con el importe corregido?»
+  4. **La cartera entre cierres (H10; VALIDAR-CONTABLE).** **Aplicada:** el cobro de una factura en
+     divisa reconoce el diferencial COMPLETO contra la tasa de la factura (histórico), aunque un
+     cierre anterior ya la hubiera revaluado; la revaluación previa de esa factura se deshace sola en
+     el cierre siguiente («lo que debe llevar − lo que lleva», neto por cuenta). A granularidad de
+     período equivale a «revaluar y reversar al abrir», pero ENTRE cierres las cuentas por cobrar del
+     mayor quedan sobrevaluadas (o subvaluadas) por lo revaluado de documentos ya cobrados, y el
+     resultado del mes del cobro muestra el diferencial entero mientras el del mes siguiente muestra
+     el reverso. **Pregunta exacta:** «¿Se acepta que la revaluación de un documento cobrado se
+     deshaga en el cierre siguiente, o el cobro debe medir su diferencial contra el valor revaluado
+     (la tasa del último cierre) y no contra la tasa de la factura?» **Alternativa:** que el cobro
+     cancele el valor revaluado (el diferencial del cobro sería solo el del tramo desde el último
+     cierre).
+
+  **Ampliada (AF-M12, AF-M13, AF-M15, 2026-10-03).** Al punto 1: ver P-92 (efecto en ISLR) y P-83
+  (cuentas separadas). Al punto 2: los arts. 22-23 de la PA 00071 hablan de notas que modifican
+  FACTURAS; no se halló regla sobre una nota de crédito que corrija una nota de débito. **Pregunta
+  adicional:** «¿La nota de crédito que deshace una nota de débito por IGTF referencia la nota de
+  débito o la factura original?» Al punto 3: el comprobante es un documento del AGENTE (PA 000054
+  art. 16); el proveedor solo lo transcribe. **Pregunta adicional:** «Si el agente anula y reemite
+  un comprobante, ¿el proveedor registra el nuevo en el período de su entrega (art. 7) y qué hace
+  con el anterior si ya lo descontó?»
+
+- **P-88 · La tasa de cierre (VALIDAR-CONTABLE; ADR-0075 §6, H7, ola 3).** **Aplicada, decidida por
+  criterio:** la tasa de cierre de un período es la oficial del BCV más reciente con fecha no
+  posterior a la fecha de cierre y con no más de **7 días** de antigüedad (parámetro de plataforma
+  `closing_rate_max_age_days`, dato y no código); fuera de ese margen el cierre se detiene y pide la
+  tasa. Si el período todavía no terminó, la revaluación se fecha el día del cierre (hoy, día de
+  Caracas) y usa la tasa de ese día. **Pregunta exacta:** «¿La tasa de cierre es la del último día
+  hábil del período? ¿Qué antigüedad máxima se admite?» **Alternativa:** exigir la tasa publicada
+  exactamente para el último día hábil del mes (margen 0 con calendario de feriados). **Ampliada
+  (AF-M02, 2026-10-03).** Para la conversión FISCAL, LIVA art. 25 manda al día hábil siguiente
+  cuando el día no es hábil. **Pregunta adicional:** «¿La tasa de cierre contable de un fin de mes
+  no hábil es la del último día hábil del mes o la publicada con fecha valor del primer día hábil
+  siguiente?»
+
+- **P-89 · La retención soportada que se anula después de declarada (VALIDAR-TRIBUTARIO; LIVA art.
+  11, PA SNAT/2025/000054; ADR-0075 §8, H9, ola 3).** **Aplicada, decidida por criterio (lo más
+  estrecho):** si el comprobante ya entró en una declaración de IVA generada después de cerrar su
+  período, su reversa se RECHAZA (409 `RETENTION_PERIOD_DECLARED`); nada cambia en el libro ni en
+  la declaración presentada. **Pregunta exacta:** «¿La retención soportada que se anula después de
+  declarada se ajusta en el período en que se detecta (como la anulación tardía de una venta) o
+  exige declaración sustitutiva?» **Alternativa anotada:** admitir la reversa y llevar un ajuste
+  negativo de retenciones soportadas al período corriente. **IGTF:** no existe todavía una
+  declaración de IGTF persistida (no hay período de IGTF «declarado» que proteger); la percepción
+  de un cobro reversado queda `pendiente_reintegro` (P-67). Cuando exista esa declaración, la misma
+  regla y la misma pregunta. **Ampliada (AF-M11, AF-M13, 2026-10-03).** Normas leídas: PA 000054
+  arts. 7 y 16 no regulan corrección ni anulación de comprobantes; LIVA art. 50 (versión 2005): el
+  ajuste que no cambia el impuesto va al período en que se detecta, y hay sustitutiva solo si
+  cambia el impuesto a pagar; instructivo del TXT (lado del agente): la declaración registrada no
+  se anula, el ajuste va en la próxima. **IGTF:** PA 000013 art. 4: lo indebido YA ENTERADO se
+  restituye y se pide en reintegro; no se compensa. **Preguntas adicionales:** (a) «Un IGTF
+  percibido y todavía no enterado cuyo cobro se reversa, ¿simplemente no se declara?» (b) «Si ya se
+  enteró, ¿el total de esa quincena se conserva como se declaró y el reintegro se tramita aparte?»
+  (c) «Si el dinero en divisa sí entró y después se devolvió, ¿la percepción fue debida, como en la
+  devolución de G-06, o indebida?» **Ampliada (revisión de la última ronda, 2026-10-03; migración
+  20261003230000).** Aplicado: «después de su quincena» se mide contra el fin de la quincena DE LA
+  PERCEPCIÓN (`platform.fiscal_fortnight`), no contra el rango consultado. (d) «Si una factura con
+  IGTF percibido se ANULA (no se reversa su cobro) después de cerrada la quincena de la percepción,
+  ¿esa percepción se trata igual que la del cobro reversado —se conserva en el total declarado y
+  se tramita el reintegro— o de otra forma?» Hoy Ladino no alcanza ese caso (una factura con
+  cobros no se anula, ADR-0061) y la percepción no guarda el instante en que pasó a
+  `pendiente_reintegro`: si el caso llega a existir, esa percepción no cuenta en ningún total
+  hasta que se guarde ese instante.
+  **Aplicada (AF-M11, 20261003220000):** el IGTF de un cobro reversado DESPUÉS del fin de su
+  quincena sigue contando en el total de esa quincena y se lista aparte como pendiente de
+  reintegro; el reversado dentro de ella no cuenta (`platform.igtf_period_totals`; PA
+  SNAT/2022/000013 art. 4). Decidido por criterio; alternativa: rebajar la quincena.
+
+## Auditoría fiscal de la familia de moneda (ola 3, 2026-10-03)
+
+- **P-90 · AF-M04 · El IVA por línea y lo que la factura imprime por alícuota (VALIDAR-TRIBUTARIO; PA 00071 art. 13 num. 10-11).** **Aplicada, decidida por criterio:** el IVA en Bs se redondea por línea (la fórmula literal de la respuesta del dueño, §2.7) y el PDF imprime, por alícuota, la suma de bases y la suma de IVA; en una factura de n líneas el IVA impreso puede apartarse de «base impresa × alícuota» hasta 0,005 × n Bs. La misma respuesta enunció el invariante «exacto por alícuota»; lo implementado y lo que vigila `fiscal_amount_gaps` es exacto por línea. No se halló norma que fije la unidad de cálculo ni el redondeo. **Pregunta exacta:** «¿El IVA de la factura se calcula sobre la base total de cada alícuota (un solo redondeo por alícuota) o puede ser la suma del IVA redondeado de cada línea? Si el agente de retención recalcula base × alícuota y su 75 % difiere en céntimos del nuestro, ¿qué cifra manda?» **Alternativa:** IVA por alícuota sobre la base sumada, repartiendo el residuo entre líneas. **Dónde se toca:** `fiscalDeLinea` (sales.ts), `fiscal_amount_gaps`, la tolerancia de `registerSupportedRetention` (declarations.ts; ver P-30).
+- **P-91 · AF-M14 · Anular una factura cuyo cobro se reversó (VALIDAR-TRIBUTARIO; PA 00071 art. 36, LIVA art. 58; ola 4, G-10).** **Aplicada, decidida por criterio (ADR-0075):** un cobro reversado no cuenta y la factura vuelve a poder anularse. Norma leída (reproducción): el art. 36 solo manda conservar original y copias de lo anulado; el art. 58 de la LIVA manda corregir con nota la operación que queda sin efecto después de facturada. **Pregunta exacta:** «¿Qué condiciones permiten ANULAR una factura en lugar de emitir nota de crédito: tener el original y todas las copias, que el período no esté declarado, que el cliente no haya tomado el crédito? ¿Haber tenido un cobro, aunque se reversara, lo impide?» **Alternativa:** que la reversa de un cobro no habilite la anulación. La regla de anulación se rehace en la ola 4 (G-10) y pregunta por el original en mano y por el período, haya habido cobro o no. **Dónde se toca:** `annulInvoice` (sales.ts).
+- **P-92 · AF-M15 · La diferencia en cambio y el ISLR (VALIDAR-TRIBUTARIO).** **Aplicada:** la revaluación mensual y el diferencial al cobrar o pagar van a resultados; Ladino no calcula ISLR. En la reproducción de la LISLR 2015 (G.O. 6.210 Ext.) no se localizó el artículo sobre ganancias y pérdidas cambiarias (una fuente académica lo sitúa en el art. 186, sin texto leído); los SPE están excluidos del ajuste por inflación (art. 171). **Pregunta exacta:** «¿La ganancia o la pérdida cambiaria no realizada de la revaluación al cierre es gravable o deducible en el ejercicio, o solo cuando se cobra, se paga o es exigible? ¿Qué artículo lo dice hoy y aplica igual a un sujeto pasivo especial?» **Dónde se toca:** `revaluarAlCierre` (accounting.ts), papeles `exchange_gain` / `exchange_loss`.

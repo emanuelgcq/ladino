@@ -117,6 +117,7 @@ beforeAll(async () => {
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values
              (${ROL}, null, ${`e2emover_${RUN}`}, 'Dueño', true)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
+             (${ROL}, 'treasury.overdraft'),
              (${ROL}, 'sales.invoice.issue'), (${ROL}, 'sales.payment.register'),
              (${ROL}, 'ar.read'), (${ROL}, 'expense.register'), (${ROL}, 'expense.read'),
              (${ROL}, 'treasury.read'), (${ROL}, 'treasury.account.manage'),
@@ -324,13 +325,15 @@ describe("el dinero del negocio: dónde cae, cómo se mueve y qué pasa si no al
     expect(sin.status).toBe(409);
     const error = (await sin.json()) as { code: string; message: string };
     expect(error.code).toBe("INSUFFICIENT_FUNDS");
-    expect(error.message).toContain("40.00000000");
+    // D-13 (ola 3): el aviso lleva el saldo con formato de dinero, no «40.00000000».
+    expect(error.message).toMatch(/Bs\.\s40,00/);
     // Nada se escribió: el saldo sigue donde estaba.
     expect(await saldoDe(CAJA_BS)).toBe("40.00000000");
 
     const con = await pedir("POST", "/v1/treasury/transfers", {
       ...cuerpo,
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(con.status).toBe(201);
     expect(await saldoDe(CAJA_BS)).toBe("-10.00000000");
@@ -359,7 +362,11 @@ describe("el dinero del negocio: dónde cae, cómo se mueve y qué pasa si no al
     expect(((await sin.json()) as { code: string }).code).toBe("INSUFFICIENT_FUNDS");
     expect(await saldoDe(CAJA_BS)).toBe("40.00000000");
 
-    const con = await pedir("POST", "/v1/expenses", { ...cuerpo, allow_negative_balance: true });
+    const con = await pedir("POST", "/v1/expenses", {
+      ...cuerpo,
+      allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
+    });
     expect(con.status).toBe(201);
     expect(await saldoDe(CAJA_BS)).toBe("-460.00000000");
   });

@@ -1,6 +1,15 @@
 import { err, ok, type Result } from "@ladino/core";
 import type { UnitOfWork, TransactionSql } from "@ladino/db";
-import type { AddMemberRequest, MemberResponse, SetMemberStatusRequest } from "@ladino/schemas";
+import type {
+  AcceptInvitationResponse,
+  AddMemberRequest,
+  CreateInvitationRequest,
+  InvitationPreviewResponse,
+  InvitationResponse,
+  MeAccessResponse,
+  MemberResponse,
+  SetMemberStatusRequest,
+} from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 
 /**
@@ -233,7 +242,7 @@ export async function addMember(
     return err({
       code: "MEMBER_NOT_REGISTERED",
       message:
-        "Esa persona todavía no tiene cuenta en Ladino. Pídele que se registre con ese correo y vuelve a agregarla.",
+        "Esa persona todavía no tiene cuenta en Ladino. Crea un enlace de invitación y mándaselo: entra con él y queda con su oficio.",
     });
   }
   const userId = persona.id;
@@ -262,6 +271,14 @@ export async function addMember(
         if (negado !== null) return err(negado);
       }
       await sql`update public.memberships set status = 'active' where id = ${previa.id}`;
+      // N-10: reactivar desde «Agregar persona» deja su acta, como desde el botón.
+      await sql`
+        insert into public.audit_events
+          (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+           actor_type, occurred_at, rules_version, payload)
+        values (${tenantId}, ${input.company_id}, 'membership', ${previa.id},
+                'member.reactivated', 'user', now(), ${RULES_VERSION},
+                ${sql.json({ user_id: userId, via: "add_member" })})`;
     }
   } else {
     const [nueva] = await sql<{ id: string }[]>`
@@ -353,9 +370,15 @@ export async function removeAssignment(
     });
   }
   const [asignacion] = await sql<
-    { id: string; user_id: string; role_key: string; company_id: string | null }[]
+    {
+      id: string;
+      membership_id: string;
+      user_id: string;
+      role_key: string;
+      company_id: string | null;
+    }[]
   >`
-    select ura.id, m.user_id, r.key as role_key, ura.company_id
+    select ura.id, ura.membership_id, m.user_id, r.key as role_key, ura.company_id
       from public.user_role_assignments ura
       join public.memberships m on m.id = ura.membership_id
       join public.roles r on r.id = ura.role_id
@@ -387,9 +410,22 @@ export async function removeAssignment(
     insert into public.audit_events
       (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
        actor_type, occurred_at, rules_version, payload)
-    values (${tenantId}, ${input.company_id}, 'membership', ${input.assignment_id},
+    -- N-10: el acta va en el historial de la MEMBRESÍA (antes llevaba el id de la asignación).
+    -- E1 (ADR-0077, segunda revisión): el acta dice de qué empresa era la ASIGNACIÓN, no desde
+    -- qué empresa se quitó. El Titular puede quitar una asignación de B con la cabecera de A, y
+    -- platform.lost_access_to_company lee assignment_company_id para decidir a quién le dice
+    -- «tu acceso ya no está activo»: anclada a la cabecera, se lo decía en A a quien nunca
+    -- trabajó en A. null = la asignación era de nivel tenant (alcanzaba todo el negocio), y
+    -- solo entonces el acta se ancla a la empresa de la cabecera.
+    values (${tenantId}, ${asignacion.company_id ?? input.company_id}, 'membership',
+            ${asignacion.membership_id},
             'member.role_revoked', 'user', now(), ${RULES_VERSION},
-            ${sql.json({ user_id: asignacion.user_id, role_key: asignacion.role_key })})`;
+            ${sql.json({
+              user_id: asignacion.user_id,
+              role_key: asignacion.role_key,
+              assignment_id: input.assignment_id,
+              assignment_company_id: asignacion.company_id,
+            })})`;
   return ok({ removed: true });
 }
 
@@ -440,4 +476,178 @@ export async function setMemberStatus(
             ${input.status === "active" ? "member.reactivated" : "member.deactivated"},
             'user', now(), ${RULES_VERSION}, ${sql.json({ user_id: miembro.user_id })})`;
   return ok({ status: input.status });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LA INVITACIÓN POR ENLACE (ADR-0077 §3; N-08, K-09)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Una invitación vive siete días (decidido por criterio; la tabla admite hasta 30). */
+const DIAS_DE_INVITACION = 7;
+
+/**
+ * Crea la invitación. Autoriza igual que addMember (membership.manage sobre la empresa de la
+ * cabecera): invitar es agregar a alguien que todavía no tiene cuenta. El token lo genera la API
+ * (`crypto.randomBytes(32)`, parámetro `secreto`) y viaja UNA vez en la respuesta; la tabla guarda
+ * solo su huella.
+ */
+export async function createInvitation(
+  uow: UnitOfWork,
+  input: CreateInvitationRequest,
+  /**
+   * H2 (revisión ADR-0077): el token lo genera la API (`crypto.randomBytes(32)`) y a la base solo
+   * llega su huella sha256 en hex. El dominio no ve más que lo que tiene que guardar y devolver.
+   */
+  secreto: { readonly token: string; readonly huella: string },
+): Promise<Result<InvitationResponse, MembersError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Invitar exige un usuario real." });
+  }
+  const tenantId = await tenantDe(sql, input.company_id);
+  if (tenantId === null) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (!(await enEmpresa(sql, actor.userId, input.company_id, "membership.manage"))) {
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "Invitar personas exige membership.manage sobre esta empresa.",
+    });
+  }
+  // Un rol acotado sin almacenes no concedería nada al aceptarse: se dice ahora, como en addMember.
+  const [rol] = await sql<{ requires_scope: boolean; almacenes: number }[]>`
+    select r.requires_scope,
+           (select count(*)::int from public.warehouses w where w.company_id = ${input.company_id})
+             as almacenes
+      from public.roles r
+     where r.key = ${input.role_key} and r.tenant_id is null`;
+  if (rol === undefined) return err({ code: "VALIDATION_FAILED", message: "Ese rol no existe." });
+  if (rol.requires_scope && rol.almacenes === 0) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Ese rol trabaja por almacén y la empresa no tiene ninguno todavía: crea el depósito primero.",
+    });
+  }
+  const email = input.email === undefined ? null : input.email.trim().toLowerCase();
+  // H7 (decidido por criterio): una invitación de Dueño va SIEMPRE a un correo. Un enlace sin correo
+  // lo usa quien lo tenga, y como Dueño eso es entregar el negocio.
+  if (input.role_key === "owner" && email === null) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Una invitación de Dueño va a un correo: escribe el correo de la persona, y solo esa cuenta podrá usarla.",
+    });
+  }
+
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  const { token, huella } = secreto;
+  const [fila] = await sql<{ id: string; expires_at: string }[]>`
+    insert into public.member_invitations
+      (tenant_id, company_id, role_key, email, token_hash, expires_at)
+    values (${tenantId}, ${input.company_id}, ${input.role_key}, ${email},
+            ${huella},
+            now() + make_interval(days => ${DIAS_DE_INVITACION}))
+    returning id,
+              to_char(expires_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as expires_at`;
+
+  // El acta: quién invitó, a qué empresa, con qué rol y a qué correo. NUNCA el token.
+  await sql`
+    insert into public.audit_events
+      (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+       actor_type, occurred_at, rules_version, payload)
+    values (${tenantId}, ${input.company_id}, 'member_invitation', ${fila!.id},
+            'member.invited', 'user', now(), ${RULES_VERSION},
+            ${sql.json({ role_key: input.role_key, email, expires_at: fila!.expires_at })})`;
+
+  return ok({
+    id: fila!.id,
+    company_id: input.company_id,
+    role_key: input.role_key,
+    email,
+    token,
+    expires_at: fila!.expires_at,
+  });
+}
+
+/** Lo que la persona invitada ve antes de entrar: «Te invitaron a <empresa>». */
+export async function previewInvitation(
+  uow: UnitOfWork,
+  token: string,
+): Promise<Result<InvitationPreviewResponse, MembersError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Ver una invitación exige un usuario." });
+  }
+  const [v] = await sql<InvitationPreviewResponse[]>`
+    select status, company_name, business_name, role_key, inviter_name,
+           to_char(expires_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as expires_at
+      from platform.invitation_preview(${token})`;
+  if (v === undefined) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  return ok(v);
+}
+
+const NO_DISPONIBLE: Record<string, MembersError> = {
+  LAD85: { code: "NOT_FOUND", message: "Recurso no encontrado." },
+  LAD86: {
+    code: "INVITATION_UNAVAILABLE",
+    message: "Esta invitación ya se usó o fue anulada. Pide a quien te invitó un enlace nuevo.",
+  },
+  LAD87: {
+    code: "INVITATION_UNAVAILABLE",
+    message: "Esta invitación venció. Pide a quien te invitó un enlace nuevo.",
+  },
+  LAD88: {
+    code: "INVITATION_FOR_OTHER_EMAIL",
+    message:
+      "Esta invitación es para otro correo. Entra con la cuenta del correo al que te invitaron.",
+  },
+  // H1: una invitación nunca reactiva una membresía desactivada.
+  LAD89: {
+    code: "INVITATION_UNAVAILABLE",
+    message:
+      "Tu acceso a este negocio está desactivado: pídele a quien lo administra que te reactive desde Usuarios.",
+  },
+  LAD90: {
+    code: "INVITATION_UNAVAILABLE",
+    message:
+      "Esta invitación ya no se puede usar: quien la envió ya no gestiona las personas de esa empresa. Pide un enlace nuevo a quien administra el negocio.",
+  },
+};
+
+/**
+ * Acepta la invitación: UNA vez, con la fila bloqueada, en `platform.accept_member_invitation`
+ * (SECURITY DEFINER: la persona todavía no es miembro y la RLS no la deja escribir su membresía).
+ * SAVEPOINT porque sus LAD son errores esperables y un error crudo condena la transacción.
+ */
+export async function acceptInvitation(
+  uow: UnitOfWork,
+  token: string,
+): Promise<Result<AcceptInvitationResponse, MembersError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Aceptar exige un usuario real." });
+  }
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  try {
+    const companyId = await sql.savepoint(async (sp) => {
+      const [r] = await sp<{ company_id: string }[]>`
+        select platform.accept_member_invitation(${token}) as company_id`;
+      return r!.company_id;
+    });
+    return ok({ company_id: companyId });
+  } catch (e) {
+    const conocido = NO_DISPONIBLE[(e as { code?: string }).code ?? ""];
+    if (conocido !== undefined) return err(conocido);
+    throw e;
+  }
+}
+
+/** N-03: los negocios donde la persona tuvo acceso y hoy no, con el nombre de quien administra. */
+export async function myLostAccess(
+  uow: UnitOfWork,
+): Promise<Result<MeAccessResponse, MembersError>> {
+  const filas = await uow.sql<{ business_name: string; admin_name: string | null }[]>`
+    select business_name, admin_name from platform.my_lost_access()`;
+  return ok({
+    lost_access: filas.map((f) => ({ business_name: f.business_name, admin_name: f.admin_name })),
+  });
 }

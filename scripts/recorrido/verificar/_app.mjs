@@ -58,7 +58,8 @@ async function idDe(correo) {
 }
 
 /** Una llamada a la API como `correo`, en la empresa `empresa` (E1/E2/E3 o un uuid). */
-export async function pedir(correo, empresa, metodo, ruta, cuerpo) {
+/** `llave` (opcional, ADR-0076): la Idempotency-Key del intento, para los casos que la repiten. */
+export async function pedir(correo, empresa, metodo, ruta, cuerpo, llave) {
   const token = await new SignJWT({ role: "authenticated" })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(await idDe(correo))
@@ -70,7 +71,7 @@ export async function pedir(correo, empresa, metodo, ruta, cuerpo) {
   const headers = { Authorization: `Bearer ${token}` };
   const companyId = EMPRESAS[empresa] ?? empresa;
   if (companyId) headers["X-Company-Id"] = companyId;
-  if (metodo !== "GET") headers["Idempotency-Key"] = crypto.randomUUID();
+  if (metodo !== "GET") headers["Idempotency-Key"] = llave ?? crypto.randomUUID();
   if (cuerpo !== undefined) headers["Content-Type"] = "application/json";
   const r = await app.request(ruta, {
     method: metodo,

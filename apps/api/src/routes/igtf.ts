@@ -140,20 +140,27 @@ export function igtfRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandler)
            ${periodo === null ? tx`` : tx`and platform.caracas_day(occurred_at) between ${periodo[0]}::date and ${periodo[1]}::date`}
          order by occurred_at desc
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
-      // El total de la quincena que se entera: SOLO lo percibido — lo
-      // pendiente de reintegro se lista, pero no se suma como si se debiera.
-      const [total] = await tx<{ total: string; moneda: string }[]>`
-        select coalesce(sum(p.functional_amount) filter (where p.status = 'percibido'), 0)::text
-                 as total,
+      // El total del rango pedido. AF-M11 (PA SNAT/2022/000013 art. 4): la regla vive en UNA
+      // función de la base (20261003230000). Una percepción cuyo cobro se reversó DESPUÉS del fin
+      // de SU quincena —la de la percepción, no el rango de esta consulta— sigue contando (ya se
+      // declaró: se recupera por reintegro, no rebajándola) y se dice aparte; la reversada dentro
+      // de su quincena no cuenta. Sin rango, solo lo percibido vigente.
+      const [total] = await tx<
+        { total: string; pendiente: string; cuantas: number; moneda: string }[]
+      >`
+        select t.total_functional::text as total,
+               t.pending_refund_functional::text as pendiente,
+               t.pending_refund_count::int as cuantas,
                (select functional_currency_code from public.companies where id = ${companyId})
                  as moneda
-          from public.igtf_perceptions p
-         where p.company_id = ${companyId}
-           ${periodo === null ? tx`` : tx`and platform.caracas_day(p.occurred_at) between ${periodo[0]}::date and ${periodo[1]}::date`}`;
+          from platform.igtf_period_totals(${companyId}, ${periodo === null ? null : periodo[0]}::date,
+                                           ${periodo === null ? null : periodo[1]}::date) t`;
       return {
         items: filas.map(({ total: _t, ...r }) => r),
         total: filas.length > 0 ? (filas[0]!["total"] as number) : 0,
         total_functional: total?.total ?? "0",
+        pending_refund_functional: total?.pendiente ?? "0",
+        pending_refund_count: total?.cuantas ?? 0,
         functional_currency: total?.moneda ?? "",
       };
     });

@@ -11,6 +11,7 @@ import { comprobaciones, pedir, afirmar, sql, EMPRESAS, PERSONAS } from "./_app.
 import { textoDe, tiene, idDocumento } from "./_pdf.mjs";
 import { pedir as pedirIgtf, EMPRESAS as EMP_IGTF, PERSONAS as PER_IGTF } from "./_app.mjs";
 import { textoDe as textoIgtf, tiene as tieneIgtf } from "./_pdf.mjs";
+import * as monedaA from "./_moneda.mjs";
 
 const c = comprobaciones("G");
 const E2 = EMPRESAS.E2;
@@ -231,6 +232,21 @@ c.caso(
     const [p] =
       await sql`select status from public.igtf_perceptions where document_id = ${v.document.id}`;
     afirmar(p.status === "percibido", "la percepción dejó de estar percibida");
+  },
+);
+
+// ── Moneda A (ADR-0075 §4) ───────────────────────────────────────────────────
+c.caso(
+  "G-12",
+  "un documento de E2 pagado exacto en Bs queda con saldo CERO en su moneda, sin polvo de conversión",
+  async () => {
+    const { doc, cobro } = await monedaA.ventaUsdCobradaEnBs();
+    afirmar(cobro.status === 201, `el cobro no entró: ${cobro.status}`);
+    const [s] = await sql`
+      select platform.document_balance_transaction(${EMPRESAS.E2}, ${doc.id})::text as usd,
+             platform.document_debt_today(${EMPRESAS.E2}, ${doc.id})::text as hoy`;
+    afirmar(Number(s.usd) === 0, `saldo en USD: ${s.usd} (antes, ~0,00000922)`);
+    afirmar(Number(s.hoy) === 0, `deuda a la tasa de hoy: ${s.hoy} (antes, ±0,01)`);
   },
 );
 

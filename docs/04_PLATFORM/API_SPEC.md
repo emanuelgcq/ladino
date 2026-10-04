@@ -216,7 +216,11 @@ Obligatoria en: emisión de factura, pagos, cobros, posting de asientos, reinten
 y posting de nómina.
 
 - Misma clave, mismo cuerpo → devuelve la respuesta original, sin repetir el efecto.
-- Misma clave, cuerpo distinto → `409 IDEMPOTENCY_KEY_REUSED`.
+- Misma clave, cuerpo distinto → `409 IDEMPOTENCY_BODY_MISMATCH` (ADR-0076; antes `IDEMPOTENCY_KEY_REUSED`).
+- Misma clave en OTRO endpoint → `409 IDEMPOTENCY_KEY_REUSED` (ADR-0056).
+- La clave es por INTENTO (ADR-0076): el cliente la estrena tras un 4xx (salvo
+  `IDEMPOTENCY_IN_PROGRESS`) y la conserva tras un fallo de red o un 5xx. Nunca es el id de un
+  recurso (la cuenta del POS fue el caso: M-01).
 - ~~La clave se persiste **dentro** de la transacción del caso de uso.~~ Sigue siendo lo correcto
   cuando el trabajo es local, pero **se admite el protocolo de dos transacciones** para operaciones
   con un viaje externo — la emisión fiscal lo necesita. Ver la enmienda de ADR-0018.
@@ -280,6 +284,37 @@ Pendiente y no decidido: el TTL concreto (`expires_at` no tiene default a propó
 `/purchase-orders` `/supplier-invoices` `/payments` `/banks` `/accounting` `/tax` `/fiscal`
 `/reports` `/audit`
 
+### La reversa de un cobro y de una retención soportada (ADR-0075 §8, ola 3)
+
+- **`POST /v1/payments/{id}/reversal`** — permiso `ar.payment.reverse` (dueño y contador). Cuerpo
+  `{company_id, reason}` (motivo de 10 a 300 caracteres). 201 con la reversa, el estado del
+  documento, la deuda que queda (`debt`, de la única función) y, si lo hubo, el IGTF pendiente de
+  reintegro. Errores: 403 `PERMISSION_REQUIRED`; 422 sin motivo o si el abono es un comprobante de
+  retención; 409 `PAYMENT_ALREADY_REVERSED`, `IGTF_NOTE_ISSUED`, `PERIOD_CLOSED` (el contra-asiento
+  va con fecha de hoy: si el período de hoy está cerrado, la reversa se rechaza).
+- **`POST /v1/supported-retentions/{id}/reversal`** — permiso `ar.retention.correct` (contador).
+  Mismo cuerpo y misma respuesta (`kind = supported_retention`); el comprobante queda `annulled`.
+  409 `RETENTION_PERIOD_DECLARED` si el comprobante ya entró en una declaración presentada.
+
+**Lecturas (aditivo, ola 3).** Un cobro reversado no es un cobro:
+
+- `GET /v1/documents`: `has_payments` cuenta solo cobros vivos.
+- `GET /v1/documents/{id}`: cada elemento de `payments` trae `reversal` (`null` o
+  `{id, reversed_at, reversed_by, reversed_by_name, reason}`); `exchange_differences` no incluye el
+  diferencial de un cobro reversado; `balance` es `null` si el documento está en divisa y no hay
+  tasa de hoy.
+- `GET /v1/customers/{id}/statement` y `/aging`, `GET /v1/customers?with_debt=1`: `paid_amount`
+  excluye lo reversado; `total_outstanding`, `debt.by_currency[].functional_today`, `aging.total`,
+  el `amount` de cada tramo y `debt` de la lista pueden ser `null`: hay deuda en divisa y falta la
+  tasa de hoy. El nominal por moneda (`debt.by_currency[].nominal`) se sirve siempre,
+  salvo un cobro antiguo en otra moneda sin tasa con que valorarlo, que deja la deuda en nulo.
+- `GET /v1/reports/exchange-difference`: no suma el diferencial de un cobro reversado.
+- `GET /v1/journal-entries/{id}`: `debit_amount` y `credit_amount` de cada línea van en moneda
+  FUNCIONAL (iguales a `functional_debit` / `functional_credit`); el importe original va en
+  `original_amount`, con `transaction_currency` y `fx_rate`.
+
+**Última ronda (aditivo, ola 3).** `GET /v1/customers/{id}/statement`: `documents[].balance` y `documents[].debt_nominal` pueden ser `null` (no «0») cuando no se pueden calcular, y `debt.unvalued_documents` dice cuántos documentos quedan fuera de `debt.by_currency`. La respuesta de las dos reversas: `debt.nominal` y `debt.functional_today` pueden ser `null`. `GET /v1/igtf/perceptions`: `total_functional` incluye lo percibido cuyo cobro se reversó después del fin del período, y `pending_refund_functional` / `pending_refund_count` lo dicen aparte. **Corrección (20261003230000, sin cambio de forma):** «después del fin del período» es después del fin de la QUINCENA DE LA PERCEPCIÓN, no del `to` de la consulta; el total de un rango es la suma de sus percepciones y Σ quincenas = mes. `GET /v1/supplier-invoices`: `items[].balance` es `null` en una factura sin asentar (borrador o anulada).
+
 ### `POST /v1/payments`: `amount` es lo ENTREGADO, por omisión (2026-10-02, ADR-0072 parte 2)
 
 `igtf_included` (booleano, opcional) decide qué significa `amount` cuando el cobro causa IGTF (un
@@ -298,6 +333,17 @@ Es un **cambio de comportamiento** del contrato: antes, por omisión, el IGTF se
 instrumento `otro` recibe 422: debe registrarlo con su instrumento verdadero. La respuesta trae
 `igtf` (con `absorbed`) y, en un cobro posterior a la factura, `igtf_debit_note` (la Nota de Débito
 por IGTF que lo documenta).
+
+### `POST /v1/payments` y `POST /v1/supplier-payments`: 409 `SETTLEMENT_MISMATCH` (ADR-0075 §4, regla 4, ola 3)
+
+El cobro o el pago que CIERRA el documento y dejaría un diferencial (o un redondeo, en la retención
+soportada) fuera de la cota del redondeo se rechaza con 409 `SETTLEMENT_MISMATCH` y no se registra
+nada. Mensajes (`ERROR_CATALOG.md`):
+
+- `POST /v1/payments`: «Este cobro no cuadra con lo que el documento todavía debe. No se registró:
+  revisa el documento.»
+- `POST /v1/supplier-payments`: «Este pago no cuadra con lo que la factura todavía debe. No se
+  registró: revisa la factura.»
 
 ## Observabilidad
 

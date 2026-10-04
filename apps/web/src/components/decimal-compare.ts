@@ -47,8 +47,15 @@ function compararMagnitud(a: Partes, b: Partes): -1 | 0 | 1 {
   return da > db ? 1 : -1;
 }
 
-/** ¿Es cero, con cualquier número de decimales? */
-export function esCero(v: string): boolean {
+/**
+ * ¿Es cero, con cualquier número de decimales?
+ *
+ * `null` y `undefined` devuelven `false`, sin lanzar: «no se sabe» NO es cero. El servidor manda
+ * `null` cuando hay una deuda que no puede valorar hoy (falta la tasa); tratarlo como cero la
+ * pintaría «Al día» o «pagada», que es justo lo contrario de lo que pasa.
+ */
+export function esCero(v: string | null | undefined): boolean {
+  if (v === null || v === undefined) return false;
   return /^-?0*(?:\.0*)?$/.test(v.trim());
 }
 

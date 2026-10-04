@@ -112,6 +112,7 @@ beforeAll(async () => {
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values
              (${ROL}, null, ${`e2ecaja_${RUN}`}, 'Dueño', true)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
+             (${ROL}, 'treasury.overdraft'),
              (${ROL}, 'sales.invoice.issue'), (${ROL}, 'sales.payment.register'),
              (${ROL}, 'ar.read'), (${ROL}, 'supplier.manage'),
              (${ROL}, 'purchase.invoice.register'), (${ROL}, 'purchase.payment.register'),
@@ -301,6 +302,7 @@ describe("la cuenta de efectivo sale de la caja real del movimiento", () => {
       // Lo que se prueba aquí es CONTRA QUÉ CUENTA asienta, no el saldo: el banco tiene lo
       // cobrado antes y no llega. Se confirma el sobregiro (ADR-0062 §4).
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(pago.status).toBe(201);
     const p = ((await pago.json()) as { payment: { id: string } }).payment.id;
@@ -320,6 +322,7 @@ describe("la cuenta de efectivo sale de la caja real del movimiento", () => {
       account_id: BANCO_USD,
       amount: "3.00000000",
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(r.status).toBe(201);
     const g = (await r.json()) as { id: string; accounting: string };
@@ -332,21 +335,37 @@ describe("la cuenta de efectivo sale de la caja real del movimiento", () => {
     expect(lineas.map((l) => l.account_id)).not.toContain(CASH_BS);
   });
 
-  it("CIERRE · la diferencia del cierre del banco en USD cae en la cuenta de ESE banco", async () => {
+  // J-03 (ola 3, ADR-0068 §8): el cierre solo acepta CAJAS. Este caso cerraba el banco en USD y
+  // pasaba gracias al defecto; ahora cierra la caja en USD, que tiene su propia subcuenta, y la
+  // propiedad que mide (la diferencia cae en la subcuenta de ESA cuenta) es la misma.
+  it("CIERRE · la diferencia del cierre de la caja en USD cae en la subcuenta de ESA caja", async () => {
     const r = await pedir("POST", "/v1/cash-closings", {
       company_id: COMPANY,
-      account_id: BANCO_USD,
-      counted_amount: "0.00000000",
-      reason: "conciliación e2e: se cuenta cero para forzar la diferencia",
+      account_id: CAJA_USD,
+      counted_amount: "12345.67000000",
+      reason: "conciliación e2e: se cuenta de más para forzar la diferencia",
     });
     expect(r.status).toBe(201);
     const c = (await r.json()) as { id: string; accounting: string; difference: string };
     expect(c.accounting).toBe("posted");
 
     const lineas = await lineasDe("cash_closing", c.id);
-    expect(lineas.map((l) => l.account_id)).toContain(MAYOR_BANCO);
+    expect(lineas.map((l) => l.account_id)).toContain(SUB_CAJA_USD);
     expect(lineas.map((l) => l.account_id)).not.toContain(CASH_BS);
     expect(lineas.map((l) => l.account_id)).not.toContain(CASH_USD);
+  });
+
+  it("CIERRE · el banco no se cierra como una caja (J-03): 422, sin el saldo", async () => {
+    const r = await pedir("POST", "/v1/cash-closings", {
+      company_id: COMPANY,
+      account_id: BANCO_USD,
+      counted_amount: "0.00000000",
+      reason: "conciliación e2e: el banco no es una caja",
+    });
+    expect(r.status).toBe(422);
+    const cuerpo = (await r.json()) as { message: string };
+    expect(cuerpo.message).toContain("Solo se cierran cajas");
+    expect(cuerpo.message).not.toContain("esperaba");
   });
 
   it("VARIANTE ROTA · sin mapeo, el gasto NO cae en cash_bs: va a la cola diciendo qué caja, y se recupera", async () => {
@@ -362,6 +381,7 @@ describe("la cuenta de efectivo sale de la caja real del movimiento", () => {
       account_id: CAJA_USD,
       amount: "2.00000000",
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(r.status).toBe(201);
     const g = (await r.json()) as { id: string; accounting: string };

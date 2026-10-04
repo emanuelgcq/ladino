@@ -142,6 +142,7 @@ const VALOR_LEGIBLE: Record<string, Record<string, string>> = {
     credit_note: "Nota de crédito",
     debit_note: "Nota de débito",
     receipt: "Recibo",
+    withdrawal_note: "Nota de retiro",
   },
   status: {
     issued: "Emitida",

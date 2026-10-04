@@ -56,6 +56,12 @@ import { modoDeVenta } from "./modo-venta.js";
 import { bloquearTalonario, serieDelTalonario } from "./talonario.js";
 import { serieYNumero } from "@ladino/schemas";
 import { exigeFormaLibre, filasDeLineas } from "./forma-libre.js";
+import {
+  cuentaAjena,
+  cuentaVendida,
+  puedeCuentasAjenas,
+  type PosCartSoldError,
+} from "./pos-carts.js";
 
 /**
  * Casos de uso de VENTAS — RIGOR MÁXIMO. Aquí convergen dinero, fiscal,
@@ -91,6 +97,10 @@ export type SalesError =
   | { code: "REGIME_KIND_NOT_ALLOWED"; message: string }
   | { code: "DOCUMENT_HAS_PAYMENTS"; message: string }
   | { code: "INSUFFICIENT_FUNDS"; message: string }
+  // ADR-0075 §4 (regla 4): el cobro que cierra dejaría un diferencial fuera del redondeo.
+  | { code: "SETTLEMENT_MISMATCH"; message: string }
+  // ADR-0076: la cuenta del POS que esta venta cerraría ya se cobró.
+  | PosCartSoldError
   | TaxpayerTypeRequiredError;
 
 /**
@@ -1135,6 +1145,32 @@ async function resolverLista(
 }
 
 /** El recibo y su devolución no son documentos fiscales: sin IVA ni clasificación de libro. */
+/**
+ * EL FISCAL EN MONEDA FUNCIONAL DE UNA LÍNEA (ADR-0075 §1, E-05). UNA sola función: la usan
+ * `insertarDocumento` (lo que la factura guarda e imprime) y `quotePos` (lo que la caja anuncia
+ * y cobra). Antes eran dos reglas y la caja enseñaba 9.518,73 donde la factura decía 9.515,31.
+ *   base_bs = round(base_divisa × tasa, 2) · iva_bs = round(base_bs × alícuota, 2) · total = suma.
+ * Un documento que ya nace en la moneda funcional no convierte nada.
+ */
+export function fiscalDeLinea(
+  calc: Pick<LineaCalculada["calc"], "subtotal" | "total" | "taxRate">,
+  tasa: Decimal,
+  monedaDocumento: string,
+  funcional: string,
+): { sub: Result<Money, SalesError>; tot: Result<Money, SalesError> } {
+  const sub = aFuncional(calc.subtotal, tasa, funcional);
+  if (monedaDocumento === funcional || !sub.ok) {
+    return { sub, tot: aFuncional(calc.total, tasa, funcional) };
+  }
+  const escala = minorUnitsOf(funcional);
+  const iva = sub.value.amount.times(calc.taxRate).toDecimalPlaces(escala, 4);
+  const tot = Money.of(sub.value.amount.plus(iva).toFixed(escala), funcional);
+  return {
+    sub,
+    tot: tot.ok ? tot : err({ code: "VALIDATION_FAILED" as const, message: tot.error.message }),
+  };
+}
+
 function esNoFiscal(kind: string): boolean {
   return kind === "receipt" || kind === "receipt_return";
 }
@@ -1172,10 +1208,19 @@ async function insertarDocumento(
    * aparte: convertir los tres por separado produce redondeos que no cuadran, y
    * `documents_amounts_chk` exige que cuadren. Restar no puede desbalancear.
    */
-  const funcionales = d.lineas.map((l) => ({
-    sub: aFuncional(l.calc.subtotal, d.fxRate, ctx.functionalCurrency),
-    tot: aFuncional(l.calc.total, d.fxRate, ctx.functionalCurrency),
-  }));
+  /**
+   * E-05 (ADR-0075 §1): EL FISCAL EN Bs SALE DE LA BASE EN Bs, POR LÍNEA. Antes el total
+   * funcional de la línea era el total en divisa —con su IVA ya redondeado en divisa— por la
+   * tasa, y el IVA en Bs de la factura no era la alícuota de su base en Bs (1.315,87 contra
+   * 1.312,46 en una línea de 9,60 USD). Ahora:
+   *   base_bs = round(base_divisa × tasa, 2) · iva_bs = round(base_bs × alícuota, 2) · total = suma.
+   * La contraprestación —y la deuda del cliente— sigue siendo el total EN LA MONEDA DEL
+   * DOCUMENTO (`amount_transaction_currency`). Un documento que ya nace en la moneda funcional
+   * no convierte nada y queda como estaba.
+   */
+  const funcionales = d.lineas.map((l) =>
+    fiscalDeLinea(l.calc, d.fxRate, d.transactionCurrency, ctx.functionalCurrency),
+  );
   const fallo = funcionales.find((f) => !f.sub.ok || !f.tot.ok);
   if (fallo !== undefined) {
     if (!fallo.sub.ok) return fallo.sub;
@@ -1928,7 +1973,12 @@ export async function refundCustomerCredit(
     sql,
     input.account_id,
     pedido.value.toFixed(8),
-    input.allow_negative_balance,
+    // D-11: sobregirar exige el permiso, el motivo y deja acta (lo hace `exigeSaldo`).
+    {
+      permitir: input.allow_negative_balance,
+      motivo: input.overdraft_reason,
+      operacion: "refund",
+    },
   );
   if (!alcanzaCaja.ok) return err(alcanzaCaja.error);
 
@@ -2034,8 +2084,12 @@ export async function annulInvoice(
   // hecho de caja que ocurrió; anular fingiría que el dinero nunca entró. El
   // camino es la devolución: repone la mercancía y devuelve el dinero como
   // saldo a favor o reembolso.
+  // H4 (ADR-0075 §8, decidido por criterio): un cobro REVERSADO no es un cobro. Solo cuentan los
+  // vivos: una venta cuyo único cobro se reversó no tiene dinero dentro y se puede anular.
   const [cobros] = await sql<{ n: number }[]>`
-    select count(*)::int as n from public.payments where document_id = ${documentId}`;
+    select count(*)::int as n from public.payments p
+     where p.document_id = ${documentId}
+       and not exists (select 1 from public.payment_reversals pr where pr.payment_id = p.id)`;
   if (doc.status === "paid" || (cobros?.n ?? 0) > 0) {
     return err({
       code: "DOCUMENT_HAS_PAYMENTS",
@@ -2209,6 +2263,7 @@ export async function registerPayment(
       id: string;
       status: string;
       total_amount: string;
+      total_transaction: string | null;
       transaction_currency: string;
       fx_rate: string;
       functional_currency: string;
@@ -2217,7 +2272,8 @@ export async function registerPayment(
       source_document_id: string | null;
       price_list_id: string | null;
     }[]
-  >`select id, status, total_amount::text as total_amount, transaction_currency,
+  >`select id, status, total_amount::text as total_amount,
+           amount_transaction_currency::text as total_transaction, transaction_currency,
            fx_rate::text as fx_rate, functional_currency, customer_id, kind,
            source_document_id, price_list_id
       from public.documents where id = ${input.document_id} and company_id = ${input.company_id}
@@ -2392,68 +2448,212 @@ export async function registerPayment(
     funcionalRedondeado = exacto;
   }
 
-  // TOPE: un cobro no supera lo pendiente (A-26). Se compara en la moneda que
-  // DECIDE el saldo (ADR-0047): la del documento si el cobro va en ella, la
-  // funcional si no. El exceso no se guarda como cobro: para eso está el
-  // saldo a favor (nota de crédito) — y la caja (quickSale) da vuelto, no
-  // pasa por aquí. Tolerancia: medio céntimo de la moneda que decide (R-02).
-  if (input.instrument !== "saldo_a_favor") {
-    const docEnFuncional = doc.transaction_currency === ctx.value.functionalCurrency;
-    // Qué se compara con qué: si el documento vive en la funcional, el saldo
-    // funcional contra el cobro funcional; si vive en divisa, el saldo EN LA
-    // DIVISA contra el cobro llevado a esa divisa (tal cual si vino en ella;
-    // a la tasa doc→funcional del día si vino en bolívares — la misma con la
-    // que abajo se valora la porción saldada). Sin tasa, el cap no decide:
-    // el camino de abajo rechazará con EXCHANGE_RATE_MISSING.
-    let pendiente: string | undefined;
-    let cobrado: string | undefined;
-    let moneda = ctx.value.functionalCurrency;
-    if (docEnFuncional) {
-      pendiente = saldoAntes?.saldo;
-      cobrado = funcionalRedondeado.value.amount.toFixed();
+  /**
+   * LO SALDADO, CONGELADO, Y EL COBRO QUE CIERRA (ADR-0075 §4; F-02, F-15, G-12).
+   *   · `saldadoTx`: lo que este cobro salda EN LA MONEDA DEL DOCUMENTO, con la tasa que vale
+   *     AHORA. Se guarda en el cobro (`settled_transaction_amount`): una tasa cargada después no
+   *     lo cambia.
+   *   · `cierra`: tras este cobro queda menos de medio céntimo de la moneda del documento. El
+   *     cobro que cierra salda exactamente lo que faltaba, y abajo cancela de cuentas por cobrar
+   *     exactamente lo que el mayor todavía le cargaba al documento: la diferencia va al
+   *     diferencial (o a redondeo, en la retención), nunca se queda en la cartera.
+   *
+   * UN SOLO TOTAL (ADR-0063 §1; ADR-0075, nota «el cobro y el cierre», reglas 2 y 3). A LA TASA
+   * DEL DOCUMENTO, la deuda en moneda funcional de un documento en divisa es su total en Bs —o
+   * la parte proporcional de lo que quede—, no «saldo en divisa × tasa»: esas dos cifras se
+   * apartan por el redondeo del IVA al céntimo de la divisa (E-05; 10,25 Bs en una factura de
+   * tres líneas). Un cobro en moneda funcional a esa tasa salda la divisa en PROPORCIÓN:
+   * saldo en divisa × pagado ÷ saldo en Bs. Así pagar el total en Bs que la caja anuncia y la
+   * factura imprime salda el total en divisa EXACTO, sin diferencial. A otra tasa (otro día) no
+   * hay total impreso que respetar: pagado ÷ tasa del día.
+   *
+   * El «saldo en Bs» es lo que el MAYOR todavía le carga al documento, que es lo que la caja
+   * pide tras un abono (el saldo funcional) y coincide con la parte proporcional del total
+   * siempre que los abonos anteriores fueron en Bs a esta tasa. Si el mayor se aparta de esa
+   * parte proporcional más que el redondeo (la cota de la regla 4), NO se le cree: se usa la
+   * parte proporcional, y el cierre de abajo falla diciéndolo.
+   */
+  const docEnDivisa = doc.transaction_currency !== doc.functional_currency;
+  let saldadoTx = funcionalRedondeado.value.amount;
+  let cierra = false;
+  let abiertoEnMayor: Decimal | null = null;
+  let saldoTxAntes: Decimal | null = null;
+  /**
+   * AF-M03 (ADR-0075 §4): el cobro ocurre a la MISMA tasa del documento. Entonces no hay
+   * diferencial cambiario posible: lo que el cierre deje de más o de menos es el redondeo del
+   * IVA al céntimo de la divisa (E-05), va a «Diferencias por redondeo» y no deja fila en
+   * `exchange_gain_loss`. La retención soportada ya iba así (abona a la tasa de la factura).
+   */
+  let aLaTasaDelDoc = false;
+  if (docEnDivisa) {
+    const [antes] = await sql<
+      {
+        saldo: string | null;
+        tasa: string | null;
+        mayor: string | null;
+        calculado: string;
+        base: string | null;
+        lineas: number;
+        cobros: number;
+      }[]
+    >`
+      select platform.document_balance_transaction(
+               ${input.company_id}, ${input.document_id})::text as saldo,
+             platform.rate_at(${input.company_id}, ${doc.transaction_currency},
+                              ${doc.functional_currency}, ${diaNegocio(fecha)}::date)::text as tasa,
+             platform.settlement_ledger_open(
+               ${input.company_id}, 'ar', ${input.document_id})::text as mayor,
+             -- LA BASE DEL CIERRE a la tasa del documento: UNA sola regla, la de la base
+             -- (20261003210100). Es la misma cifra que platform.document_debt enseña como deuda:
+             -- lo mostrado es lo que cierra.
+             platform.document_settlement_base(
+               ${input.company_id}, ${input.document_id})::text as base,
+             -- El respaldo, cuando alguna pieza está en la cola: total − Σ lo ya cancelado por
+             -- los cobros VIVOS. Un cobro reversado no canceló nada (el mismo «not exists» de
+             -- platform.document_balance): contarlo inventaba un diferencial en el cierre.
+             (select d.total_amount
+                     - coalesce(sum(p.functional_amount - coalesce(g.difference, 0)), 0)
+                from public.documents d
+                left join public.payments p
+                  on p.document_id = d.id
+                 and not exists (select 1 from public.payment_reversals pr
+                                  where pr.payment_id = p.id)
+                left join public.exchange_gain_loss g on g.payment_id = p.id
+               where d.id = ${input.document_id}
+               group by d.total_amount)::text as calculado,
+             (select count(*)::int from public.document_lines l
+               where l.document_id = ${input.document_id}) as lineas,
+             (select count(*)::int from public.payments p
+               where p.document_id = ${input.document_id}) as cobros`;
+    const tasaFactura = parseDecimal(doc.fx_rate);
+    // El mayor responde si todas las piezas del documento tienen asiento; si alguna está en la
+    // cola, lo mismo se calcula desde los cobros. Vale con cualquier signo: con el mayor ya en
+    // cero o sobre-abonado, el último cobro lo devuelve a cero igual (antes solo si era > 0, y
+    // la cuenta por cobrar quedaba negativa en un documento pagado).
+    const abierto = parseDecimal(antes?.mayor ?? antes?.calculado ?? "");
+    if (abierto.ok) abiertoEnMayor = abierto.value;
+    const saldoLeido = parseDecimal(antes?.saldo ?? "");
+    if (saldoLeido.ok) saldoTxAntes = saldoLeido.value;
+    // La cota del redondeo (regla 4), a una tasa: por línea, media unidad mínima de la divisa ×
+    // tasa + un céntimo; más la media unidad con la que un cobro «cierra» sin llegar al céntimo,
+    // y un céntimo por cada cobro (cada uno redondea lo que cancela).
+    const cota = (tasaMayor: Decimal): Decimal => {
+      const media = unidadMinima(doc.transaction_currency).dividedBy(2).times(tasaMayor);
+      const centimo = unidadMinima(doc.functional_currency);
+      return media
+        .plus(centimo)
+        .times(Math.max(antes?.lineas ?? 1, 1))
+        .plus(media)
+        .plus(centimo.times((antes?.cobros ?? 0) + 1));
+    };
+    // La tasa documento → funcional del día del cobro: la del propio cobro si viene en la moneda
+    // del documento; la de la factura en la retención; la del día en lo demás.
+    let tasaDocHoy: Decimal | null = null;
+    if (input.currency === doc.transaction_currency) {
+      saldadoTx = importe.value.amount;
+      tasaDocHoy = tasaCobroDec.value;
+    } else if (retencionATasaFactura && tasaFactura.ok) {
+      saldadoTx = funcionalRedondeado.value.amount
+        .dividedBy(tasaFactura.value)
+        .toDecimalPlaces(8, 4);
+      tasaDocHoy = tasaFactura.value;
     } else {
-      moneda = doc.transaction_currency;
-      const [tx] = await sql<{ saldo: string }[]>`
-        select platform.document_balance_transaction(
-                 ${input.company_id}, ${input.document_id})::text as saldo`;
-      pendiente = tx?.saldo;
-      if (input.currency === doc.transaction_currency) {
-        cobrado = importe.value.amount.toFixed();
-      } else if (retencionATasaFactura) {
-        const tasaFactura = parseDecimal(doc.fx_rate);
-        cobrado = tasaFactura.ok
-          ? funcionalRedondeado.value.amount
-              .dividedBy(tasaFactura.value)
+      const tasaDia = antes?.tasa != null ? parseDecimal(antes.tasa) : null;
+      if (tasaDia === null || !tasaDia.ok) {
+        return err({
+          code: "EXCHANGE_RATE_MISSING",
+          message: `No hay tasa de ${doc.transaction_currency} a ${doc.functional_currency} para valorar este cobro.`,
+        });
+      }
+      tasaDocHoy = tasaDia.value;
+      const aLaTasaDelDocumento =
+        input.currency === doc.functional_currency &&
+        tasaFactura.ok &&
+        tasaDia.value.equals(tasaFactura.value);
+      // El «saldo en Bs» a la tasa del documento NO se calcula aquí: lo dice
+      // platform.document_settlement_base (lo que el mayor carga si cuadra con la parte
+      // proporcional del total dentro de la cota; si no, la parte proporcional).
+      let saldoBs: Decimal | null = null;
+      if (aLaTasaDelDocumento && saldoTxAntes !== null && saldoTxAntes.greaterThan(0)) {
+        const base = parseDecimal(antes?.base ?? "");
+        if (base.ok && base.value.greaterThan(0)) saldoBs = base.value;
+      }
+      saldadoTx =
+        saldoBs !== null && saldoTxAntes !== null && saldoBs.greaterThan(0)
+          ? saldoTxAntes
+              .times(funcionalRedondeado.value.amount)
+              .dividedBy(saldoBs)
               .toDecimalPlaces(8, 4)
-              .toFixed()
-          : undefined;
-      } else {
-        const [conv] = await sql<{ v: string | null }[]>`
-          select round(${funcionalRedondeado.value.amount.toFixed()}::numeric
-                       / platform.rate_at(${input.company_id}, ${doc.transaction_currency},
-                                          ${doc.functional_currency},
-                                          ${diaNegocio(fecha)}::date), 8)::text as v`;
-        cobrado = conv?.v ?? undefined;
+          : funcionalRedondeado.value.amount.dividedBy(tasaDia.value).toDecimalPlaces(8, 4);
+    }
+
+    aLaTasaDelDoc =
+      !retencionATasaFactura &&
+      tasaFactura.ok &&
+      tasaDocHoy !== null &&
+      tasaDocHoy.equals(tasaFactura.value);
+
+    // TOPE: un cobro no supera lo pendiente (A-26). El documento vive en divisa: se compara el
+    // saldo EN LA DIVISA contra lo que este cobro salda en ella (lo mismo que se va a guardar).
+    // El exceso no se guarda como cobro: para eso está el saldo a favor (nota de crédito) — y la
+    // caja (quickSale) da vuelto, no pasa por aquí. Tolerancia: medio céntimo (R-02).
+    if (input.instrument !== "saldo_a_favor" && saldoTxAntes !== null) {
+      const holgura = decimalDe("0.005");
+      if (saldadoTx.minus(saldoTxAntes).greaterThan(holgura)) {
+        return err({
+          code: "VALIDATION_FAILED",
+          message: `El cobro supera lo pendiente: quedan ${saldoTxAntes.toDecimalPlaces(2, 4).toFixed(2)} ${doc.transaction_currency} por cobrar. Ajusta el importe; si el cliente pagó de más, regístralo como saldo a favor con una nota de crédito.`,
+        });
       }
     }
-    const pend = pendiente === undefined ? null : parseDecimal(pendiente);
-    const cob = cobrado === undefined ? null : parseDecimal(cobrado);
+
+    if (saldoTxAntes !== null && saldoTxAntes.minus(saldadoTx).lessThan("0.005")) {
+      cierra = true;
+      if (saldoTxAntes.greaterThan(0)) saldadoTx = saldoTxAntes;
+    }
+
+    /**
+     * EL TOPE DEL DIFERENCIAL (ADR-0075, nota «el cobro y el cierre», regla 4). El cobro que
+     * cierra lleva al diferencial (o a redondeo, la retención) lo que entró − lo que el mayor
+     * todavía carga. Eso tiene que parecerse al diferencial ESPERADO —lo saldado × (tasa del
+     * cobro − tasa del documento); cero en la retención, que abona a la tasa de la factura—
+     * dentro del redondeo: por línea del documento, media unidad mínima de la divisa × tasa +
+     * 0,01; más la media unidad con la que un cobro «cierra» sin llegar al céntimo, y un céntimo
+     * por cada cobro (cada uno redondea lo que cancela). Fuera de esa cota NO se asienta: un
+     * descuadre real entre el saldo del documento y su mayor no se esconde en «Ganancia en
+     * diferencial cambiario» ni en «Diferencias por redondeo».
+     */
+    if (cierra && abiertoEnMayor !== null && tasaDocHoy !== null && tasaFactura.ok) {
+      const real = funcionalRedondeado.value.amount.minus(abiertoEnMayor);
+      const esperado = retencionATasaFactura
+        ? decimalDe("0")
+        : saldadoTx.times(tasaDocHoy.minus(tasaFactura.value));
+      const tasaMayor = tasaDocHoy.greaterThan(tasaFactura.value) ? tasaDocHoy : tasaFactura.value;
+      if (real.minus(esperado).abs().greaterThan(cota(tasaMayor))) {
+        return err({
+          code: "SETTLEMENT_MISMATCH",
+          message:
+            "Este cobro no cuadra con lo que el documento todavía debe. No se registró: revisa el documento.",
+        });
+      }
+    }
+  } else if (input.instrument !== "saldo_a_favor") {
+    // TOPE, documento en la moneda funcional: el saldo funcional contra el cobro funcional.
     /**
      * La tolerancia del tope es la del redondeo de caja: media unidad mínima de la moneda del
      * cobro, expresada en la moneda que decide. Con medio céntimo fijo, pagar en dólares lo
      * que el botón sugiere se leía como «cobro de más» por unos bolívares (ADR-0063 §2).
      */
+    const pend = saldoAntes?.saldo === undefined ? null : parseDecimal(saldoAntes.saldo);
     const media = unidadMinima(input.currency).dividedBy(2);
     const enLaQueDecide =
-      moneda === ctx.value.functionalCurrency && input.currency !== moneda
-        ? media.times(tasaCobroDec.value)
-        : media;
+      input.currency !== ctx.value.functionalCurrency ? media.times(tasaCobroDec.value) : media;
     const minimo = decimalDe("0.005");
     const holgura = enLaQueDecide.greaterThan(minimo) ? enLaQueDecide : minimo;
-    if (pend?.ok && cob?.ok && cob.value.minus(pend.value).greaterThan(holgura)) {
+    if (pend?.ok && funcionalRedondeado.value.amount.minus(pend.value).greaterThan(holgura)) {
       return err({
         code: "VALIDATION_FAILED",
-        message: `El cobro supera lo pendiente: quedan ${pend.value.toDecimalPlaces(2, 4).toFixed(2)} ${moneda} por cobrar. Ajusta el importe; si el cliente pagó de más, regístralo como saldo a favor con una nota de crédito.`,
+        message: `El cobro supera lo pendiente: quedan ${pend.value.toDecimalPlaces(2, 4).toFixed(2)} ${ctx.value.functionalCurrency} por cobrar. Ajusta el importe; si el cliente pagó de más, regístralo como saldo a favor con una nota de crédito.`,
       });
     }
   }
@@ -2613,12 +2813,12 @@ export async function registerPayment(
         insert into public.payments
           (tenant_id, company_id, document_id, paid_at, currency, amount, fx_rate, rate_source,
            rate_timestamp, functional_amount, instrument, reference, customer_credit_id,
-           supported_retention_id, account_id)
+           supported_retention_id, account_id, settled_transaction_amount)
         values (${ctx.value.tenantId}, ${input.company_id}, ${input.document_id}, ${fecha},
                 ${input.currency}, ${input.amount}, ${tasaCobro}, ${fuenteCobro}, now(),
                 ${funcionalRedondeado.value.toAmountString()}, ${input.instrument},
                 ${input.reference ?? null}, ${input.customer_credit_id ?? null},
-                ${input.supported_retention_id ?? null}, ${cuentaId})
+                ${input.supported_retention_id ?? null}, ${cuentaId}, ${saldadoTx.toFixed(8)})
         returning id, document_id,
                   to_char(paid_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as paid_at,
                   currency, amount::text as amount, fx_rate::text as fx_rate, rate_source,
@@ -2640,7 +2840,8 @@ export async function registerPayment(
   // diferencia, no se escribe una fila de cero: un hecho que no ocurrió no
   // se registra.
   let diferencial: Record<string, unknown> | null = null;
-  if (doc.transaction_currency !== doc.functional_currency) {
+  // A la tasa del documento no hay diferencial que registrar (AF-M03): el residuo es redondeo.
+  if (doc.transaction_currency !== doc.functional_currency && !aLaTasaDelDoc) {
     const tasaEmision = parseDecimal(doc.fx_rate);
     if (tasaEmision.ok && input.currency === doc.transaction_currency) {
       const dif = exchangeDifference({
@@ -2653,7 +2854,12 @@ export async function registerPayment(
         policy: politicaDeValoracion(escalaFuncional),
       });
       if (!dif.ok) return err({ code: "VALIDATION_FAILED", message: dif.error.message });
-      if (!dif.value.difference.isZero()) {
+      // F-15: el cobro que cierra cancela EXACTAMENTE lo que el mayor todavía carga.
+      const difMismaMoneda =
+        cierra && abiertoEnMayor !== null
+          ? funcionalRedondeado.value.amount.minus(abiertoEnMayor)
+          : dif.value.difference.amount;
+      if (!difMismaMoneda.isZero()) {
         const [eg] = await sql<Record<string, unknown>[]>`
           insert into public.exchange_gain_loss
             (tenant_id, company_id, document_id, payment_id, amount_transaction,
@@ -2661,9 +2867,9 @@ export async function registerPayment(
              fx_rate_issue, fx_rate_payment, occurred_on)
           values (${ctx.value.tenantId}, ${input.company_id}, ${input.document_id},
                   ${pago["id"] as string}, ${importe.value.toAmountString()}, ${input.currency},
-                  ${funcionalRedondeado.value.amount.minus(dif.value.difference.amount).toFixed(8)},
+                  ${funcionalRedondeado.value.amount.minus(difMismaMoneda).toFixed(8)},
                   ${funcionalRedondeado.value.toAmountString()},
-                  ${dif.value.difference.toAmountString()},
+                  ${difMismaMoneda.toFixed(8)},
                   ${tasaEmision.value.toFixed()}, ${tasaCobroDec.value.toFixed()}, ${diaNegocio(fecha)}::date)
           returning id, document_id, payment_id, amount_transaction::text as amount_transaction,
                     transaction_currency, functional_at_issue::text as functional_at_issue,
@@ -2699,12 +2905,13 @@ export async function registerPayment(
        * diferencia se calcula por PROPORCIÓN: lo que entró, por lo que la tasa se movió. Con
        * tasas iguales el factor es cero exacto, sin resta de dos redondeos.
        */
-      const saldadoTx = funcionalRedondeado.value.amount
-        .dividedBy(tasaDoc.value)
-        .toDecimalPlaces(8, 4);
       const alPago = funcionalRedondeado.value.amount;
       const factor = decimalDe("1").minus(tasaEmision.value.dividedBy(tasaDoc.value));
-      const diferencia = alPago.times(factor).toDecimalPlaces(escalaFuncional, 4);
+      // F-15: el cobro que cierra cancela EXACTAMENTE lo que el mayor todavía carga.
+      const diferencia =
+        cierra && abiertoEnMayor !== null
+          ? alPago.minus(abiertoEnMayor)
+          : alPago.times(factor).toDecimalPlaces(escalaFuncional, 4);
       const alEmitir = alPago.minus(diferencia);
       // Menos de una unidad mínima no es un hecho contable: es el redondeo de la caja.
       if (!diferencia.isZero()) {
@@ -2788,11 +2995,28 @@ export async function registerPayment(
    * coinciden y la tercera línea no se genera por su condición de signo.
    */
   const entrado = funcionalRedondeado.value.toAmountString();
-  const diferencia = diferencial === null ? "0" : (diferencial["difference"] as string);
+  // F-01 + F-15: la retención soportada abona a la tasa de la factura, SIN diferencial. Si es el
+  // abono que cierra, lo que cancela es lo que el mayor carga, y el céntimo que sobre o falte va a
+  // «Diferencias por redondeo» (la plantilla ar.retention_applied lo lleva ahí): no es cambiario.
+  const redondeoDeCierre =
+    docEnDivisa && (retencionATasaFactura || aLaTasaDelDoc) && cierra && abiertoEnMayor !== null
+      ? funcionalRedondeado.value.amount.minus(abiertoEnMayor)
+      : null;
+  const diferencia =
+    redondeoDeCierre !== null
+      ? redondeoDeCierre.toFixed(8)
+      : diferencial === null
+        ? "0"
+        : (diferencial["difference"] as string);
   // Lo que deja de deberse = lo que entró − el diferencial. Se DERIVA en vez de leerse de la
   // fila: así el asiento cuadra por construcción aunque el cobro se haya ajustado al céntimo
   // (ADR-0063 §§2-3).
-  const cancelado = diferencial === null ? entrado : (diferencial["functional_at_issue"] as string);
+  const cancelado =
+    redondeoDeCierre !== null && abiertoEnMayor !== null
+      ? abiertoEnMayor.toFixed(8)
+      : diferencial === null
+        ? entrado
+        : (diferencial["functional_at_issue"] as string);
   const contable = await generateJournalFromDocument(sql, {
     tenantId: ctx.value.tenantId,
     companyId: input.company_id,
@@ -2808,6 +3032,7 @@ export async function registerPayment(
       total: cancelado,
       exchange_difference: diferencia,
     },
+    ...(aLaTasaDelDoc ? { differenceIsRounding: true } : {}),
     backlink: { table: "payments", id: pago["id"] as string },
   });
   if (!contable.ok) {
@@ -4193,15 +4418,23 @@ export async function quotePos(
   const totales = calculateTotals(calculadas.value.lineas.map((l) => l.calc));
   if (!totales.ok) return err({ code: "VALIDATION_FAILED", message: totales.error.message });
 
-  // ADR-0047: el carrito enseña LOS DOS LADOS y los dos los calcula el
-  // servidor — el funcional por línea con la misma conversión que congelará
-  // el documento, y el impuesto funcional derivado (total − subtotal), igual
-  // que en insertarDocumento: convertir los tres por separado descuadra.
-  const porLinea = calculadas.value.lineas.map((l) => ({
-    linea: l,
-    unitFunc: aFuncional(l.calc.unitPrice, calculadas.value.fxRate, ctx.value.functionalCurrency),
-    totFunc: aFuncional(l.calc.total, calculadas.value.fxRate, ctx.value.functionalCurrency),
-  }));
+  // ADR-0047: el carrito enseña LOS DOS LADOS y los dos los calcula el servidor. El funcional de
+  // cada línea sale de `fiscalDeLinea`, LA MISMA función con la que `insertarDocumento` congela
+  // el documento (ADR-0075 §1): la caja anuncia y cobra el total que la factura va a decir.
+  const porLinea = calculadas.value.lineas.map((l) => {
+    const fiscal = fiscalDeLinea(
+      l.calc,
+      calculadas.value.fxRate,
+      calculadas.value.transactionCurrency,
+      ctx.value.functionalCurrency,
+    );
+    return {
+      linea: l,
+      unitFunc: aFuncional(l.calc.unitPrice, calculadas.value.fxRate, ctx.value.functionalCurrency),
+      subFunc: fiscal.sub,
+      totFunc: fiscal.tot,
+    };
+  });
   const roto = porLinea.find((f) => !f.unitFunc.ok || !f.totFunc.ok);
   if (roto !== undefined) {
     if (!roto.unitFunc.ok) return roto.unitFunc;
@@ -4214,9 +4447,7 @@ export async function quotePos(
    * total una sola vez y la caja anunciaba Bs 5.558,56 mientras el recibo decía 5.558,57: dos
    * reglas de redondeo para el mismo importe (QA de pantalla 2026-09-15, h. 19 y 57).
    */
-  const subLineas = calculadas.value.lineas.map((l) =>
-    aFuncional(l.calc.subtotal, calculadas.value.fxRate, ctx.value.functionalCurrency),
-  );
+  const subLineas = porLinea.map((f) => f.subFunc);
   const rotoSub = subLineas.find((r) => !r.ok);
   if (rotoSub !== undefined && !rotoSub.ok) return rotoSub;
   const ceroFunc = parseDecimal("0");
@@ -4315,8 +4546,9 @@ export async function quotePos(
  * camino real de `createInvoice`) y registra los cobros, con el vuelto
  * calculado en el servidor. Una transacción: si el segundo cobro falla, no
  * queda ni factura ni primer cobro. La idempotencia viene del middleware: la
- * clave es el id de venta del CLIENTE, así que un reintento devuelve esta
- * misma respuesta sin emitir una segunda factura.
+ * clave es el INTENTO de cobro (ADR-0076), así que el reintento de ese intento devuelve esta
+ * misma respuesta; un cobro nuevo de una cuenta ya vendida lo para la cuenta (POS_CART_SOLD),
+ * nunca una segunda factura.
  */
 export async function quickSale(
   uow: UnitOfWork,
@@ -4325,6 +4557,50 @@ export async function quickSale(
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Vender exige un usuario real." });
+  }
+
+  // LA CUENTA QUE SE CIERRA, PRIMERO Y BLOQUEADA (ADR-0076, M-01/M-02/E-08): antes de gastar
+  // numeración. Vendida ⇒ 409 POS_CART_SOLD, venga con la llave que venga — un cobro nuevo de
+  // la misma cuenta nunca es otra venta ni el replay de la vieja. Ajena ⇒ la cobra su autor o
+  // quien tenga pos.carts.manage. Sin fila (la cuenta nunca llegó a la nube): la lápida se
+  // escribe al final igual, para que una subida en vuelo no la cree después.
+  //
+  // PRIMERO SE AUTORIZA (vender), antes de bloquear nada: quien no puede vender no toma el
+  // candado de una cuenta ajena. createInvoice lo vuelve a exigir; esto es el orden.
+  const autorizado = await companyScope(sql, actor.userId, input.company_id, "sales.invoice.issue");
+  if (!autorizado.ok) return autorizado;
+  //
+  // Y el candado de LA CUENTA, antes de leerla (y antes del de clase, el del talonario y el del
+  // kardex): dos cobros simultáneos de una cuenta que nunca llegó a la nube no tienen fila que
+  // bloquear con FOR UPDATE, y los dos la leían vacía. Con el advisory, el segundo espera al
+  // primero y lee la lápida.
+  let autorCuenta: string | null = actor.userId;
+  if (input.cart_id !== undefined) {
+    await sql`select pg_advisory_xact_lock(hashtextextended(${"pos_cart:" + input.cart_id}, 0))`;
+    const [cuenta] = await sql<
+      {
+        company_id: string;
+        created_by: string | null;
+        sold_at: string | null;
+        sale_id: string | null;
+      }[]
+    >`
+      select company_id, created_by, sold_at, sale_id from public.pos_carts
+       where id = ${input.cart_id} for update`;
+    if (cuenta && cuenta.company_id !== input.company_id) {
+      return err({ code: "VALIDATION_FAILED", message: "Esa cuenta no es de esta empresa." });
+    }
+    if (cuenta && cuenta.sold_at !== null) {
+      return err(await cuentaVendida(sql, input.company_id, cuenta.sale_id));
+    }
+    if (
+      cuenta &&
+      cuenta.created_by !== actor.userId &&
+      !(await puedeCuentasAjenas(sql, actor.userId, input.company_id))
+    ) {
+      return err(cuentaAjena());
+    }
+    if (cuenta) autorCuenta = cuenta.created_by;
   }
 
   const cliente = await clienteEfectivo(sql, input.company_id, input.customer_id);
@@ -4365,6 +4641,9 @@ export async function quickSale(
       customer_id: cliente.value,
       warehouse_id: input.warehouse_id,
       branch_id: input.branch_id ?? null,
+      // O-02 (ADR-0076): el vendedor de la venta del POS es QUIEN COBRA. Quién armó la cuenta
+      // queda en la cuenta vendida (`pos_carts.created_by` + `sale_id`) y en el acta.
+      vendor_id: actor.userId,
       lines: input.lines,
       ...(input.series === undefined ? {} : { series: input.series }),
       ...(input.price_list_id === undefined ? {} : { price_list_id: input.price_list_id }),
@@ -4480,12 +4759,49 @@ export async function quickSale(
     documento = doc ?? documento;
   }
 
-  // La cuenta abierta que esta venta cierra (migración 44): se borra AQUÍ,
-  // en la misma transacción — si la venta no commitea, el carrito sobrevive.
-  // Cero filas no es error: pudo cobrarse desde otra pestaña o nunca sincronizar.
+  // La cuenta abierta que esta venta cierra: se MARCA vendida aquí, en la misma transacción
+  // (ADR-0076) — si la venta no commitea, la cuenta sigue abierta. Antes se borraba, y la
+  // subida diferida que ya estaba en vuelo la volvía a crear con lo vendido (M-01). Si la
+  // cuenta nunca llegó a la nube, nace ya vendida: la lápida es la que cierra la puerta.
   if (input.cart_id !== undefined) {
-    await sql`delete from public.pos_carts
-       where company_id = ${input.company_id} and id = ${input.cart_id}`;
+    const marcada = await sql`
+      insert into public.pos_carts as pc
+        (id, tenant_id, company_id, label, lines, updated_at, updated_by, sold_at, sale_id)
+      select ${input.cart_id}, c.tenant_id, c.id, 'Cuenta cobrada', '[]'::jsonb,
+             clock_timestamp(), ${actor.userId}, clock_timestamp(), ${documento.id}
+        from public.companies c where c.id = ${input.company_id}
+      on conflict (id) do update
+        set sold_at = excluded.sold_at, sale_id = excluded.sale_id,
+            updated_at = excluded.updated_at, updated_by = excluded.updated_by
+        where pc.company_id = excluded.company_id and pc.sold_at is null
+      returning pc.id`;
+    if (marcada.length === 0) {
+      // Con el candado de arriba no debería pasar. Si pasa, la fila ya existía y no se dejó
+      // marcar: se relee y se responde con el `err` del dominio. `withTransaction` REVIERTE ante
+      // cualquier `err` (packages/db/src/transaction.ts): la factura recién emitida y su número
+      // se van con el rollback, y la respuesta lleva en `details` la venta que SÍ cerró la cuenta.
+      const [ahora] = await sql<{ company_id: string; sale_id: string | null }[]>`
+        select company_id, sale_id from public.pos_carts where id = ${input.cart_id}`;
+      if (ahora && ahora.company_id !== input.company_id) {
+        return err({ code: "VALIDATION_FAILED", message: "Esa cuenta no es de esta empresa." });
+      }
+      return err(await cuentaVendida(sql, input.company_id, ahora?.sale_id ?? null));
+    }
+    // El acta de la cuenta: quién la armó, quién cobró, con qué edición y en qué intento.
+    await sql`
+      insert into public.audit_events
+        (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+         actor_type, occurred_at, rules_version, payload)
+      select c.tenant_id, c.id, 'document', ${documento.id}, 'pos.cart.sold',
+             'user', now(), ${RULES_VERSION},
+             ${sql.json({
+               cart_id: input.cart_id,
+               cart_author_id: autorCuenta,
+               cashier_id: actor.userId,
+               cart_version: input.cart_version ?? null,
+               attempt_id: input.attempt_id ?? null,
+             })}
+        from public.companies c where c.id = ${input.company_id}`;
   }
 
   // El IGTF total de la venta, en funcional: la suma de lo que causó cada

@@ -282,6 +282,28 @@ function AgregarPersona({ onCerrar }: { onCerrar: (hecho: boolean) => void }): R
   const toast = useToast();
   const [correo, setCorreo] = useState("");
   const [rol, setRol] = useState<string | null>(null);
+  // ADR-0077 §3 (N-08): quien todavía no tiene cuenta entra con un enlace de invitación.
+  const [enlace, setEnlace] = useState<string | null>(null);
+
+  const invitar = useMutation({
+    mutationFn: () =>
+      llamar<{ token: string | null; notice?: string }>("/v1/invitations", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          role_key: rol,
+          ...(correo.trim() === "" ? {} : { email: correo.trim() }),
+        }),
+      }),
+    // H5: el token va en el fragmento, que no llega a los logs del servidor web. H2: el replay de
+    // la misma llave no trae token (no se guarda): se dice, en vez de enseñar un enlace roto.
+    onSuccess: (r) => {
+      if (r.token === null) toast.error("El enlace ya se mostró", r.notice);
+      else setEnlace(`${window.location.origin}/#invitacion=${r.token}`);
+    },
+    onError: (e) => toast.error("No se pudo crear el enlace", errorDePersona(e)),
+  });
 
   const agregar = useMutation({
     mutationFn: () =>
@@ -304,9 +326,37 @@ function AgregarPersona({ onCerrar }: { onCerrar: (hecho: boolean) => void }): R
       <DialogContent className="max-w-md">
         <DialogTitle>Agregar persona</DialogTitle>
         <DialogDescription>
-          Pídele que se registre primero en Ladino con su correo. Después la agregas aquí y su
-          oficio decide lo que ve.
+          Si ya tiene cuenta en Ladino, agrégala con su correo. Si todavía no, crea un enlace de
+          invitación y mándaselo: entra con él y queda con su oficio. El enlace sirve una sola vez y
+          vence en 7 días.
         </DialogDescription>
+        {enlace !== null && (
+          <div className="space-y-2 rounded-md bg-surface-muted p-3">
+            <p className="text-[0.88rem]">
+              {correo.trim() === ""
+                ? "Mándale este enlace. Quien lo abra primero entra con ese oficio: no lo compartas en grupos."
+                : `Mándale este enlace. Solo sirve para la cuenta de ${correo.trim()}.`}
+            </p>
+            <Input
+              readOnly
+              value={enlace}
+              aria-label="Enlace de invitación"
+              onFocus={(e) => e.target.select()}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                void navigator.clipboard
+                  ?.writeText(enlace)
+                  .then(() => toast.success("Enlace copiado"))
+                  .catch(() => toast.error("No se pudo copiar", "Selecciónalo y cópialo a mano."));
+              }}
+            >
+              Copiar el enlace
+            </Button>
+          </div>
+        )}
         <div className="space-y-3 pt-2">
           <FormField label="Correo" required>
             {(p) => (
@@ -334,7 +384,14 @@ function AgregarPersona({ onCerrar }: { onCerrar: (hecho: boolean) => void }): R
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onCerrar(false)}>
-            Cancelar
+            {enlace === null ? "Cancelar" : "Listo"}
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={rol === null || invitar.isPending}
+            onClick={() => invitar.mutate()}
+          >
+            {invitar.isPending ? "Creando…" : "Crear enlace de invitación"}
           </Button>
           <Button
             variant="primary"

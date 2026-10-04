@@ -1,3 +1,86 @@
+# Handoff — 2026-10-03 (35ª entrega) — Ola 3: bloqueos visibles y familias de dinero (POS, inventario, moneda, céntimo, empresa, sin RIF y la llegada, permisos)
+
+Hallazgos cerrados (71):
+- **Idempotencia y cuentas del POS (ADR-0076):** M-01, M-02, M-03, M-04, D-03, F-03, F-08, E-08 y O-02.
+- **Salidas de inventario (ADR-0078):** I-01, I-02, I-05, I-06, I-07, I-08, I-09, I-10, I-11, I-12 y P-10.
+- **Moneda y diferencial (ADR-0075 §1-6):** E-05, D-02 (servidor), D-07, H-02, F-01, F-02, F-04, F-15, G-12, H-06, E-11 y J-04.
+- **El céntimo (ADR-0075 §7):** P-01, P-03 y K-08.
+- **Empresa por pestaña e invitaciones (ADR-0077):** O-01, A-13, E-15, K-09, N-03, N-06 y N-08.
+- **Sin RIF y la llegada (ADR-0066, nota de la ola 3):** D-01, D-04, D-12, F-14, D-05, D-06, D-08, D-09, D-10, D-11, D-13 y D-14/I-03.
+- **Permisos que terminan en verde (ADR-0068 §7-9):** J-03, N-07, P-04, E-12, A-07, C-09, A-14, O-03 y N-10.
+
+Construido además (ADR-0075 §8): la reversa de un cobro (R-61), la restitución del IGTF indebido (P-67) y la reversa de la retención soportada (`ar.retention.correct`). Solo API: la pantalla va en la ola 4.
+
+**No cerrado en esta ola:** G-05 (saldo a favor en USD) pasa a la ola 4 con la familia de cobros.
+
+**Cadena de cada familia:** reparador → revisor en contexto limpio → arreglos → re-revisión (empresa: tres rondas; céntimo: tres; moneda: dos) → auditor-fiscal sobre retiros, céntimo y sin RIF → gate y recorrido.
+
+## Lo que la norma impuso sobre lo decidido (RESPUESTA §0: manda la norma)
+
+- **El retiro de inventario exige FACTURA** (RLIVA art. 31, leído en reproducción no oficial): «deberá emitirse obligatoriamente la correspondiente factura… y efectuarse su registro en la columna especial del Libro de Ventas». La respuesta del dueño (§2.13) pedía un documento interno «Nota de retiro», que es lo construido. **Se rehace como factura en la ola 5**, junto con el faltante sin justificar (art. 13), los motivos no gravados (uso en el giro, activo fijo: LIVA art. 4.3 in fine) y la merma justificada en el libro. Hasta entonces los retiros no se liberan en producción (R-70, P-76).
+- **El faltante de un conteo exige evidencia** (RLIVA art. 14; §2.13 del dueño): se cerró la puerta lateral del conteo (migración 20261003110200).
+
+## Moneda (ADR-0075 §1-6 y §8)
+
+- **Cálculo fiscal por línea** en un solo sitio (`fiscalDeLinea`): `base_bs = round(base_usd × tasa, 2)`, `iva_bs = round(base_bs × alícuota, 2)`; la caja cotiza con la misma función.
+- **Un solo total** (decidido por criterio): a la tasa del documento, la deuda en Bs ES su total en Bs y pagar esa cifra cierra en cero exacto; a otra tasa, `saldo_usd × tasa de hoy`. Lo mostrado y lo que cierra salen de la misma función (`platform.document_settlement_base`).
+- **Pago cruzado** en ventas y compras a la BCV del día; **diferencial al pagar** contra `exchange_gain` / `exchange_loss`, con TOPE: fuera del diferencial esperado más el redondeo, el cobro no se registra (`SETTLEMENT_MISMATCH`, 409).
+- **Una función de deuda** (`document_debt`, `customer_debt_today`): nominal por moneda; Bs a la tasa de hoy para mostrar.
+- **El mayor guarda la divisa** (los siete campos de ADR-0020) en caja, CxC y CxP; `debit_amount`/`credit_amount` van en la moneda de la transacción y lo funcional en `functional_debit`/`functional_credit`.
+- **Revaluación al cierre** de período, neteada por cuenta, a la tasa de cierre (la oficial vigente, no más antigua que `platform.parameters.closing_rate_max_age_days` = 7; si falta, el cierre se detiene).
+- **Reversa de cobros** (`payment_reversals`, append-only, permiso `ar.payment.reverse`, motivo, contra-asiento); un cobro reversado no cuenta en ninguna lectura.
+- Invariantes nuevos: `fiscal_amount_gaps`, `settled_ledger_gaps`, `treasury_currency_gaps`.
+
+## El céntimo (ADR-0075 §7)
+
+- Valor de cada movimiento de kardex y toda línea de asiento, al céntimo (half-up); costo unitario y promedio, a 8 decimales; residuo a 5.1.10 «Diferencias por redondeo» (papel `rounding_difference`).
+- `assert_entry_balanced` rechaza al postear una línea con más de dos decimales (LAD71); la única excepción es el asiento de la propia regularización, reconocido por un registro privado (`platform.cent_regularization_entries`), no por una etiqueta.
+- Libro de compras y declaración convierten igual. **Un documento registrado ANTES del corte del céntimo de su empresa se reproduce como se generó, a 8 decimales; uno posterior, al céntimo** (migración 20261003190400): el libro de un período ya generado o declarado no cambia de cifras y la conciliación con el mayor es exacta, sin cota. La conciliación se mira ahora mes a mes (antes solo «toda la historia», que tapaba el descuadre de un período).
+- **La tasa del día** de una llegada en divisa es la oficial vigente a su fecha, no más antigua que `platform.parameters.closing_rate_max_age_days` (7 días, dato); fuera del margen, 409 `EXCHANGE_RATE_MISSING`. El resto de operaciones sigue con «la más reciente no posterior» sin margen: se cierra en la ola 4.
+- Regularización al corte (`scripts/reparar/adr-0075-centimo.mjs`), idempotente, con acta; la empresa sin contabilidad regulariza su kardex y su fila de cola nace descartada con acta.
+- Invariante nuevo: `cent_gaps`. El recorrido mide 21 invariantes (20 + la conciliación del libro mes a mes).
+
+## Aserciones existentes cambiadas (clase autorizada, §5.2.4)
+
+Ver el informe de la ola 3 (tabla completa). Resumen: POS (5: la cuenta vendida deja lápida; `IDEMPOTENCY_KEY_REUSED` → `IDEMPOTENCY_BODY_MISMATCH`), permisos (2: `e2e-cuenta-de-caja`, `e2e-treasury`), sin RIF y la llegada (3: `e2e-purchases`, pgTAP 022, `e2e-mover-dinero`), céntimo (`costing.test.ts`, `inventory.test.ts` y pgTAP 019: valores de 8 decimales al céntimo), moneda (`e2e-sales` 4190.32 → 4190.33; `e2e-igtf` lee `functional_debit`), append-only (pgTAP 019 y 025: `truncate … cascade`, mismo LAD06).
+
+## Preguntas al asesor nuevas o cambiadas
+
+Nuevas: P-81 (faltante de conteo sin soporte), P-82 (uso en el giro y activo fijo), P-83 (cuentas del diferencial), P-84 (residuos anteriores al corte), P-85 (IVA en Bs, tolerancia y «un solo total»), P-86 (reversa con ND de IGTF, revaluación acumulada), P-88 (tasa de cierre), P-89 (retención soportada anulada tras declarar). Ampliadas: P-27, P-36↔P-79, P-73, P-75, P-76 (RLIVA art. 31), P-77, P-79, P-80. Actualizadas: P-31, P-67.
+
+## Despliegue (para la sección 7)
+
+- **Las migraciones 20261003140000 a 190200 (céntimo) y 170000 a 2102xx (moneda) NO son compatibles con la API hoy desplegada:** van «justo después del git pull», no antes (R-71, R-74, R-75).
+- **Reparaciones tras el pull, en este orden y con todas las migraciones ya aplicadas:** (1) `select platform.grant_invited_owner_warehouse_ops();` (2) `node scripts/reparar/adr-0075-centimo.mjs --ensayo` y después sin `--ensayo` (3) `node scripts/reparar/adr-0070-subcuentas.mjs` (4) `node scripts/reparar/p-02-rif-normalizado.mjs` (5) `node scripts/reparar/adr-0075-divisa-del-mayor.mjs`. El céntimo va primero: desde la 20261003190000 la base rechaza al postear una línea con más de dos decimales (LAD71), y la de subcuentas se niega con LAD82 si se corre antes. Es el orden de `scripts/recorrido/correr.mjs` y lo fija pgTAP 112. La 140100 nunca sin la 190000.
+- `treasury.overdraft` va solo al rol Dueño: tras desplegar, cualquier otro rol que confirmaba sobregiros recibe 403 (D-11).
+- La 20261003110100 se aplica en una sola transacción.
+
+## Lo que queda abierto
+
+- **Ola 5:** el retiro se factura (RLIVA art. 31) con AF3-02b a AF3-07; la nota de crédito de proveedor acredita inventario en el mayor sin mover el kardex (hallazgo nuevo, con H-03).
+- **Ola 4:** G-05; la pantalla de las reversas; la pantalla del pago cruzado (D-02).
+- Reversa de un cobro cuyo IGTF se documentó con nota de débito: 409 `IGTF_NOTE_ISSUED` (P-86).
+- Empresa que regularizó el céntimo sin contabilidad y la adopta sin el corte de ADR-0060: `inventory_ledger_gap` puede quedar con céntimos.
+- El resumen del Inicio sirve ventas, margen y «por agotarse» con solo `treasury.read` (deliberado por ADR-0048; observación).
+- No existe anular una factura de proveedor (ni endpoint ni caso de uso).
+
+- El resumen del Inicio no distingue «falta la tasa» de «sin permiso» en los totales de deuda (ola 4).
+- Ningún invariante suma todavía los originales de la cartera contra el saldo en divisa de los documentos (ola 4, F-12).
+
+## Migraciones (33)
+
+20261003100000, 100100 (POS) · 110000, 110100, 110200 (inventario) · 120000 a 120500 (empresa e invitaciones) · 130000 a 130300 (permisos) · 140000, 140100, 140200, 190000, 190100, 190200, 190300, 190400 (céntimo, el orden de las reparaciones y el libro a los dos lados del corte) · 160000 (proveedor sin RIF) · 170000, 170100, 180000, 200000, 210000, 210100, 210200, 220000, 230000 (moneda e IGTF por quincena).
+
+Todas se aplican en orden limpio con `pnpm db:reset` (comprobado dos veces). Reversibilidad: cada cabecera la declara; las que escriben hechos append-only (regularizaciones, reversas, líneas con divisa) se deshacen con su reversa, nunca con DELETE.
+
+## Pruebas
+
+- **Gate** (`scripts/gate-verdict.sh`, 2026-10-04): VERDE. VERIFY EXIT=0 · vitest 1417 en 19 paquetes (base anterior 1158) · pgTAP 2221 en 113 ficheros (base anterior 1825 en 98) · openapi:check OK · release:manifest:check OK. Línea base guardada. `pnpm db:reset` aplica las 33 migraciones de la ola en orden limpio.
+- **Recorrido** (`RECORRIDO_FECHA=2026-09-24`, escenario restaurado con las reparaciones en el orden de R-71): los 16 bloques (A a P) en VERDE, con los 21 invariantes en 0 en E1, E2 y E3.
+- Lo que el gate y el recorrido cazaron al consolidar, y quedó arreglado antes de este commit: el libro de compras por alícuota perdía el signo de las notas de crédito (pgTAP 081d); tres eventos del preset con nombre distinto del outbox (pgTAP 026); la reparación de subcuentas moría en LAD71 (orden de R-71); el libro de un período heredado no conciliaba con su mayor (190400); «la tasa del día» de la llegada aceptaba cualquier tasa vieja (D-09); el vaciado del outbox del test del worker se quedaba sin tiempo.
+
+---
+
 # Handoff — 2026-10-02 (34ª entrega) — Ola 2, segunda ronda: el contribuyente especial (IGTF, retenciones que practicamos, declaración quincenal y calendario)
 
 Hallazgos cerrados (12):

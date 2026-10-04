@@ -52,10 +52,15 @@ interface PerfilRow {
   activity_start_date: string | null;
 }
 
+// A-10/E-15 (RESPUESTA §3 A-10, ADR-0077 §2): con documentos emitidos el camino es la corrección
+// con motivo; la «otra empresa» ya existe en el selector (A-13). El aviso es el texto del dueño.
 const COPY_RIF_BLOQUEADO =
-  "El RIF identifica a tu negocio ante el SENIAT y no se puede cambiar. " +
-  "¿Tu negocio ahora opera con otro RIF? Eso es una entidad nueva: crea otra " +
-  "empresa en Ladino y mantén esta con su historia.";
+  "Ya emitiste documentos con este RIF, así que no se cambia directo. Si estaba mal tecleado, " +
+  "usa «Corregir RIF» con el motivo: los documentos ya emitidos no se reemiten; si el RIF " +
+  "anterior era erróneo, esas facturas no cumplen el art. 13.5 de la PA 00071: consulta con tu " +
+  "asesor si procede anular y reemitir. Si tu negocio ahora opera con otro RIF, eso es una " +
+  "entidad nueva: créala con «Crear otra empresa» en el selector de empresas y mantén esta con " +
+  "su historia.";
 
 export type CompanyProfileError =
   | CompanyScopeError
@@ -300,6 +305,38 @@ async function cambiarRif(
             'company.tax_id_changed', 1,
             ${sql.json({ company_id: companyId, from: actual.tax_id, to: taxId, ...(reason === null ? {} : { reason }) })})`;
   return ok({ tax_id: taxId });
+}
+
+/**
+ * A-07: ¿puede este usuario cambiar el logo? La ruta lo pregunta ANTES de escribir en el
+ * almacenamiento: un 403 no deja objetos huérfanos. `setCompanyLogo` vuelve a autorizar al
+ * persistir (la autorización de la escritura es la suya; esta solo evita la basura).
+ */
+export async function autorizarLogo(
+  uow: UnitOfWork,
+  companyId: string,
+): Promise<Result<{ tenantId: string }, CompanyProfileError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "El logo exige un usuario real." });
+  }
+  const scope = await companyScope(sql, actor.userId, companyId, "company.settings.manage");
+  if (!scope.ok) return scope;
+  if (scope.value.companyStatus === "suspended") {
+    return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
+  }
+  return ok({ tenantId: scope.value.tenantId });
+}
+
+/**
+ * A-14: los objetos de logo que ya se pueden purgar (más de 30 días, no vigentes y sin documento
+ * emitido mientras fueron el logo). La decisión es del esquema (`company_logo_purgeable`); borrar
+ * del almacenamiento lo hace la ruta, que tiene la credencial de Storage.
+ */
+export async function logosPurgables(uow: UnitOfWork, companyId: string): Promise<string[]> {
+  const filas = await uow.sql<{ object_name: string }[]>`
+    select object_name from platform.company_logo_purgeable(${companyId})`;
+  return filas.map((f) => f.object_name);
 }
 
 /** El logo: presentación pura (jamás dato fiscal congelado). Patrón product-images. */

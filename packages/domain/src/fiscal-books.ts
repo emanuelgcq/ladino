@@ -5,6 +5,7 @@ import type { ExportFiscalBookRequest } from "@ladino/schemas";
 import { BookKind, formatearDocumento } from "@ladino/schemas";
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
+import { exigeEmpresaConRif } from "./modo-venta.js";
 
 /**
  * LIBROS FISCALES (ADR-0044) — RIGOR MÁXIMO.
@@ -28,7 +29,8 @@ import { companyScope, type CompanyScopeError } from "./company-scope.js";
 export type FiscalBookError =
   | CompanyScopeError
   | { code: "VALIDATION_FAILED"; message: string }
-  | { code: "BOOK_FORMAT_UNAVAILABLE"; message: string };
+  | { code: "BOOK_FORMAT_UNAVAILABLE"; message: string }
+  | { code: "REGIME_KIND_NOT_ALLOWED"; message: string };
 
 /**
  * La versión del generador, persistida en cada exportación.
@@ -594,6 +596,9 @@ export async function exportFiscalBook(
   }
   const scope = await companyScope(sql, actor.userId, input.company_id, "fiscal_book.export");
   if (!scope.ok) return scope;
+  // AF3-13: una empresa sin RIF no genera libros (ni el de compras con su IVA al costo).
+  const conRif = await exigeEmpresaConRif(sql, input.company_id);
+  if (!conRif.ok) return conRif;
   if (scope.value.companyStatus === "suspended") {
     return err({ code: "COMPANY_SUSPENDED", message: "La empresa está suspendida." });
   }

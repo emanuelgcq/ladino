@@ -48,14 +48,28 @@ La cuenta contable del impuesto se obtiene de `accounting_mappings`.
 - **Devolución (G-06):** la percepción queda «percibido» y se entera; la NC no la lleva; el
   reembolso es el total de la NC; la confirmación devuelve el aviso para la pantalla. Solo la
   anulación lo haría indebido, pero una factura con cobros no se anula: la rama
-  `pendiente_reintegro` no se alcanza con IGTF percibido. **La restitución de un IGTF indebido
-  con la venta viva no existe todavía**: decidido por criterio, va a la ola 3 con la reversa de
-  cobros (R-61). VALIDAR-TRIBUTARIO P-31 y P-67.
+  `pendiente_reintegro` no se alcanza por la anulación. **La restitución de un IGTF indebido con la
+  venta viva existe desde la ola 3 (ADR-0075 §8, migración 20261003180000):** reversar el cobro que
+  lo percibió (`POST /v1/payments/{id}/reversal`, permiso `ar.payment.reverse`) marca la percepción
+  `pendiente_reintegro`, revierte su asiento y saca de la caja lo percibido, con acta
+  `igtf.perception_pending_refund`. Si la percepción se documentó con una ND por IGTF, la reversa
+  responde 409 `IGTF_NOTE_ISSUED` (P-86). Una devolución sigue sin restituir. VALIDAR-TRIBUTARIO
+  P-31 y P-67.
 - **Quincena y vencimiento (L-15):** `GET /v1/igtf/status` trae `fortnight` (1–15 y 16–último del
   mes de Caracas), de `platform.fiscal_fortnight` en el servidor, y `fortnight.due` desde `platform.tax_due_date`
   (calendario de la PA SNAT/2025/000091, migración 20261002120000): con fecha si la celda es de
   fuente secundaria; `pending_review` con la fecha en null si está pendiente de cotejo;
   `not_available` si no hay calendario para esa quincena. Nunca se inventa una fecha.
+
+## El total de un período y la percepción reversada (ola 3, 2026-10-03; AF-M11)
+
+- **Norma:** PA SNAT/2022/000013 art. 4 — lo percibido y enterado que resulta indebido se recupera por reintegro; no se rebaja de lo ya declarado.
+- **Regla aplicada (`platform.igtf_period_totals`, migración 20261003220000):** el total de IGTF de un período es lo percibido vigente MÁS lo percibido cuyo cobro se reversó DESPUÉS del fin del período; esto último se dice además aparte (`pending_refund_functional`, `pending_refund_count`). La percepción reversada DENTRO de su período no cuenta. Granularidad: día de Caracas de la percepción y de la reversa contra el `from` / `to` de la consulta.
+- **Dónde se lee:** `GET /v1/igtf/perceptions?from=&to=` (`total_functional`). No hay libro ni TXT de IGTF que lea otra suma, ni una declaración de IGTF guardada: el total se recalcula al consultarlo.
+- **VALIDAR-TRIBUTARIO (P-89):** decidido por criterio; la alternativa era rebajar la quincena.
+- **Corrección (migración 20261003230000): «su período» es la QUINCENA DE LA PERCEPCIÓN, no el rango de la consulta.** Una percepción reversada cuenta en el total si la reversa de su cobro ocurrió DESPUÉS del último día de la quincena a la que pertenece la percepción (`platform.fiscal_fortnight(día de Caracas de la percepción)`: la misma función que usan la declaración del especial y el calendario, migración 20261002120000). Con eso el total de cualquier rango (`from` / `to`) es la suma de sus percepciones según esa regla, y la suma de las dos quincenas es el mes. Lo dicho arriba «contra el `from` / `to` de la consulta» vale solo para elegir QUÉ percepciones entran en el rango. Sin rango, el total es solo lo percibido vigente.
+- **La otra vía a `pendiente_reintegro` (anulación de la factura):** no deja fila en `payment_reversals` y la percepción no guarda el instante en que cambió de estado; esa percepción no cuenta en el total. Hoy la rama no se alcanza (una factura con cobros no se anula, ADR-0061). Pregunta (d) de P-89.
+- **Pantalla (`Libros → IGTF`):** el total del período y, aparte, «De eso, pendiente de reintegro: Bs X (n cobros reversados después de cerrar la quincena)». Las dos cifras son del servidor.
 
 ## Marco verificado el 2026-09-28 (respuesta del dueño al recorrido)
 
@@ -68,7 +82,7 @@ Decisiones del dueño que aplican esta norma (respuesta §2.6):
 - la caja lo suma al total;
 - el cobro posterior se documenta con una Nota de Débito por IGTF;
 - la devolución deja el IGTF percibido; lo indebido se restituye (PA art. 4) — la restitución con
-  la venta viva se construye en la ola 3 (R-61, P-67);
+  la venta viva la hace la reversa del cobro (ADR-0075 §8; P-67);
 - la quincena la calcula el servidor con el calendario.
 
 ## Fuentes normativas (verificadas 2026-09-12)

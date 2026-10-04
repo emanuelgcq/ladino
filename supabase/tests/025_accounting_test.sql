@@ -21,7 +21,7 @@
 -- =============================================================================
 
 begin;
-select plan(53);
+select plan(55);
 
 -- ── Fixtures ─────────────────────────────────────────────────────────────────
 insert into auth.users (id) values ('aaaa0025-0000-4000-8000-0000000000a1');
@@ -257,14 +257,31 @@ $$, 'LAD06', null, 'ni se borran');
 -- cabecera fallaría por la FK con 0A000, y el test pasaría por la razón
 -- equivocada sin llegar nunca al trigger — que es justo lo que se quiere
 -- comprobar.
+-- Desde 20261003180000 también payment_reversals apunta al diario (dos FK). La lista de arriba
+-- caduca con cada tabla nueva que referencie al diario; con CASCADE Postgres no corta por la FK,
+-- venga de la tabla que venga, y se llega al trigger. Lo esperado no cambia: LAD06.
+create temp table _antes_truncate_025 as
+  select (select count(*) from public.journal_entries) as asientos,
+         (select count(*) from public.journal_lines) as lineas,
+         (select count(*) from public.journal_generation_queue) as cola,
+         (select count(*) from public.payment_reversals) as reversas;
 select throws_ok($$
   truncate public.journal_lines, public.journal_generation_queue,
            public.expenses, public.cash_closings, public.inventory_ledger_cutovers,
            public.customer_refunds, public.treasury_transfers,
            public.supplier_credit_note_lines, public.supplier_credit_notes,
-           public.journal_entries
+           public.journal_entries cascade
 $$, 'LAD06', null,
   'TRUNCATE sobre el diario: rechazado por trigger (capa 2 de ADR-0006), no por la FK');
+select throws_ok($$ truncate public.journal_entries $$, '0A000', null,
+  'y el TRUNCATE simple de la cabecera tampoco pasa: lo corta la FK (0A000)');
+select is(
+  (select row((select count(*) from public.journal_entries),
+              (select count(*) from public.journal_lines),
+              (select count(*) from public.journal_generation_queue),
+              (select count(*) from public.payment_reversals))::text),
+  (select row(asientos, lineas, cola, reversas)::text from _antes_truncate_025),
+  'ninguno de los dos TRUNCATE vació nada: ni el diario ni las tablas arrastradas por CASCADE');
 
 -- Capa 1: ni siquiera hay GRANT de mutación para nadie sobre las líneas de un
 -- asiento posteado… salvo el que necesita editar borradores. Lo que NO hay es

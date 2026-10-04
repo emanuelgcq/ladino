@@ -108,6 +108,7 @@ beforeAll(async () => {
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope)
              values (${ROL}, null, ${`e2econta_${RUN}`}, 'Contador e2e', true)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
+             (${ROL}, 'treasury.overdraft'),
              (${ROL}, 'sales.invoice.issue'), (${ROL}, 'sales.invoice.annul'),
              (${ROL}, 'sales.payment.register'), (${ROL}, 'ar.read'),
              (${ROL}, 'supplier.manage'), (${ROL}, 'purchase.invoice.register'),
@@ -520,6 +521,7 @@ describe("el gancho contable — R-20", () => {
       instrument: "transferencia",
       paid_at: `${MES_PASADO}T12:00:00-04:00`,
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(pago.status, await pago.clone().text()).toBe(201);
     const { payment } = (await pago.json()) as { payment: { id: string } };
@@ -586,6 +588,7 @@ describe("el gancho contable — R-20", () => {
       instrument: "transferencia",
       // La cuenta no tiene con qué: aquí se prueba el ASIENTO, no el saldo (ADR-0062 §4).
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(pago.status).toBe(201);
     const p = (await pago.json()) as { payment: { id: string } };
@@ -688,6 +691,7 @@ describe("el gancho contable — R-20", () => {
       currency: "VES",
       instrument: "transferencia",
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(pago.status, await pago.clone().text()).toBe(201);
     const p = (await pago.json()) as {

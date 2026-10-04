@@ -185,7 +185,7 @@ describe("POST /v1/companies — la plantilla, de extremo a extremo", () => {
     expect(n?.c).toBe("1");
   });
 
-  it("misma clave, cuerpo distinto → 409 IDEMPOTENCY_KEY_REUSED", async () => {
+  it("misma clave, cuerpo distinto → 409 IDEMPOTENCY_BODY_MISMATCH (ADR-0076)", async () => {
     const t = await tokenDe(ADMIN);
     await crear({
       token: t,
@@ -198,7 +198,7 @@ describe("POST /v1/companies — la plantilla, de extremo a extremo", () => {
       body: { tenant_id: TENANT, legal_name: "OTRA", tax_id: rif(33) },
     });
     expect(res.status).toBe(409);
-    expect(((await res.json()) as { code: string }).code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect(((await res.json()) as { code: string }).code).toBe("IDEMPOTENCY_BODY_MISMATCH");
   });
 
   it("miembro SIN company.manage → 403 PERMISSION_REQUIRED, y la clave queda failed (reintentable)", async () => {

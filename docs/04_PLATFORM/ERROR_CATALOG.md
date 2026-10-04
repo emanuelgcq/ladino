@@ -41,7 +41,7 @@ Comprobado sobre las funciones realmente instaladas. **Cada uno es único en tie
 | `LAD40` | `platform.assert_transfer_balanced()` | al COMMIT, una transferencia sin sus dos patas cuadradas (mismo producto y lote, almacenes distintos, Σcantidad = 0, Σvalor = 0, referencia mutua) | `TRANSFER_UNBALANCED` | `409` |
 | `LAD98` | `platform.assert_document_issuance()` | factura, NC o ND de una empresa con RIF sin tipo de contribuyente declarado vigente a la fecha de emisión (ADR-0072, migración 20260928190100). Mensaje de persona: «Para facturar falta declarar el tipo de contribuyente del negocio vigente al AAAA-MM-DD…» | `TAXPAYER_TYPE_REQUIRED` | `409` |
 | `LAD99` | `platform.assert_document_issuance()` | sobre forma libre, una factura sin adquirente identificado (PA 00071 art. 13.7, P-57), o una NC/ND que no identifica al adquirente como su factura (migraciones 20260928190400 y 190500). El dominio responde antes con su mensaje de persona: «Para facturar sobre forma libre hacen falta el nombre del cliente y su RIF, cédula o pasaporte (PA 00071 art. 13.7). Identifícalo: el «Consumidor final» es solo para recibos.» | `VALIDATION_FAILED` | `422` |
-| `LAD41` | `platform.apply_inventory_move()` | el costeo declarado por el caso de uso no coincide con el oráculo exacto del esquema (costo de salida, costo unitario resultante o saldos). Casi siempre: la posición cambió entre el cálculo y el INSERT | `COSTING_MISMATCH` | `409` |
+| `LAD41` | `platform.apply_inventory_move()` | el costeo declarado por el caso de uso no coincide con el oráculo exacto del esquema (costo de salida, costo unitario resultante o saldos). Casi siempre: la posición cambió entre el cálculo y el INSERT. **Desde 20261003140000 (ADR-0075 §7) también:** «kardex: el valor de un movimiento va al céntimo» — sobre una posición al céntimo llegó un valor con fracción de céntimo; no es carrera y reintentar no sirve (ver la sección «El mayor al céntimo» al final, con su mensaje de persona) | `COSTING_MISMATCH` | `409` |
 | `LAD43` | `platform.apply_inventory_move()` | movimiento directo sobre un producto COMPUESTO, en cualquier dirección: no tiene existencias propias (ADR-0035, migración 20) | `COMPOSED_HAS_NO_STOCK` | `409` |
 | `LAD44` | `platform.assert_recipe_shape()` · `assert_composed_flag_coherent()` | receta inválida: el padre no es compuesto, el hijo SÍ lo es (anidamiento no soportado), el hijo es un servicio, o se cambia `is_composed` de un producto que ya es ingrediente / ya tiene movimientos / ya tiene receta | `RECIPE_INVALID` | `409` |
 | `LAD45` | *caso de uso* (`explodeRecipe`) | falta la fila de `unit_conversions` para pasar de la unidad de la receta a la del producto. **No lo lanza la base**: `convert_quantity()` devuelve `NULL` y el caso de uso lo traduce — el NULL es el mecanismo, el código es el contrato | `UNIT_CONVERSION_MISSING` | `422` |
@@ -78,6 +78,12 @@ el código y se corrige el espejo.
 | `VALIDATION_FAILED` | Algo en el formulario no está bien. Revisa los campos marcados y vuelve a intentar. |
 | `PERMISSION_REQUIRED` | Necesitas el permiso para <acción>. Pídeselo a quien administra el negocio. — la acción sale de `ACCION_DE_PERMISO` según el permiso que nombra `message` (ADR-0068 §4); si no nombra ninguno conocido: «Tu usuario no puede hacer esto. Pídele acceso a quien administra el negocio.» |
 | `NOT_FOUND` | Eso no existe o no está disponible para ti. |
+| `ACCESS_REVOKED` | Tu acceso a esta empresa ya no está activo. Habla con quien administra el negocio. — ADR-0077 §3 (N-06), texto del dueño. |
+| `INVITATION_UNAVAILABLE` | Esta invitación ya no se puede usar. Pide a quien te invitó un enlace nuevo. — el dominio dice cuál de los casos (usada, vencida, quien invitó ya no gestiona). |
+| `INVITATION_FOR_OTHER_EMAIL` | Esta invitación es para otro correo. Entra con la cuenta del correo al que te invitaron. |
+| `IDEMPOTENCY_BODY_MISMATCH` | El texto lo elige el servidor por `details.previous_status` (`personaDeOtroCuerpo`, ADR-0076 §12). `completed`: «Esa operación ya quedó registrada antes con otros datos. Revísala antes de repetirla.» · `in_progress`: «Esa operación todavía se está registrando. Espera un momento y revisa si quedó.» · `failed` u otro: «Esa operación ya se envió con otros datos; vuelve a intentarlo.» — 409: la misma `Idempotency-Key` en el mismo endpoint con OTRO cuerpo (ADR-0076). No se ejecuta nada. Con `completed` o `in_progress` la web NO estrena llave y enseña ese texto con el camino a revisar el intento anterior; con `failed`, estrena. |
+| `IDEMPOTENCY_KEY_REUSED` | Esa operación se envió como si fuera otra; vuelve a intentarlo. — desde ADR-0076, SOLO la misma llave en OTRO endpoint (ADR-0056); otro cuerpo es `IDEMPOTENCY_BODY_MISMATCH`. |
+| `POS_CART_SOLD` | Lo escribe el dominio: «Esa cuenta ya se cobró (venta X-N). No se puede cobrar ni cambiar otra vez: si el cliente quiere algo más, ábrele una cuenta nueva.» — 409, con `details.sale_id`, `series` y `document_number` (ADR-0076). |
 | `DUPLICATE` | Ya hay uno igual registrado. Busca el que existe en vez de crear otro. |
 | `EXCHANGE_RATE_MISSING` | Falta la tasa BCV. Tráela en Mi dinero y vuelve a intentar. |
 | `RATE_ONLY_FROM_BCV` | Solo se usa la tasa del BCV. Tráela con «Traer del BCV» en Mi dinero. |
@@ -98,6 +104,9 @@ el código y se corrige el espejo.
 | `GATEWAY_TIMEOUT` | Esto está tardando más de la cuenta. Revisa en un momento si quedó registrado antes de repetirlo. |
 | *(cualquier otro)* | Algo salió mal de nuestro lado. Vuelve a intentar; si sigue, avísanos. |
 
+> **Ola 3 (2026-10-03, ADR-0068 §7–§8).** Permisos nuevos en `ACCION_DE_PERMISO`: `sales.refund` → «devolver dinero a un cliente», `treasury.overdraft` → «dejar una cuenta en negativo», `purchase.payment.approve` → «aprobar pagos grandes a proveedores». `GET /v1/customers?with_debt=1` sin `ar.read` da `PERMISSION_REQUIRED` («Necesitas el permiso para ver lo que deben los clientes…»). El cierre de caja (`POST /v1/cash-closings`) sobre una cuenta que no es caja: `NOT_FOUND` para quien no ve la cuenta (solo `cash.close`) y `VALIDATION_FAILED` «Solo se cierran cajas: «X» no es una caja.» para quien sí la ve; ninguno de los dos lleva el saldo. El logo y la foto del producto responden 403/404 ANTES de leer el archivo. `INSUFFICIENT_FUNDS` (sobregiro) lleva el saldo de la cuenta solo si quien opera tiene `treasury.read`; si no: «En «X» no alcanza para sacar …: quedaría en negativo…».
+
+
 ### Códigos de dominio del QA de pantalla (2026-09-15)
 
 Estos viajan con el mensaje del DOMINIO como `person_message` (no están en la lista de mensajes
@@ -109,6 +118,9 @@ fijos): el texto dice qué pasó y qué hacer con los datos del caso.
 | `OVER_INVOICED` | `409` | Lo facturado de una mercancía (acumulado, facturas no anuladas) pasaría de lo recibido (h. 86) |
 | `MEMBER_NOT_REGISTERED` | `404` | Agregar a una persona cuyo correo no tiene cuenta en Ladino (h. 74) |
 | `MEMBER_PROTECTED` | `403` | Un gestor acotado a la empresa intenta quitar roles o desactivar al Titular de la cuenta, o desactivar a quien trabaja en otra empresa que él no gestiona (ADR-0068 §3, N-02). El `person_message` es el del dominio: «Esa persona es el Titular de la cuenta: sus roles y su acceso solo los cambia el propio Titular.» / «Esa persona también trabaja en otra empresa de la cuenta. Quítale el rol en esta empresa; desactivarla del todo lo hace quien administra todas sus empresas.» |
+| `ACCESS_REVOKED` | `404` | ADR-0077 §3 (N-06, N-03). El middleware de alcance lo responde EN LUGAR de `NOT_FOUND` solo a quien TUVO acceso a esa empresa (regla de `platform.lost_access_to_company`, migraciones 20261003120300 y 120500: una membresía desactivada con un rol de esa empresa, o de nivel tenant si la empresa ya existía cuando se desactivó —según el acta `member.deactivated`—; o un acta `member.role_revoked` de esa membresía cuyo `assignment_company_id` es esa empresa, o `null` —rol de nivel tenant— si la empresa ya existía cuando se quitó. Las actas sin esa clave, anteriores a esta ola, no cuentan: esa persona recibe `NOT_FOUND`): ya sabe que existe, así que decírselo no revela nada. Mismo `404` (la regla de este catálogo: 404 antes que 403). Un extraño, o un miembro con rol en otra empresa del tenant que pide una a la que nunca tuvo acceso, sigue recibiendo `NOT_FOUND` idéntico (`scope.test.ts`, «los TRES 404»). `person_message` fijo: «Tu acceso a esta empresa ya no está activo. Habla con quien administra el negocio.» — la web reemplaza la pantalla entera por ese aviso. |
+| `INVITATION_UNAVAILABLE` | `409` | ADR-0077 §3 (N-08). La invitación ya se usó o fue anulada (LAD86), venció (LAD87), la membresía está desactivada y una invitación no la reactiva (LAD89), o quien la envió ya no gestiona las personas de esa empresa (LAD90). El `person_message` es el del dominio y dice cuál y qué hacer («Esta invitación venció. Pide a quien te invitó un enlace nuevo.»). |
+| `INVITATION_FOR_OTHER_EMAIL` | `403` | ADR-0077 §3. La invitación está ligada a otro correo (LAD88): «Esta invitación es para otro correo. Entra con la cuenta del correo al que te invitaron.» |
 | `ENTRY_GENERATED_BY_DOCUMENT` | `409` | Reversar desde el Diario un asiento generado por un documento: se corrige desde el documento (h. 67) |
 
 ### El documento de identidad (A-08, M-05, P-02, A-17 — 2026-09-28)
@@ -217,7 +229,15 @@ esta regla cubre el canal por **mensaje**, no el canal por **tiempo**.
 | `LAD29` | `PERMISSION_REQUIRED` | `403` | El recurso es visible; falta `company.tax_id.manage` |
 | `LAD30` | `OCCURRED_AT_IN_FUTURE` | `422` | Dato del cliente, semánticamente inválido |
 | `LAD31` | `IDEMPOTENCY_ACTOR_IMMUTABLE` | `409` | |
-| `23505` | `IDEMPOTENCY_KEY_REUSED` / `DUPLICATE` | `409` | Según el índice que se viole |
+| `LAD85` | `NOT_FOUND` | `404` | Token de invitación que no existe (ADR-0077) |
+| `LAD86` | `INVITATION_UNAVAILABLE` | `409` | Invitación ya usada por otra cuenta, o anulada |
+| `LAD87` | `INVITATION_UNAVAILABLE` | `409` | Invitación vencida |
+| `LAD88` | `INVITATION_FOR_OTHER_EMAIL` | `403` | Invitación ligada a otro correo |
+| `LAD89` | `INVITATION_UNAVAILABLE` | `409` | La membresía está desactivada: una invitación nunca la reactiva (revisión H1) |
+| `LAD90` | `INVITATION_UNAVAILABLE` | `409` | Quien invitó ya no tiene `membership.manage` sobre la empresa |
+| `LAD93` | `PERMISSION_REQUIRED` | `403` | «Crear otra empresa» sin ser Titular de ninguna cuenta |
+| `LAD94` | `DUPLICATE` | `409` | Ya tiene un negocio con ese nombre o ese RIF (clave natural de la otra empresa) |
+| `23505` | `IDEMPOTENCY_KEY_REUSED` / `DUPLICATE` | `409` | Según el índice que se viole (el middleware responde `IDEMPOTENCY_BODY_MISMATCH` u `IDEMPOTENCY_KEY_REUSED` antes de llegar al índice; ADR-0076) |
 | `23514` | `VALIDATION_FAILED` | `422` | Debería haberlo cazado Zod antes: **si llega aquí, hay un hueco de validación** |
 | `23503` | `NOT_FOUND` | **`404`** | FK compuesta: el recurso es de otro tenant. **Regla de arriba** |
 | `23502` | `VALIDATION_FAILED` | `422` | Típico: falta `actor_id` o `expires_at` |
@@ -267,3 +287,75 @@ la idempotencia protegía del reintento pero no del abuso.
 - Si el `message` en español sale de la excepción de Postgres o de una tabla de mensajes de la API.
   Los `raise exception` actuales llevan mensaje en español y `hint` accionable; reutilizarlos es
   tentador y hay que decidir si el texto de la base es contrato de la API o detalle interno.
+
+## Salidas y retiros de inventario (ADR-0078, 20261003110000)
+
+| Camino | Cuándo | `code` | HTTP | Mensaje (lo que ve la persona) |
+|---|---|---|---|---|
+| esquema `IssueStockRequest.reason` | salida sin motivo o con uno fuera de la lista | `VALIDATION_FAILED` | `422` | «Elige el motivo de la salida: merma, rotura, vencido, faltante, consumo propio, regalo, donación o muestra.» con `details[].path = ["reason"]`: la pantalla marca el campo (I-09) |
+| `valorDeRetiro` | retiro en empresa que factura, producto sin precio en la lista principal | `VALIDATION_FAILED` | `422` | «El retiro se valora al precio de venta (LIVA art. 4.3) y este producto no tiene precio en tu lista de precios principal. Ponle precio y vuelve a registrar la salida.» |
+| `valorDeRetiro` | lista en divisa sin tasa del día | `EXCHANGE_RATE_MISSING` | `409` | «No hay tasa de USD a VES vigente para hoy: el retiro se valora al precio de venta en bolívares…» |
+| trigger `assign_withdrawal_note` | nota de retiro que no corresponde a una salida de retiro de esa empresa | `23514` → `VALIDATION_FAILED` | `422` | genérico (no lo alcanza la API: el dominio solo emite notas de sus propias salidas) |
+
+### Revisión (20261003110100)
+
+| Camino | Cuándo | `code` | HTTP | Mensaje |
+|---|---|---|---|---|
+| `issueStock` | merma, rotura, vencido o faltante sin `evidence` | `VALIDATION_FAILED` | `422` | «Una merma, rotura, vencimiento o faltante necesita su evidencia: escribe la referencia del acta, la foto o el informe que la respalda (RLIVA art. 14).» |
+| `countStock` | conteo que da faltante, registrado sin `evidence` (la vista previa y el sobrante no la piden) | `VALIDATION_FAILED` | `422` | «El conteo dio un faltante: va a pérdidas y necesita su evidencia. Escribe la referencia del acta, la foto o el informe que lo respalda (RLIVA art. 14).» |
+| `issueStock` | retiro con `occurred_at` en un período cuya declaración se generó después de cerrarse | `VALIDATION_FAILED` | `422` | «El período del … al … ya se declaró: un retiro con esa fecha cambiaría una declaración presentada. Regístralo con la fecha de hoy.» |
+| `countStock` | producto con lotes sin `lot_id` (antes de bloquear) | `VALIDATION_FAILED` | `422` | «Elige el lote que contaste: este producto se lleva por lotes y cada lote se cuenta aparte.» |
+| `countStock` | `expected_system_quantity` distinto del sistema bajo el bloqueo | `CONFLICT` (nuevo) | `409` | «La existencia cambió desde que calculaste la diferencia: el sistema tiene ahora N y viste M. Vuelve a calcular la diferencia.» · persona: «Algo cambió mientras lo revisabas. Vuelve a calcularlo y confirma de nuevo.» |
+
+## Sin RIF y la llegada (ola 3, 20261003160000)
+
+| Código | Dónde | Cuándo | `code` | HTTP | Mensaje de persona |
+|---|---|---|---|---|---|
+| `LAD96` | trigger `supplier_invoices_fiscal_needs_tax_id` | factura de proveedor CON soporte fiscal a un proveedor nacional sin RIF (D-04). El caso de uso lo dice antes; el trigger cierra cualquier otro camino | `VALIDATION_FAILED` | `422` | «Esta factura necesita el RIF del proveedor, que viene impreso en ella, y este proveedor está guardado sin RIF. Agrégalo como proveedor con su RIF y vuelve a registrar la factura.» (AF3-14: sin la salida «no va a haber factura») |
+| — | `registerSupplierInvoice` | «Falta el tipo de contribuyente de la empresa…» ya solo con factura (D-01): sin soporte fiscal no hay IVA que discriminar | `VALIDATION_FAILED` | `422` | sin cambios |
+| — | `registerArrival` · `prices_include_tax` | sin alícuota de compra vigente para quitar el IVA del precio escrito (D-05) | `TAX_RULE_MISSING` | `409` | «No hay alícuota de IVA de compra vigente para ese producto ese día: sin ella no se puede quitar el IVA del precio. Escribe el precio sin IVA, como viene en la factura.» |
+
+`POST /v1/arrivals/preview` (D-05) falla con los MISMOS códigos que `POST /v1/arrivals` —es el mismo caso de uso, deshecho al terminar—: `EXCHANGE_RATE_MISSING` (D-09), el `LAD96`/422 de arriba, etc. Un proveedor nacional sin RIF ya no da 422 al crearse (antes «Un proveedor nacional necesita RIF…», que desaparece).
+
+`INSUFFICIENT_FUNDS` (D-13): los importes del mensaje van con formato de dinero de la moneda de la cuenta («Bs. 120.000,00»), redondeados a sus decimales SOLO para el texto; antes «120000.00000000».
+
+## El mayor al céntimo (ADR-0075 §7, 20261003140000)
+
+| SQLSTATE | Dónde | Cuándo | `code` / HTTP | `person_message` |
+|---|---|---|---|---|
+| `LAD41` — «kardex: el valor de un movimiento va al céntimo» | `platform.apply_inventory_move()` | sobre una posición cuyo valor ya está al céntimo llega un movimiento con fracción de céntimo (un cliente viejo, o un camino que no pasa por `costing.ts`). No es una carrera: reintentar no sirve | `VALIDATION_FAILED` (traducido en `traducir`, packages/domain/src/inventory.ts) / `422`; si llega crudo, `COSTING_MISMATCH` / `409` | El importe de este movimiento tiene más de dos decimales y el inventario se lleva al céntimo. Escribe el costo con dos decimales como máximo y vuelve a intentar. |
+
+| `LAD71` — «Los importes del asiento llevan como máximo dos decimales» | `platform.assert_entry_balanced()` (20261003190000; el mismo trigger que comprueba la partida doble) · antes, `createManualJournalEntry` (packages/domain/src/accounting.ts) con el mismo texto | al POSTEAR un asiento con una línea cuyo importe en moneda funcional tiene más de dos decimales. La única excepción está en el enunciado y es un mecanismo, no una etiqueta: el asiento cuyo id registró `platform.cent_regularization_prepare` en `platform.cent_regularization_entries` (tabla sin GRANT a nadie, 20261003190200); escribir `source_event = 'stock.cent_regularized'` desde la API no exime. Los asientos ya posteados no se tocan; la reversa de uno viejo se genera al céntimo | `VALIDATION_FAILED` / `422` (por el dominio y también si llega crudo) | Los importes del asiento llevan como máximo dos decimales. |
+
+El mensaje técnico (`message`) dice: «El valor de un movimiento de inventario va al céntimo (ADR-0075 §7): llegó un importe con más de dos decimales.» Lo distingue del LAD41 de carrera el texto «va al céntimo» del error de la base, que es lo que mira `traducir`.
+
+### Confirmar un sobregiro (D-11, H-05) y los libros sin RIF (AF3-13)
+
+| Dónde | Cuándo | `code` | HTTP | Mensaje de persona |
+|---|---|---|---|---|
+| `exigeSaldo` (gasto, transferencia, pago a proveedor, reembolso) | el egreso deja la cuenta en negativo y el cuerpo NO lo confirma | `INSUFFICIENT_FUNDS` | `409` | con `treasury.overdraft`: «… quedaría en negativo. Revisa de qué cuenta sale, o regístralo igual con su motivo.»; sin él: «… quedaría en negativo. Elige otra cuenta o pídele a quien administra que lo registre.» El saldo solo aparece con `treasury.read`. Ya no dice «confirma que quieres registrarlo igual» |
+| `exigeSaldo` | lo confirma (`allow_negative_balance`) quien no tiene `treasury.overdraft` | `PERMISSION_REQUIRED` | `403` | «Esta cuenta no tiene saldo suficiente. Elige otra cuenta o pídele a quien administra que lo registre.» (frase propia de este permiso en `personaDePermiso`) |
+| `exigeSaldo` | lo confirma quien puede, sin `overdraft_reason` o con menos de 5 caracteres | `VALIDATION_FAILED` | `422` | «Para dejar una cuenta en negativo hay que decir el motivo: escribe por qué se registra sin saldo (queda en el historial).» |
+| `GET /v1/fiscal-books/:kind` · `POST /v1/fiscal-books/export` | la empresa no tiene RIF (`PEND-…`) | `REGIME_KIND_NOT_ALLOWED` | `409` | «Los libros de compras y ventas son de quien tiene RIF, y este negocio no tiene RIF: sus compras y ventas no van a libros ni a declaraciones. Cuando tengas tu RIF, regístralo en Mi empresa.» |
+
+El sobregiro confirmado deja el acta `treasury.overdraft.confirmed` (agregado `company_account`): `actor_id`, `account_id`, `account_name`, `currency`, `amount`, `balance_before`, `balance_after`, `reason`, `operation` (`expense` · `transfer` · `supplier_payment` · `refund`). Si el saldo alcanza, `allow_negative_balance` no exige ni permiso ni motivo.
+
+## Reversa de cobros y revaluación al cierre (ADR-0075 §6 y §8, migración 20261003180000)
+
+| Origen | Dónde nace | `code` | HTTP | Mensaje para la persona |
+|---|---|---|---|---|
+| caso de uso | `reversePayment`: el cobro ya tiene reversa | `PAYMENT_ALREADY_REVERSED` | `409` | «Este cobro ya fue reversado. Un cobro se reversa una sola vez.» |
+| caso de uso | `reverseSupportedRetention`: el comprobante ya está anulado | `PAYMENT_ALREADY_REVERSED` | `409` | «Este comprobante de retención ya está anulado.» |
+| caso de uso (y trigger `payment_reversals_05_fill`, `LAD95`) | el IGTF del cobro se documentó con nota de débito | `IGTF_NOTE_ISSUED` | `409` | «Este cobro documentó su IGTF con la nota de débito N. Una nota de débito emitida es un documento fiscal y no se deshace reversando el cobro: consulta con tu contador cómo corregirla antes de reversar.» |
+| caso de uso | `registerPayment` / `registerSupplierPayment`: el cobro o pago que CIERRA dejaría un diferencial (o un redondeo, en la retención soportada) fuera de la cota del redondeo (ADR-0075 §4, regla 4) | `SETTLEMENT_MISMATCH` | `409` (mapeado a 409 en errors.ts desde la ola 3, con test) | «Este cobro no cuadra con lo que el documento todavía debe. No se registró: revisa el documento.» · en compras: «Este pago no cuadra con lo que la factura todavía debe. No se registró: revisa la factura.» |
+| caso de uso | el abono de una retención reversado como cobro | `VALIDATION_FAILED` | `422` | «Este abono es un comprobante de retención de IVA: no se reversa como un cobro. Lo corrige el contador desde el comprobante (Retenciones que nos practican).» |
+| caso de uso | `reverseSupportedRetention`: el comprobante ya entró en una declaración de IVA presentada (ADR-0075 §8, H9; P-89) | `RETENTION_PERIOD_DECLARED` | `409` | «Este comprobante ya entró en una declaración presentada. Corregirlo exige una declaración sustitutiva o un ajuste: habla con tu contador.» |
+| caso de uso | `reversePayment`: el período contable de HOY está cerrado y el contra-asiento no tiene dónde asentarse (ADR-0069) | `PERIOD_CLOSED` | `409` | «El período contable de hoy está cerrado: el contra-asiento de esta reversa no tiene dónde asentarse. Reabre el período o espera al siguiente, y vuelve a reversar.» |
+| caso de uso | `closeFiscalPeriod`: no hay tasa oficial dentro del margen para la fecha de cierre (ADR-0075 §6, H7; P-88) | `VALIDATION_FAILED` | `422` | «Falta la tasa BCV del cierre (dd/mm/aaaa). Cárgala y vuelve a cerrar.» |
+| permiso | `reversePayment` / `reverseSupportedRetention` sin `ar.payment.reverse` / `ar.retention.correct` | `PERMISSION_REQUIRED` | `403` | «Necesitas el permiso para reversar un cobro. Pídeselo a quien administra el negocio.» / «Necesitas el permiso para corregir una retención que le practicaron al negocio. Pídeselo a quien administra el negocio.» |
+| caso de uso | motivo de menos de 10 caracteres | `VALIDATION_FAILED` | `422` | «Escribe el motivo de la reversa (entre 10 y 300 caracteres): queda en el acta.» |
+| `closeFiscalPeriod` (`LAD51` de `fx_revaluation_items`) | sin tasa BCV al último día del período | `VALIDATION_FAILED` | `422` | «No hay tasa del día de cierre (fecha) para revaluar las cuentas en divisa. Cárgala con su fuente y vuelve a cerrar.» |
+| `closeFiscalPeriod` | falta la cuenta de ganancia o pérdida en diferencial | `VALIDATION_FAILED` | `422` | «Falta configurar la cuenta de ganancia (o pérdida) en diferencial cambiario: la revaluación de «partida» al cierre no tiene dónde asentarse. Asígnala en el plan de cuentas y vuelve a cerrar.» |
+| trigger `documents_immutable` (`LAD06`) | `paid → issued` sin un cobro reversado | `VALIDATION_FAILED` | `422` | no se alcanza desde la API: solo la reversa de un cobro produce esa transición |
+
+`EXCHANGE_RATE_MISSING` en la llegada (D-09): `POST /v1/arrivals` y `/v1/arrivals/preview` lo devuelven (409) cuando la llegada cruza monedas y la tasa oficial vigente a su fecha no existe o es más antigua que `platform.parameters.closing_rate_max_age_days`: «No hay tasa del BCV vigente para ese día: la última publicada es demasiado vieja o no existe. Tráela en Mi dinero y vuelve a registrar la llegada.» La vista previa devuelve además `fx_rate` y `fx_rate_date` (la tasa que se usaría y el día en que se publicó).

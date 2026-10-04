@@ -3,7 +3,6 @@ import { Link } from "react-router";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, Search, Users } from "lucide-react";
 import { useSesion } from "../../app/session.js";
-import { mostrarImporte } from "../../money.js";
 import { errorDePersona } from "../../lib.js";
 import { Button } from "../../ui/button.js";
 import { Card } from "../../ui/card.js";
@@ -19,6 +18,7 @@ import { useToast } from "../../ui/toast.js";
 import { FormField } from "../../components/forms.js";
 import { formatearDocumento } from "./comunes.js";
 import { useConFacturas } from "../../app/modo-venta.js";
+import { FALTA_LA_TASA, estadoDeDeuda, textoDeDeuda } from "../../components/deuda.js";
 
 /**
  * CLIENTES (Fase C, PARTE 9): a quién le vendo. SOLO la información del
@@ -38,7 +38,8 @@ interface ClienteFila {
   fiscal_address?: string | null;
   is_system?: boolean;
   /** Lo que debe HOY, redondeado a 2 por el servidor (with_debt=1). */
-  debt?: string;
+  /** null = debe algo en divisa y falta la tasa de hoy. */
+  debt?: string | null;
 }
 
 const POR_PAGINA = 50;
@@ -63,15 +64,17 @@ export function ClientesNegocio(): React.JSX.Element {
   // Crear y corregir un contacto van bajo el MISMO permiso: quien no puede
   // editar la ficha tampoco ve «Agregar cliente» (auditoría 2026-09-11).
   const puedeGestionar = puede("customer.manage");
+  // P-04: la deuda de cada cliente se pide solo con `ar.read`; sin él, el servidor da 403.
+  const verDeuda = puede("ar.read");
 
   // PAGINADO DE VERDAD: antes `per_page=100` y el cliente 101 no existía
   // para la pantalla. Se acumulan páginas y se dice cuántos hay de cuántos.
   const clientes = useInfiniteQuery({
-    queryKey: ["negocio-clientes", empresa.id, q],
+    queryKey: ["negocio-clientes", empresa.id, q, verDeuda],
     initialPageParam: 1,
     queryFn: ({ pageParam }) =>
       llamar<{ items: ClienteFila[]; total: number }>(
-        `/v1/customers?exclude_system=1&with_debt=1&per_page=${POR_PAGINA}&page=${pageParam}${
+        `/v1/customers?exclude_system=1${verDeuda ? "&with_debt=1" : ""}&per_page=${POR_PAGINA}&page=${pageParam}${
           q === "" ? "" : `&search=${encodeURIComponent(q)}`
         }`,
       ),
@@ -179,13 +182,17 @@ export function ClientesNegocio(): React.JSX.Element {
                 </span>
                 {/* Quién debe, en la lista del negocio: antes había que ir a Administración
                     para saberlo (QA de pantalla 2026-09-15, h. 84). */}
-                {c.debt !== undefined &&
-                  !/^-?0*(\.0*)?$/.test(c.debt) &&
-                  !c.debt.startsWith("-") && (
-                    <span className="shrink-0 rounded-full bg-warning-soft px-2 py-0.5 text-[0.8rem] font-medium text-warning-soft-foreground tabular-nums">
-                      Debe {mostrarImporte({ amount: c.debt, currency: "VES" })}
-                    </span>
-                  )}
+                {estadoDeDeuda(c.debt) === "debe" && (
+                  <span className="shrink-0 rounded-full bg-warning-soft px-2 py-0.5 text-[0.8rem] font-medium text-warning-soft-foreground tabular-nums">
+                    Debe {textoDeDeuda(c.debt, "VES")}
+                  </span>
+                )}
+                {/* Debe, y el servidor no puede decir cuánto en bolívares (null): se dice eso. */}
+                {estadoDeDeuda(c.debt) === "sin_valorar" && (
+                  <span className="shrink-0 rounded-full bg-warning-soft px-2 py-0.5 text-[0.8rem] font-medium text-warning-soft-foreground">
+                    Debe · {FALTA_LA_TASA}
+                  </span>
+                )}
               </button>
             ))}
           </div>

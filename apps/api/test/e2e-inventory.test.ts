@@ -177,6 +177,8 @@ describe("inventario de extremo a extremo", () => {
       warehouse_id: W1,
       product_id: PROD,
       quantity: "3",
+      reason: "merma",
+      evidence: "acta de merma e2e",
     });
     expect(s.status).toBe(201);
     expect(((await s.json()) as { functional_amount: string }).functional_amount).toBe(
@@ -188,6 +190,8 @@ describe("inventario de extremo a extremo", () => {
       warehouse_id: W1,
       product_id: PROD,
       quantity: "10000",
+      reason: "merma",
+      evidence: "acta de merma e2e",
     });
     expect(demasiado.status).toBe(409);
     expect(((await demasiado.json()) as { code: string }).code).toBe("NEGATIVE_STOCK");

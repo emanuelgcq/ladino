@@ -19,7 +19,7 @@
 -- =============================================================================
 
 begin;
-select plan(60);
+select plan(64);
 
 -- ── Fixtures ─────────────────────────────────────────────────────────────────
 insert into auth.users (id) values
@@ -213,9 +213,26 @@ select throws_ok(
   'LAD41', null,
   'una salida valorada a 300 en vez de 330 muere: LAD41 — sacar barato es inflar el margen');
 
--- Entrada en MONEDA EXTRANJERA: 7 unidades a 3,00 USD con tasa 41,1522663366667
--- → 21,00 USD × tasa = 864,19759... El funcional se declara y los siete campos viajan.
--- Valor 2 184,19752307 / 19 = 114,957764372105… → HALF_UP a 8 → 114,95776437.
+-- Entrada en MONEDA EXTRANJERA: 7 unidades a 3,00 USD con tasa 41,15226301
+-- → 21,00 USD × tasa = 864,19752321. El funcional se declara y los siete campos viajan.
+-- ADR-0075 §7: el VALOR del movimiento va al céntimo. El funcional a 8 decimales que este caso
+-- declaraba (864,19752307) es ahora la prueba del RECHAZO del oráculo, con su mensaje; el caso
+-- legítimo es el mismo movimiento con el funcional al céntimo, 864,20.
+select throws_ok(
+  $$ insert into public.inventory_moves
+       (tenant_id, company_id, warehouse_id, product_id, kind, quantity,
+        amount_transaction_currency, transaction_currency, fx_rate,
+        functional_amount, functional_currency, rate_source, rate_timestamp,
+        rounding_policy_id, unit_cost, occurred_at, reference)
+     values ('aaaa0019-0000-4000-8000-00000000000a',
+             'aaaa0019-0000-4000-8000-0000000000a2', 'aaaa0019-0000-4000-8000-00000000ff01',
+             'aaaa0019-0000-4000-8000-0000000000d1', 'entrada', 7,
+             21.00000000, 'USD', 41.15226301, 864.19752307, 'VES',
+             'BCV:tasa-oficial', '2026-08-26T10:00:00Z',
+             'inventory:cost:8:HALF_UP', 114.95776437, now(), 'IMP-1') $$,
+  'LAD41', 'kardex: el valor de un movimiento va al céntimo (ADR-0075 §7), llegó 864.19752307',
+  'el funcional a 8 decimales ya no entra sobre una posición al céntimo: LAD41, y lo dice');
+-- Valor 1 320,00 + 864,20 = 2 184,20; 2 184,20 / 19 = 114,957894736… → HALF_UP a 8 → 114,95789474.
 select lives_ok(
   $$ insert into public.inventory_moves
        (id, tenant_id, company_id, warehouse_id, product_id, kind, quantity,
@@ -225,16 +242,16 @@ select lives_ok(
      values ('aaaa0019-0000-4000-8000-0000000000f4', 'aaaa0019-0000-4000-8000-00000000000a',
              'aaaa0019-0000-4000-8000-0000000000a2', 'aaaa0019-0000-4000-8000-00000000ff01',
              'aaaa0019-0000-4000-8000-0000000000d1', 'entrada', 7,
-             21.00000000, 'USD', 41.15226301, 864.19752307, 'VES',
+             21.00000000, 'USD', 41.15226301, 864.20, 'VES',
              'BCV:tasa-oficial', '2026-08-26T10:00:00Z',
-             'inventory:cost:8:HALF_UP', 114.95776437, now(), 'IMP-1') $$,
+             'ledger:cents:2:HALF_UP', 114.95789474, now(), 'IMP-1') $$,
   'entrada en USD: los SIETE campos de ADR-0020 viajan y el funcional es el que cuesta');
 select is(
   (select last_unit_cost::text from public.stock_balances
     where warehouse_id = 'aaaa0019-0000-4000-8000-00000000ff01'
       and product_id = 'aaaa0019-0000-4000-8000-0000000000d1'),
-  '114.95776437',
-  'A MANO: 2 184,19752307 / 19 = 114,957764372105… → HALF_UP a 8 decimales');
+  '114.95789474',
+  'A MANO: 2 184,20 / 19 = 114,957894736842… → HALF_UP a 8 decimales (el promedio sigue a 8)');
 select is(
   (select rate_source || ' @ ' || fx_rate::text from public.inventory_moves
     where id = 'aaaa0019-0000-4000-8000-0000000000f4'),
@@ -277,8 +294,10 @@ select throws_ok(
   'LAD38', null,
   'un movimiento en moneda funcional distinta a la de la empresa muere: el costeo va en funcional');
 
--- Datos hostiles: el importe al LÍMITE de numeric(24,8) entra y sale entero.
-select lives_ok(
+-- Datos hostiles: el importe al LÍMITE entra y sale entero. Con el valor al céntimo (ADR-0075
+-- §7) el máximo de numeric(24,8) con sus ocho nueves ya no es un valor de kardex: es la prueba
+-- del rechazo. El máximo legítimo es el mayor importe AL CÉNTIMO que cabe en el tipo.
+select throws_ok(
   $$ insert into public.inventory_moves
        (tenant_id, company_id, warehouse_id, product_id, kind, quantity,
         amount_transaction_currency, transaction_currency, fx_rate,
@@ -289,12 +308,26 @@ select lives_ok(
              'entrada', 1, 9999999999999999.99999999, 'VES', 1,
              9999999999999999.99999999, 'VES', 'identidad', now(),
              'inventory:cost:8:HALF_UP', 9999999999999999.99999999, now(), 'LIM-1') $$,
-  'el importe MÁXIMO representable en numeric(24,8) entra');
+  'LAD41',
+  'kardex: el valor de un movimiento va al céntimo (ADR-0075 §7), llegó 9999999999999999.99999999',
+  'el máximo de numeric(24,8) con ocho decimales ya no es un valor de kardex: LAD41');
+select lives_ok(
+  $$ insert into public.inventory_moves
+       (tenant_id, company_id, warehouse_id, product_id, kind, quantity,
+        amount_transaction_currency, transaction_currency, fx_rate,
+        functional_amount, functional_currency, rate_source, rate_timestamp,
+        rounding_policy_id, unit_cost, occurred_at, reference)
+     values ('aaaa0019-0000-4000-8000-00000000000a', 'aaaa0019-0000-4000-8000-0000000000a2',
+             'aaaa0019-0000-4000-8000-00000000ff01', 'aaaa0019-0000-4000-8000-0000000000d2',
+             'entrada', 1, 9999999999999999.99, 'VES', 1,
+             9999999999999999.99, 'VES', 'identidad', now(),
+             'ledger:cents:2:HALF_UP', 9999999999999999.99, now(), 'LIM-1') $$,
+  'el importe MÁXIMO al céntimo representable en numeric(24,8) entra');
 select is(
   (select value::text from public.stock_balances
     where product_id = 'aaaa0019-0000-4000-8000-0000000000d2'),
-  '9999999999999999.99999999',
-  'y sale con los 24 dígitos intactos: sin pérdida en el kardex materializado');
+  '9999999999999999.99000000',
+  'y sale con todos sus dígitos intactos: sin pérdida en el kardex materializado');
 
 -- ── 3. Materializado == recalculado (criterio «kardex reproduce balance») ────
 select is(
@@ -359,7 +392,7 @@ select throws_ok(
         rounding_policy_id, unit_cost, occurred_at)
      values ('aaaa0019-0000-4000-8000-00000000000a', 'aaaa0019-0000-4000-8000-0000000000a2',
              'aaaa0019-0000-4000-8000-00000000ff01', 'aaaa0019-0000-4000-8000-0000000000d1',
-             'ajuste', 1, 114.95776437, 'VES', 1, 114.95776437, 'VES', 'identidad', now(),
+             'ajuste', 1, 114.96, 'VES', 1, 114.96, 'VES', 'identidad', now(),
              'inventory:cost:8:HALF_UP', null, now()) $$,
   '23514', null, 'un AJUSTE sin motivo es un CHECK, no una convención');
 
@@ -373,7 +406,7 @@ select throws_ok(
         rounding_policy_id, unit_cost, occurred_at)
      values ('aaaa0019-0000-4000-8000-00000000000a', 'aaaa0019-0000-4000-8000-0000000000a2',
              'aaaa0019-0000-4000-8000-00000000ff01', 'aaaa0019-0000-4000-8000-0000000000d1',
-             'salida', -20, -2299.15528740, 'VES', 1, -2299.15528740, 'VES', 'identidad', now(),
+             'salida', -20, -2299.16, 'VES', 1, -2299.16, 'VES', 'identidad', now(),
              'inventory:cost:8:HALF_UP', null, now()) $$,
   'LAD39', null,
   'SIN allow_negative_stock la salida que deja negativo muere: LAD39, nunca negativo silencioso');
@@ -391,7 +424,7 @@ select throws_ok(
         rounding_policy_id, unit_cost, occurred_at)
      values ('aaaa0019-0000-4000-8000-00000000000a', 'aaaa0019-0000-4000-8000-0000000000a2',
              'aaaa0019-0000-4000-8000-00000000ff01', 'aaaa0019-0000-4000-8000-0000000000d1',
-             'salida', -20, -2299.15528740, 'VES', 1, -2299.15528740, 'VES', 'identidad', now(),
+             'salida', -20, -2299.16, 'VES', 1, -2299.16, 'VES', 'identidad', now(),
              'inventory:cost:8:HALF_UP', null, now()) $$,
   'LAD39', null,
   'CON la bandera pero sin inventory.negative del actor sobre ESE almacén: LAD39 igualmente');
@@ -402,7 +435,8 @@ insert into public.role_permissions (role_id, permission_key)
   values ('aaaa0019-0000-4000-8000-0000000000e1', 'inventory.negative');
 select set_config('ladino.actor_id', 'aaaa0019-0000-4000-8000-0000000000a1', true);
 set local role ladino_api;
--- 19 unidades por 2 184,19752307; salen 20: todo el valor + 1 × 114,95776437.
+-- 19 unidades por 2 184,20; salen 20: todo el valor + la unidad de más al promedio, AL CÉNTIMO
+-- (1 × 114,95789474 → 114,96): 2 299,16. El promedio arrastrado sigue a 8 decimales.
 select lives_ok(
   $$ insert into public.inventory_moves
        (tenant_id, company_id, warehouse_id, product_id, kind, quantity,
@@ -411,23 +445,24 @@ select lives_ok(
         rounding_policy_id, unit_cost, occurred_at, reference)
      values ('aaaa0019-0000-4000-8000-00000000000a', 'aaaa0019-0000-4000-8000-0000000000a2',
              'aaaa0019-0000-4000-8000-00000000ff01', 'aaaa0019-0000-4000-8000-0000000000d1',
-             'salida', -20, -2299.15528744, 'VES', 1, -2299.15528744, 'VES', 'identidad', now(),
-             'inventory:cost:8:HALF_UP', 114.95776437, now(), 'VTA-NEG') $$,
+             'salida', -20, -2299.16, 'VES', 1, -2299.16, 'VES', 'identidad', now(),
+             'ledger:cents:2:HALF_UP', 114.95789474, now(), 'VTA-NEG') $$,
   'con bandera Y permiso: la salida a negativo entra (y solo entonces)');
 select is(
   (select quantity::text || ' / ' || value::text || ' / ' || last_unit_cost::text
      from public.stock_balances
     where warehouse_id = 'aaaa0019-0000-4000-8000-00000000ff01'
       and product_id = 'aaaa0019-0000-4000-8000-0000000000d1'),
-  '-1.00000000 / -114.95776437 / 114.95776437',
-  'A MANO: −1 unidad por −114,95776437 (todo el valor + 1 × promedio) y el promedio ARRASTRADO, '
+  '-1.00000000 / -114.96000000 / 114.95789474',
+  'A MANO: −1 unidad por −114,96 (todo el valor + 1 × promedio, al céntimo) y el promedio ARRASTRADO, '
   'nunca negativo');
 select is(
   (select count(*) from platform.stock_reconciliation('aaaa0019-0000-4000-8000-0000000000a2')),
   0::bigint, 'y con la posición en negativo el materializado SIGUE cuadrando con el kardex');
 
 -- ── 6. Transferencia atómica ────────────────────────────────────────────────
--- Primero repongo W1 para tener qué transferir: +11 a 114,95776437 = 1 264,53540807.
+-- Primero repongo W1 para tener qué transferir: +11 a 114,95789474 = 1 264,53684214, que entra
+-- al céntimo: 1 264,54. Quedan 10 unidades por −114,96 + 1 264,54 = 1 149,58 → promedio 114,958.
 select lives_ok(
   $$ insert into public.inventory_moves
        (tenant_id, company_id, warehouse_id, product_id, kind, quantity,
@@ -436,11 +471,13 @@ select lives_ok(
         rounding_policy_id, unit_cost, occurred_at, reference)
      values ('aaaa0019-0000-4000-8000-00000000000a', 'aaaa0019-0000-4000-8000-0000000000a2',
              'aaaa0019-0000-4000-8000-00000000ff01', 'aaaa0019-0000-4000-8000-0000000000d1',
-             'entrada', 11, 1264.53540807, 'VES', 1, 1264.53540807, 'VES', 'identidad', now(),
-             'inventory:cost:8:HALF_UP', 114.95776437, now(), 'CMP-3') $$,
+             'entrada', 11, 1264.54, 'VES', 1, 1264.54, 'VES', 'identidad', now(),
+             'ledger:cents:2:HALF_UP', 114.958, now(), 'CMP-3') $$,
   'reposición de 11 unidades para poder transferir');
 
--- Las DOS patas, en la misma transacción y con referencia mutua.
+-- Las DOS patas, en la misma transacción y con referencia mutua. Salen 4 de 10 por
+-- round2(1 149,58 × 4 / 10) = 459,83. El origen queda en 6 por 689,75 (promedio 114,95833333) y
+-- el destino recibe 4 por 459,83 (promedio 114,9575): cada pata lleva SU promedio a 8 decimales.
 select lives_ok(
   $$ insert into public.inventory_moves
        (id, tenant_id, company_id, warehouse_id, product_id, kind, quantity,
@@ -450,14 +487,14 @@ select lives_ok(
      values ('aaaa0019-0000-4000-8000-00000000ee01', 'aaaa0019-0000-4000-8000-00000000000a',
              'aaaa0019-0000-4000-8000-0000000000a2', 'aaaa0019-0000-4000-8000-00000000ff01',
              'aaaa0019-0000-4000-8000-0000000000d1', 'transferencia_out', -4,
-             -459.83105748, 'VES', 1, -459.83105748, 'VES', 'identidad', now(),
-             'inventory:cost:8:HALF_UP', 114.95776437, now(),
+             -459.83, 'VES', 1, -459.83, 'VES', 'identidad', now(),
+             'ledger:cents:2:HALF_UP', 114.95833333, now(),
              'aaaa0019-0000-4000-8000-00000000ee00', 'aaaa0019-0000-4000-8000-00000000ee02'),
             ('aaaa0019-0000-4000-8000-00000000ee02', 'aaaa0019-0000-4000-8000-00000000000a',
              'aaaa0019-0000-4000-8000-0000000000a2', 'aaaa0019-0000-4000-8000-00000000ff02',
              'aaaa0019-0000-4000-8000-0000000000d1', 'transferencia_in', 4,
-             459.83105748, 'VES', 1, 459.83105748, 'VES', 'identidad', now(),
-             'inventory:cost:8:HALF_UP', 114.95776437, now(),
+             459.83, 'VES', 1, 459.83, 'VES', 'identidad', now(),
+             'ledger:cents:2:HALF_UP', 114.9575, now(),
              'aaaa0019-0000-4000-8000-00000000ee00', 'aaaa0019-0000-4000-8000-00000000ee01') $$,
   'transferencia de 4 unidades W1 → W2: las dos patas, mismo transfer_id, referencia mutua');
 select is(
@@ -510,11 +547,11 @@ insert into public.inventory_moves
 values ('aaaa0019-0000-4000-8000-00000000ee03', 'aaaa0019-0000-4000-8000-00000000000a',
         'aaaa0019-0000-4000-8000-0000000000a2', 'aaaa0019-0000-4000-8000-00000000ff01',
         'aaaa0019-0000-4000-8000-0000000000d1', 'transferencia_out', -1,
-        -114.95776437, 'VES', 1, -114.95776437, 'VES', 'identidad', now(),
+        -114.96, 'VES', 1, -114.96, 'VES', 'identidad', now(),
         -- La contraparte apunta a un movimiento REAL que no es de esta transferencia:
         -- así el CHECK de forma y el FK quedan satisfechos y lo ÚNICO que puede
         -- fallar es el cuadre de las dos patas.
-        'inventory:cost:8:HALF_UP', 114.95776437, now(),
+        'ledger:cents:2:HALF_UP', 114.958, now(),
         'aaaa0019-0000-4000-8000-00000000ee09', 'aaaa0019-0000-4000-8000-0000000000f1');
 reset role;
 select throws_ok(
@@ -605,7 +642,11 @@ reset role;
 -- El SELECT va en el mismo GRANT a propósito: sin él el WHERE de un UPDATE muere
 -- con el MISMO 42501 de la capa 1, y el test parecería probar la capa 2 mientras
 -- prueba otra vez la primera. (Dos caminos, un solo código: la lección de S0.5.)
+create temp table _antes_truncate_019 as
+  select (select count(*) from public.inventory_moves) as movimientos,
+         (select count(*) from public.inventory_withdrawal_notes) as notas;
 grant select, update, delete, truncate on public.inventory_moves to service_role;
+grant truncate on public.inventory_withdrawal_notes to service_role;
 set local role service_role;
 select throws_ok(
   $$ update public.inventory_moves set quantity = 999
@@ -616,12 +657,26 @@ select throws_ok(
 select throws_ok(
   $$ delete from public.inventory_moves where id = 'aaaa0019-0000-4000-8000-0000000000f1' $$,
   'LAD06', null, 'DELETE como service_role: LAD06');
+-- Desde 20261003110000 la Nota de retiro referencia al movimiento (FK): un TRUNCATE simple lo
+-- corta Postgres por la FK (0A000) ANTES de llegar al trigger, y el test pasaría —o fallaría— por
+-- la razón equivocada. Con CASCADE la FK no corta y se llega al trigger de STATEMENT, que es lo
+-- que este caso quiere demostrar. Lo esperado no cambia: LAD06.
 select throws_ok(
-  $$ truncate public.inventory_moves $$,
+  $$ truncate public.inventory_moves cascade $$,
   'LAD06', null,
   'TRUNCATE como service_role: LAD06 — ignora la RLS y no dispara triggers de FILA, '
   'por eso hay un trigger de STATEMENT');
+select throws_ok(
+  $$ truncate public.inventory_moves $$,
+  '0A000', null,
+  'y el TRUNCATE simple tampoco pasa: lo corta la FK de la Nota de retiro (0A000)');
 reset role;
+revoke truncate on public.inventory_withdrawal_notes from service_role;
+select is(
+  (select row((select count(*) from public.inventory_moves),
+              (select count(*) from public.inventory_withdrawal_notes))::text),
+  (select row(movimientos, notas)::text from _antes_truncate_019),
+  'ninguno de los dos TRUNCATE vació nada: ni el kardex ni las notas arrastradas por CASCADE');
 revoke select, update, delete, truncate on public.inventory_moves from service_role;
 
 -- ── 10. Banderas de rastreo congeladas con movimientos (LAD38) ─────────────

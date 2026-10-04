@@ -23,6 +23,12 @@ import {
   MemberResponse,
   AddMemberRequest,
   SetMemberStatusRequest,
+  CreateInvitationRequest,
+  InvitationResponse,
+  InvitationTokenRequest,
+  InvitationPreviewResponse,
+  AcceptInvitationResponse,
+  MeAccessResponse,
   ErrorResponse,
   CreateProductRequest,
   UpdateProductRequest,
@@ -41,6 +47,8 @@ import {
   ListCustomersResponse,
   ReceiveStockApiRequest,
   IssueStockRequest,
+  CountStockRequest,
+  CountStockResponse,
   AdjustStockRequest,
   TransferStockRequest,
   InventoryMoveResponse,
@@ -65,6 +73,8 @@ import {
   ConfirmOrderRequest,
   CreateInvoiceRequest,
   AnnulInvoiceRequest,
+  ReversePaymentRequest,
+  PaymentReversalResponse,
   RegisterPaymentRequest,
   CreateReturnRequest,
   RefundCustomerCreditRequest,
@@ -115,6 +125,7 @@ import {
   SimplePurchaseRequest,
   RegisterArrivalRequest,
   ArrivalResponse,
+  ArrivalPreviewResponse,
   ArrivalImpactResponse,
   SimplePurchaseResponse,
   RetentionReceiptResponse,
@@ -373,6 +384,116 @@ export function buildOpenApiDocument(): object {
       401: errorRef("Token ausente, inválido o expirado."),
     },
   });
+  // ── ADR-0077: segunda empresa, invitación por enlace y acceso perdido ──────
+  const crearInvitacion = registry.register("CreateInvitationRequest", CreateInvitationRequest);
+  const invitacion = registry.register("InvitationResponse", InvitationResponse);
+  const tokenInvitacion = registry.register("InvitationTokenRequest", InvitationTokenRequest);
+  const vistaInvitacion = registry.register("InvitationPreviewResponse", InvitationPreviewResponse);
+  const aceptada = registry.register("AcceptInvitationResponse", AcceptInvitationResponse);
+  const miAcceso = registry.register("MeAccessResponse", MeAccessResponse);
+
+  registry.registerPath({
+    method: "post",
+    path: "/v1/onboarding/another-company",
+    summary: "Crear otra empresa, en un tenant nuevo (ADR-0077 §2)",
+    description:
+      "El mismo alta de /v1/onboarding en un tenant NUEVO, del que la persona nace Titular y " +
+      "Dueño. Solo para el Titular de alguna cuenta (asignación owner de nivel tenant). Sin " +
+      "X-Company-Id y sin Idempotency-Key: la clave natural (nombre o RIF entre los negocios de " +
+      "la persona, LAD94 → 409) impide fundarla dos veces.",
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { "application/json": { schema: fundar } } } },
+    responses: {
+      201: {
+        description: "La empresa nueva, con su tenant.",
+        content: { "application/json": { schema: fundado } },
+      },
+      403: errorRef("No es Titular de ninguna cuenta (PERMISSION_REQUIRED)."),
+      409: errorRef("Ya tiene un negocio con ese nombre o ese RIF (DUPLICATE)."),
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
+  registry.registerPath({
+    method: "get",
+    path: "/v1/me/access",
+    summary: "Los negocios donde la persona perdió el acceso (N-03)",
+    description:
+      "Negocios donde la persona tiene membresía (desactivada o sin rol) y ninguna empresa " +
+      "visible, con el nombre de quien los administra. Solo la historia propia.",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: {
+        description: "La lista (vacía si no perdió nada).",
+        content: { "application/json": { schema: miAcceso } },
+      },
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
+  registry.registerPath({
+    method: "post",
+    path: "/v1/invitations",
+    summary: "Invitar a una persona por enlace (ADR-0077 §3)",
+    description:
+      "Crea una invitación de un solo uso que vence a los 7 días, con uno de los seis roles de " +
+      "sistema, opcionalmente ligada a un correo. El token viaja UNA vez, en esta respuesta; la " +
+      "base guarda su huella. Exige membership.manage sobre la empresa de la cabecera.",
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { "application/json": { schema: crearInvitacion } } } },
+    responses: {
+      201: {
+        description: "La invitación, con su token.",
+        content: { "application/json": { schema: invitacion } },
+      },
+      403: errorRef("Sin membership.manage sobre esta empresa."),
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
+  registry.registerPath({
+    method: "post",
+    path: "/v1/invitations/preview",
+    summary: "Lo que ve quien abre el enlace de invitación",
+    description:
+      "Empresa, negocio, rol, quién invita y el estado (pending, used, revoked, expired, " +
+      "other_email). Sin X-Company-Id: la persona todavía no es miembro.",
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { "application/json": { schema: tokenInvitacion } } } },
+    responses: {
+      200: {
+        description: "La vista previa.",
+        content: { "application/json": { schema: vistaInvitacion } },
+      },
+      404: errorRef("Ese token no corresponde a ninguna invitación."),
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
+  registry.registerPath({
+    method: "post",
+    path: "/v1/invitations/accept",
+    summary: "Aceptar la invitación",
+    description:
+      "Un solo uso, con la fila bloqueada: crea o reactiva la membresía y la asignación acotada a " +
+      "la empresa. La misma persona que repite recibe la empresa sin efecto doble. Sin " +
+      "X-Company-Id y sin Idempotency-Key.",
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { "application/json": { schema: tokenInvitacion } } } },
+    responses: {
+      200: {
+        description: "La empresa a la que entró.",
+        content: { "application/json": { schema: aceptada } },
+      },
+      403: errorRef("La invitación es para otro correo (INVITATION_FOR_OTHER_EMAIL)."),
+      404: errorRef("Ese token no corresponde a ninguna invitación."),
+      409: errorRef(
+        "Ya se usó, venció, o quien la envió ya no gestiona la empresa (INVITATION_UNAVAILABLE).",
+      ),
+      401: errorRef("Token ausente, inválido o expirado."),
+    },
+  });
+
   registry.registerPath({
     method: "get",
     path: "/v1/me/permissions",
@@ -724,7 +845,7 @@ export function buildOpenApiDocument(): object {
     description:
       "Multipart con `file` y `number_format` opcional. La petición solo crea el trabajo (202). " +
       "El mismo archivo con el mismo formato devuelve el trabajo existente (200, `reused: true`): " +
-      "la llave es el sha256 del archivo. Exige `Idempotency-Key` con hash canónico (archivo + formato): la misma llave con otro archivo da 409 IDEMPOTENCY_KEY_REUSED. Dentro del trabajo, el código del producto es la llave: " +
+      "la llave es el sha256 del archivo. Exige `Idempotency-Key` con hash canónico (archivo + formato): la misma llave con otro archivo da 409 IDEMPOTENCY_BODY_MISMATCH. Dentro del trabajo, el código del producto es la llave: " +
       "si ya existe, la fila actualiza su precio en vez de duplicar (ADR-0074, C-04).",
     security: [{ bearerAuth: [] }],
     request: {
@@ -1009,7 +1130,9 @@ export function buildOpenApiDocument(): object {
     summary: "Listar clientes (búsqueda por RIF o razón social, paginación en servidor)",
     description:
       "`with_debt=1` añade a cada cliente lo que debe (suma de saldos positivos de sus " +
-      "facturas emitidas, calculada por el esquema) — la cifra de la pantalla de Clientes.",
+      "facturas emitidas, calculada por el esquema) — la cifra de la pantalla de Clientes. " +
+      "Pedir la deuda exige el permiso ar.read: sin él, 403 PERMISSION_REQUIRED (P-04). " +
+      "La lista sin `with_debt` no lo exige.",
     security: [{ bearerAuth: [] }],
     request: {
       headers: companyHeader,
@@ -1224,8 +1347,12 @@ export function buildOpenApiDocument(): object {
   );
   mueveStock(
     "/v1/inventory/issues",
-    "Salida de existencias al costo promedio (permiso inventory.move sobre el almacén)",
-    "El costo lo calcula el promedio ponderado móvil; el cliente no lo envía.",
+    "Salida con motivo al costo promedio (permiso inventory.move sobre el almacén)",
+    "El costo lo calcula el promedio ponderado móvil; el cliente no lo envía. El motivo es " +
+      "obligatorio y de lista cerrada (ADR-0078): merma, rotura, vencido y faltante van a " +
+      "«Pérdidas por mermas y faltantes»; consumo propio, regalo, donación y muestra son retiro " +
+      "(LIVA art. 4.3) y, en una empresa que factura, emiten Nota de retiro con débito fiscal al " +
+      "valor de mercado (withdrawal_note_number).",
     despachar,
     movimiento,
   );
@@ -1236,6 +1363,25 @@ export function buildOpenApiDocument(): object {
     ajustar,
     movimiento,
   );
+  registry.registerPath({
+    method: "post",
+    path: "/v1/inventory/counts",
+    summary: "Conteo de existencias (permiso inventory.adjust sobre el almacén)",
+    description:
+      "La persona escribe lo que contó; el servidor calcula la diferencia contra el sistema bajo " +
+      "el bloqueo de la posición (ADR-0078 §4). Con preview: true solo la devuelve (200); sin él la " +
+      "registra como ajuste con su motivo (201). Contado igual al sistema: 200 sin movimiento.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: CountStockRequest } } },
+    },
+    responses: {
+      200: okJson(CountStockResponse, "La diferencia calculada, sin movimiento."),
+      201: okJson(CountStockResponse, "La diferencia registrada como ajuste."),
+      ...erroresComunes,
+    },
+  });
   mueveStock(
     "/v1/inventory/transfers",
     "Transferencia entre almacenes (permiso inventory.transfer en LOS DOS)",
@@ -1466,6 +1612,8 @@ export function buildOpenApiDocument(): object {
   const confirmarPedido = registry.register("ConfirmOrderRequest", ConfirmOrderRequest);
   const crearFactura = registry.register("CreateInvoiceRequest", CreateInvoiceRequest);
   const anularFactura = registry.register("AnnulInvoiceRequest", AnnulInvoiceRequest);
+  const reversarCobro = registry.register("ReversePaymentRequest", ReversePaymentRequest);
+  const cobroReversado = registry.register("PaymentReversalResponse", PaymentReversalResponse);
   const registrarCobro = registry.register("RegisterPaymentRequest", RegisterPaymentRequest);
   const respuestaCobro = registry.register("RegisterPaymentResponse", RegisterPaymentResponse);
   const crearDevolucion = registry.register("CreateReturnRequest", CreateReturnRequest);
@@ -1622,6 +1770,43 @@ export function buildOpenApiDocument(): object {
       ...erroresComunes,
       409: errorRef("Sin tasa vigente para la fecha del cobro, o saldo a favor insuficiente."),
     },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/payments/{id}/reversal",
+    summary: "Reversar un cobro, con motivo (permiso ar.payment.reverse: dueño y contador)",
+    description:
+      "ADR-0075 §8. El cobro no se edita ni se borra: se escribe su reversa (append-only), sale " +
+      "de la caja lo que entró, su asiento se revierte con un contra-asiento y el documento " +
+      "vuelve a deber por la única función de deuda (una factura `paid` vuelve a `issued`). Si " +
+      "el cobro percibió IGTF, la percepción queda `pendiente_reintegro` y lo percibido se " +
+      "restituye al cliente (PA SNAT/2022/000013 art. 4). Un cobro se reversa una sola vez → 409 " +
+      "PAYMENT_ALREADY_REVERSED. Si su IGTF se documentó con nota de débito → 409 IGTF_NOTE_ISSUED. " +
+      "El abono de una retención soportada se reversa desde su comprobante.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: reversarCobro } } },
+    },
+    responses: { 201: okJson(cobroReversado, "Cobro reversado."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/supported-retentions/{id}/reversal",
+    summary:
+      "Reversar un comprobante de retención soportada (permiso ar.retention.correct: contador)",
+    description:
+      "ADR-0072 §5 y ADR-0075 §8. Reversa el abono del comprobante por la vía de la reversa de " +
+      "cobros y deja el comprobante `annulled` con el motivo: sale del libro de ventas y de la " +
+      "declaración. Corregirlo es reversarlo y volver a cargarlo (su número queda libre).",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: { content: { "application/json": { schema: reversarCobro } } },
+    },
+    responses: { 201: okJson(cobroReversado, "Comprobante reversado."), ...erroresComunes },
   });
 
   const resumenNegocio = registry.register("NegocioResumenResponse", NegocioResumenResponse);
@@ -1956,8 +2141,12 @@ export function buildOpenApiDocument(): object {
     description:
       "Emite por el MISMO camino que /v1/invoices (numeración gapless, kardex, asiento) y " +
       "registra hasta dos cobros. El vuelto del efectivo lo calcula el servidor; una tarjeta " +
-      "no da vuelto. El `Idempotency-Key` es el id de venta del cliente: reintentar devuelve " +
-      "LA MISMA venta, nunca una segunda factura. Sin `payments` (o con pagos que no " +
+      "no da vuelto. El `Idempotency-Key` es el INTENTO de cobro (ADR-0076), nunca el id de la " +
+      "cuenta: reintentar con la misma devuelve LA MISMA venta; la misma llave con otro cuerpo da " +
+      "409 IDEMPOTENCY_BODY_MISMATCH. Con `cart_id`, la cuenta queda marcada vendida en la misma " +
+      "transacción y un segundo cobro de ella da 409 POS_CART_SOLD (con la venta en `details`); " +
+      "una cuenta que armó otra persona la cobra su autor o quien tenga pos.carts.manage (403). " +
+      "`cart_version` y `attempt_id` quedan en el acta `pos.cart.sold`. Sin `payments` (o con pagos que no " +
       "alcanzan) la venta queda FIADA y `balance` dice el saldo — solo con cliente " +
       "identificado: una venta de mostrador con saldo se rechaza (422).",
     security: [{ bearerAuth: [] }],
@@ -1968,7 +2157,10 @@ export function buildOpenApiDocument(): object {
     responses: {
       201: okJson(ventaRapidaResp, "La venta: documento, cobros, vuelto y saldo."),
       ...erroresComunes,
-      409: errorRef("Numeración, regla tributaria, tasa o existencias: lo que impida emitir."),
+      409: errorRef(
+        "Numeración, regla tributaria, tasa o existencias: lo que impida emitir; POS_CART_SOLD si " +
+          "la cuenta ya se cobró; IDEMPOTENCY_BODY_MISMATCH si la llave ya viajó con otro cuerpo.",
+      ),
     },
   });
   registry.registerPath({
@@ -2005,7 +2197,9 @@ export function buildOpenApiDocument(): object {
     summary: "Las cuentas abiertas de la caja (permiso sales.invoice.issue)",
     description:
       "La INTENCIÓN de cada venta en armado: productos, cantidades, cliente y nota — nunca " +
-      "precios (al retomar se recotiza a la tasa de HOY). Ordenadas por último toque.",
+      "precios (al retomar se recotiza a la tasa de HOY). Ordenadas por último toque. Cada una " +
+      "dice quién la armó, cuándo y en qué caja, y si quien pregunta puede cobrarla (`editable`: " +
+      "su autor o pos.carts.manage). Las ya cobradas no salen (ADR-0076).",
     security: [{ bearerAuth: [] }],
     request: { headers: companyHeader },
     responses: { 200: okJson(carritos, "Las cuentas abiertas."), ...erroresComunes },
@@ -2016,16 +2210,22 @@ export function buildOpenApiDocument(): object {
     summary: "Guardar una cuenta abierta (crea o pisa; permiso sales.invoice.issue)",
     description:
       "El id lo pone la CAJA: misma clave, mismo carrito — idempotente por naturaleza, sin " +
-      "`Idempotency-Key`. Última escritura gana. No reserva mercancía ni congela precios: " +
-      "para eso están el pedido y la factura. La cuenta solo muere al cobrarse " +
-      "(`cart_id` en /v1/pos/sales, misma transacción) o purgada tras 30 días sin tocar.",
+      "`Idempotency-Key`. Última escritura gana entre su autor y quien tenga pos.carts.manage; " +
+      "los demás reciben 403. No reserva mercancía ni congela precios: para eso están el pedido y " +
+      "la factura. La cuenta muere al cobrarse (`cart_id` en /v1/pos/sales, misma transacción): " +
+      "desde ahí, todo PUT responde 409 POS_CART_SOLD (ADR-0076). Sin cobrar, se purga tras 30 " +
+      "días sin tocar.",
     security: [{ bearerAuth: [] }],
     request: {
       params: z.object({ id: z.string().uuid() }),
       headers: companyHeader,
       body: { content: { "application/json": { schema: guardarCarrito } } },
     },
-    responses: { 200: okJson(carrito, "La cuenta guardada."), ...erroresComunes },
+    responses: {
+      200: okJson(carrito, "La cuenta guardada."),
+      ...erroresComunes,
+      409: errorRef("POS_CART_SOLD: esa cuenta ya se cobró."),
+    },
   });
   registry.registerPath({
     method: "delete",
@@ -2033,7 +2233,8 @@ export function buildOpenApiDocument(): object {
     summary: "Descartar una cuenta abierta (permiso sales.invoice.issue)",
     description:
       "Para la que se abandona SIN venta. Descartar lo ya borrado no es error: responde " +
-      "`deleted: false`. El cierre normal es el cobro, no este endpoint.",
+      "`deleted: false`, igual que una cuenta ya cobrada (no se borra: ADR-0076). Una ajena la " +
+      "borra su autor o quien tenga pos.carts.manage (403). El cierre normal es el cobro.",
     security: [{ bearerAuth: [] }],
     request: { params: z.object({ id: z.string().uuid() }), headers: companyHeader },
     responses: {
@@ -2820,6 +3021,27 @@ export function buildOpenApiDocument(): object {
       201: okJson(llegadaResp, "Qué salida tomó la llegada, con su recepción, factura y pago."),
       ...erroresComunes,
       409: errorRef("Documento duplicado del proveedor, sin tasa, o sin regla de IVA."),
+    },
+  });
+  const vistaLlegada = registry.register("ArrivalPreviewResponse", ArrivalPreviewResponse);
+  registry.registerPath({
+    method: "post",
+    path: "/v1/arrivals/preview",
+    summary: "Vista previa de una llegada: base, IVA y total antes de confirmar (D-05)",
+    description:
+      "El MISMO cálculo que `POST /v1/arrivals`, deshecho al terminar: no escribe nada y no " +
+      "lleva Idempotency-Key. El pago del cuerpo se ignora. Con `prices_include_tax` el " +
+      "servidor quita el IVA del precio escrito. Falla con los mismos códigos que el registro " +
+      "(sin tasa del día, proveedor sin RIF con factura…), para decirlo antes de confirmar.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: llegada } } },
+    },
+    responses: {
+      200: okJson(vistaLlegada, "Lo que se registraría: base, IVA y total del documento."),
+      ...erroresComunes,
+      409: errorRef("Sin tasa del día, o sin regla de IVA."),
     },
   });
   const impactoLlegada = registry.register("ArrivalImpactResponse", ArrivalImpactResponse);

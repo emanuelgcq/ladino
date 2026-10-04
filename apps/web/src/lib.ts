@@ -210,7 +210,11 @@ export interface InventoryMove {
   occurred_at: string;
   reference: string | null;
   reason: string | null;
+  /** El motivo de una salida con motivo (ADR-0078); null en los demás movimientos. */
+  exit_reason?: string | null;
   transfer_id: string | null;
+  /** El correlativo de la Nota de retiro que la salida emitió, si la emitió. */
+  withdrawal_note_number?: number | null;
 }
 export interface CodeCatalog {
   code: string;
@@ -1089,8 +1093,14 @@ export interface IgtfPerception {
 }
 export interface IgtfPerceptions {
   items: IgtfPerception[];
-  /** Σ de lo PERCIBIDO (sin lo pendiente de reintegro). */
+  /**
+   * El total del período, calculado por el servidor (platform.igtf_period_totals): lo percibido
+   * vigente MÁS lo percibido cuyo cobro se reversó DESPUÉS de cerrar su quincena (ya se declaró).
+   */
   total_functional: string;
+  /** De ese total, cuánto está pendiente de reintegro, y en cuántos cobros. */
+  pending_refund_functional?: string;
+  pending_refund_count?: number;
   functional_currency: string;
 }
 export interface IgtfPreview {
@@ -1099,4 +1109,38 @@ export interface IgtfPreview {
   base: string;
   currency: string;
   amount: string | null;
+}
+
+/**
+ * La vista previa de una llegada (POST /v1/arrivals/preview). El contrato trae la tasa con su
+ * nombre técnico; las pantallas de negocio hablan de «la tasa del día» (glosario de persona), así
+ * que se traduce aquí, una vez.
+ */
+export interface VistaDeLlegada {
+  currency: string;
+  subtotal: string | null;
+  tax_amount: string | null;
+  total_amount: string | null;
+  /** La tasa oficial que usa la llegada, o null si no cruza monedas. */
+  tasa: string | null;
+  /** El día en que esa tasa se publicó. */
+  tasaFecha: string | null;
+}
+
+export function vistaDeLlegada(r: {
+  currency: string;
+  subtotal: string | null;
+  tax_amount: string | null;
+  total_amount: string | null;
+  fx_rate?: string | null;
+  fx_rate_date?: string | null;
+}): VistaDeLlegada {
+  return {
+    currency: r.currency,
+    subtotal: r.subtotal,
+    tax_amount: r.tax_amount,
+    total_amount: r.total_amount,
+    tasa: r.fx_rate ?? null,
+    tasaFecha: r.fx_rate_date ?? null,
+  };
 }

@@ -231,7 +231,7 @@ sea la otra.
 | Base e impuesto de cada línea | minor units ISO-4217 de la moneda del documento (2 en VES y USD) | `HALF_UP` — `VALIDAR-TRIBUTARIO` | ADR-0058 |
 | Subtotal y total del documento | suma de las líneas ya redondeadas (PER_LINE, §6.2) | — | ADR-0058 |
 | Descuentos | `VALIDAR-TRIBUTARIO` | `VALIDAR-TRIBUTARIO` | |
-| Conversión a moneda funcional | minor units de la moneda funcional; impuesto funcional = total − subtotal | `HALF_UP` | ADR-0058 |
+| Conversión a moneda funcional | por línea: base funcional = round(base × tasa, minor units); impuesto funcional = round(base funcional × alícuota, minor units); total = suma. El pie es la suma de las líneas. Una sola función (`fiscalDeLinea`) para el documento y para la cotización de la caja | `HALF_UP` | ADR-0075 §1 (E-05); sustituye a «impuesto funcional = total − subtotal» de ADR-0058 |
 
 Política persistida: `sales:document:<minorUnits>:<modo>` en `documents` y `document_lines`. Los
 documentos anteriores al 2026-09-12 llevan `sales:document:8:HALF_UP`, que es la regla con la que
@@ -333,3 +333,28 @@ propiedades verificadas están en `packages/money/test/`. Las que anclan este do
 Mientras las celdas de §6 sigan vacías, la suite prueba **los cinco modos por igual**. Ninguna
 política es privilegiada en el código, así que responder el formulario no exige rediseñar nada:
 solo insertar filas en `rounding_policies`.
+
+
+## 9. Enmienda ADR-0075 §7 — el mayor al céntimo (2026-10-03)
+
+- Todo importe funcional que va al mayor o al VALOR del kardex se redondea al céntimo, half-up
+  (`toCents` / `CENTS_POLICY` `ledger:cents:2:HALF_UP` en TS; `platform.round_cents` en SQL).
+- §6.6 queda así: ocho decimales solo para costos unitarios (y el promedio) y tasas. El costo de una
+  salida es round2(valor × q / existencia); vaciar saca todo el valor; el acumulado es la suma de los
+  redondeados y el promedio derivado es valor / cantidad a 8.
+- El residuo de llevar al céntimo las líneas de un asiento va a «Diferencias por redondeo»
+  (`rounding_difference`, 5.1.10) en el mismo asiento. VALIDAR-CONTABLE (PENDIENTES_ASESOR P-79).
+- **Un solo redondeo, y la política que lo produjo** (revisión de la ola 3). El importe funcional de
+  un movimiento del kardex se redondea UNA vez, de lo exacto al céntimo: round(round(x, 8), 2) ≠
+  round(x, 2) en el borde (10,004999995 → 10,00500000 → 10,01, contra 10,00), y los libros en SQL
+  hacen round(x, 2). La tabla de §6.6 queda enmendada: el costo de una salida y el importe funcional
+  de una entrada en moneda extranjera van a escala `2`, `HALF_UP`, con `ledger:cents:2:HALF_UP`, que
+  es lo que guarda `inventory_moves.rounding_policy_id`; solo el costo unitario promedio sigue a
+  escala `8` (`inventory:cost:8:HALF_UP`), derivado como valor / cantidad y comprobado por el oráculo.
+- **Las gemelas se comprueban.** `toCents` y `platform.round_cents` pasan los mismos bordes (0,005;
+  −0,005; 1,005; 2,675; negativos) en `packages/money/test/cents.test.ts` y, contra Postgres, en
+  `packages/domain/test/centimo-gemelas.test.ts`.
+- **Sin excepciones al escribir.** El asiento manual con más de dos decimales es 422 en el dominio y
+  LAD71 al postear en la base; la reversa de un asiento viejo con fracción se genera al céntimo con
+  su línea de redondeo; la declaración de IVA convierte sus créditos con la misma regla del libro de
+  compras (round(iva × tasa, 2) por documento).

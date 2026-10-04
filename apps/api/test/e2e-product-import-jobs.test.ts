@@ -463,7 +463,7 @@ describe(
         { key },
       );
       expect(otro.status).toBe(409);
-      expect(otro.json["code"]).toBe("IDEMPOTENCY_KEY_REUSED");
+      expect(otro.json["code"]).toBe("IDEMPOTENCY_BODY_MISMATCH");
       // Llave distinta con el mismo archivo: el único del esquema devuelve el mismo trabajo.
       const c = await subir("/v1/products/import/jobs", csv);
       expect(c.status).toBe(200);

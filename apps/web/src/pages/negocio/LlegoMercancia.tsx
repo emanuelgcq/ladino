@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatearDocumento } from "@ladino/schemas";
 import { useNavigate, useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, ClipboardList, Package, Plus, Trash2, Truck, User } from "lucide-react";
 import { useSesion } from "../../app/session.js";
-import { errorDePersona } from "../../lib.js";
+import { errorDePersona, vistaDeLlegada } from "../../lib.js";
+import { conLlaveDeIntento, intentoAnteriorPudoQuedar } from "../../llave-intento.js";
+import { RevisaIntentoAnterior } from "../../components/RevisaIntentoAnterior.js";
 import { esCero } from "../../components/decimal-compare.js";
 import { Button } from "../../ui/button.js";
 import { Card } from "../../ui/card.js";
@@ -26,7 +28,17 @@ import {
 } from "../../components/formas-de-pago.js";
 import { fechaLocal } from "../../fechas.js";
 import { MoneyDualInput } from "../../components/MoneyDualInput.js";
-import { TARJETAS_FACTURA } from "../../components/capa-fiscal/textos.js";
+import {
+  DETALLE_FACTURA_SIN_RIF,
+  FILAS_VISTA_LLEGADA,
+  INTERRUPTOR_PRECIO_CON_IVA,
+  RESUMEN_FACTURA_CON_RIF,
+  RESUMEN_FACTURA_SIN_RIF,
+  TARJETAS_FACTURA,
+} from "../../components/capa-fiscal/textos.js";
+import { useConFacturas } from "../../app/modo-venta.js";
+import { mostrarImporte } from "../../money.js";
+import { tasaLimpia } from "../../tasa.js";
 
 /**
  * LLEGÓ MERCANCÍA (ADR-0066) — LA ÚNICA PUERTA por la que la mercancía entra al negocio.
@@ -142,7 +154,9 @@ export function LlegoMercancia(): React.JSX.Element {
   const [params] = useSearchParams();
   const pedidoDeLaUrl = params.get("pedido");
 
-  const [clave] = useState(() => crypto.randomUUID());
+  // La llave es por INTENTO (ADR-0076, D-03): se conserva ante un fallo de red y se estrena
+  // tras un 4xx — corregir un dato y confirmar ya no choca con «ya se registró».
+  const clave = useRef(crypto.randomUUID());
   const [paso, setPaso] = useState<Paso>("pedido");
   const [pedido, setPedido] = useState<PedidoPendiente | null>(null);
   const [origen, setOrigen] = useState<Origen | null>(null);
@@ -161,7 +175,15 @@ export function LlegoMercancia(): React.JSX.Element {
   const [cuenta, setCuenta] = useState<string | null>(null);
   const [deposito, setDeposito] = useState<string | null>(null);
   const [sinSaldo, setSinSaldo] = useState<string | null>(null);
+  // ADR-0076: el intento anterior pudo quedar registrado — se revisa antes de repetir.
+  const [revisar, setRevisar] = useState<unknown>(null);
   const [hecho, setHecho] = useState<{ kind: string; productos: number } | null>(null);
+  // D-05: el precio se escribe sin impuesto, como viene en la factura; si la persona copia el del
+  // papel con impuesto, lo dice aquí y el SERVIDOR se lo quita. La pantalla no lo calcula.
+  const [incluyeIva, setIncluyeIva] = useState(false);
+  // D-01 y D-12: la empresa en modo recibos no tiene crédito fiscal; la factura del proveedor es
+  // soporte de costo.
+  const conRif = useConFacturas();
 
   const puedeFacturar = puede("purchase.invoice.register");
   const puedePagar = puede("purchase.payment.register");
@@ -380,69 +402,73 @@ export function LlegoMercancia(): React.JSX.Element {
     lineasValidas.length > 0 &&
     lineasValidas.length === lineas.filter((l) => l.producto !== null).length;
 
-  const registrar = useMutation({
-    mutationFn: (forzar: boolean) => {
-      const pago =
-        pagada !== true || elegida === undefined
-          ? undefined
+  const cuerpoDeLaLlegada = (forzar: string | null): Record<string, unknown> => {
+    const pago =
+      pagada !== true || elegida === undefined
+        ? undefined
+        : {
+            instrument: elegida.instrument,
+            ...(cuentaDelPago == null ? {} : { account_id: cuentaDelPago }),
+            ...(forzar !== null ? { allow_negative_balance: true, overdraft_reason: forzar } : {}),
+          };
+    return {
+      company_id: empresa.id,
+      warehouse_id: depositoElegido,
+      currency: moneda,
+      ...(fecha === hoyLocal() ? {} : { arrived_on: fecha }),
+      ...(pedido === null ? {} : { purchase_order_id: pedido.id }),
+      ...(origen === "propia"
+        ? {}
+        : {
+            supplier_id: proveedor?.id,
+            invoice: estadoFactura,
+            ...(estadoFactura === "present" && nroFactura.trim() !== ""
+              ? { supplier_document_number: nroFactura.trim() }
+              : {}),
+            ...(estadoFactura === "present" && nroControl.trim() !== ""
+              ? { supplier_control_number: nroControl.trim() }
+              : {}),
+            ...(incluyeIva && estadoFactura !== "none" ? { prices_include_tax: true } : {}),
+            ...(pago === undefined ? {} : { payment: pago }),
+          }),
+      lines: lineasValidas.map((l) => ({
+        product_id: l.producto!.id,
+        quantity: l.cantidad.trim().replace(",", "."),
+        // A CIEGAS: la línea del pedido va, el costo NO. El servidor lo lee del pedido y el
+        // contrato rechaza que viaje un importe con ella.
+        ...(l.ordenLineaId !== null
+          ? { purchase_order_line_id: l.ordenLineaId }
           : {
-              instrument: elegida.instrument,
-              ...(cuentaDelPago == null ? {} : { account_id: cuentaDelPago }),
-              ...(forzar ? { allow_negative_balance: true } : {}),
-            };
-      return llamar<{ kind: string }>("/v1/arrivals", {
-        method: "POST",
-        /**
-         * DOS CUERPOS, DOS CLAVES. La clave nace al entrar para que un doble clic no cree dos
-         * llegadas, pero confirmar el sobregiro manda un cuerpo DISTINTO —con
-         * `allow_negative_balance`— y con la misma clave el servidor respondía, con razón,
-         * `IDEMPOTENCY_KEY_REUSED`: «esa operación ya se registró con otros datos». Es decir, el
-         * botón «Registrarlo igual» no podía funcionar nunca. Lo destapó el QA de ADR-0067, en
-         * cuanto elegir la cuenta hizo que el sobregiro saltara de verdad.
-         *
-         * El sufijo es DETERMINISTA, no un uuid nuevo: repetir la confirmación tampoco duplica.
-         */
-        headers: { "Idempotency-Key": forzar ? `${clave}:sobregiro` : clave },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          warehouse_id: depositoElegido,
-          currency: moneda,
-          ...(fecha === hoyLocal() ? {} : { arrived_on: fecha }),
-          ...(pedido === null ? {} : { purchase_order_id: pedido.id }),
-          ...(origen === "propia"
-            ? {}
-            : {
-                supplier_id: proveedor?.id,
-                invoice: estadoFactura,
-                ...(estadoFactura === "present" && nroFactura.trim() !== ""
-                  ? { supplier_document_number: nroFactura.trim() }
-                  : {}),
-                ...(estadoFactura === "present" && nroControl.trim() !== ""
-                  ? { supplier_control_number: nroControl.trim() }
-                  : {}),
-                ...(pago === undefined ? {} : { payment: pago }),
-              }),
-          lines: lineasValidas.map((l) => ({
-            product_id: l.producto!.id,
-            quantity: l.cantidad.trim().replace(",", "."),
-            // A CIEGAS: la línea del pedido va, el costo NO. El servidor lo lee del pedido y el
-            // contrato rechaza que viaje un importe con ella.
-            ...(l.ordenLineaId !== null
-              ? { purchase_order_line_id: l.ordenLineaId }
-              : {
-                  // Uno de los dos, nunca los dos: el otro lo calcula el servidor.
-                  ...(l.por === "unidad"
-                    ? { unit_amount: l.costo.trim().replace(",", ".") }
-                    : { amount: l.costo.trim().replace(",", ".") }),
-                  // En qué moneda lo escribió. Si no es la del documento, el servidor convierte
-                  // con la tasa del día del hecho y guarda las dos cosas (migración 71).
-                  ...(l.monedaCosto === moneda ? {} : { capture_currency: l.monedaCosto }),
-                }),
-            ...(l.paquete.trim() === "" ? {} : { lot_code: l.paquete.trim() }),
-            ...(l.vence === "" ? {} : { lot_expires_at: l.vence }),
-          })),
+              // Uno de los dos, nunca los dos: el otro lo calcula el servidor.
+              ...(l.por === "unidad"
+                ? { unit_amount: l.costo.trim().replace(",", ".") }
+                : { amount: l.costo.trim().replace(",", ".") }),
+              // En qué moneda lo escribió. Si no es la del documento, el servidor convierte
+              // con la tasa del día del hecho y guarda las dos cosas (migración 71).
+              ...(l.monedaCosto === moneda ? {} : { capture_currency: l.monedaCosto }),
+            }),
+        ...(l.paquete.trim() === "" ? {} : { lot_code: l.paquete.trim() }),
+        ...(l.vence === "" ? {} : { lot_expires_at: l.vence }),
+      })),
+    };
+  };
+
+  const registrar = useMutation({
+    mutationFn: (forzar: string | null) => {
+      return conLlaveDeIntento(clave, (k) =>
+        llamar<{ kind: string }>("/v1/arrivals", {
+          method: "POST",
+          /**
+           * UNA LLAVE POR INTENTO (ADR-0076). Confirmar el sobregiro manda un cuerpo DISTINTO —con
+           * `allow_negative_balance`—, y antes, con la clave fija de la pantalla, el servidor lo
+           * paraba (lo destapó el QA de ADR-0067; fbdfd36 lo parcheó con un sufijo `:sobregiro`).
+           * Ahora el 409 de saldo es un 4xx y la llave ya se estrenó: el segundo cuerpo viaja con
+           * la suya. Un doble clic sobre el MISMO intento sigue siendo la misma llave.
+           */
+          headers: { "Idempotency-Key": k },
+          body: JSON.stringify(cuerpoDeLaLlegada(forzar)),
         }),
-      });
+      );
     },
     onSuccess: (r) => {
       setHecho({ kind: r.kind, productos: lineasValidas.length });
@@ -450,6 +476,10 @@ export function LlegoMercancia(): React.JSX.Element {
       void qc.invalidateQueries({ queryKey: ["compras", empresa.id] });
     },
     onError: (e) => {
+      if (intentoAnteriorPudoQuedar(e)) {
+        setRevisar(e);
+        return;
+      }
       const falta = esSinSaldo(e);
       if (falta !== null) {
         setSinSaldo(falta);
@@ -458,6 +488,44 @@ export function LlegoMercancia(): React.JSX.Element {
       toast.error("No se pudo registrar la llegada", errorDePersona(e));
     },
   });
+
+  /**
+   * D-05: LO QUE SE VA A REGISTRAR, CALCULADO POR EL SERVIDOR. «¿Todo bien?» enseña base, impuesto y
+   * total antes de confirmar; la pantalla no multiplica ni suma (regla 7): pide la vista previa,
+   * que es el mismo caso de uso deshecho al terminar. Si el registro fuera a fallar —la tasa de
+   * ese día que no existe (D-09), el proveedor sin documento fiscal con factura (D-04)—, falla aquí y se dice
+   * antes de «Sí, registrar».
+   */
+  const cuerpoVista =
+    paso === "confirmar" && origen === "proveedor" ? cuerpoDeLaLlegada(null) : null;
+  const vista = useQuery({
+    queryKey: ["vista-llegada", empresa.id, JSON.stringify(cuerpoVista)],
+    enabled: cuerpoVista !== null && depositoElegido !== null,
+    retry: false,
+    queryFn: async () =>
+      vistaDeLlegada(
+        await llamar<Parameters<typeof vistaDeLlegada>[0]>("/v1/arrivals/preview", {
+          method: "POST",
+          body: JSON.stringify(cuerpoVista),
+        }),
+      ),
+  });
+
+  /**
+   * D-09: ¿hay tasa del BCV para el día elegido? Hace falta cuando el documento o algún costo va
+   * en dólares. Una empresa que empezó hoy no tiene la de ayer: la pantalla lo dice en «¿Qué
+   * llegó?» y no deja seguir, en vez de descubrirlo al final (antes el aviso salía y «Seguir»
+   * seguía encendido).
+   */
+  const necesitaTasa = moneda !== "VES" || lineas.some((l) => l.monedaCosto !== moneda);
+  const tasaDelDia = useQuery({
+    queryKey: ["tasa-del-dia", empresa.id, fecha],
+    enabled: necesitaTasa,
+    staleTime: 60_000,
+    retry: false,
+    queryFn: () => llamar(`/v1/exchange-rates/preview?amount=1&currency=USD&date=${fecha}`),
+  });
+  const faltaTasa = necesitaTasa && tasaDelDia.isError;
 
   // ── Navegación ────────────────────────────────────────────────────────────
   const pasos: Paso[] = useMemo(() => {
@@ -944,6 +1012,30 @@ export function LlegoMercancia(): React.JSX.Element {
             </FormField>
           </div>
 
+          {origen === "proveedor" && pedido === null && (
+            <label className="flex items-start gap-2 text-[0.9rem]">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={incluyeIva}
+                onChange={(e) => setIncluyeIva(e.target.checked)}
+              />
+              <span>
+                {INTERRUPTOR_PRECIO_CON_IVA.titulo}
+                <span className="block text-[0.85rem] text-muted-foreground">
+                  {INTERRUPTOR_PRECIO_CON_IVA.ayuda}
+                </span>
+              </span>
+            </label>
+          )}
+
+          {faltaTasa && (
+            <p role="alert" className="rounded-md bg-warning-soft p-3 text-[0.88rem]">
+              No hay tasa del BCV para el {fechaLocal(fecha)}: sin ella no se puede registrar una
+              llegada en dólares ese día. Tráela en Mi dinero, o fecha la llegada hoy.
+            </p>
+          )}
+
           {(impacto.data?.sales_since.length ?? 0) > 0 && (
             <p role="status" className="rounded-md bg-muted p-3 text-[0.88rem]">
               Entre el {fechaLocal(fecha)} y hoy vendiste{" "}
@@ -955,7 +1047,12 @@ export function LlegoMercancia(): React.JSX.Element {
           <div className="flex justify-end">
             <Button
               variant="primary"
-              disabled={!listoQue || hayCompuesto || (origen === "proveedor" && proveedor === null)}
+              disabled={
+                !listoQue ||
+                hayCompuesto ||
+                faltaTasa ||
+                (origen === "proveedor" && proveedor === null)
+              }
               onClick={avanzar}
             >
               Seguir
@@ -970,22 +1067,26 @@ export function LlegoMercancia(): React.JSX.Element {
           <h2 className="text-lg font-medium">¿Tienes la factura?</h2>
           <div className="grid gap-3">
             {TARJETAS_FACTURA.filter((t) => t.valor === "pending" || puedeFacturar).map(
-              ({ valor, titulo, detalle }) => (
-                <Card
-                  key={valor}
-                  role="button"
-                  tabIndex={0}
-                  className="cursor-pointer p-4 hover:border-accent"
-                  onClick={() => {
-                    setEstadoFactura(valor);
-                    if (valor === "pending") setPagada(null);
-                  }}
-                  onKeyDown={(e) => e.key === "Enter" && setEstadoFactura(valor)}
-                >
-                  <p className="font-medium">{titulo}</p>
-                  <p className="text-[0.85rem] text-muted-foreground">{detalle}</p>
-                </Card>
-              ),
+              ({ valor, titulo, detalle: detalleBase }) => {
+                const detalle =
+                  valor === "present" && !conRif ? DETALLE_FACTURA_SIN_RIF : detalleBase;
+                return (
+                  <Card
+                    key={valor}
+                    role="button"
+                    tabIndex={0}
+                    className="cursor-pointer p-4 hover:border-accent"
+                    onClick={() => {
+                      setEstadoFactura(valor);
+                      if (valor === "pending") setPagada(null);
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && setEstadoFactura(valor)}
+                  >
+                    <p className="font-medium">{titulo}</p>
+                    <p className="text-[0.85rem] text-muted-foreground">{detalle}</p>
+                  </Card>
+                );
+              },
             )}
           </div>
 
@@ -1123,13 +1224,29 @@ export function LlegoMercancia(): React.JSX.Element {
                   setDeposito(d.id);
                   avanzar();
                 }}
-                onKeyDown={(e) => e.key === "Enter" && setDeposito(d.id)}
+                onKeyDown={(e) => {
+                  // D-14 / I-03: Enter hace lo mismo que el clic — elige Y avanza. Antes solo
+                  // elegía, y sin botón «Seguir» el teclado quedaba atrapado en el paso.
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setDeposito(d.id);
+                    avanzar();
+                  }
+                }}
               >
                 <Package className="mb-2 size-5 text-accent" />
                 <p className="font-medium">{d.name}</p>
-                {d.is_default && <p className="text-[0.85rem] text-muted-foreground">Principal</p>}
+                {/* «Principal Principal» (I-03): la marca solo cuando el nombre no la dice ya. */}
+                {d.is_default && d.name.trim().toLowerCase() !== "principal" && (
+                  <p className="text-[0.85rem] text-muted-foreground">Principal</p>
+                )}
               </Card>
             ))}
+          </div>
+          <div className="flex justify-end">
+            <Button variant="primary" disabled={depositoElegido === null} onClick={avanzar}>
+              Seguir
+            </Button>
           </div>
         </div>
       )}
@@ -1155,9 +1272,8 @@ export function LlegoMercancia(): React.JSX.Element {
                   {pedido === null ? "" : `, del pedido n.º ${pedido.order_number}`}.
                 </p>
                 {pedido !== null && <p>Lo que no haya llegado sigue esperando en «Por recibir».</p>}
-                {estadoFactura === "present" && (
-                  <p>Con su factura: entra al libro de compras y da crédito fiscal.</p>
-                )}
+                {estadoFactura === "present" &&
+                  (conRif ? <p>{RESUMEN_FACTURA_CON_RIF}</p> : <p>{RESUMEN_FACTURA_SIN_RIF}</p>)}
                 {estadoFactura === "pending" && (
                   <p>Sin la factura todavía: queda en «Falta la factura» hasta que llegue.</p>
                 )}
@@ -1170,14 +1286,63 @@ export function LlegoMercancia(): React.JSX.Element {
             )}
             {fecha !== hoyLocal() && <p>Llegó el {fechaLocal(fecha)}.</p>}
           </Card>
+          {origen === "proveedor" && (
+            <Card className="space-y-1 p-4" aria-live="polite">
+              {vista.isPending && (
+                <p className="text-[0.9rem] text-muted-foreground">Calculando los importes…</p>
+              )}
+              {vista.data?.tasa != null && vista.data.tasaFecha != null && (
+                <p className="text-[0.85rem] text-muted-foreground">
+                  {tasaLimpia(vista.data.tasa)}, publicada el {fechaLocal(vista.data.tasaFecha)}.
+                </p>
+              )}
+              {vista.isError && (
+                <p role="alert" className="text-[0.9rem] text-destructive">
+                  {errorDePersona(vista.error)}
+                </p>
+              )}
+              {vista.data !== undefined && vista.data.subtotal !== null && (
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[0.95rem]">
+                  <dt>{FILAS_VISTA_LLEGADA.base}</dt>
+                  <dd className="text-right tabular-nums">
+                    {mostrarImporte({ amount: vista.data.subtotal, currency: vista.data.currency })}
+                  </dd>
+                  <dt>{FILAS_VISTA_LLEGADA.impuesto}</dt>
+                  <dd className="text-right tabular-nums">
+                    {vista.data.tax_amount === null
+                      ? FILAS_VISTA_LLEGADA.impuestoPendiente
+                      : mostrarImporte({
+                          amount: vista.data.tax_amount,
+                          currency: vista.data.currency,
+                        })}
+                  </dd>
+                  {vista.data.total_amount !== null && (
+                    <>
+                      <dt className="font-medium">{FILAS_VISTA_LLEGADA.total}</dt>
+                      <dd className="text-right font-medium tabular-nums">
+                        {mostrarImporte({
+                          amount: vista.data.total_amount,
+                          currency: vista.data.currency,
+                        })}
+                      </dd>
+                    </>
+                  )}
+                </dl>
+              )}
+            </Card>
+          )}
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={atras}>
               Atrás
             </Button>
             <Button
               variant="primary"
-              disabled={registrar.isPending || depositoElegido === null}
-              onClick={() => registrar.mutate(false)}
+              disabled={
+                registrar.isPending ||
+                depositoElegido === null ||
+                (origen === "proveedor" && !vista.isSuccess)
+              }
+              onClick={() => registrar.mutate(null)}
             >
               {registrar.isPending ? "Registrando…" : "Sí, registrar la llegada"}
             </Button>
@@ -1185,12 +1350,15 @@ export function LlegoMercancia(): React.JSX.Element {
         </div>
       )}
 
+      {revisar !== null && (
+        <RevisaIntentoAnterior error={revisar} a="/compras" etiqueta="Ver las compras" />
+      )}
       {sinSaldo !== null && (
         <ConfirmarSobregiro
           mensaje={sinSaldo}
           onCancelar={() => setSinSaldo(null)}
-          onConfirmar={async () => {
-            await registrar.mutateAsync(true);
+          onConfirmar={async (porQue) => {
+            await registrar.mutateAsync(porQue);
             setSinSaldo(null);
           }}
         />

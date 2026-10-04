@@ -23,7 +23,7 @@ Usa la skill `adr` de Claude Code.
 | [0015](adr/ADR-0015-zod-schemas-compartidos.md) | Zod como definición única | Aceptado | NO |
 | [0016](adr/ADR-0016-testing.md) | Estrategia de pruebas por capa, TDD en dominio financiero | Aceptado | SÍ |
 | [0017](adr/ADR-0017-observabilidad.md) | OpenTelemetry + logs estructurados | Aceptado | NO |
-| [0018](adr/ADR-0018-idempotencia.md) | Idempotencia obligatoria por clave | Aceptado | SÍ |
+| [0018](adr/ADR-0018-idempotencia.md) | Idempotencia obligatoria por clave (enmendado por ADR-0076: BODY_MISMATCH, llave por intento) | Aceptado | SÍ |
 | [0019](adr/ADR-0019-migraciones-expand-contract.md) | Expand/contract, nunca destructivo en un paso | Aceptado | SÍ |
 | [0020](adr/ADR-0020-multimoneda.md) | Multimoneda con moneda funcional y trazabilidad de tasa | Aceptado | SÍ |
 | [0021](adr/ADR-0021-fronteras-dependency-cruiser.md) | Fronteras con dependency-cruiser; `core` como kernel; `money/format` como subpath | Aceptado | NO |

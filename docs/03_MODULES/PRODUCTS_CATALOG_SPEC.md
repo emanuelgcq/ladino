@@ -121,8 +121,8 @@ Migraciones: `20260928140100_product_import_jobs_review.sql` y
 - **H4: `POST /v1/products/import/jobs` exige y honra `Idempotency-Key`.**
   - El hash de la petición es canónico: sha256 del archivo más `number_format`, no el multipart crudo
     con su boundary. Lo hace el middleware con la opción `canonicalHash`.
-  - La misma llave con otro archivo da 409 `IDEMPOTENCY_KEY_REUSED` (el código que ya existe; no se
-    inventó uno nuevo).
+  - La misma llave con otro archivo da 409 `IDEMPOTENCY_BODY_MISMATCH` (ADR-0076; antes
+    `IDEMPOTENCY_KEY_REUSED`, que queda para la misma llave en otro endpoint).
   - La web usa una llave por intento de «Confirmar»: se conserva ante un fallo de red y se estrena
     tras un 4xx.
 - **H5:** la vista previa devuelve `warned_rows`, todas las filas con aviso, y la web las lista antes

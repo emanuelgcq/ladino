@@ -161,4 +161,30 @@ c.caso(
   },
 );
 
+// C-09 (ola 3): la foto se autoriza (permiso y producto) ANTES de procesarla y subirla.
+c.caso(
+  "C-09",
+  "foto a un producto inventado: cajero → 403 y dueño → 404, antes del almacenamiento",
+  async () => {
+    const { pedir } = await import("./_app.mjs");
+    const inventado = crypto.randomUUID();
+    const cajero = await pedir(
+      PERSONAS.cajero,
+      "E2",
+      "POST",
+      `/v1/products/${inventado}/image`,
+      {},
+    );
+    afirmar(cajero.status === 403, `cajero: esperaba 403, llegó ${cajero.status}`);
+    const dueno = await pedir(
+      PERSONAS.duenoE2E3,
+      "E2",
+      "POST",
+      `/v1/products/${inventado}/image`,
+      {},
+    );
+    afirmar(dueno.status === 404, `dueño: esperaba 404, llegó ${dueno.status}`);
+  },
+);
+
 export default c.correr;

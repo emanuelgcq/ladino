@@ -5,6 +5,8 @@ import {
   isPersistableAsNumeric,
   parseDecimal,
   roundForCost,
+  CENTS_POLICY,
+  toCents,
   type CurrencyCode,
   type Decimal,
   type MoneyError,
@@ -26,7 +28,11 @@ import {
  *     criterio «costeo reproducible» de INVENTORY_SPEC);
  *   · el promedio se recalcula en cada entrada, y el costo unitario RESULTANTE se proyecta a
  *     8 decimales con `roundForCost` bajo la política de abajo, que se persiste con el
- *     movimiento (ADR-0024).
+ *     movimiento (ADR-0024);
+ *   · EL VALOR de cada movimiento va AL CÉNTIMO, half-up (ADR-0075 §7): el costo de una salida,
+ *     el de un ajuste y el de una entrada se redondean a 2 al escribirse, así que el valor
+ *     acumulado es la suma de importes al céntimo y el asiento usa ese mismo valor. Solo el
+ *     costo unitario y el promedio siguen con 8.
  *
  * El método es DATO en la configuración de la empresa (`inventory_settings.costing_method`);
  * hoy solo existe uno. Añadir FIFO es añadir un módulo aquí, no rehacer este.
@@ -242,18 +248,22 @@ export function receive(
   if (cost.isNegative()) {
     return err({ code: "MONEY", message: "El costo de una entrada no puede ser negativo." });
   }
-  return finish(position, quantity, cost);
+  // ADR-0075 §7: el valor del movimiento se escribe al céntimo, half-up.
+  const alCentimo = Money.of(toCents(cost.amount).toFixed(2), cost.currency);
+  if (!alCentimo.ok) return err(money(alCentimo.error));
+  return finish(position, quantity, alCentimo.value);
 }
 
 /**
  * Costo de una SALIDA de `quantity` unidades desde `position`, exacto y con la regla de
  * ADR-0034 §Costeo:
- *   · 0 < q < existencia: round8(valor × q / existencia);
+ *   · 0 < q < existencia: al céntimo, half-up, de (valor × q / existencia);
  *   · q = existencia: TODO el valor (la posición cierra en cero exacto, sin residuo);
- *   · q > existencia > 0: todo el valor + round8((q − existencia) × promedio) — la parte que
- *     deja la posición en negativo se valora al promedio vigente;
- *   · sin promedio significativo (existencia ≤ 0, o valor < 0): round8(q × lastUnitCost).
- * El esquema verifica esta misma regla con multiplicaciones exactas (LAD41).
+ *   · q > existencia > 0: todo el valor + al céntimo de ((q − existencia) × promedio) — la parte
+ *     que deja la posición en negativo se valora al promedio vigente;
+ *   · sin promedio significativo (existencia ≤ 0, o valor < 0): al céntimo de (q × lastUnitCost).
+ * «Al céntimo» es CENTS_POLICY (ADR-0075 §7); antes era round8. El esquema verifica esta misma
+ * regla con multiplicaciones exactas y tolerancia de medio céntimo (LAD41).
  */
 export function issueCost(
   position: StockPosition,
@@ -277,8 +287,12 @@ export function issueCost(
   return ok(total.value);
 }
 
+/**
+ * El VALOR de un movimiento, al céntimo half-up (ADR-0075 §7). Antes iba a los 8 decimales de
+ * COST_ROUNDING_POLICY, y esos decimales llegaban al mayor y a «Lo que gané» (P-01, K-08).
+ */
 function round(value: ExactMoney): Result<Money, InventoryError> {
-  const r = roundForCost(value, COST_ROUNDING_POLICY);
+  const r = roundForCost(value, CENTS_POLICY);
   if (!r.ok) return err(money(r.error));
   return ok(r.value.value);
 }

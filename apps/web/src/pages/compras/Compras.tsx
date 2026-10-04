@@ -1225,7 +1225,8 @@ function CuentasPorPagar(): React.JSX.Element {
                               })}
                             </TDNum>
                             <TDNum>
-                              {f.balance !== undefined
+                              {/* null: factura sin asentar (borrador o anulada). */}
+                              {f.balance !== undefined && f.balance !== null
                                 ? mostrarImporte({
                                     amount: f.balance,
                                     currency: f.transaction_currency,

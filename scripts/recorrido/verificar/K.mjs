@@ -117,4 +117,165 @@ c.caso(
   },
 );
 
+// ── ADR-0077 §3 (K-09): la rama «te invitaron» ───────────────────────────────────────────────────
+// Escribe UNA invitación pendiente en E2 (no se acepta: el escenario no cambia de miembros).
+c.caso(
+  "K-09",
+  "el dueño de E2 invita y quien abre el enlace ve «Te invitaron a <empresa>» con su oficio",
+  async () => {
+    const inv = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/invitations", {
+      company_id: EMPRESAS.E2,
+      role_key: "accountant",
+    });
+    afirmar(inv.status === 201, `POST /v1/invitations dio ${inv.status}`);
+    afirmar(/^[0-9a-f]{64}$/.test(inv.json?.token ?? ""), "el token no tiene forma");
+    const v = await pedir(PERSONAS.contador, null, "POST", "/v1/invitations/preview", {
+      token: inv.json.token,
+    });
+    afirmar(v.status === 200, `preview dio ${v.status}`);
+    afirmar(
+      v.json.status === "pending" && v.json.role_key === "accountant",
+      JSON.stringify(v.json),
+    );
+    const [e] = await sql`select coalesce(trade_name, legal_name) as n from public.companies
+                           where id = ${EMPRESAS.E2}`;
+    afirmar(v.json.company_name === e.n, `empresa: ${v.json.company_name}`);
+  },
+);
+
+// K-08 (ola 3, ADR-0075 §7): los estados financieros de E2 llegan al céntimo y la regularización
+// dejó su acta y su cuenta.
+c.caso("K-08", "estado de resultados y balance de E2: todo importe con dos decimales", async () => {
+  const [d] = await sql`select (now() at time zone 'America/Caracas')::date::text as hoy`;
+  const er = await pedir(
+    PERSONAS.duenoE2E3,
+    "E2",
+    "GET",
+    `/v1/accounting/reports/income-statement?from=2026-01-01&to=${d.hoy}`,
+  );
+  const bs = await pedir(
+    PERSONAS.duenoE2E3,
+    "E2",
+    "GET",
+    `/v1/accounting/reports/balance-sheet?date=${d.hoy}`,
+  );
+  afirmar(er.status === 200 && bs.status === 200, `estados: ${er.status} / ${bs.status}`);
+  const malos = [];
+  const mirar = (o, ruta) => {
+    if (typeof o === "string" && /^-?\d+\.\d+$/.test(o) && !/^-?\d+\.\d{2}$/.test(o)) {
+      malos.push(`${ruta}=${o}`);
+    } else if (o && typeof o === "object") {
+      for (const [k, v] of Object.entries(o)) mirar(v, `${ruta}.${k}`);
+    }
+  };
+  mirar(er.json, "er");
+  mirar(bs.json, "bs");
+  afirmar(malos.length === 0, malos.slice(0, 5).join(", "));
+});
+c.caso("K-08", "E2 tiene el acta de la regularización del céntimo y la cuenta 5.1.10", async () => {
+  const [f] = await sql`
+    select (select count(*)::int from public.audit_events
+             where company_id = ${EMPRESAS.E2}
+               and event_type = 'accounting.cent_regularized') as actas,
+           (select count(*)::int from public.company_account_settings s
+              join public.accounts a on a.id = s.account_id
+             where s.company_id = ${EMPRESAS.E2} and s.purpose = 'rounding_difference'
+               and a.code = '5.1.10') as cuenta`;
+  afirmar(f.actas >= 1, `actas: ${f.actas}`);
+  afirmar(f.cuenta === 1, `cuenta 5.1.10: ${f.cuenta}`);
+});
+
+// Revisión de la ola 3 (migraciones 20261003190000 y 190100): el céntimo no tiene excepciones.
+c.caso(
+  "K-08",
+  "un asiento manual con más de dos decimales → 422 «llevan como máximo dos decimales»",
+  async () => {
+    const [d] = await sql`select (now() at time zone 'America/Caracas')::date::text as hoy`;
+    const cuentas = await sql`
+      select code, id from public.accounts
+       where company_id = ${E2} and code in ('1.1.03', '4.1.01')`;
+    afirmar(cuentas.length === 2, "E2 no tiene las cuentas 1.1.03 y 4.1.01 del plan");
+    const de = (codigo) => cuentas.find((x) => x.code === codigo).id;
+    const r = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/journal-entries", {
+      company_id: E2,
+      posting_date: d.hoy,
+      description: "Recorrido K-08: un asiento a 8 decimales",
+      lines: [
+        { account_id: de("1.1.03"), debit: "10.12345678" },
+        { account_id: de("4.1.01"), credit: "10.12345678" },
+      ],
+    });
+    afirmar(r.status === 422, `esperaba 422, llegó ${r.status}`);
+    afirmar(
+      JSON.stringify(r.json).includes("como máximo dos decimales"),
+      `el mensaje no dice la regla: ${JSON.stringify(r.json).slice(0, 200)}`,
+    );
+  },
+);
+c.caso(
+  "K-08",
+  "libro de compras por alícuota: en cada renglón las alícuotas suman la base y el IVA, con su signo",
+  async () => {
+    const [f] = await sql`
+      select count(*)::int as renglones,
+             count(*) filter (where b.base_alicuota_general + b.base_alicuota_adicional
+                                    + b.base_alicuota_reducida + b.base_gravada_sin_alicuota
+                                    <> b.base_gravada
+                                 or b.iva_alicuota_general + b.iva_alicuota_adicional
+                                    + b.iva_alicuota_reducida + b.iva_sin_clasificar
+                                    <> b.iva_credito + b.iva_al_costo)::int as malos
+        from unnest(${Object.values(EMPRESAS)}::uuid[]) as e(id),
+             lateral platform.purchases_book_by_rate(e.id, '2026-01-01', '2026-12-31') b`;
+    afirmar(f.malos === 0, `${f.malos} de ${f.renglones} renglón(es) no cuadran por alícuota`);
+  },
+);
+c.caso(
+  "K-08",
+  "el crédito fiscal de la declaración es el del libro de compras, mes a mes; y al céntimo después del corte",
+  async () => {
+    const filas = await sql`
+      select e.id, m.desde::text as desde,
+             (select d.creditos from platform.recompute_iva_period(
+                e.id, m.desde, (m.desde + interval '1 month - 1 day')::date, 0, 0) d) as declarado,
+             coalesce((select sum(b.iva_credito)
+                         from platform.purchases_book(
+                           e.id, m.desde, (m.desde + interval '1 month - 1 day')::date) b
+                        where b.status <> 'ajuste_periodo_anterior'), 0) as libro,
+             -- 20261003190400: lo registrado ANTES del corte del céntimo se reproduce a 8
+             -- decimales; el mes del corte es mixto. Dos decimales se exigen en los meses
+             -- ENTEROS posteriores al corte (o en todos, si la empresa nunca regularizó).
+             coalesce(m.desde > platform.caracas_day(platform.cent_cutover_at(e.id)), true)
+               as posterior
+        from unnest(${Object.values(EMPRESAS)}::uuid[]) as e(id),
+             lateral (select make_date(2026, n, 1) as desde from generate_series(1, 12) n) m`;
+    const malas = filas.filter(
+      (x) =>
+        Number(x.declarado) !== Number(x.libro) ||
+        (x.posterior && !/^-?\d+(\.\d{2}0*)?$/.test(String(x.declarado))),
+    );
+    afirmar(
+      malas.length === 0,
+      malas
+        .slice(0, 3)
+        .map((x) => `${x.id} ${x.desde}: declarado ${x.declarado}, libro ${x.libro}`)
+        .join(" · "),
+    );
+  },
+);
+c.caso(
+  "AF3-13",
+  "una empresa sin RIF (PEND-) no tiene renglones en el libro de compras",
+  async () => {
+    const [f] = await sql`
+    select count(*)::int as empresas,
+           coalesce(sum((select count(*) from platform.purchases_book(
+                           c.id, '2026-01-01', '2026-12-31'))), 0)::int as renglones
+      from public.companies c
+     where upper(btrim(c.tax_id)) like 'PEND-%'
+       and exists (select 1 from public.supplier_invoices i
+                    where i.company_id = c.id and i.fiscal_support)`;
+    afirmar(f.renglones === 0, `${f.renglones} renglón(es) en ${f.empresas} empresa(s) sin RIF`);
+  },
+);
+
 export default c.correr;

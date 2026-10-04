@@ -27,7 +27,7 @@
 -- =============================================================================
 
 begin;
-select plan(72);
+select plan(73);
 
 -- ── Fixtures ─────────────────────────────────────────────────────────────────
 insert into auth.users (id) values ('aaaa0022-0000-4000-8000-0000000000a1');
@@ -90,11 +90,24 @@ select is((select tax_id from public.suppliers
             where id = 'aaaa0022-0000-4000-8000-00000000ba02'::uuid), null,
   'el proveedor extranjero no tiene RIF, y exigírselo sería inventarle identidad fiscal venezolana');
 
+-- D-04 (migración 20261003160000): el RIF ya no es obligatorio en el proveedor nacional; lo
+-- exige la factura con soporte fiscal (pgTAP 106). Lo que sigue obligatorio es su FORMA: tipo de
+-- persona y de contribuyente (suppliers_national_shape_chk). Antes esta aserción decía «un
+-- proveedor NACIONAL sin RIF se rechaza» y seguía en verde por esa otra CHECK.
 select throws_ok($$
   insert into public.suppliers (tenant_id, company_id, legal_name, supplier_kind)
   values ('aaaa0022-0000-4000-8000-00000000000a', 'aaaa0022-0000-4000-8000-0000000000a2',
-          'Nacional sin RIF', 'nacional')
-$$, '23514', null, 'un proveedor NACIONAL sin RIF se rechaza: no se puede llevar al libro de compras');
+          'Nacional sin clasificar', 'nacional')
+$$, '23514',
+  'new row for relation "suppliers" violates check constraint "suppliers_national_shape_chk"',
+  'un proveedor NACIONAL sin tipo de persona ni de contribuyente se rechaza, y por SU check');
+
+select lives_ok($$
+  insert into public.suppliers (tenant_id, company_id, legal_name, supplier_kind,
+                                person_type_code, taxpayer_type_code)
+  values ('aaaa0022-0000-4000-8000-00000000000a', 'aaaa0022-0000-4000-8000-0000000000a2',
+          'Nacional sin RIF', 'nacional', 'natural', 'no_contribuyente')
+$$, 'un proveedor NACIONAL sin RIF y con su forma válida entra (D-04): se le compra sin factura');
 
 select throws_ok($$
   insert into public.suppliers

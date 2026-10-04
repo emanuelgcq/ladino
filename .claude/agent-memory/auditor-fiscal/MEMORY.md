@@ -1,2 +1,2 @@
-- [Normas verificadas](normas_verificadas.md) — una linea por norma: PA 00071, RLIVA 72-78, PA 000013 (art. 1 sin mediacion bancaria), 000054 (arts. 2/3/5/7/16), 000091 (terminal discrepante), TXT v3, LIVA, UT; NO verificados
+- [Normas verificadas](normas_verificadas.md) — una linea por norma: PA 00071, RLIVA 72-78, PA 000013 (art. 1 sin mediacion bancaria), 000054 (arts. 2/3/5/7/16), 000091 (terminal discrepante), TXT v3, LIVA (4.3, 32, 50, 54), RLIVA 12-14/31/43 (retiros, faltantes), RLIVA 51 (diferencial = ND/NC), LIVA 25/23/36, COT 146, LISLR, BCV 21-08-01, UT; NO verificados
 - [Hook solo memoria](project_hook_solo_memoria.md) — auditor-fiscal no puede escribir en docs/; entregar texto listo en el informe

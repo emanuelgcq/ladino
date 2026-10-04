@@ -89,7 +89,10 @@ beforeAll(async () => {
   while ((await procesarLote(sqlWorker, new FakeTransmitter())).publicados > 0) {
     /* drenar */
   }
-});
+  // El drenado depende de cuánto dejaron los E2E de la API si corrieron antes (miles de eventos
+  // desde la ola 3): con los 10 s por omisión el hook moría por tiempo y el suite entero se
+  // saltaba (gate del 2026-10-04). El plazo es del drenado, no de ninguna aserción.
+}, 180_000);
 
 afterAll(async () => {
   await sql`delete from public.outbox where tenant_id = ${TENANT}`;

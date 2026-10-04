@@ -2,6 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { SignJWT } from "jose";
 import { createClient } from "@ladino/db";
 import { buildApp } from "../src/app.js";
+import { repairCents } from "@ladino/domain";
 import { diaCaracas } from "./_dia-caracas.js";
 
 /**
@@ -347,5 +348,92 @@ describe("K-05 · el inicio de actividades se corrige desde Mi empresa", () => {
        where aggregate_id = ${COMPANY} and event_type = 'company.profile_updated'
          and payload -> 'cambios' -> 'activity_start_date' ->> 'to' = '2024-11-01'`;
     expect(acta!.n).toBe(1);
+  });
+});
+
+describe("S1 · el cierre del ejercicio se arma al céntimo (ADR-0075 §7)", () => {
+  it("fracción heredada en 2024, regularización HOY, cierre de 2024: cierra, cuadra y cent_gaps = 0", async () => {
+    // EL CASO CRUZADO. El saldo que cierra el ejercicio está acotado al año; la regularización
+    // corrige el saldo de toda la vida con un asiento fechado hoy. La fracción vieja (2024) y la
+    // regularización (hoy) caen en ejercicios distintos: el saldo de 2024 de «Ventas» SIGUE
+    // trayendo fracción. Antes el cierre copiaba ese saldo a 8 decimales y moría en LAD71 con el
+    // mensaje del asiento manual, sin salida por la API.
+    const heredado = crypto.randomUUID();
+    await sql.begin(async (tx) => {
+      await tx`select set_config('ladino.actor_id', ${CONTADOR}, true)`;
+      await tx`select set_config('ladino.rules_version', 'e2e-cierre-heredado', true)`;
+      await tx`set constraints all immediate`;
+      // El ALTER TABLE de abajo pide un candado sobre la tabla: si otra sesión la tiene ocupada,
+      // falla en 4 s en vez de quedarse en la cola bloqueando a todo el que venga detrás.
+      await tx`set local lock_timeout = '4s'`;
+      await tx`
+        insert into public.journal_entries
+          (id, tenant_id, company_id, period_id, posting_date, source_kind, description,
+           rules_version)
+        values (${heredado}, ${TENANT}, ${COMPANY},
+                platform.period_for_date(${COMPANY}, '2024-11-15'::date), '2024-11-15', 'manual',
+                'Venta de 2024, anterior al céntimo (e2e)', 'e2e-cierre-heredado')`;
+      let n = 0;
+      for (const [codigo, debe, haber] of [
+        ["1.1.01", "10.126", "0"],
+        ["4.1.01", "0", "10.126"],
+      ] as const) {
+        n += 1;
+        await tx`
+          insert into public.journal_lines
+            (tenant_id, company_id, entry_id, line_number, account_id, debit_amount,
+             credit_amount, amount_transaction_currency, transaction_currency, fx_rate,
+             functional_amount, functional_currency, rate_source, rate_timestamp,
+             functional_debit, functional_credit)
+          values (${TENANT}, ${COMPANY}, ${heredado}, ${n}, ${cuenta[codigo]!}, ${debe}::numeric,
+                  ${haber}::numeric, 10.126, 'VES', 1, 10.126, 'VES', 'identidad', now(),
+                  ${debe}::numeric, ${haber}::numeric)`;
+      }
+      // El guarda que hoy lo impide (LAD71) se apaga SOLO dentro de esta transacción.
+      await tx`alter table public.journal_entries disable trigger journal_entries_02_balanced`;
+      await tx`
+        update public.journal_entries
+           set status = 'posted', posted_at = now(), posted_by = ${CONTADOR},
+               entry_number = platform.claim_entry_number(${COMPANY}, 2024)
+         where id = ${heredado}`;
+      await tx`alter table public.journal_entries enable trigger journal_entries_02_balanced`;
+    });
+    const regularizada = await sql.begin((tx) => repairCents(tx, COMPANY));
+    expect(regularizada.regularized).toBe(true);
+    // Lo que hace el caso: el saldo de Ventas ACOTADO A 2024 sigue con fracción.
+    const [del2024] = await sql<{ s: string }[]>`
+      select sum(jl.functional_credit - jl.functional_debit)::text as s
+        from public.journal_lines jl join public.journal_entries e on e.id = jl.entry_id
+       where jl.company_id = ${COMPANY} and jl.account_id = ${cuenta["4.1.01"]!}
+         and e.status in ('posted', 'reversed')
+         and e.posting_date between '2024-01-01' and '2024-12-31'`;
+    expect(del2024!.s).toBe("10.12600000");
+
+    const diciembre = await periodoDe("2024-12-15");
+    const cerrado = await pedir("POST", `/v1/fiscal-periods/${diciembre}/close`, {
+      company_id: COMPANY,
+    });
+    expect(cerrado.status, await cerrado.clone().text()).toBe(200);
+    const r = await pedir("POST", "/v1/fiscal-periods/year-end-close", {
+      company_id: COMPANY,
+      year: 2024,
+    });
+    expect(r.status, await r.clone().text()).toBe(201);
+    const cierre = (await r.json()) as { id: string };
+    const lineas = await sql<{ code: string; d: string; c: string }[]>`
+      select a.code, jl.functional_debit::text as d, jl.functional_credit::text as c
+        from public.journal_lines jl join public.accounts a on a.id = jl.account_id
+       where jl.entry_id = ${cierre.id} order by jl.line_number`;
+    // Ventas se cierra por su saldo del año AL CÉNTIMO (10,126 → 10,13) y el resultado pasa por
+    // 3.1.01 a 3.1.02 por ese mismo importe: cuadra por construcción.
+    expect(lineas).toEqual([
+      { code: "4.1.01", d: "10.13000000", c: "0.00000000" },
+      { code: "3.1.01", d: "0.00000000", c: "10.13000000" },
+      { code: "3.1.01", d: "10.13000000", c: "0.00000000" },
+      { code: "3.1.02", d: "0.00000000", c: "10.13000000" },
+    ]);
+    const [inv] = await sql<{ n: number }[]>`
+      select count(*)::int as n from platform.cent_gaps(${COMPANY})`;
+    expect(inv!.n).toBe(0);
   });
 });

@@ -1,7 +1,14 @@
 import { err, ok, type Result } from "@ladino/core";
 import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
-import { Money, parseDecimal, type Decimal, type RoundingPolicy } from "@ladino/money";
+import {
+  minorUnitsOf,
+  Money,
+  parseDecimal,
+  toCents,
+  type Decimal,
+  type RoundingPolicy,
+} from "@ladino/money";
 import {
   allocateLandedCost,
   computeRetention,
@@ -67,15 +74,37 @@ export type PurchaseError =
   | { code: "NEGATIVE_STOCK"; message: string }
   | { code: "OVER_INVOICED"; message: string }
   | { code: "INSUFFICIENT_FUNDS"; message: string }
+  // ADR-0075 §4 (regla 4): el pago que cierra dejaría un diferencial fuera del redondeo.
+  | { code: "SETTLEMENT_MISMATCH"; message: string }
   | { code: "APPEND_ONLY_VIOLATION"; message: string };
 
 const POLICY: RoundingPolicy = { id: "purchases:document:8:HALF_UP", scale: 8, mode: "HALF_UP" };
 const JURISDICTION = "VE";
 
+/** Una unidad mínima de la moneda (0,01 en VES y USD), para las cotas de redondeo. */
+function unidadMinimaDe(moneda: string): Decimal {
+  const escala = minorUnitsOf(moneda);
+  const u = parseDecimal(escala === 0 ? "1" : `0.${"0".repeat(escala - 1)}1`);
+  if (!u.ok) throw new Error(`unidad mínima de ${moneda} no interpretable`);
+  return u.value;
+}
+
 interface Contexto {
   readonly tenantId: string;
   readonly functionalCurrency: string;
 }
+
+/**
+ * D-04 (ola 3, migración 20261003160000): el proveedor sin RIF se guarda y se le compra sin
+ * factura; la compra CON factura lo exige, porque va al libro de compras y a la retención. El
+ * mismo mensaje sale del caso de uso y, si otro camino llegara a la base, del trigger (LAD96).
+ *
+ * AF3-14 (auditoría fiscal de la ola): el mensaje NO propone registrarla como «no va a haber
+ * factura». Esa salida sacaría del libro de compras una compra que SÍ trae factura solo porque al
+ * maestro le falta un dato que la factura lleva impreso. Lo que falta es el RIF, y eso se pide.
+ */
+const PROVEEDOR_SIN_RIF =
+  "Esta factura necesita el RIF del proveedor, que viene impreso en ella, y este proveedor está guardado sin RIF. Agrégalo como proveedor con su RIF y vuelve a registrar la factura.";
 
 function traducir(e: unknown): PurchaseError | null {
   const code = (e as { code?: string }).code;
@@ -86,6 +115,7 @@ function traducir(e: unknown): PurchaseError | null {
   if (code === "LAD06") return { code: "APPEND_ONLY_VIOLATION", message };
   if (code === "LAD67") return { code: "VALIDATION_FAILED", message };
   if (code === "LAD39") return { code: "NEGATIVE_STOCK", message };
+  if (code === "LAD96") return { code: "VALIDATION_FAILED", message: PROVEEDOR_SIN_RIF };
   if (code === "23505") {
     return {
       code: "DUPLICATE",
@@ -157,6 +187,17 @@ async function tasaA(
   const d = parseDecimal(t.rate);
   if (!d.ok) return err({ code: "VALIDATION_FAILED", message: d.error.message });
   return ok({ rate: d.value, source: t.source ?? "manual" });
+}
+
+/** Lo mismo que `aFuncional`, al céntimo half-up (ADR-0075 §7): lo que sale de una caja. */
+function aFuncionalAlCentimo(
+  m: Money,
+  tasa: Decimal,
+  funcional: string,
+): Result<Money, PurchaseError> {
+  const c = Money.of(toCents(m.multiply(tasa).amount).toFixed(2), funcional);
+  if (!c.ok) return err({ code: "VALIDATION_FAILED", message: c.error.message });
+  return ok(c.value);
 }
 
 function aFuncional(m: Money, tasa: Decimal, funcional: string): Result<Money, PurchaseError> {
@@ -272,19 +313,14 @@ export async function createSupplier(
   if (!ctx.ok) return ctx;
 
   const extranjero = input.supplier_kind === "extranjero";
-  // La forma fiscal la impone el esquema con dos CHECK; aquí se traduce a un
-  // mensaje que dice QUÉ falta, en vez de dejar salir un 23514 opaco.
-  if (!extranjero && (input.tax_id ?? null) === null) {
-    return err({
-      code: "VALIDATION_FAILED",
-      message:
-        "Un proveedor nacional necesita RIF: sin él no se puede llevar al libro de compras ni practicarle retención.",
-    });
-  }
+  // D-04 (ola 3): el proveedor nacional SIN RIF se guarda —«Cédula o RIF: puede quedar vacío»—
+  // y se le compra sin factura. La compra CON factura es la que exige el RIF (libro y retención),
+  // y la exige `registerSupplierInvoice` con el trigger LAD96 detrás.
+  const sinRif = !extranjero && (input.tax_id ?? null) === null;
   // El RIF del proveedor nacional: estructura validada y NORMALIZADO (A-08, P-02); el dígito
   // verificador que no cuadra se acepta y queda en la auditoría.
   let documento: DocumentoLeido | null = null;
-  if (!extranjero) {
+  if (!extranjero && !sinRif) {
     const leido = validarRif(input.tax_id!);
     if (!leido.ok) return leido;
     documento = leido.value;
@@ -298,6 +334,12 @@ export async function createSupplier(
   // VALIDAR-SENIAT: un proveedor formal o especial se corrige en su ficha.
   let personType = input.person_type_code ?? null;
   let taxpayerType = input.taxpayer_type_code ?? null;
+  // Sin RIF no hay inscripción: persona natural y no contribuyente, salvo que se diga otra cosa
+  // (decidido por criterio, ADR-0066 nota de la ola 3; la alternativa era pedirlos en la pantalla).
+  if (sinRif) {
+    personType ??= "natural";
+    taxpayerType ??= "no_contribuyente";
+  }
   if (!extranjero && (personType === null || taxpayerType === null)) {
     const inferida = clasificacionPorPrefijo(taxId);
     personType ??= inferida.persona;
@@ -837,8 +879,13 @@ export async function registerSupplierInvoice(
   if (!ctx.ok) return ctx;
 
   const [prov] = await sql<
-    { supplier_kind: string; taxpayer_type_code: string | null; person_type_code: string | null }[]
-  >`select supplier_kind, taxpayer_type_code, person_type_code from public.suppliers
+    {
+      supplier_kind: string;
+      taxpayer_type_code: string | null;
+      person_type_code: string | null;
+      tax_id: string | null;
+    }[]
+  >`select supplier_kind, taxpayer_type_code, person_type_code, tax_id from public.suppliers
      where id = ${input.supplier_id} and company_id = ${input.company_id}`;
   if (!prov) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
 
@@ -848,6 +895,12 @@ export async function registerSupplierInvoice(
    * por eso no se le pide identificación del emisor — no la hay.
    */
   const conSoporte = input.fiscal_support !== false;
+
+  // D-04: con factura, el proveedor nacional necesita RIF (libro de compras y retención). Va
+  // antes que todo lo demás: es lo primero que la persona tiene que corregir.
+  if (conSoporte && prov.supplier_kind === "nacional" && prov.tax_id === null) {
+    return err({ code: "VALIDATION_FAILED", message: PROVEEDOR_SIN_RIF });
+  }
 
   // La identificación del emisor: o control (nacional) o referencia (extranjero). Se exige a lo
   // que VA AL LIBRO, que es el motivo con el que se escribió esta regla.
@@ -887,7 +940,10 @@ export async function registerSupplierInvoice(
   // El tipo VIGENTE EN LA FECHA DE LA FACTURA, por la única lectura (ADR-0072 §1): una compra
   // fechada antes de un cambio se lee con el tipo de entonces.
   const tipoEmpresa = await tipoVigente(sql, input.company_id, input.invoice_date);
-  if (tipoEmpresa === null) {
+  // D-01 (ola 3): el tipo decide si el IVA de la factura es crédito o costo, así que solo hace
+  // falta CON factura. Sin soporte fiscal no hay IVA que discriminar —lo pagado es el costo— y
+  // exigirlo dejaba sin comprar a quien todavía no lo declaró (y sin salida a la empresa sin RIF).
+  if (tipoEmpresa === null && conSoporte) {
     return err({
       code: "VALIDATION_FAILED",
       message:
@@ -1492,6 +1548,8 @@ async function revalorizarContraRecepcion(
       lot_id: string | null;
       warehouse_id: string;
       en_stock: string;
+      q_previa: string;
+      costo_previo: string;
     }[]
   >`select il.quantity::text as quantity, il.line_subtotal_transaction::text as subtotal,
            il.tax_amount::text as tax, rl.quantity::text as recibida,
@@ -1500,10 +1558,23 @@ async function revalorizarContraRecepcion(
            coalesce((select b.quantity from public.stock_balances b
                       where b.company_id = ${d.companyId} and b.warehouse_id = gr.warehouse_id
                         and b.product_id = rl.product_id
-                        and b.lot_id is not distinct from rl.lot_id), 0)::text as en_stock
+                        and b.lot_id is not distinct from rl.lot_id), 0)::text as en_stock,
+           -- C8: lo que OTRAS facturas vigentes ya facturaron de esta misma línea de recepción
+           -- (cantidad, y costo al céntimo a la tasa de cada una).
+           coalesce(prev.q, 0)::text as q_previa, coalesce(prev.costo, 0)::text as costo_previo
       from public.supplier_invoice_lines il
       join public.goods_receipt_lines rl on rl.id = il.goods_receipt_line_id
       join public.goods_receipts gr on gr.id = rl.goods_receipt_id
+      left join lateral (
+        select sum(il2.quantity) as q,
+               sum(round((case when i2.tax_is_recoverable then il2.line_subtotal_transaction
+                               else il2.line_subtotal_transaction + il2.tax_amount end)
+                         * i2.fx_rate, 2)) as costo
+          from public.supplier_invoice_lines il2
+          join public.supplier_invoices i2 on i2.id = il2.supplier_invoice_id
+         where il2.goods_receipt_line_id = rl.id and il2.company_id = ${d.companyId}
+           and i2.id <> ${d.facturaId} and i2.status in ('posted', 'paid')
+      ) prev on true
      where il.supplier_invoice_id = ${d.facturaId} and il.company_id = ${d.companyId}
      order by il.line_number`;
   if (lineas.length === 0) return ok(true);
@@ -1519,23 +1590,60 @@ async function revalorizarContraRecepcion(
     const qr = parseDecimal(l.recibida);
     const vr = parseDecimal(l.valor_recibido);
     const st = parseDecimal(l.en_stock);
-    if (!q.ok || !sub.ok || !tax.ok || !qr.ok || !vr.ok || !st.ok || qr.value.isZero()) {
+    const qPrev = parseDecimal(l.q_previa);
+    const cPrev = parseDecimal(l.costo_previo);
+    if (
+      !q.ok ||
+      !sub.ok ||
+      !tax.ok ||
+      !qr.ok ||
+      !vr.ok ||
+      !st.ok ||
+      !qPrev.ok ||
+      !cPrev.ok ||
+      qr.value.isZero()
+    ) {
       return err({
         code: "VALIDATION_FAILED",
         message: "Datos de la recepción no interpretables.",
       });
     }
     const costoTxn = d.ivaRecuperable ? sub.value : sub.value.plus(tax.value);
-    const costoFunc = costoTxn.times(d.tasa).toDecimalPlaces(8, 4);
-    const recibidoFacturado = vr.value.times(q.value).dividedBy(qr.value).toDecimalPlaces(8, 4);
-    const diferencia = costoFunc.minus(recibidoFacturado);
+    // C5: UN solo redondeo, de lo exacto al céntimo. Antes iba a 8 decimales y de ahí al
+    // céntimo, mientras el acumulado previo de la misma línea sale de SQL con round(x × tasa, 2)
+    // directo: en el borde (10,004999995 → 10,00500000 → 10,01) esta factura se medía con 10,01
+    // y la siguiente la veía como 10,00.
+    const costoFunc = toCents(costoTxn.times(d.tasa));
+    // C8 (revisión de la ola 3): LA DIFERENCIA SE MIDE CONTRA EL ACUMULADO DE LA LÍNEA. Con
+    // facturación parcial (100,00 recibido por 3 unidades, tres facturas de 33,33) cada factura
+    // difería de su tercio en −0,0033, que al céntimo es cero, y «mercancía recibida por
+    // facturar» se quedaba con 0,01 para siempre. Ahora la diferencia de esta factura es lo
+    // acumulado hasta ella menos lo acumulado hasta la anterior, y la que CIERRA la línea
+    // (cantidad facturada ≥ recibida) compara contra el valor recibido ENTERO, al céntimo, que es
+    // lo que el kardex y el puente recibieron: se lleva el residuo.
+    const recibidoHasta = (qAcum: Decimal): Decimal =>
+      qAcum.greaterThanOrEqualTo(qr.value)
+        ? toCents(vr.value)
+        : vr.value.times(qAcum).dividedBy(qr.value).toDecimalPlaces(8, 4);
+    const diferenciaHasta = (costoAcum: Decimal, qAcum: Decimal): Decimal =>
+      toCents(costoAcum.minus(recibidoHasta(qAcum)));
+    // ADR-0075 §7: la diferencia se mide AL CÉNTIMO. Una diferencia de menos de medio céntimo
+    // no es un hecho contable: antes se escribía a 8 decimales, y con el asiento al céntimo sus
+    // líneas quedaban en cero y el hecho se encolaba para siempre («no produjo dos líneas»).
+    // Lo que sí es céntimo se reparte entero entre kardex (inv) y variación (vari = dif − inv):
+    // si la parte del kardex redondea a cero, todo va a variación; nada se omite.
+    const diferencia = diferenciaHasta(
+      cPrev.value.plus(costoFunc),
+      qPrev.value.plus(q.value),
+    ).minus(qPrev.value.isZero() ? cero.value : diferenciaHasta(cPrev.value, qPrev.value));
     if (diferencia.isZero()) continue;
     const queda = st.value.isNegative()
       ? cero.value
       : st.value.greaterThan(q.value)
         ? q.value
         : st.value;
-    const inv = diferencia.times(queda).dividedBy(q.value).toDecimalPlaces(8, 4);
+    // ADR-0075 §7: lo que va al kardex va al céntimo, y el asiento suma ESOS céntimos.
+    const inv = toCents(diferencia.times(queda).dividedBy(q.value));
     const vari = diferencia.minus(inv);
     if (!inv.isZero()) {
       const mov = await revalorizar(sql, d.tenantId, {
@@ -2240,8 +2348,9 @@ export async function registerSupplierPayment(
   if (!ctx.ok) return ctx;
 
   const [factura] = await sql<
-    { supplier_id: string; status: string; transaction_currency: string }[]
-  >`select supplier_id, status, transaction_currency from public.supplier_invoices
+    { supplier_id: string; status: string; transaction_currency: string; fx_rate: string }[]
+  >`select supplier_id, status, transaction_currency, fx_rate::text as fx_rate
+       from public.supplier_invoices
      where id = ${input.supplier_invoice_id} and company_id = ${input.company_id}
      for update`;
   // `for update`: dos pagos simultáneos del mismo saldo pasaban ambos el tope
@@ -2253,15 +2362,25 @@ export async function registerSupplierPayment(
       message: `Solo se paga una factura asentada; esta está en ${factura.status}.`,
     });
   }
-  // El saldo de la factura vive en SU moneda (`supplier_invoice_balance` resta los pagos sin
-  // convertir): un pago en otra moneda lo dejaba mal — 100 Bs «pagaban» una factura de
-  // USD 100 (revisión fiscal de la migración 65). Mientras no exista el pago cruzado con su
-  // conversión, se paga en la moneda en que se facturó.
-  if (input.currency !== factura.transaction_currency) {
-    return err({
-      code: "VALIDATION_FAILED",
-      message: `La factura está en ${factura.transaction_currency} y el pago en ${input.currency}: por ahora el pago se registra en la moneda de la factura.`,
-    });
+  /**
+   * EL PAGO CRUZADO (ADR-0075 §3, D-02). El saldo de la factura vive en SU moneda, y un pago en
+   * otra se convierte a la tasa BCV del día del pago — nunca se resta sin convertir (100 Bs
+   * «pagaban» una factura de USD 100: revisión fiscal de la migración 65). Dos formas de decirlo:
+   *   · `currency` es la de la factura y la cuenta elegida vive en otra moneda: `gross_amount`
+   *     es lo que se CANCELA, y de la cuenta sale su equivalente a la tasa del día
+   *     («pagué la factura en dólares desde el banco en bolívares»);
+   *   · `currency` es otra moneda: `gross_amount` es el DINERO que salió, y cancela su
+   *     equivalente en la moneda de la factura.
+   * La fila del pago va siempre en la moneda del dinero (la de la cuenta: LAD67); lo cancelado
+   * va aparte, en `settled_amount`, en la moneda de la factura.
+   */
+  const monedaFactura = factura.transaction_currency;
+  let monedaDinero = input.currency;
+  if (input.account_id !== undefined && input.currency === monedaFactura) {
+    const [c] = await sql<{ currency: string }[]>`
+      select currency from public.company_accounts
+       where id = ${input.account_id} and company_id = ${input.company_id}`;
+    if (c) monedaDinero = c.currency;
   }
 
   // Cuenta bancaria: si se indica, tiene que estar APROBADA (SUPPLIERS_SPEC).
@@ -2280,27 +2399,145 @@ export async function registerSupplierPayment(
   }
 
   const fecha = input.paid_at ?? new Date().toISOString();
+  // La tasa del DINERO que sale, del día del pago; y, si el pago es cruzado, la de la moneda de
+  // la factura ese mismo día.
   const tasa = await tasaA(
     sql,
     input.company_id,
-    input.currency,
+    monedaDinero,
     ctx.value.functionalCurrency,
     fecha,
   );
   if (!tasa.ok) return tasa;
+  const cruzado = monedaDinero !== monedaFactura;
+  const tasaFacturaHoy = cruzado
+    ? await tasaA(sql, input.company_id, monedaFactura, ctx.value.functionalCurrency, fecha)
+    : tasa;
+  if (!tasaFacturaHoy.ok) return tasaFacturaHoy;
 
-  const bruto = Money.of(input.gross_amount, input.currency);
-  if (!bruto.ok) return err({ code: "VALIDATION_FAILED", message: bruto.error.message });
-  const [saldoAntes] = await sql<{ s: string }[]>`
+  const declarado = Money.of(input.gross_amount, input.currency);
+  if (!declarado.ok) return err({ code: "VALIDATION_FAILED", message: declarado.error.message });
+  const tasaRegistro = parseDecimal(factura.fx_rate);
+  if (!tasaRegistro.ok) {
+    return err({ code: "VALIDATION_FAILED", message: tasaRegistro.error.message });
+  }
+  // El saldo en la moneda de la factura y lo que el MAYOR todavía le carga en cuentas por pagar
+  // (si la factura o algo de lo que la salda está en la cola, lo mismo calculado desde las
+  // filas). Con ellos van lo que la regla 4 necesita: líneas, pagos previos y lo que las notas
+  // de crédito del proveedor bajaron a OTRA tasa que la de la factura.
+  const [antes] = await sql<
+    {
+      s: string | null;
+      mayor: string | null;
+      calculado: string | null;
+      lineas: number;
+      pagos: number;
+      notas: string;
+    }[]
+  >`
     select platform.supplier_invoice_balance(${input.company_id},
-           ${input.supplier_invoice_id})::text as s`;
-  const saldo = parseDecimal(saldoAntes?.s ?? "0");
-  if (saldo.ok && bruto.value.amount.greaterThan(saldo.value)) {
+             ${input.supplier_invoice_id})::text as s,
+           platform.settlement_ledger_open(
+             ${input.company_id}, 'ap', ${input.supplier_invoice_id})::text as mayor,
+           (select round(i.functional_amount, 2) - coalesce(i.retention_total, 0)
+                   - coalesce((select sum(p.functional_amount - p.exchange_difference)
+                                 from public.supplier_payments p
+                                where p.supplier_invoice_id = i.id), 0)
+                   - coalesce((select sum(n.functional_amount)
+                                 from public.supplier_credit_notes n
+                                where n.supplier_invoice_id = i.id and n.status = 'posted'), 0)
+              from public.supplier_invoices i
+             where i.id = ${input.supplier_invoice_id})::text as calculado,
+           (select count(*)::int from public.supplier_invoice_lines l
+             where l.supplier_invoice_id = ${input.supplier_invoice_id}) as lineas,
+           (select count(*)::int from public.supplier_payments p
+             where p.supplier_invoice_id = ${input.supplier_invoice_id}) as pagos,
+           (select coalesce(sum(n.total_amount * i.fx_rate - n.functional_amount), 0)
+              from public.supplier_credit_notes n
+              join public.supplier_invoices i on i.id = n.supplier_invoice_id
+             where n.supplier_invoice_id = ${input.supplier_invoice_id}
+               and n.status = 'posted')::text as notas`;
+  const saldo = parseDecimal(antes?.s ?? "0");
+  const quedaLeida = parseDecimal(antes?.mayor ?? antes?.calculado ?? "");
+  const queda = quedaLeida.ok ? quedaLeida.value : null;
+  /**
+   * UN SOLO TOTAL (ADR-0063 §1; ADR-0075, nota «el cobro y el cierre», reglas 2 y 3). A LA TASA
+   * DE LA FACTURA, lo que se debe en moneda funcional es lo que el mayor carga, y el pago
+   * cruzado salda en PROPORCIÓN: pagar esa cifra cancela el saldo en divisa exacto, sin
+   * diferencial. A otra tasa, la conversión del día.
+   */
+  const notasLeidas = parseDecimal(antes?.notas ?? "0");
+  const notas = notasLeidas.ok ? notasLeidas.value : null;
+  // La cota del redondeo (regla 4), a una tasa: por línea, media unidad mínima de la divisa ×
+  // tasa + un céntimo (cubre el redondeo de `retention_total / fx_rate` al céntimo de la
+  // divisa); más la media unidad del pago que cierra, y un céntimo por pago.
+  const cota = (tasaMayor: Decimal): Decimal => {
+    const media = unidadMinimaDe(monedaFactura).dividedBy(2).times(tasaMayor);
+    const centimo = unidadMinimaDe(ctx.value.functionalCurrency);
+    return media
+      .plus(centimo)
+      .times(Math.max(antes?.lineas ?? 1, 1))
+      .plus(media)
+      .plus(centimo.times((antes?.pagos ?? 0) + 1));
+  };
+  // Al mayor se le cree como «lo que se debe en Bs» solo si cuadra con el saldo en divisa a la
+  // tasa de la factura dentro del redondeo; si no, se convierte a la tasa y el cierre falla.
+  const proporcion =
+    cruzado &&
+    monedaDinero === ctx.value.functionalCurrency &&
+    tasaFacturaHoy.value.rate.equals(tasaRegistro.value) &&
+    saldo.ok &&
+    saldo.value.greaterThan(0) &&
+    queda !== null &&
+    queda.greaterThan(0) &&
+    notas !== null &&
+    queda
+      .minus(saldo.value.times(tasaRegistro.value).plus(notas))
+      .abs()
+      .lessThanOrEqualTo(cota(tasaRegistro.value))
+      ? { saldo: saldo.value, queda }
+      : null;
+  // `bruto`: el dinero que sale, en su moneda. `saldado`: lo que cancela, en la de la factura.
+  let saldado = declarado.value.amount;
+  let brutoTexto = declarado.value.toAmountString();
+  if (cruzado && input.currency === monedaFactura) {
+    const escala = minorUnitsOf(monedaDinero);
+    brutoTexto = (
+      proporcion !== null
+        ? proporcion.queda.times(declarado.value.amount).dividedBy(proporcion.saldo)
+        : declarado.value.amount.times(tasaFacturaHoy.value.rate).dividedBy(tasa.value.rate)
+    )
+      .toDecimalPlaces(escala, 4)
+      .toFixed(8);
+  } else if (cruzado) {
+    saldado = (
+      proporcion !== null
+        ? proporcion.saldo.times(declarado.value.amount).dividedBy(proporcion.queda)
+        : declarado.value.amount.times(tasa.value.rate).dividedBy(tasaFacturaHoy.value.rate)
+    ).toDecimalPlaces(8, 4);
+  }
+  const bruto = Money.of(brutoTexto, monedaDinero);
+  if (!bruto.ok) return err({ code: "VALIDATION_FAILED", message: bruto.error.message });
+  if (!bruto.value.amount.greaterThan(0) || !saldado.greaterThan(0)) {
     return err({
       code: "VALIDATION_FAILED",
-      message: `El pago (${bruto.value.toAmountString()}) supera el saldo pendiente de la factura (${saldo.value.toFixed()}).`,
+      message: "El pago convertido a la tasa del día no llega a un céntimo.",
     });
   }
+  // El tope. En la moneda de la factura es exacto, como siempre. Cruzado, la conversión del
+  // dinero real (céntimos) no cae exacta: se tolera medio céntimo de la moneda de la factura.
+  const holgura = parseDecimal(cruzado && input.currency !== monedaFactura ? "0.005" : "0");
+  if (saldo.ok && holgura.ok && saldado.minus(saldo.value).greaterThan(holgura.value)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `El pago (${saldado.toDecimalPlaces(2, 4).toFixed(2)} ${monedaFactura}) supera el saldo pendiente de la factura (${saldo.value.toFixed()}).`,
+    });
+  }
+  // El pago que CIERRA salda exactamente lo que faltaba (ADR-0075 §4): ni polvo de conversión
+  // en el saldo, ni una factura «pagada» que debe 0,003.
+  const cierra =
+    saldo.ok && holgura.ok && saldo.value.minus(saldado).abs().lessThanOrEqualTo(holgura.value);
+  if (cierra && saldo.ok) saldado = saldo.value;
 
   /**
    * LA RETENCIÓN YA ESTÁ PRACTICADA (ADR-0065 §3, migración 68). Se calculó y se asentó al
@@ -2329,12 +2566,14 @@ export async function registerSupplierPayment(
   // La retención solo se aplica cuando se cancela la factura entera: aplicarla
   // en un abono parcial exigiría prorratearla, y una retención prorrateada no
   // se corresponde con ninguna base declarable.
-  const cancelaTodo = saldo.ok && bruto.value.amount.equals(saldo.value);
+  const cancelaTodo = cierra;
   // El pago no retiene nada: lo retenido se le acreditó al fisco al registrar la factura.
   const aRetener = totalRetenido.times(0);
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
-  const funcional = aFuncional(bruto.value, tasa.value.rate, ctx.value.functionalCurrency);
+  // P-03 (ADR-0075 §7): el equivalente funcional del pago va al céntimo, half-up — el mismo
+  // importe sale de la caja, entra al mayor y baja la CxP. Antes 42.783,125.
+  const funcional = aFuncionalAlCentimo(bruto.value, tasa.value.rate, ctx.value.functionalCurrency);
   if (!funcional.ok) return funcional;
 
   /**
@@ -2347,6 +2586,42 @@ export async function registerSupplierPayment(
    */
   const neto = bruto.value.amount.minus(aRetener);
   const netoFuncional = funcional.value.amount.minus(aRetener);
+
+  /**
+   * EL DIFERENCIAL AL PAGAR (ADR-0075 §4; D-07, H-02). La cuenta por pagar se registró a la tasa
+   * de la FACTURA; el dinero sale a la tasa de HOY. Antes el pago debitaba la CxP por lo que
+   * salía, y la diferencia se quedaba para siempre en 2.1.01 con el saldo en divisa en cero.
+   * Ahora la CxP se debita por lo que este pago cancela A LA TASA DE LA FACTURA, y la diferencia
+   * con lo que salió es pérdida (positiva) o ganancia (negativa) en diferencial cambiario.
+   * El pago que cierra cancela EXACTAMENTE lo que el mayor todavía le carga a la factura: el
+   * céntimo de los redondeos va al diferencial, no se queda en la cartera.
+   */
+  let cancelado = toCents(saldado.times(tasaRegistro.value));
+  if (cierra && queda !== null) {
+    // Con cualquier signo: con la cuenta por pagar ya en cero o sobre-cargada, el último pago la
+    // devuelve a cero igual (antes solo si era > 0, y quedaba negativa en una factura pagada).
+    cancelado = toCents(queda);
+    /**
+     * EL TOPE DEL DIFERENCIAL (regla 4). Lo que el cierre lleva al diferencial —lo que salió −
+     * lo que el mayor carga— tiene que parecerse al ESPERADO: lo saldado × (tasa de hoy − tasa
+     * de la factura), menos lo que las notas de crédito del proveedor bajaron a otra tasa (se
+     * valoran a la de su fecha: es diferencia cambiaria y se reconoce aquí). La cota es la del
+     * redondeo (arriba). Fuera de ella NO se asienta.
+     */
+    const tasaHoy = tasaFacturaHoy.value.rate;
+    const cambiario = saldado.times(tasaHoy.minus(tasaRegistro.value));
+    const esperado = notas === null ? cambiario : cambiario.minus(notas);
+    const real = netoFuncional.minus(cancelado);
+    const tasaMayor = tasaHoy.greaterThan(tasaRegistro.value) ? tasaHoy : tasaRegistro.value;
+    if (real.minus(esperado).abs().greaterThan(cota(tasaMayor))) {
+      return err({
+        code: "SETTLEMENT_MISMATCH",
+        message:
+          "Este pago no cuadra con lo que la factura todavía debe. No se registró: revisa la factura.",
+      });
+    }
+  }
+  const diferencial = netoFuncional.minus(cancelado);
 
   // La cuenta de la que SALE el efectivo (migración 29): la explícita si el
   // llamante la eligió, si no la forma de pago configurada → «Sin asignar».
@@ -2363,10 +2638,10 @@ export async function registerSupplierPayment(
         message: `La cuenta «${cuenta.name}» está desactivada.`,
       });
     }
-    if (cuenta.currency !== input.currency) {
+    if (cuenta.currency !== monedaDinero) {
       return err({
         code: "VALIDATION_FAILED",
-        message: `El pago es en ${input.currency} y la cuenta «${cuenta.name}» vive en ${cuenta.currency}.`,
+        message: `El pago es en ${monedaDinero} y la cuenta «${cuenta.name}» vive en ${cuenta.currency}.`,
       });
     }
     cuentaId = input.account_id;
@@ -2376,13 +2651,18 @@ export async function registerSupplierPayment(
       ctx.value.tenantId,
       input.company_id,
       input.instrument,
-      input.currency,
+      monedaDinero,
     );
   }
   // El NETO es lo que sale de la cuenta: sin saldo, se confirma o no se registra
   // (ADR-0062 §4; QA de pantalla 2026-09-15, h. 77).
   if (cuentaId !== null) {
-    const alcanza = await exigeSaldo(sql, cuentaId, neto.toFixed(8), input.allow_negative_balance);
+    // D-11: sobregirar exige el permiso, el motivo y deja acta (lo hace `exigeSaldo`).
+    const alcanza = await exigeSaldo(sql, cuentaId, neto.toFixed(8), {
+      permitir: input.allow_negative_balance,
+      motivo: input.overdraft_reason,
+      operacion: "supplier_payment",
+    });
     if (!alcanza.ok) return err(alcanza.error);
   }
 
@@ -2394,14 +2674,16 @@ export async function registerSupplierPayment(
           (tenant_id, company_id, supplier_id, supplier_invoice_id, bank_account_id, paid_at,
            instrument, reference, gross_amount, retained_amount, net_amount,
            amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
-           functional_currency, rate_source, rate_timestamp, rounding_policy_id, account_id)
+           functional_currency, rate_source, rate_timestamp, rounding_policy_id, account_id,
+           settled_amount, settled_currency, exchange_difference)
         values (${ctx.value.tenantId}, ${input.company_id}, ${factura.supplier_id},
                 ${input.supplier_invoice_id}, ${input.bank_account_id ?? null}, ${fecha},
                 ${input.instrument}, ${input.reference ?? null}, ${bruto.value.toAmountString()},
                 ${aRetener.toFixed(8)}, ${neto.toFixed(8)}, ${bruto.value.toAmountString()},
-                ${input.currency}, ${tasa.value.rate.toFixed()},
+                ${monedaDinero}, ${tasa.value.rate.toFixed()},
                 ${funcional.value.toAmountString()}, ${ctx.value.functionalCurrency},
-                ${tasa.value.source}, now(), ${POLICY.id}, ${cuentaId})
+                ${tasa.value.source}, now(), ${POLICY.id}, ${cuentaId},
+                ${saldado.toFixed(8)}, ${monedaFactura}, ${diferencial.toFixed(8)})
         returning id, supplier_invoice_id,
                   to_char(paid_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as paid_at,
                   instrument, gross_amount::text as gross_amount,
@@ -2483,6 +2765,10 @@ export async function registerSupplierPayment(
       gross_amount: pago["gross_amount"] as string,
       retained_amount: pago["retained_amount"] as string,
       net_amount: pago["net_amount"] as string,
+      currency: monedaDinero,
+      settled_amount: saldado.toFixed(8),
+      settled_currency: monedaFactura,
+      exchange_difference: diferencial.toFixed(8),
       instrument: input.instrument,
       balance_after: saldoDespues?.s ?? "0",
       retention_receipt_id: comprobante === null ? null : (comprobante["id"] as string),
@@ -2510,12 +2796,26 @@ export async function registerSupplierPayment(
     description: "Pago a proveedor",
     functionalCurrency: ctx.value.functionalCurrency,
     amounts: {
-      total: funcional.value.toAmountString(),
+      // Lo que se CANCELA de la cuenta por pagar (a la tasa de la factura), lo que SALE de la
+      // caja (a la de hoy) y su diferencia: el asiento cuadra por construcción.
+      total: cancelado.toFixed(8),
       net_amount: netoFuncional.toFixed(8),
+      exchange_difference: diferencial.toFixed(8),
       retained_iva: cancelaTodo ? (porTributo?.iva ?? "0") : "0",
       retained_islr: cancelaTodo ? (porTributo?.islr ?? "0") : "0",
       retained_total: aRetener.toFixed(8),
     },
+    // AF-M03 (ADR-0075 §4): a la tasa con que se registró la factura no hay diferencial; lo que
+    // el cierre deje es redondeo y va a «Diferencias por redondeo». `exchange_difference` de la
+    // fila conserva el importe (es aritmética: lo que salió − lo cancelado).
+    // Revisión final: SOLO si además cabe en la cota del redondeo. El pago que cierra reconoce
+    // también lo que las notas de crédito del proveedor bajaron a OTRA tasa (`notas`, arriba): con
+    // la tasa de hoy igual a la de la factura eso es NC × (R' − R), diferencial REAL, y va a
+    // ganancia o pérdida cambiaria como siempre.
+    ...(tasaFacturaHoy.value.rate.equals(tasaRegistro.value) &&
+    diferencial.abs().lessThanOrEqualTo(cota(tasaRegistro.value))
+      ? { differenceIsRounding: true }
+      : {}),
     backlink: { table: "supplier_payments", id: pago["id"] as string },
   });
   if (!contablePago.ok) {
@@ -2656,6 +2956,9 @@ export async function simplePurchase(
       ...(input.payment.allow_negative_balance === undefined
         ? {}
         : { allow_negative_balance: input.payment.allow_negative_balance }),
+      ...(input.payment.overdraft_reason === undefined
+        ? {}
+        : { overdraft_reason: input.payment.overdraft_reason }),
     });
     if (!pagado.ok) return pagado;
     pago = pagado.value;

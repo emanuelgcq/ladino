@@ -144,6 +144,12 @@ export const RegisterExpenseRequest = z
      * egreso mayor que el saldo responde 409 INSUFFICIENT_FUNDS con el número delante.
      */
     allow_negative_balance: z.boolean().optional(),
+    /**
+     * D-11: POR QUÉ se deja la cuenta en negativo, en palabras de quien lo confirma. Obligatorio
+     * (con el permiso `treasury.overdraft`) cuando el egreso sobregira de verdad; queda en el
+     * acta `treasury.overdraft.confirmed`. El mínimo lo exige el caso de uso, con su mensaje.
+     */
+    overdraft_reason: z.string().trim().max(300).optional(),
   })
   .strict();
 export type RegisterExpenseRequest = z.infer<typeof RegisterExpenseRequest>;
@@ -162,6 +168,12 @@ export const CreateTreasuryTransferRequest = z
      * egreso mayor que el saldo responde 409 INSUFFICIENT_FUNDS con el número delante.
      */
     allow_negative_balance: z.boolean().optional(),
+    /**
+     * D-11: POR QUÉ se deja la cuenta en negativo, en palabras de quien lo confirma. Obligatorio
+     * (con el permiso `treasury.overdraft`) cuando el egreso sobregira de verdad; queda en el
+     * acta `treasury.overdraft.confirmed`. El mínimo lo exige el caso de uso, con su mensaje.
+     */
+    overdraft_reason: z.string().trim().max(300).optional(),
   })
   .strict();
 export type CreateTreasuryTransferRequest = z.infer<typeof CreateTreasuryTransferRequest>;

@@ -59,6 +59,9 @@ es un hecho: no hay caso de uso que lo emita y el nombre queda apartado, no impl
 - stock.shipped
 - stock.transferred
 - stock.adjusted
+- stock.counted
+- stock.shrinkage
+- stock.withdrawn
 
 **Implementados en S0.6 (módulo de inventario, ADR-0034), `schema_version` 1.** Los emiten los
 casos de uso de `packages/domain/src/inventory.ts` con `aggregate_type = 'inventory_move'`, y el
@@ -67,6 +70,22 @@ functional_currency, unit_cost, quantity_after, rounding_policy_id}` — el impo
 política de redondeo van dentro porque un evento de inventario sin ellos no permite reconstruir el
 costo. `stock.adjusted` añade `{reason}` (obligatorio) y `stock.transferred` añade
 `{transfer_id, from_warehouse_id, to_warehouse_id}`.
+
+**Salidas y conteo (ADR-0078, ola 3), `schema_version` 1.** Un evento por hecho, con el MISMO nombre
+que su hecho contable (`journal_entries.source_event`); el pgTAP 026 lo exige. Todos llevan el
+payload común de arriba:
+
+| Evento | Quién lo emite | Añade al payload |
+|---|---|---|
+| `stock.shipped` | el costo de una venta (`sales_cost`) | `{reference, exit_reason: null}` |
+| `stock.shrinkage` | `issueStock` con motivo merma, rotura, vencido o faltante | `{reference, exit_reason}` |
+| `stock.withdrawn` | `issueStock` con motivo consumo propio, regalo, donación o muestra | `{reference, exit_reason}`; la Nota de retiro va aparte en el acta `inventory.withdrawal_note.issued` |
+| `stock.counted` | `countStock` cuando la diferencia mueve existencia (faltante o sobrante) | `{reason}`, que empieza por «Conteo:» |
+| `stock.adjusted` | `adjustStock`, el ajuste suelto | `{reason}` |
+
+Hasta esta ola la salida suelta publicaba `stock.shipped` y el conteo `stock.adjusted` mientras sus
+asientos decían otra cosa. La forma del payload no cambió; cambió el nombre. Ningún consumidor
+dependía de los nombres viejos (el worker entrega por tipo genérico).
 
 `INVENTORY_SPEC.md` §API/eventos nombra `inventory.moved`; **el vocabulario bueno es el de este
 catálogo** (`stock.*`), que es el canónico y el que ya estaba escrito. La spec de módulo quedó
@@ -138,6 +157,20 @@ Y dos eventos que ya existían ganan un consumidor contable (migración 58, ADR-
 `stock.received` asienta la entrada sin compra, la recepción de compra, la devolución y la
 reposición de una venta anulada. El ORIGEN va en `source_kind`, nunca en un nombre de evento
 paralelo.
+
+## Moneda B: reversa de cobros, divisa del mayor y revaluación (ADR-0075 §6 y §8; migraciones 20261003180000 y 20261003210000)
+
+| Evento | Dónde | Quién lo emite | Payload |
+|---|---|---|---|
+| `ar.payment_reversed` | `audit_events` y outbox, `aggregate_type = payment` | `reversePayment` | `{reversal_id, payment_id, document_id, kind, reason, currency, amount, instrument, document_status_before, document_status_after, reversal_entry_id, igtf_perception_id, igtf_restituted_amount, igtf_reversal_entry_id, supported_retention_id, customer_credit_id}` |
+| `ar.retention_reversed` | igual | `reverseSupportedRetention` (la reversa del abono de un comprobante de retención soportada; el comprobante queda `annulled`) | el mismo payload, con `kind = supported_retention` |
+| `igtf.perception_pending_refund` | igual, `aggregate_id` = el cobro | `reversePayment`, cuando el cobro reversado percibió IGTF | el mismo payload: la percepción queda `pendiente_reintegro` (P-67) |
+| `treasury.currency_regularized` | `audit_events`, `aggregate_type = company`, actor `system` | `repairTreasuryCurrency` (script post-pull) | `{adr, entry_id, entry_number, posting_date, accounts[], without_rate[]}` |
+| `accounting.fx_revalued_at_close` | `audit_events` y outbox, `aggregate_type = journal_entry` | `closeFiscalPeriod`, solo si hay diferencia neta | `{as_of, period_id, entry_number, items[]}`; `as_of` = min(fin del período, hoy) |
+
+Dos de esos nombres son también `source_event` de asientos, con `source_kind = exchange_diff`:
+`fx.revaluation_at_close` (la revaluación) y `treasury.currency_regularized` (la regularización de
+la divisa; desde 20261003210000 no nace `manual`). Un asiento con origen no se reversa suelto.
 
 ## Compras (migraciones 22 y 28; nota de crédito recibida, migración 67)
 

@@ -124,4 +124,54 @@ c.caso("A-03", "una empresa nueva con RIF nace SIN tipo y no factura sin declara
   afirmar(f.tipo === null && f.omision === null, JSON.stringify(f));
 });
 
+// A-07 (ola 3): el logo se autoriza ANTES de tocar el almacenamiento. Sin Storage en el recorrido,
+// antes llegaba al 422 «no tiene almacenamiento» (el permiso se miraba después); ahora, 403.
+c.caso("A-07", "el cajero sube el logo de E2 → 403 antes de cualquier escritura", async () => {
+  const r = await pedir(PERSONAS.cajero, "E2", "POST", "/v1/companies/logo", {});
+  afirmar(r.status === 403, `esperaba 403, llegó ${r.status}: ${r.texto.slice(0, 160)}`);
+});
+// A-14 (ola 3): la purga nunca ofrece el logo vigente.
+c.caso(
+  "A-14",
+  "company_logo_purgeable no ofrece ningún objeto del logo vigente de E2",
+  async () => {
+    const filas = await sql.begin(async (tx) => {
+      const [d] = await tx`select id from auth.users where email = ${PERSONAS.duenoE2E3}`;
+      await tx`select set_config('ladino.actor_id', ${d.id}, true)`;
+      return tx`
+      select o.object_name from platform.company_logo_purgeable(${EMPRESAS.E2}) o
+        join public.companies c on c.id = ${EMPRESAS.E2}
+       where c.logo_path is not null
+         and o.object_name like regexp_replace(c.logo_path, '/[^/]+$', '') || '/%'`;
+    });
+    afirmar(filas.length === 0, `ofrece el vigente: ${filas.map((f) => f.object_name).join(", ")}`);
+  },
+);
+
+// ── ADR-0077 §2 (A-13): crear otra empresa desde dentro ─────────────────────────────────────────
+// Sin escribir nada en el escenario: el dueño de E2 pide «otra» con el nombre de su propio negocio
+// (la clave natural responde 409 legible) y el cajero, que no es Titular de ninguna cuenta, 403.
+c.caso(
+  "A-13",
+  "«Crear otra empresa» existe: el Titular choca con su clave natural, el cajero no es Titular",
+  async () => {
+    const [t] = await sql`
+      select t.name from public.tenants t join public.companies c on c.tenant_id = t.id
+       where c.id = ${EMPRESAS.E2}`;
+    const mismo = await pedir(PERSONAS.duenoE2E3, null, "POST", "/v1/onboarding/another-company", {
+      business_name: t.name.toUpperCase(),
+    });
+    afirmar(mismo.status === 409, `el Titular con el mismo nombre dio ${mismo.status}`);
+    afirmar(
+      mismo.json?.message?.includes("Ya tienes un negocio con ese nombre"),
+      `mensaje: ${mismo.json?.message}`,
+    );
+    const cajero = await pedir(PERSONAS.cajero, null, "POST", "/v1/onboarding/another-company", {
+      business_name: "Negocio del cajero",
+    });
+    afirmar(cajero.status === 403, `el cajero dio ${cajero.status}`);
+    afirmar(cajero.json?.message?.includes("Titular"), `mensaje: ${cajero.json?.message}`);
+  },
+);
+
 export default c.correr;

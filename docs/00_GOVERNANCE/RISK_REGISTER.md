@@ -1038,7 +1038,7 @@ y mostrado como hasta hoy (`P-AB1234567`). Alternativa: un selector explícito d
   significa «no juzga filas viejas»: no se validó al crearlo, pero se evalúa en todo UPDATE. Marcar
   `status = 'annulled'` en un comprobante viejo con un número de otro formato fallará con 23514 si
   la migración de la reversa no lo prevé (p. ej. excluyendo `annulled` del CHECK).
-- **Estado:** abierto · decisión del dueño.
+- **Estado:** construido en la ola 3 (2026-10-03, pendiente de commit) — migración 20261003180000, ADR-0075 §8: `payment_reversals`, `POST /v1/payments/{id}/reversal` y `POST /v1/supported-retentions/{id}/reversal`. Lo que queda está en R-75.
 
 **Ampliación (2026-10-02, ola 2 C2):** la ola 3 construye juntas la reversa de cobros y la
 restitución de un IGTF percibido indebidamente con la venta viva (PA SNAT/2022/000013 art. 4;
@@ -1164,3 +1164,159 @@ pendiente, la ND recupera su asiento y la cobertura vuelve a cero (E2E `e2e-igtf
 **Re-revisión (20261002100200):** `accounting_coverage_gaps()` cambia su enunciado: la ND por
 IGTF queda cubierta por el asiento O la fila en cola de su percepción, así que ya no aparece
 como hueco mientras el pendiente espera. **Estado:** cerrado.
+
+### R-67 · La llave por intento y la cuenta vendida exigen desplegar web, API y migración juntas (ADR-0076)
+
+> **Estado 2026-10-02: ABIERTO hasta el despliegue** (M-01, M-02, M-03, E-08, O-02).
+
+- **Severidad:** Media (dinero en caja) · **Disparador:** desplegar la API sin la web nueva, o la API sin
+  las migraciones `20261003100000` y `20261003100100` (en ese orden, en la misma ventana).
+- **API sin la migración:** `quickSale` y el PUT leen `sold_at` → `42703` → 500 en toda venta del POS con
+  cuenta y en toda subida de cuenta. Ruidoso, no escribe nada.
+- **API nueva con la web vieja:** la web vieja usa el id de la cuenta como llave. El servidor ya impide la
+  segunda venta (POS_CART_SOLD), pero si la cuenta resucitada se cobra con EXACTAMENTE el mismo cuerpo,
+  el middleware devuelve el replay de la venta vieja antes de llegar al dominio (M-02) hasta que la web
+  nueva (que manda `attempt_id`) esté servida. El compose despliega web y API juntas: el riesgo es la
+  pestaña abierta con el bundle viejo — se va al recargar.
+- **Crecimiento:** las cuentas vendidas no se purgan (son la constancia de quién armó cada venta): una
+  fila pequeña por venta del POS. Revisar si pasa del millón de filas por empresa.
+- **Dueño:** el dueño del despliegue. **Deja de ser aceptable:** si la ventana entre API y web dura más que
+  un día de caja.
+
+### R-71 · El mayor al céntimo depende de una regularización post-pull, de una cuenta que el contador no ha confirmado, y no recalcula lo ya declarado (ADR-0075 §7)
+
+**Qué:** las migraciones 20261003140000/140100/140200 llevan al céntimo todo lo NUEVO (kardex,
+asientos, libro de compras). Lo VIEJO no se toca (append-only): la fracción heredada la limpia
+`scripts/reparar/adr-0075-centimo.mjs` (`repairCents`), que hay que correr **después del pull**, con la
+API nueva ya escribiendo al céntimo. Hasta que corra, `cent_gaps` sale en rojo en toda empresa con
+historia, y una salida que vacía una posición vieja todavía escribe su fracción (el oráculo solo exige
+céntimo sobre posiciones que ya lo están). **Mitigación:** la reparación es idempotente, tiene
+`--ensayo`, deja acta `accounting.cent_regularized` (que es el corte del invariante) y comprueba que
+`inventory_ledger_gap` no se mueve más que su fracción de céntimo; está en los post-pull de
+`pnpm recorrido`. **La cuenta:** 5.1.10 «Diferencias por redondeo» (`rounding_difference`) y el
+half-up son la respuesta del dueño; los confirma el contador (PENDIENTES_ASESOR P-79). Una empresa
+cuyo plan ya tenía otra cuenta en 5.1.10 queda sin el papel: el generador encola diciendo «Falta
+configurar la cuenta de: rounding_difference» cuando hay residuo. **K-08:** las declaraciones y los
+libros ya generados (`fiscal_book_runs`, append-only) NO se recalculan; regenerar produce una corrida
+nueva con hash nuevo, y una declaración ya presentada se corrige como diga la norma (LIVA art. 50:
+ajuste en el período en que se detecta si no cambia el impuesto a pagar; sustitutiva si lo cambia): P-80.
+**Despliegue — las migraciones del céntimo NO son compatibles con la API hoy desplegada.** Se
+aplican **justo después del `git pull`, no antes**, en este orden y en la misma ventana:
+1. `git pull && docker compose up -d --build` (la API nueva escribe al céntimo);
+2. TODAS las migraciones pendientes, en orden (de la 20261003140000 a la última; las del céntimo
+   son 140000, 140100, 140200, 190000, 190100, 190200 y 190300);
+3. `select platform.grant_invited_owner_warehouse_ops();` (permisos; no postea nada);
+4. `node scripts/reparar/adr-0075-centimo.mjs --ensayo`, y después sin `--ensayo`. Imprime una
+   línea por empresa (regularizada, sin nada, o FALLÓ con su motivo) y sale ≠ 0 si alguna falla.
+   **Va la primera de las que postean**: desde la 190000 la base rechaza al postear una línea con
+   más de dos decimales (LAD71), y las demás arman su asiento desde saldos heredados;
+5. `node scripts/reparar/adr-0070-subcuentas.mjs` (subcuentas de tesorería). Si se corre antes
+   del paso 4 se niega con LAD82 «Corre ANTES la regularización del céntimo» y no deja nada a
+   medias (migración 20261003190300); después del 4 reparte al céntimo y postea;
+6. `node scripts/reparar/p-02-rif-normalizado.mjs` (no postea asientos; su sitio es indiferente);
+7. `node scripts/reparar/adr-0075-divisa-del-mayor.mjs` (ADR-0075 §6): necesita las subcuentas
+   del paso 5 y arma sus importes con `round_cents`.
+Es el orden de `scripts/recorrido/correr.mjs` (la restauración del escenario lo ejecuta entero:
+«✓ escenario restaurado», invariantes en 0 en E1, E2 y E3) y lo fija pgTAP 112 (`112_the_repairs_run_in_the_order_of_r71_test.sql`).
+`scripts/ola2/regularizacion-inventario-y-caja.sql` (ADR-0060) es un guion manual de la ola 2 que
+ya se corrió: si se volviera a usar, va DESPUÉS del paso 4, porque arma su asiento con el valor
+del kardex tal cual.
+**Entre el paso 1 y el 4 no se opera** (ventana de mantenimiento): un documento de compra en divisa
+registrado ahí se asienta al céntimo y el libro lo convierte a 8 decimales (su `created_at` es
+anterior al corte, migración 20261003190400); si su conversión deja fracción, la conciliación libro
+↔ mayor de ese mes lo enseña.
+Por qué no vale otro orden: con la 140000 aplicada y la API vieja, una salida parcial sobre una
+posición al céntimo cuyo costo no es entero en céntimos da LAD41; con la API nueva y la base vieja,
+el oráculo viejo exige 8 decimales y rechaza la salida al céntimo. Y desde la 190000 la base rechaza
+al postear toda línea con más de dos decimales (LAD71): la API vieja, que asienta a 8, no postearía
+nada en divisa, y un cierre de ejercicio o una reparación que mueva saldos todavía con fracción
+falla hasta que corra el paso 3. Si el período de hoy está cerrado, el paso 3 falla para esa empresa
+diciéndolo (LAD61) y no deja nada a medias: se reabre o se corre al abrir el siguiente.
+**Revisión de la ola 3 (20261003190000/190100):** el libro de compras por alícuota de la 140100
+perdía el signo de la nota de crédito, del ajuste de período anterior y de la anulada (HOMOLOGATION
+YES); un libro de compras generado entre la 140100 y la 190000 lleva esos signos mal y se regenera.
+En local las dos se aplicaron seguidas; **en producción la 140100 nunca debe quedar aplicada sin la
+190000**. **La empresa SIN contabilidad** regulariza su kardex y no deja nada pendiente: la fila de cola nace descartada con su motivo y su acta (20261003190200), así que no bloquea el cierre cuando adopte la contabilidad; el kardex lo valora entonces el corte de ADR-0060. Si la adopta sin corte, procesando la cola histórica, `inventory_ledger_gap` puede quedar con céntimos (Σ round por movimiento ≠ kardex regularizado): se cierra con el corte. **Fracciones del kardex que netean a cero** con el mayor sin fracción: ya no falla ni hay que revisarla a mano; se regulariza el kardex y queda la misma fila descartada con acta. **Cierre de ejercicio:** se arma al céntimo y no muere en LAD71 aunque las fracciones viejas y la regularización caigan en ejercicios distintos; condición: correr el paso 3 ANTES de cerrar cualquier ejercicio, porque sin regularizar el saldo de toda la vida de las cuentas de resultado conserva la fracción que el cierre al céntimo deja fuera (`cent_gaps` la enseña). **La excepción de LAD71** es el registro privado `platform.cent_regularization_entries`, no una etiqueta: no darle GRANT nunca. **`--ensayo`** avisa además si el período de hoy está cerrado.
+**Origen:** ola 3, P-01/P-03/K-08. **Estado:** abierto hasta que corra la reparación en producción y
+el contador responda P-79/P-80.
+
+### R-70 · El retiro sin precio en la lista principal no sale, y la Nota de retiro no se borra
+
+**Qué:** una salida por consumo propio, regalo, donación o muestra en una empresa que factura se
+valora al precio de la lista principal (ADR-0078 §3, P-75). Si el producto no tiene precio vigente
+en esa lista, o falta la tasa de su moneda, la salida se rechaza (422 / EXCHANGE_RATE_MISSING) en
+vez de registrarse sin débito: es el modo de fallo ruidoso elegido a propósito. Y las Notas de
+retiro emitidas son append-only: una nota de más no se borra, se compensa con asiento del contador.
+**Mitigación:** el mensaje dice qué falta (precio o tasa). **Despliegue:** la migración
+20261003110000 añade cuentas y plantillas a las empresas existentes y redefine `sales_book`,
+`sales_book_by_rate`, `sales_book_summary`, `recompute_iva_period` y `low_stock_products`;
+va en la misma ventana que la API (la API vieja escribiría salidas sin `exit_reason`, que el CHECK
+admite; la nueva no funciona sin la migración). **Origen:** ola 3, I-01/I-11. **Estado:** abierto.
+**Disparador (auditoría fiscal de la ola 3, AF3-01, 2026-10-03):** RLIVA art. 31: el retiro exige
+factura; la Nota interna no la sustituye. No liberar retiros en producción hasta la ola 5. (P-76;
+nota de la auditoría fiscal en ADR-0078.)
+
+### R-68 · La separación de funciones existe en la base y todavía no la exige ningún caso de uso
+
+**Qué:** la migración 20261003130000 (ADR-0068 §8) crea `sales.refund`, `treasury.overdraft` y
+`purchase.payment.approve` (solo del Dueño), el ajuste `company_settings.four_eyes`, el umbral de
+pago a proveedor (USD 1.000 por omisión, regla interna decidida por criterio) y las funciones
+`platform.four_eyes_active(empresa, permiso)` / `platform.approval_allowed` (por permiso desde 20261003130200). Hasta que G-20, D-11 y H-14 los hagan
+cumplir, reembolsar y pagar por encima del umbral siguen como antes (sobregirar YA exige `treasury.overdraft` + motivo + acta desde D-11, ola 3: ADR-0066 nota §8; va solo al rol Dueño, así que tras desplegar cualquier otro rol que confirmaba sobregiros recibe 403), y no hay endpoint
+para cambiar el ajuste ni el umbral (sería un cambio de contrato). **Mitigación:** el ADR y este
+registro lo dicen; el pgTAP 101 fija la regla para cuando llegue su primer usuario. **Además:** la
+purga de logos huérfanos (A-14) corre solo cuando la empresa sube un logo nuevo; una empresa que
+no vuelve a cambiarlo conserva sus huérfanas (el worker no tiene credencial de Storage).
+**Despliegue:** 20261003130000, 130100 y 130200 van con la API de la misma ola: la API vieja sigue
+funcionando con la migración (solo cambia qué puede leer `authenticated` por PostgREST, que la web
+no usa, y las policies de servicio, que la API ya cumplía por WHERE); la API nueva llama a
+`company_logo_purgeable` tras cada logo; sin la migración esa purga falla con un aviso en el log y
+el logo se guarda igual. **Origen:** ola 3, J-03/G-20/H-14/D-11/A-14.
+**Estado:** abierto.
+
+
+### R-69 · El enlace de invitación sin correo es un portador: quien lo tenga, entra (ADR-0077)
+
+**Qué:** la migración 20261003120000 crea `member_invitations` y `platform.accept_member_invitation`.
+Una invitación sin correo la acepta la PRIMERA cuenta que abra el enlace: si el dueño lo pega en un
+grupo equivocado, entra otra persona con el rol elegido. Hoy no hay proveedor de correo, así que el
+enlace se copia a mano. **Mitigación:** un solo uso (la segunda cuenta recibe 409), vence a los 7
+días (la tabla no admite más de 30), el token lo genera la API y no se guarda en ninguna parte: la
+base guarda su sha256 y la respuesta guardada para la idempotencia va sin él (revisión H2; antes de
+la revisión sí quedaba en `idempotency_keys`); la invitación de Dueño exige correo (H7); quien invitó tiene que conservar `membership.manage` el día que se acepta, la entrada
+queda en `audit_events` (`member.invited` y `member.invitation_accepted`, con quién invitó) y el
+correo opcional liga la invitación a una cuenta. **Lo que falta:** listar y anular invitaciones
+pendientes desde la web (no hay endpoint todavía: hoy se espera a que venza), y el envío por correo
+cuando haya proveedor. **Además:** «Crear otra empresa» abre un tenant por cada negocio; la clave
+natural es el nombre (o el RIF) entre los negocios de la persona, así que dos negocios con nombres
+distintos y sin RIF los puede abrir el Titular sin límite (no hay plan de cobro que lo acote).
+**Despliegue:** 20261003120000, 20261003120100, 20261003120200, 20261003120300, 20261003120400 y 20261003120500 van con la API y la web de la misma ola. La API vieja
+no llama a las funciones nuevas; la API nueva sin la migración responde 500 en las rutas nuevas
+(invitar, aceptar, otra empresa, acceso perdido); el middleware de alcance, que consulta
+`lost_access_to_company` solo cuando la empresa no es visible, cae al 404 genérico si la función no
+existe. **La migración se aplica antes que la API**, en la misma ventana.
+**Origen:** ola 3, N-08/K-09/A-13/N-06. **Estado:** abierto.
+
+### R-74 · El cálculo fiscal en Bs y el diferencial al pagar dependen de migración y API en la misma ventana (ADR-0075 §1-4)
+
+**Qué puede pasar.** (1) La migración 20261003170000 fija el corte de `fiscal_amount_gaps` en el instante en que corre: una factura en divisa emitida con la API VIEJA después de ese instante sale en rojo en el invariante (su IVA en Bs es el de la regla anterior) y no se puede editar. (2) La API nueva escribe `settled_transaction_amount`, `settled_amount` y `exchange_difference`: sin la migración, todo cobro y todo pago a proveedor falla. (3) La plantilla `payment_made` pasa a leer `total` como lo cancelado: con la API vieja `total` = lo que salió y el asiento sigue cuadrando, sin diferencial (compatible). (4) El invariante `settled_ledger_gaps` suma las cuentas que la empresa tiene o tuvo con el papel `ar_general` / `ap_general`: una empresa que lleve la cartera en subcuentas por cliente fuera de ese papel no queda vigilada. (5) El cierre exacto del último cobro absorbe en el diferencial la separación entre total en Bs y total en divisa × tasa (P-85): en una factura de muchas líneas puede ser de varios bolívares aun a la misma tasa.
+**Mitigación.** Migración y API en la misma ventana, la migración primero y sin emitir entre una y otra; `pnpm recorrido D E F G H` después; P-83, P-84 y P-85 con el contador y el asesor.
+**Origen:** ola 3, familia «moneda A» (E-05, D-02, D-07, H-02, F-02, F-15, G-12). **Estado:** abierto.
+**Añadido por «el cobro y el cierre» (ola 3, migración 20261003200000).** El punto (5) cambia: a la tasa del documento, pagar el total en Bs ya no deja diferencial (regla 2), y el diferencial del cierre tiene TOPE (regla 4, `SETTLEMENT_MISMATCH`). Lo que eso abre: (6) un documento cuyo mayor quedó descuadrado ANTES del corte (los residuos de P-84) ya no cierra absorbiendo el descuadre: su último cobro o pago se rechaza hasta que el contador lo regularice; (7) `SETTLEMENT_MISMATCH` responde 500 mientras `errors.ts` no lo mapee a 409 (el código y el mensaje viajan bien); (8) tras un abono en divisa el mismo día, `document_debt` enseña la parte proporcional del total y la caja pide lo que el mayor carga: en una factura de muchas líneas pagar la primera cifra puede responder «supera lo pendiente» (ADR-0075, nota «el cobro y el cierre», punto 3) — **CERRADO por la migración 20261003210100: lo mostrado es lo que cierra (`platform.document_settlement_base`)**; (9) `settlement_ledger_open` devuelve ahora una cifra donde devolvía NULL (cobro reversado en cola): un documento pagado con residuo que el invariante callaba empieza a salir en `settled_ledger_gaps`. **Mitigación.** Migración 20261003200000 y API en la misma ventana; `pnpm recorrido E` después; mirar `settled_ledger_gaps` por empresa tras aplicar.
+
+**Corregido por «el mayor en divisa, la revaluación, las reversas y las lecturas» (ola 3, migración 20261003210000).** El punto (3) estaba mal: la plantilla `payment_made` EXIGE `exchange_difference` desde 20261003170000 y la API vieja no lo aporta, así que con la migración aplicada y la API vieja todo pago a proveedor iba a la COLA (no «sigue cuadrando»), y las filas `ap.payment_made` ya pendientes no podían generarse. Ahora el generador toma `exchange_difference` ausente como 0 (solo ese importe): el pago se asienta sin diferencial y la cola se vacía (E2E «un pago a proveedor con el contexto VIEJO se asienta»). El pago de la API vieja CON retención practicada (`total` = bruto, `net_amount` = neto) descuadraba contra la plantilla nueva por lo retenido (reproducido en E2E: «débitos 100 contra créditos 80»): el generador toma `net_amount` para la línea de cuentas por pagar de un pago sin `exchange_difference`, como lo asentaba la plantilla de entonces. El punto (7) queda cerrado: `SETTLEMENT_MISMATCH` está mapeado a 409 en `errors.ts`.
+
+**Última ronda (20261003220000).** El residuo del cierre de un cobro o pago A LA TASA DEL DOCUMENTO ya no se asienta en las cuentas de diferencial sino en «Diferencias por redondeo» (AF-M03): los informes que lean `exchange_gain_loss` dejan de ver esos céntimos, y el mayor los muestra en 5.1.10. El borde del tope (`SETTLEMENT_MISMATCH`) tiene ahora prueba en ventas y en compras: un céntimo dentro de la cota pasa, uno fuera se rechaza.
+
+### R-75 · La reversa de cobros y la divisa en el mayor dependen de una reparación post-pull, y dejan cuatro bordes sin construir (ADR-0075 §5, §6 y §8)
+
+- **Severidad:** Alta · **Disparador:** aplicar 20261003180000 en producción; el primer cierre de período; la primera reversa de un cobro con IGTF
+- **Dónde:** `platform.treasury_currency_gaps`, `scripts/reparar/adr-0075-divisa-del-mayor.mjs`, `closeFiscalPeriod`, `packages/domain/src/payment-reversals.ts`
+
+1. **Orden del despliegue:** migración y API van en la misma ventana (la API vieja no escribe la divisa en la línea de caja; la nueva la escribe). Después del pull hay que correr `node scripts/reparar/adr-0075-divisa-del-mayor.mjs`: hasta entonces `treasury_currency_gaps` enseña cada caja en divisa. La reparación se salta una empresa con la cola de asientos pendiente o con el período de hoy cerrado, y lo dice.
+2. **El primer cierre de cada empresa con cajas o cartera en divisa genera un asiento de revaluación** contra las cuentas de diferencial (4.1.02 / 5.1.02 en ve_basico). Sin la oficial vigente a la fecha de cierre, no más antigua que `closing_rate_max_age_days` (7 días, dato) —la fecha es el menor entre el fin del período y hoy; ver P-88—, o sin esas cuentas, el cierre falla con el mensaje que lo dice. El método (acumulado, sin reverso al abrir) es VALIDAR-CONTABLE (P-86).
+3. **Anular un comprobante de retención soportada cambia el libro de ventas y la declaración del período** en que se cargó (los lectores filtran `registered`). Una declaración ya presentada no se reescribe: se corrige con sustitutiva (P-80).
+4. **Bordes sin construir:** el cobro con IGTF documentado en nota de débito no se reversa (409); no hay pantalla de reversa; `exchange_gain_loss` no descuenta el diferencial de un cobro reversado; la reversa no exige saldo en la caja.
+5. **Revisión de la ola 3 (migración 20261003210000).** Cerrado de los puntos de arriba: la reparación ya no se salta una empresa por la cola pendiente (el invariante la cuenta) y sale con exit ≠ 0 si alguna queda saltada, sin tasa o con fallo; la revaluación netea por cuenta (reabrir y cerrar a la misma tasa no asienta nada); `exchange_gain_loss` se lee sin el diferencial de los cobros reversados; anular un comprobante ya declarado se RECHAZA (409 `RETENTION_PERIOD_DECLARED`, P-89). **Lo que abre:** (a) la tasa de cierre exige una tasa oficial de no más de 7 días (`platform.parameters`, P-88): un cierre de un mes viejo sin tasas cargadas en su última semana se detiene hasta cargarla; (b) cerrar un período que no terminó fecha la revaluación HOY y usa la tasa de hoy; (c) entre cierres, la cartera del mayor queda sobrevaluada por lo revaluado de documentos ya cobrados hasta el cierre siguiente (P-86.4); (d) los asientos de regularización de la divisa posteados ANTES de esta migración son `manual` y siguen siendo reversibles a mano; (e) sin tasa de hoy, la deuda en divisa se sirve con el equivalente en `null`: la web tiene que decir «falta la tasa de hoy» (no verificado en pantalla; «Lo que me deben» del Inicio no distingue ese `null` del de «sin permiso»); (f) ~~las líneas de cuentas por cobrar y por pagar siguen sin la divisa del documento (H6)~~ cerrado en 20261003210200: llevan moneda, original y tasa del documento; lo que abre: `debit_amount` / `credit_amount` de esas líneas ya no son bolívares (todo lector tiene que usar `functional_*`), las líneas anteriores no se regularizan y ningún invariante suma aún los originales de la cartera; (g) un cobro viejo en otra moneda sin tasa con que valorarlo enseña su documento con la deuda en `null` (la lista no se cae), y sigue sin poder cobrarse hasta cargar la tasa.
+6. **Última ronda (migración 20261003220000).** El original de la cartera deja de decidirse por parecido (determinista por hecho); a la tasa del documento el residuo del cierre va a «Diferencias por redondeo» y no a diferencial; el IGTF de un cobro reversado después de su quincena sigue contando en ella. **Lo que abre:** (a) una plantilla propia con dos líneas de cartera en un asiento las deja en moneda funcional; (b) el total de IGTF de un período depende del `to` con que se consulta — una consulta con un rango que no es una quincena da otra respuesta (no hay declaración de IGTF guardada); (c) el invariante cartera ↔ mayor en las dos monedas queda para la ola 4 (F-12); (d) migración y API en la misma ventana: el generador anterior (210200) sigue con su umbral hasta desplegar la API.
+- **Estado:** abierto.

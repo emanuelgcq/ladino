@@ -99,13 +99,43 @@ export const ReceiveStockApiRequest = ReceiveStockRequest.omit({ amount: true })
   });
 export type ReceiveStockApiRequest = z.infer<typeof ReceiveStockApiRequest>;
 
+/**
+ * EL MOTIVO DE UNA SALIDA, lista cerrada (ADR-0078 §2, I-01). Es una columna con CHECK en la base
+ * (`inventory_moves.exit_reason`), no una nota, y decide adónde va en el mayor:
+ *   · merma, rotura, vencido y faltante (justificado) → «Pérdidas por mermas y faltantes»;
+ *   · consumo_propio, regalo, donacion y muestra → RETIRO (LIVA art. 4.3): gasto de retiros y, en
+ *     una empresa que factura, débito fiscal al valor de mercado y Nota de retiro numerada.
+ */
+export const ExitReason = z.enum(
+  ["merma", "rotura", "vencido", "faltante", "consumo_propio", "regalo", "donacion", "muestra"],
+  {
+    errorMap: () => ({
+      message:
+        "Elige el motivo de la salida: merma, rotura, vencido, faltante, consumo propio, regalo, donación o muestra.",
+    }),
+  },
+);
+export type ExitReason = z.infer<typeof ExitReason>;
+/** Los motivos que son retiro (LIVA art. 4.3). */
+export const RETIRO_REASONS: readonly ExitReason[] = [
+  "consumo_propio",
+  "regalo",
+  "donacion",
+  "muestra",
+];
+
 export const IssueStockRequest = z
   .object({
     ...posicion,
     quantity: QuantityString,
     occurred_at: z.string().datetime({ offset: true }).optional(),
-    /** Por qué sale (merma, consumo interno, regalo). La pantalla lo exige (QA 2026-09-15, h. 42). */
-    reason: z.string().trim().min(3).max(500).optional(),
+    /** OBLIGATORIO: por qué sale, de la lista cerrada (ADR-0078 §2). */
+    reason: ExitReason,
+    /**
+     * La referencia del soporte (acta, foto, informe). Obligatoria en merma, rotura, vencido y
+     * faltante: sin evidencia no es «faltante justificado» (RLIVA art. 14). Aditivo (revisión).
+     */
+    evidence: z.string().trim().min(3).max(500).optional(),
     reference: z.string().trim().min(1).max(60).optional(),
     note: z.string().trim().min(1).max(500).optional(),
   })
@@ -133,6 +163,43 @@ export const AdjustStockRequest = z
   })
   .strict();
 export type AdjustStockRequest = z.infer<typeof AdjustStockRequest>;
+
+/**
+ * EL CONTEO (ADR-0078 §4, I-07): la persona escribe lo que CONTÓ; la diferencia contra el sistema
+ * la calcula el servidor bajo el bloqueo de la posición. Con `preview` solo la enseña; sin él la
+ * registra como ajuste con su motivo (permiso `inventory.adjust`). Contado igual al sistema: no hay
+ * ajuste que registrar.
+ */
+export const CountStockRequest = z
+  .object({
+    ...posicion,
+    /** Lo contado. Cero es un conteo válido (no queda nada). */
+    counted: z
+      .string()
+      .regex(
+        /^\d{1,16}(\.\d{1,8})?$/,
+        "lo contado, decimal como string: hasta 16 enteros y 8 decimales",
+      ),
+    reason: z.string().trim().min(3).max(400),
+    preview: z.boolean().optional(),
+    /**
+     * La existencia del sistema que la persona vio en la vista previa. Si viene y, bajo el bloqueo,
+     * ya no coincide, 409 CONFLICT: la diferencia calculada era vieja (aditivo, revisión).
+     */
+    expected_system_quantity: z
+      .string()
+      .regex(/^-?\d{1,16}(\.\d{1,8})?$/, "existencia esperada, decimal con signo como string")
+      .optional(),
+    /**
+     * La referencia del soporte (acta, foto, informe), con la misma forma que en la salida.
+     * Obligatoria al REGISTRAR un conteo que da faltante: va a pérdidas y sin evidencia no es
+     * «faltante justificado» (RLIVA art. 14). La vista previa y el sobrante no la piden. Aditivo.
+     */
+    evidence: z.string().trim().min(3).max(500).optional(),
+    reference: z.string().trim().min(1).max(60).optional(),
+  })
+  .strict();
+export type CountStockRequest = z.infer<typeof CountStockRequest>;
 
 export const TransferStockRequest = z
   .object({
@@ -173,10 +240,25 @@ export const InventoryMoveResponse = z
     occurred_at: z.string().datetime({ offset: true }),
     reference: z.string().nullable(),
     reason: z.string().nullable(),
+    /** El motivo de una salida con motivo (ADR-0078); null en las demás. */
+    exit_reason: ExitReason.nullable(),
     transfer_id: uuid.nullable(),
+    /** El correlativo de la Nota de retiro, si la salida la emitió (ADR-0078 §3). */
+    withdrawal_note_number: z.number().int().positive().nullable().optional(),
   })
   .strict();
 export type InventoryMoveResponse = z.infer<typeof InventoryMoveResponse>;
+
+export const CountStockResponse = z
+  .object({
+    system_quantity: z.string(),
+    counted: z.string(),
+    /** contado − sistema, con signo. Cero: no hay ajuste. */
+    delta: z.string(),
+    move: InventoryMoveResponse.nullable(),
+  })
+  .strict();
+export type CountStockResponse = z.infer<typeof CountStockResponse>;
 
 export const ListInventoryMovesResponse = z
   .object({ items: z.array(InventoryMoveResponse), total: z.number().int().nonnegative() })

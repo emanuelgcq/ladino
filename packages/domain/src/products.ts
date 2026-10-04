@@ -368,6 +368,28 @@ export async function setProductTaxCategory(
  * ruta vieja no se borra del bucket a propósito — una venta impresa ayer con
  * esa foto no tiene por qué perder su imagen; la limpieza es un job aparte.
  */
+/**
+ * C-09: ¿puede este usuario poner la foto de ESTE producto? La ruta lo pregunta ANTES de procesar
+ * y subir la imagen: un 403 o un 404 no deja objetos huérfanos. `setProductImage` vuelve a
+ * autorizar al persistir.
+ */
+export async function autorizarImagenProducto(
+  uow: UnitOfWork,
+  productId: string,
+  companyId: string,
+): Promise<Result<{ tenantId: string }, ProductError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Los maestros exigen un usuario real." });
+  }
+  const scope = await companyScope(sql, actor.userId, companyId, "product.manage");
+  if (!scope.ok) return scope;
+  const [existe] = await sql<{ id: string }[]>`
+    select id from public.products where id = ${productId} and company_id = ${companyId}`;
+  if (!existe) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  return ok({ tenantId: scope.value.tenantId });
+}
+
 export async function setProductImage(
   uow: UnitOfWork,
   productId: string,

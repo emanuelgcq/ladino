@@ -43,8 +43,17 @@ interface Props {
   readonly correo: string;
   readonly onSalir: () => void;
   /** Recarga la sesión (la MISMA función del selector): en éxito Y en
-   *  DUPLICATE — un reintento de un éxito responde 409 y se resuelve igual. */
-  readonly onListo: () => void;
+   *  DUPLICATE — un reintento de un éxito responde 409 y se resuelve igual.
+   *  En éxito recibe la empresa nueva, para que la pestaña entre en ella. */
+  readonly onListo: (companyId?: string) => void;
+  /**
+   * ADR-0077 §2 (A-13): «Crear otra empresa» desde el selector. El mismo asistente contra
+   * `/v1/onboarding/another-company`. El 409 aquí es «ya tienes un negocio con ese nombre o ese
+   * RIF»: si la web encuentra cuál es, lo AVISA («…te llevamos a él») y entra en él; si no lo
+   * encuentra, enseña el mensaje del servidor y el asistente sigue abierto. Nunca en silencio.
+   * «Salir» vuelve a la empresa de la pestaña.
+   */
+  readonly otraEmpresa?: boolean;
 }
 
 type Paso =
@@ -240,10 +249,16 @@ function borrarBorrador(clave: string): void {
 const REDUCIR = () =>
   typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.Element {
+export function Registro({
+  token,
+  correo,
+  onListo,
+  onSalir,
+  otraEmpresa = false,
+}: Props): React.JSX.Element {
   // La clave y el borrador se resuelven UNA vez, al montar: los `useState`
-  // de abajo arrancan de ahí.
-  const [clave] = useState(() => claveBorrador(token, correo));
+  // de abajo arrancan de ahí. La otra empresa lleva su propio borrador.
+  const [clave] = useState(() => claveBorrador(token, correo) + (otraEmpresa ? ".otra" : ""));
   const [borrador] = useState(() => leerBorrador(clave));
   const [paso, setPaso] = useState<Paso>(borrador?.paso ?? "bienvenida");
   const [rumbo, setRumbo] = useState<1 | -1>(1);
@@ -374,7 +389,7 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
     setErrorCrear(null);
     try {
       const conRif = d.tieneRif === true;
-      const r = await fetch(`${API_URL}/v1/onboarding`, {
+      const r = await fetch(`${API_URL}/v1/onboarding${otraEmpresa ? "/another-company" : ""}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -407,10 +422,56 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
           activity_start_date: d.inicioActividades === "" ? hoyLocal() : d.inicioActividades,
         }),
       });
-      if (r.status === 409) {
+      if (r.status === 409 && !otraEmpresa) {
         // Ya estaba fundado (reintento de un éxito): recargar lo resuelve.
         borrarBorrador(clave);
         onListo();
+        return;
+      }
+      if (r.status === 409 && otraEmpresa) {
+        // Revisión de ADR-0077 (H6 de la primera, E5 de la segunda): ya tiene un negocio con ese
+        // nombre o ese RIF (también el reintento de un éxito). Se busca cuál es; si aparece, se
+        // avisa y la pestaña entra en él; si no, se enseña el mensaje del 409 y nada se cierra.
+        const cuerpo409 = (await r.json().catch(() => null)) as {
+          person_message?: string;
+          message?: string;
+        } | null;
+        const lista = (await fetch(`${API_URL}/v1/companies`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+          .then((x) => (x.ok ? x.json() : []))
+          .catch(() => [])) as {
+          id: string;
+          trade_name: string | null;
+          legal_name: string;
+          tax_id: string;
+        }[];
+        const plano = (t: string) => t.trim().toLowerCase().replace(/\s+/g, " ");
+        const existente = lista.find(
+          (e) =>
+            plano(e.trade_name ?? e.legal_name) === plano(d.nombre) ||
+            (d.tieneRif === true && e.tax_id === rifNormalizado),
+        );
+        if (existente === undefined) {
+          // El servidor compara el nombre del NEGOCIO (tenants.name); la web solo ve el nombre
+          // comercial de sus empresas. Si no coincide ninguno, decide la persona.
+          setErrorCrear(
+            cuerpo409?.person_message ??
+              cuerpo409?.message ??
+              "Ya tienes un negocio con ese nombre o ese RIF.",
+          );
+          setCreando(false);
+          return;
+        }
+        borrarBorrador(clave);
+        // El aviso dice por qué coincidió: por el nombre, o por el RIF.
+        const porNombre = plano(existente.trade_name ?? existente.legal_name) === plano(d.nombre);
+        setErrorCrear(
+          porNombre
+            ? "Ya tienes un negocio con ese nombre: te llevamos a él."
+            : "Ya tienes un negocio con ese RIF: te llevamos a él.",
+        );
+        window.setTimeout(() => onListo(existente.id), 1800);
         return;
       }
       if (!r.ok) {
@@ -445,7 +506,7 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
       } catch {
         // sin sessionStorage se aterriza por rol: peor no es
       }
-      window.setTimeout(() => onListo(), REDUCIR() ? 0 : 450);
+      window.setTimeout(() => onListo(company_id), REDUCIR() ? 0 : 450);
     } catch {
       setErrorCrear("No se pudo conectar. Revisa tu internet e intenta otra vez.");
       setCreando(false);
@@ -489,7 +550,7 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
             onClick={onSalir}
             className="rounded-md px-2 py-1 text-[0.82rem] text-faint-foreground transition-colors hover:text-foreground"
           >
-            Salir
+            {otraEmpresa ? "Volver" : "Salir"}
           </button>
         </div>
       </header>
@@ -499,10 +560,14 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
           <div className="text-center">
             <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(ellipse_60%_80%_at_50%_-10%,var(--accent-soft),transparent)]" />
             <h1 className="text-balance text-[2.4rem] font-semibold leading-tight tracking-tight">
-              Vamos a montar tu negocio en Ladino.
+              {otraEmpresa
+                ? "Vamos a montar tu otra empresa."
+                : "Vamos a montar tu negocio en Ladino."}
             </h1>
             <p className="mx-auto mt-3 max-w-md text-[1.05rem] text-muted-foreground">
-              Te toma menos de dos minutos. Puedes ajustar todo después.
+              {otraEmpresa
+                ? "Es un negocio aparte, con sus propios documentos, inventario y libros, y tú quedas como su dueño. Puedes ajustar todo después."
+                : "Te toma menos de dos minutos. Puedes ajustar todo después."}
             </p>
             <Button
               variant="primary"
@@ -513,6 +578,12 @@ export function Registro({ token, correo, onListo, onSalir }: Props): React.JSX.
             >
               Empezar
             </Button>
+            {!otraEmpresa && (
+              <p className="mx-auto mt-8 max-w-sm text-[0.88rem] text-muted-foreground">
+                ¿Vienes a trabajar en el negocio de otra persona? No empieces aquí: pídele a quien
+                lo administra el enlace de invitación y ábrelo con esta cuenta.
+              </p>
+            )}
           </div>
         )}
 

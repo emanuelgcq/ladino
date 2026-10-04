@@ -172,11 +172,16 @@ Por eso esta categoría de test se escribe aparte y a propósito. Los que ya exi
 | Valor del kardex = saldo del mayor de inventario | `inventory_ledger_gap()` | inventario ↔ contabilidad (ADR-0060) |
 | Movimiento de valor ⇒ asiento **o** cola | `inventory_coverage_gaps()` | inventario ↔ contabilidad |
 | Venta anulada ⇒ su kardex netea a cero | `annulled_stock_gaps()` | ventas ↔ inventario (ADR-0061) |
-| Libro fiscal = mayor + cola | `book_ledger_reconciliation()` | fiscal ↔ contabilidad (L-02) |
+| Libro fiscal = mayor + cola, mes a mes y en toda la historia | `book_ledger_reconciliation()` | fiscal ↔ contabilidad (L-02); el asiento de la regularización del céntimo no cuenta (ADR-0075 §7) |
 | Caja de tesorería = su subcuenta contable, propia y hoja | `treasury_ledger_gaps()` | tesorería ↔ contabilidad (ADR-0070) |
 | Ningún control repetido por emisor e identificador | `control_number_collisions()` | ventas ↔ talonario (ADR-0071) |
 | Ningún talonario pisa a otro | `control_range_overlaps()` | talonario ↔ papel de la imprenta (ADR-0071) |
 | Retención de IVA practicada ⇒ renglón de comprobante vigente | `retention_voucher_gaps()` | compras ↔ comprobante de retención (ADR-0072) |
+| Retiro de inventario ⇒ Nota de retiro con su IVA | `withdrawal_note_gaps()` | inventario ↔ libro de ventas (ADR-0078) |
+| Ningún importe del mayor ni valor de kardex nuevo pasa del céntimo | `cent_gaps()` | contabilidad e inventario ↔ céntimo (ADR-0075 §7) |
+| IVA en Bs = base en Bs × alícuota, por línea, y el pie es la suma de sus líneas | `fiscal_amount_gaps()` | documento fiscal ↔ regla de conversión (ADR-0075 §1) |
+| Documento saldado ⇒ su cuenta por cobrar o por pagar del mayor en cero | `settled_ledger_gaps()` | ventas y compras ↔ contabilidad (ADR-0075 §4) |
+| Saldo de cada caja en su moneda = Σ originales de su subcuenta, más la cola | `treasury_currency_gaps()` | tesorería ↔ contabilidad en divisa (ADR-0075 §6) |
 
 **Al cerrar un módulo, la pregunta no es «¿pasan sus tests?» sino «¿qué invariante cruza este
 módulo con los anteriores, y quién lo mira?».** Si la respuesta es «nadie», ese es el trabajo que

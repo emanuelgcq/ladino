@@ -20,6 +20,7 @@ import { SimpleSelect } from "../../ui/select.js";
 import { Switch } from "../../ui/switch.js";
 import { useToast } from "../../ui/toast.js";
 import { FormField, MoneyInput, importeValido } from "../../components/forms.js";
+import { PRECIO_DE_LA_FACTURA } from "../../components/capa-fiscal/textos.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import {
   FORMAS_DE_COMPRA,
@@ -59,7 +60,8 @@ interface FacturaProveedor {
   status: string;
   total_amount: string;
   transaction_currency: string;
-  balance: string;
+  /** null si la factura no está asentada (borrador o anulada). */
+  balance: string | null;
 }
 interface Gasto {
   id: string;
@@ -372,7 +374,10 @@ export function ComprasNegocio(): React.JSX.Element {
                     <span className="shrink-0 tabular-nums">
                       {mostrarImporte({ amount: f.total_amount, currency: f.transaction_currency })}
                     </span>
-                    {esCero(f.balance) || compararImportes(f.balance, "0") < 0 ? (
+                    {/* `balance` llega null si la factura no está asentada (borrador o anulada:
+                        platform.supplier_invoice_balance solo responde por posted/paid). */}
+                    {f.balance === null ? null : esCero(f.balance) ||
+                      compararImportes(f.balance, "0") < 0 ? (
                       <span className="shrink-0 text-[0.8rem] text-success-soft-foreground">
                         Pagada
                       </span>
@@ -544,7 +549,7 @@ function RegistrarGasto({
   const [sinSaldo, setSinSaldo] = useState<string | null>(null);
 
   const registrar = useMutation({
-    mutationFn: async (forzar: boolean) => {
+    mutationFn: async (forzar: string | null) => {
       let attachment: string | undefined;
       if (adjunto !== null) {
         if (adjuntoSubido !== null && adjuntoSubido.archivo === adjunto) {
@@ -570,7 +575,7 @@ function RegistrarGasto({
           account_id: cuenta,
           amount: monto.trim().replace(",", "."),
           ...(recurrente ? { is_recurring: true } : {}),
-          ...(forzar ? { allow_negative_balance: true } : {}),
+          ...(forzar !== null ? { allow_negative_balance: true, overdraft_reason: forzar } : {}),
           ...(attachment === undefined ? {} : { attachment_path: attachment }),
         }),
       });
@@ -712,7 +717,7 @@ function RegistrarGasto({
             <Button
               variant="primary"
               disabled={!listo || registrar.isPending}
-              onClick={() => registrar.mutate(false)}
+              onClick={() => registrar.mutate(null)}
             >
               {registrar.isPending ? "Guardando…" : "Registrar gasto"}
             </Button>
@@ -723,8 +728,8 @@ function RegistrarGasto({
         <ConfirmarSobregiro
           mensaje={sinSaldo}
           onCancelar={() => setSinSaldo(null)}
-          onConfirmar={async () => {
-            await registrar.mutateAsync(true);
+          onConfirmar={async (porQue) => {
+            await registrar.mutateAsync(porQue);
             setSinSaldo(null);
           }}
         />
@@ -759,7 +764,7 @@ function PagarFactura({
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const toast = useToast();
-  const [monto, setMonto] = useState(factura.balance);
+  const [monto, setMonto] = useState(factura.balance ?? "");
   const [forma, setForma] = useState<string | null>(null);
   const [cuenta, setCuenta] = useState<string | null>(null);
   // Sobregiro: sin saldo se pregunta antes de dejar la cuenta en negativo (ADR-0062 §4).
@@ -813,7 +818,7 @@ function PagarFactura({
   const faltaElegirCuenta = deCuenta.que === "elegir" && cuenta === null;
 
   const pagar = useMutation({
-    mutationFn: (forzar: boolean) => {
+    mutationFn: (forzar: string | null) => {
       const configurada = configuradaElegida;
       const tipoDePago = configurada?.kind ?? forma;
       if (tipoDePago === null || !esFormaDeCompra(tipoDePago)) {
@@ -829,7 +834,7 @@ function PagarFactura({
           currency: factura.transaction_currency,
           instrument: tipoDePago,
           ...(cuentaDelPago == null ? {} : { account_id: cuentaDelPago }),
-          ...(forzar ? { allow_negative_balance: true } : {}),
+          ...(forzar !== null ? { allow_negative_balance: true, overdraft_reason: forzar } : {}),
         }),
       });
     },
@@ -854,8 +859,11 @@ function PagarFactura({
           <DialogTitle>Pagar a {proveedor}</DialogTitle>
           <DialogDescription>
             Factura {factura.supplier_document_number} — debes{" "}
-            {mostrarImporte({ amount: factura.balance, currency: factura.transaction_currency })}.
-            Puede ser un abono: lo que pagues se resta.
+            {/* Este diálogo solo se abre desde una fila con saldo (asentada): null no llega. */}
+            {factura.balance === null
+              ? "—"
+              : mostrarImporte({ amount: factura.balance, currency: factura.transaction_currency })}
+            . Puede ser un abono: lo que pagues se resta.
           </DialogDescription>
           <div className="space-y-3 pt-2">
             <FormField label="¿Cuánto pagas?" required>
@@ -925,7 +933,7 @@ function PagarFactura({
                 !importeValido(monto.trim().replace(",", ".")) ||
                 pagar.isPending
               }
-              onClick={() => pagar.mutate(false)}
+              onClick={() => pagar.mutate(null)}
             >
               {pagar.isPending ? "Pagando…" : "Registrar pago"}
             </Button>
@@ -936,8 +944,8 @@ function PagarFactura({
         <ConfirmarSobregiro
           mensaje={sinSaldo}
           onCancelar={() => setSinSaldo(null)}
-          onConfirmar={async () => {
-            await pagar.mutateAsync(true);
+          onConfirmar={async (porQue) => {
+            await pagar.mutateAsync(porQue);
             setSinSaldo(null);
           }}
         />
@@ -952,6 +960,11 @@ function PagarFactura({
  * «mercancía recibida por facturar». Si el precio de la factura difiere del de la recepción, el
  * servidor revaloriza el inventario (ADR-0060 §2).
  */
+/** «100.00000000» es como lo guarda la base; «100» es como se escribe. Solo texto. */
+function sinCeros(q: string): string {
+  return q.includes(".") ? q.replace(/\.?0+$/, "") : q;
+}
+
 function EngancharFactura({
   recepcion,
   onCerrar,
@@ -967,6 +980,13 @@ function EngancharFactura({
   const [control, setControl] = useState("");
   // ADR-0072 §3 (H7): la exclusión o el 100 %, solo si la empresa es agente.
   const [retencion, setRetencion] = useState<EleccionRetencion>({ tipo: "normal" });
+  /**
+   * D-06 (ola 3): el precio DE LA FACTURA, por línea y sin impuesto. Por omisión, el de la recepción;
+   * si el proveedor facturó otro, se escribe aquí y el SERVIDOR revaloriza el inventario por la
+   * diferencia (ajuste de valor en los movimientos, no de cantidad; ADR-0060 §2). La pantalla no
+   * calcula la diferencia: manda el precio y nada más.
+   */
+  const [precios, setPrecios] = useState<Record<string, string>>({});
   const detalle = useQuery({
     queryKey: ["recepcion", recepcion.id],
     queryFn: () =>
@@ -998,7 +1018,7 @@ function EngancharFactura({
             goods_receipt_line_id: l.id,
             product_id: l.product_id,
             quantity: l.quantity,
-            unit_price: l.unit_price_transaction,
+            unit_price: (precios[l.id] ?? l.unit_price_transaction).trim().replace(",", "."),
           })),
         }),
       }),
@@ -1024,6 +1044,22 @@ function EngancharFactura({
           <FormField label="N° de control" hint="El que trae impreso, si lo trae.">
             {(p) => <Input {...p} value={control} onChange={(e) => setControl(e.target.value)} />}
           </FormField>
+          {(detalle.data?.lines ?? []).map((l, i) => (
+            <FormField
+              key={l.id}
+              label={PRECIO_DE_LA_FACTURA(i + 1, sinCeros(l.quantity))}
+              hint="Si el proveedor facturó otro precio, escríbelo: el costo del inventario se ajusta."
+            >
+              {(p) => (
+                <Input
+                  {...p}
+                  inputMode="decimal"
+                  value={precios[l.id] ?? sinCeros(l.unit_price_transaction)}
+                  onChange={(e) => setPrecios((prev) => ({ ...prev, [l.id]: e.target.value }))}
+                />
+              )}
+            </FormField>
+          ))}
           <RetencionIvaCampos valor={retencion} onCambio={setRetencion} />
         </div>
         <DialogFooter>
@@ -1035,6 +1071,7 @@ function EngancharFactura({
             disabled={
               numero.trim() === "" ||
               !eleccionCompleta(retencion) ||
+              Object.values(precios).some((v) => !importeValido(v.trim().replace(",", "."))) ||
               detalle.isPending ||
               enganchar.isPending
             }

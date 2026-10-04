@@ -136,6 +136,7 @@ beforeAll(async () => {
              (${ROL_JEFE}, null, ${`lleg_jefe_${RUN}`}, 'Jefe llegada', true),
              (${ROL_REC}, null, ${`lleg_rec_${RUN}`}, 'Recibidor', true)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
+             (${ROL_JEFE}, 'treasury.overdraft'),
              (${ROL_JEFE}, 'inventory.move'), (${ROL_JEFE}, 'inventory.adjust'),
              (${ROL_JEFE}, 'purchase.receive'), (${ROL_JEFE}, 'purchase.invoice.register'),
              (${ROL_JEFE}, 'purchase.payment.register'), (${ROL_JEFE}, 'purchase.order.manage'),
@@ -423,7 +424,11 @@ describe("llegó mercancía — la única puerta (ADR-0066)", () => {
       lines: [{ product_id: PROD, quantity: "2", unit_amount: "250" }],
       // Sin forma de pago configurada, el servidor resuelve «Sin asignar (Bs.)»; aquí se prueba
       // el PAGO, no el saldo, así que el sobregiro se confirma explícitamente (ADR-0062 §4).
-      payment: { instrument: "transferencia", allow_negative_balance: true },
+      payment: {
+        instrument: "transferencia",
+        allow_negative_balance: true,
+        overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
+      },
     });
     expect(r.status, await r.clone().text()).toBe(201);
     const a = (await r.json()) as {
@@ -834,7 +839,12 @@ describe("llegó mercancía — la única puerta (ADR-0066)", () => {
       payment: {
         instrument: "transferencia" as const,
         account_id: cuenta!.id,
-        ...(forzar ? { allow_negative_balance: true } : {}),
+        ...(forzar
+          ? {
+              allow_negative_balance: true,
+              overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
+            }
+          : {}),
       },
     });
 
@@ -850,7 +860,7 @@ describe("llegó mercancía — la única puerta (ADR-0066)", () => {
     // reutilizarla. Se asevera el CÓDIGO, que es lo único que separa esto de un 409 cualquiera.
     const mismaClave = await pedir("POST", "/v1/arrivals", JEFE, cuerpo(true), llave);
     expect(mismaClave.status).toBe(409);
-    expect(((await mismaClave.json()) as { code: string }).code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect(((await mismaClave.json()) as { code: string }).code).toBe("IDEMPOTENCY_BODY_MISMATCH");
 
     // Con la clave derivada —determinista, no un uuid nuevo— la llegada entra.
     const otra = await pedir("POST", "/v1/arrivals", JEFE, cuerpo(true), `${llave}:sobregiro`);

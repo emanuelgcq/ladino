@@ -14,6 +14,7 @@ import { mostrarImporte } from "../../money.js";
 import { mostrarPorcentaje } from "../../porcentaje.js";
 import { fechaLocal } from "../../fechas.js";
 import { MensajeError } from "../ventas/comunes.js";
+import { IGTF_PERCEPCIONES } from "../../components/capa-fiscal/textos.js";
 import { errorDePersona, type IgtfPerceptions, type IgtfStatus } from "../../lib.js";
 
 /** El permiso REAL que exigen enable / instruments / taxpayer-type (packages/domain/src/igtf.ts). */
@@ -298,8 +299,23 @@ function Percepciones({ desde, hasta }: { desde: string; hasta: string }): React
           })}
         </CardTitle>
         <CardDescription>
-          Una fila por cobro que causó. Lo pendiente de reintegro —facturas anuladas después de
-          percibir— se lista, pero no se suma: ese dinero se le devuelve al cliente, no al fisco.
+          {IGTF_PERCEPCIONES.descripcion}
+          {/* Las dos cifras vienen del servidor (platform.igtf_period_totals): aquí no se suma. */}
+          {(datos.pending_refund_count ?? 0) > 0 &&
+            datos.pending_refund_functional !== undefined && (
+              <>
+                {" "}
+                <strong>
+                  {IGTF_PERCEPCIONES.pendienteDeReintegro(
+                    mostrarImporte({
+                      amount: datos.pending_refund_functional,
+                      currency: datos.functional_currency,
+                    }),
+                    datos.pending_refund_count ?? 0,
+                  )}
+                </strong>
+              </>
+            )}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -308,11 +324,7 @@ function Percepciones({ desde, hasta }: { desde: string; hasta: string }): React
             role="alert"
             className="mb-3 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-[0.88rem] text-warning-soft-foreground"
           >
-            {pendientes.length === 1
-              ? "Hay 1 percepción pendiente de reintegro"
-              : `Hay ${pendientes.length} percepciones pendientes de reintegro`}
-            {paginas > 1 ? " en esta página" : ""}: su factura se anuló después de cobrarla. Habla
-            con tu contador antes de devolver.
+            {IGTF_PERCEPCIONES.avisoPendientes(pendientes.length, paginas > 1)}
           </p>
         )}
         {datos.items.length === 0 ? (

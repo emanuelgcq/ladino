@@ -46,6 +46,15 @@ const MEM_MIRON = crypto.randomUUID();
 const ASIG_VENDEDOR = crypto.randomUUID();
 const ASIG_CAJERO = crypto.randomUUID();
 const ASIG_MIRON = crypto.randomUUID();
+// ADR-0076 (E-08/O-02): otra vendedora sin pos.carts.manage, y una encargada con él.
+const OTRA = crypto.randomUUID();
+const GESTORA = crypto.randomUUID();
+const ROL_GESTION = crypto.randomUUID();
+const MEM_OTRA = crypto.randomUUID();
+const MEM_GESTORA = crypto.randomUUID();
+const ASIG_OTRA = crypto.randomUUID();
+const ASIG_GESTORA = crypto.randomUUID();
+const ASIG_GESTORA_GESTION = crypto.randomUUID();
 const RUN = Date.now().toString(36);
 /** Tasas OFICIALES sembradas por este fichero (solo existe la del BCV: ADR-0064 §1). */
 const FUENTE_TASA = "BCV e2e-ventas";
@@ -71,6 +80,25 @@ const tokenDe = (sub: string) =>
     .setIssuedAt()
     .setExpirationTime("1h")
     .sign(JWT_SECRET);
+
+/** Como `pedir`, con la llave que el caso necesita (ADR-0076: la llave es por intento). */
+async function pedirConLlave(
+  path: string,
+  sub: string,
+  body: unknown,
+  llave: string,
+): Promise<Response> {
+  return app.request(path, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${await tokenDe(sub)}`,
+      "X-Company-Id": COMPANY,
+      "Idempotency-Key": llave,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
 
 async function pedir(metodo: string, path: string, sub: string, body?: unknown): Promise<Response> {
   const headers: Record<string, string> = {
@@ -98,7 +126,8 @@ beforeAll(async () => {
   sql = createClient(URL_LOCAL);
   sqlApi = createClient(URL_API);
   app = buildApp({ sql: sqlApi, auth: { mode: "hs256", jwtSecret: JWT_SECRET, issuer: ISSUER } });
-  await sql`insert into auth.users (id) values (${VENDEDOR}), (${CAJERO}), (${MIRON})
+  await sql`insert into auth.users (id) values (${VENDEDOR}), (${CAJERO}), (${MIRON}),
+                                               (${OTRA}), (${GESTORA})
             on conflict (id) do nothing`;
   // `exchange_rates` es GLOBAL: no tiene tenant y sobrevive entre corridas. El
   // primer caso de este fichero demuestra que SIN tasa no se vende, así que la
@@ -131,8 +160,12 @@ beforeAll(async () => {
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values
              (${ROL_VENTAS}, null, ${`e2evta_ventas_${RUN}`}, 'Ventas', true),
              (${ROL_CAJA}, null, ${`e2evta_caja_${RUN}`}, 'Caja', false),
-             (${ROL_MIRON}, null, ${`e2evta_miron_${RUN}`}, 'Mirón', false)
+             (${ROL_MIRON}, null, ${`e2evta_miron_${RUN}`}, 'Mirón', false),
+             (${ROL_GESTION}, null, ${`e2evta_gestion_${RUN}`}, 'Cuentas ajenas', false)
              on conflict (id) do nothing`;
+    await tx`insert into public.role_permissions (role_id, permission_key) values
+             (${ROL_GESTION}, 'pos.carts.manage')
+             on conflict do nothing`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
              (${ROL_VENTAS}, 'sales.quote.manage'),
              (${ROL_VENTAS}, 'sales.order.manage'),
@@ -153,18 +186,25 @@ beforeAll(async () => {
     await tx`insert into public.memberships (id, tenant_id, user_id) values
              (${MEM_VENDEDOR}, ${TENANT}, ${VENDEDOR}),
              (${MEM_CAJERO}, ${TENANT}, ${CAJERO}),
-             (${MEM_MIRON}, ${TENANT}, ${MIRON})
+             (${MEM_MIRON}, ${TENANT}, ${MIRON}),
+             (${MEM_OTRA}, ${TENANT}, ${OTRA}),
+             (${MEM_GESTORA}, ${TENANT}, ${GESTORA})
              on conflict (id) do nothing`;
     await tx`insert into public.user_role_assignments (id, tenant_id, membership_id, role_id, company_id) values
              (${ASIG_VENDEDOR}, ${TENANT}, ${MEM_VENDEDOR}, ${ROL_VENTAS}, null),
              (${ASIG_CAJERO}, ${TENANT}, ${MEM_CAJERO}, ${ROL_CAJA}, ${COMPANY}),
-             (${ASIG_MIRON}, ${TENANT}, ${MEM_MIRON}, ${ROL_MIRON}, ${COMPANY})
+             (${ASIG_MIRON}, ${TENANT}, ${MEM_MIRON}, ${ROL_MIRON}, ${COMPANY}),
+             (${ASIG_OTRA}, ${TENANT}, ${MEM_OTRA}, ${ROL_VENTAS}, null),
+             (${ASIG_GESTORA}, ${TENANT}, ${MEM_GESTORA}, ${ROL_VENTAS}, null),
+             (${ASIG_GESTORA_GESTION}, ${TENANT}, ${MEM_GESTORA}, ${ROL_GESTION}, ${COMPANY})
              on conflict (id) do nothing`;
     // LAD25: el rol de ventas lleva inventory.move, que es scoped, así que
     // declara requires_scope y necesita binding por almacén. No hay jefe de
     // ventas «de toda la empresa» que se salte esto.
     await tx`insert into public.scope_bindings (tenant_id, company_id, assignment_id, scope_type, scope_id)
-             values (${TENANT}, ${COMPANY}, ${ASIG_VENDEDOR}, 'warehouse', ${W1})
+             values (${TENANT}, ${COMPANY}, ${ASIG_VENDEDOR}, 'warehouse', ${W1}),
+                    (${TENANT}, ${COMPANY}, ${ASIG_OTRA}, 'warehouse', ${W1}),
+                    (${TENANT}, ${COMPANY}, ${ASIG_GESTORA}, 'warehouse', ${W1})
              on conflict do nothing`;
     await tx`insert into public.customers (id, tenant_id, company_id, tax_id, legal_name,
                                            person_type_code, taxpayer_type_code)
@@ -1258,7 +1298,7 @@ describe("ventas de extremo a extremo", () => {
 
   // ── CUENTAS ABIERTAS del POS (migración 44) ───────────────────────────────
 
-  it("la cuenta abierta vive en la nube y MUERE en la transacción del cobro", async () => {
+  it("la cuenta abierta vive en la nube y MUERE en la transacción del cobro (marcada vendida, ADR-0076)", async () => {
     const CARRITO = crypto.randomUUID();
 
     // Nace SIN `Idempotency-Key` a propósito: el PUT es idempotente por
@@ -1310,9 +1350,17 @@ describe("ventas de extremo a extremo", () => {
       payments: [{ instrument: "efectivo_usd", amount: "232.00000000", currency: "USD" }],
     });
     expect(venta.status).toBe(201);
-    const filas = await sql<{ id: string }[]>`
-      select id from public.pos_carts where company_id = ${COMPANY} and id = ${CARRITO}`;
-    expect(filas).toHaveLength(0);
+    // ADR-0076 (M-01): antes la fila se BORRABA y la subida en vuelo la resucitaba. Ahora muere
+    // marcada: vendida, con la venta que la cerró, y fuera de la lista de la caja.
+    const vendidaId = ((await venta.clone().json()) as { document: { id: string } }).document.id;
+    const filas = await sql<{ sold_at: string | null; sale_id: string | null }[]>`
+      select sold_at, sale_id from public.pos_carts where company_id = ${COMPANY} and id = ${CARRITO}`;
+    expect(filas).toHaveLength(1);
+    expect(filas[0]!.sold_at).not.toBeNull();
+    expect(filas[0]!.sale_id).toBe(vendidaId);
+    const listaTrasVender = await pedir("GET", "/v1/pos/carts", VENDEDOR);
+    const quedan = ((await listaTrasVender.json()) as { items: { id: string }[] }).items;
+    expect(quedan.filter((x) => x.id === CARRITO)).toHaveLength(0);
 
     // Descartar lo ya muerto no es un error: responde qué pasó.
     const otraVez = await pedir("DELETE", `/v1/pos/carts/${CARRITO}`, VENDEDOR);
@@ -1344,6 +1392,251 @@ describe("ventas de extremo a extremo", () => {
       lines: [],
     });
     expect(clienteAjeno.status).toBe(422);
+  });
+
+  // ── ADR-0076: la llave es por intento y la cuenta vendida muere en el servidor ──────────
+
+  const ventaDeCuenta = (
+    cartId: string,
+    attemptId: string,
+    version = 1,
+  ): Record<string, unknown> => ({
+    company_id: COMPANY,
+    warehouse_id: W1,
+    customer_id: CLIENTE,
+    series: "C",
+    cart_id: cartId,
+    cart_version: version,
+    attempt_id: attemptId,
+    lines: [{ product_id: PROD, quantity: "1" }],
+    payments: [{ instrument: "efectivo_usd", amount: "116.00000000", currency: "USD" }],
+  });
+  const contarDocs = async (): Promise<string> => {
+    const [r] = await sql<{ n: string }[]>`
+      select count(*)::text as n from public.documents where company_id = ${COMPANY}`;
+    return r!.n;
+  };
+
+  it("M-01/M-02: la cuenta cobrada no resucita por PUT, y un segundo cobro con otra llave da 409 POS_CART_SOLD, no otra venta ni el replay", async () => {
+    const CUENTA = crypto.randomUUID();
+    const crear = await pedir("PUT", `/v1/pos/carts/${CUENTA}`, VENDEDOR, {
+      company_id: COMPANY,
+      label: "Cuenta M-01",
+      customer_id: null,
+      lines: [{ product_id: PROD, qty: "1" }],
+    });
+    expect(crear.status).toBe(200);
+
+    const k1 = crypto.randomUUID();
+    const primera = await pedirConLlave("/v1/pos/sales", VENDEDOR, ventaDeCuenta(CUENTA, k1), k1);
+    expect(primera.status, await primera.clone().text()).toBe(201);
+    const venta = ((await primera.json()) as { document: { id: string; vendor_id: string | null } })
+      .document;
+    // O-02: el vendedor es quien cobra.
+    expect(venta.vendor_id).toBe(VENDEDOR);
+    const docs = await contarDocs();
+
+    // La subida que estaba en vuelo llega DESPUÉS de la venta: 409, y la fila sigue vendida.
+    const tarde = await pedir("PUT", `/v1/pos/carts/${CUENTA}`, VENDEDOR, {
+      company_id: COMPANY,
+      label: "Cuenta M-01",
+      customer_id: null,
+      lines: [
+        { product_id: PROD, qty: "1" },
+        { product_id: PROD, qty: "2" },
+      ],
+    });
+    expect(tarde.status).toBe(409);
+    const tardeCuerpo = (await tarde.json()) as { code: string; message: string };
+    expect(tardeCuerpo.code).toBe("POS_CART_SOLD");
+    expect(tardeCuerpo.message).toMatch(/ya se cobró/);
+    const [fila] = await sql<{ sold_at: string | null; lines: unknown[] }[]>`
+      select sold_at, lines from public.pos_carts where id = ${CUENTA}`;
+    expect(fila!.sold_at).not.toBeNull();
+    expect(fila!.lines).toHaveLength(1);
+
+    // Cobrarla otra vez con OTRA llave: la cuenta es la clave natural — 409 con la venta vieja
+    // en details, y ningún documento nuevo. El mensaje es el del dominio, no el del middleware.
+    const k2 = crypto.randomUUID();
+    const segunda = await pedirConLlave("/v1/pos/sales", VENDEDOR, ventaDeCuenta(CUENTA, k2), k2);
+    expect(segunda.status).toBe(409);
+    const seg = (await segunda.json()) as {
+      code: string;
+      message: string;
+      details?: { sale_id: string };
+    };
+    expect(seg.code).toBe("POS_CART_SOLD");
+    expect(seg.details?.sale_id).toBe(venta.id);
+    expect(await contarDocs()).toBe(docs);
+
+    // La MISMA llave con el MISMO cuerpo sí es el replay (la respuesta perdida): misma venta.
+    const replay = await pedirConLlave("/v1/pos/sales", VENDEDOR, ventaDeCuenta(CUENTA, k1), k1);
+    expect(replay.status).toBe(201);
+    expect(((await replay.json()) as { document: { id: string } }).document.id).toBe(venta.id);
+
+    // La MISMA llave con OTRO cuerpo: IDEMPOTENCY_BODY_MISMATCH en palabras de persona, nunca
+    // «ya se registró». Se asevera el MENSAJE: es lo único que solo produce este camino.
+    const otroCuerpo = await pedirConLlave(
+      "/v1/pos/sales",
+      VENDEDOR,
+      ventaDeCuenta(CUENTA, k1, 7),
+      k1,
+    );
+    expect(otroCuerpo.status).toBe(409);
+    const oc = (await otroCuerpo.json()) as {
+      code: string;
+      person_message: string;
+      details?: { previous_status: string };
+    };
+    expect(oc.code).toBe("IDEMPOTENCY_BODY_MISMATCH");
+    // Decidido por criterio (ADR-0076): el intento anterior quedó HECHO — la web no estrena llave.
+    expect(oc.details?.previous_status).toBe("completed");
+    // Con el intento anterior HECHO el texto no dice «vuelve a intentarlo»: dice que se revise.
+    expect(oc.person_message).toBe(
+      "Esa operación ya quedó registrada antes con otros datos. Revísala antes de repetirla.",
+    );
+    expect(await contarDocs()).toBe(docs);
+
+    // El acta de la cuenta: quién la armó, quién cobró, con qué edición y en qué intento.
+    const [acta] = await sql<{ payload: Record<string, unknown> }[]>`
+      select payload from public.audit_events
+       where company_id = ${COMPANY} and aggregate_id = ${venta.id} and event_type = 'pos.cart.sold'`;
+    expect(acta!.payload).toMatchObject({
+      cart_id: CUENTA,
+      cart_author_id: VENDEDOR,
+      cashier_id: VENDEDOR,
+      cart_version: 1,
+      attempt_id: k1,
+    });
+  });
+
+  it("M-01: una cuenta que nunca llegó a la nube nace vendida — la subida en vuelo no la crea después", async () => {
+    const CUENTA = crypto.randomUUID();
+    const k = crypto.randomUUID();
+    const venta = await pedirConLlave("/v1/pos/sales", VENDEDOR, ventaDeCuenta(CUENTA, k), k);
+    expect(venta.status, await venta.clone().text()).toBe(201);
+    const vendida = ((await venta.clone().json()) as { document: { id: string } }).document.id;
+    // La lápida nace con su autor y su venta, y el acta lo dice.
+    const [lapida] = await sql<{ created_by: string | null; sale_id: string | null }[]>`
+      select created_by, sale_id from public.pos_carts where id = ${CUENTA}`;
+    expect(lapida).toMatchObject({ created_by: VENDEDOR, sale_id: vendida });
+    const [acta] = await sql<{ payload: Record<string, unknown> }[]>`
+      select payload from public.audit_events
+       where aggregate_id = ${vendida} and event_type = 'pos.cart.sold'`;
+    expect(acta!.payload).toMatchObject({
+      cart_id: CUENTA,
+      cart_author_id: VENDEDOR,
+      attempt_id: k,
+    });
+    const tarde = await pedir("PUT", `/v1/pos/carts/${CUENTA}`, VENDEDOR, {
+      company_id: COMPANY,
+      label: "Cuenta 9",
+      customer_id: null,
+      lines: [{ product_id: PROD, qty: "1" }],
+    });
+    expect(tarde.status).toBe(409);
+    expect(((await tarde.json()) as { code: string }).code).toBe("POS_CART_SOLD");
+  });
+
+  it("[1] dos cobros SIMULTÁNEOS de una cuenta que nunca subió, con llaves distintas: una venta y un 409 POS_CART_SOLD", async () => {
+    const CUENTA = crypto.randomUUID();
+    const docs = Number(await contarDocs());
+    const k1 = crypto.randomUUID();
+    const k2 = crypto.randomUUID();
+    const [a, b] = await Promise.all([
+      pedirConLlave("/v1/pos/sales", VENDEDOR, ventaDeCuenta(CUENTA, k1), k1),
+      pedirConLlave("/v1/pos/sales", VENDEDOR, ventaDeCuenta(CUENTA, k2), k2),
+    ]);
+    const estados = [a.status, b.status].sort();
+    expect(estados, `${await a.clone().text()} | ${await b.clone().text()}`).toEqual([201, 409]);
+    const perdedora = a.status === 409 ? a : b;
+    const ganadora = a.status === 409 ? b : a;
+    const vendida = ((await ganadora.json()) as { document: { id: string } }).document.id;
+    const perdio = (await perdedora.json()) as { code: string; details?: { sale_id: string } };
+    expect(perdio.code).toBe("POS_CART_SOLD");
+    // El `code` solo no dice qué camino respondió. La venta de la GANADORA en `details` solo la
+    // produce el `err` del dominio (cuentaVendida), que relee la lápida: es lo que se asevera.
+    expect(perdio.details?.sale_id).toBe(vendida);
+    expect(Number(await contarDocs())).toBe(docs + 1);
+  });
+
+  it("E-08/O-02: la cuenta de otra persona se ve con autor y hora, en solo lectura; la cobra quien tenga pos.carts.manage, y el vendedor es quien cobra", async () => {
+    const CUENTA = crypto.randomUUID();
+    const caja = crypto.randomUUID();
+    const crear = await pedir("PUT", `/v1/pos/carts/${CUENTA}`, VENDEDOR, {
+      company_id: COMPANY,
+      label: "Cuenta de la mañana",
+      customer_id: null,
+      station_id: caja,
+      lines: [{ product_id: PROD, qty: "1" }],
+    });
+    expect(crear.status).toBe(200);
+
+    type Item = {
+      id: string;
+      created_by: string | null;
+      created_at: string;
+      station_id: string | null;
+      editable: boolean;
+    };
+    const verla = async (sub: string): Promise<Item | undefined> => {
+      const r = await pedir("GET", "/v1/pos/carts", sub);
+      expect(r.status).toBe(200);
+      return ((await r.json()) as { items: Item[] }).items.find((x) => x.id === CUENTA);
+    };
+    const suya = await verla(VENDEDOR);
+    expect(suya).toMatchObject({ created_by: VENDEDOR, station_id: caja, editable: true });
+    expect(suya!.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    const ajena = await verla(OTRA);
+    expect(ajena).toMatchObject({ created_by: VENDEDOR, editable: false });
+
+    // OTRA no la cambia, no la borra y no la cobra: 403 con el permiso que falta, y nada cambia.
+    const docs = await contarDocs();
+    const pisar = await pedir("PUT", `/v1/pos/carts/${CUENTA}`, OTRA, {
+      company_id: COMPANY,
+      label: "Secuestrada",
+      customer_id: null,
+      lines: [],
+    });
+    expect(pisar.status).toBe(403);
+    expect(((await pisar.json()) as { message: string }).message).toMatch(/pos\.carts\.manage/);
+    const borrar = await pedir("DELETE", `/v1/pos/carts/${CUENTA}`, OTRA);
+    expect(borrar.status).toBe(403);
+    const kOtra = crypto.randomUUID();
+    const cobrarOtra = await pedirConLlave(
+      "/v1/pos/sales",
+      OTRA,
+      ventaDeCuenta(CUENTA, kOtra),
+      kOtra,
+    );
+    expect(cobrarOtra.status).toBe(403);
+    expect(await contarDocs()).toBe(docs);
+    const [intacta] = await sql<{ label: string; sold_at: string | null }[]>`
+      select label, sold_at from public.pos_carts where id = ${CUENTA}`;
+    expect(intacta).toMatchObject({ label: "Cuenta de la mañana", sold_at: null });
+
+    // La encargada (pos.carts.manage) la ve editable y la cobra: ella es la vendedora, y la
+    // cuenta vendida y el acta dicen quién la armó.
+    expect(await verla(GESTORA)).toMatchObject({ editable: true });
+    const kG = crypto.randomUUID();
+    const cobrada = await pedirConLlave("/v1/pos/sales", GESTORA, ventaDeCuenta(CUENTA, kG), kG);
+    expect(cobrada.status, await cobrada.clone().text()).toBe(201);
+    const doc = ((await cobrada.json()) as { document: { id: string; vendor_id: string | null } })
+      .document;
+    expect(doc.vendor_id).toBe(GESTORA);
+    const [lapida] = await sql<{ created_by: string | null; sale_id: string | null }[]>`
+      select created_by, sale_id from public.pos_carts where id = ${CUENTA}`;
+    expect(lapida).toMatchObject({ created_by: VENDEDOR, sale_id: doc.id });
+    const [acta] = await sql<{ payload: Record<string, unknown> }[]>`
+      select payload from public.audit_events
+       where aggregate_id = ${doc.id} and event_type = 'pos.cart.sold'`;
+    expect(acta!.payload).toMatchObject({ cart_author_id: VENDEDOR, cashier_id: GESTORA });
+    // [10] El detalle de la venta dice quién ARMÓ la cuenta, leído de la lápida.
+    const detalle = await pedir("GET", `/v1/documents/${doc.id}`, GESTORA);
+    expect(detalle.status).toBe(200);
+    expect(
+      ((await detalle.json()) as { pos_cart: { author_id: string } | null }).pos_cart,
+    ).toMatchObject({ author_id: VENDEDOR });
   });
 
   // ── LAS NOTAS (ADR-0051): débito de punta a punta y crédito directa ───────
@@ -1512,7 +1805,10 @@ describe("ventas de extremo a extremo", () => {
   // (< 0.005 de la moneda que decide) cierra el documento.
 
   it("la deuda se sirve a 2 decimales y pagar lo mostrado cierra la factura", async () => {
-    // Tasa fea de HOY: 116 USD → 4190.320896 Bs. La pantalla dirá 4190.32.
+    // Tasa fea de HOY. E-05 (ADR-0075 §1): la factura en Bs sale de su base en Bs —
+    // 100 USD → 3.612,35; IVA 16 % de ESA base = 577,98; total 4.190,33—, no de convertir el
+    // total en divisa (116 USD → 4.190,320896 → 4.190,32, la cifra que esta prueba aseveraba
+    // gracias al defecto). La pantalla dirá 4190.33.
     await sembrarTasaOficial(sql, {
       rate: "36.12345600",
       source: `${FUENTE_TASA} redondeo`,
@@ -1549,7 +1845,7 @@ describe("ventas de extremo a extremo", () => {
     const fila = ((await lista.json()) as { items: { id: string; debt: string }[] }).items.find(
       (x) => x.id === deudorId,
     );
-    expect(fila?.debt).toBe("4190.32");
+    expect(fila?.debt).toBe("4190.33");
 
     const estado = (await (
       await pedir("GET", `/v1/customers/${deudorId}/statement`, VENDEDOR)
@@ -1559,14 +1855,14 @@ describe("ventas de extremo a extremo", () => {
       documents: { id: string; balance: string }[];
     };
     const filaDoc = estado.documents.find((d) => d.id === doc.id);
-    expect(filaDoc?.balance).toBe("4190.32");
+    expect(filaDoc?.balance).toBe("4190.33");
 
     // Se paga EXACTAMENTE lo que la pantalla pidió…
     const cobro = await pedir("POST", "/v1/payments", VENDEDOR, {
       company_id: COMPANY,
       document_id: doc.id,
       currency: "VES",
-      amount: "4190.32000000",
+      amount: "4190.33000000",
       instrument: "efectivo_bs",
     });
     expect(cobro.status).toBe(201);

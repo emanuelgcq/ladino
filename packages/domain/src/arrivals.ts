@@ -4,6 +4,7 @@ import { parseDecimal } from "@ladino/money";
 import type {
   RegisterArrivalRequest,
   ArrivalResponse,
+  ArrivalPreviewResponse,
   ReceiveGoodsRequest,
   RegisterSupplierInvoiceRequest,
   InventoryMoveResponse,
@@ -133,6 +134,80 @@ export async function ventasIntermedias(
      order by p.name`;
 }
 
+/**
+ * EL INSTANTE DEL HECHO (D-08 y D-10, familia F1 de CLAUDE.md §3). La llegada se fecha por DÍA de
+ * Caracas; el kardex y el pago necesitan un INSTANTE. Antes era `${fecha}T12:00:00.000Z`, las
+ * 08:00 de Caracas: antes de esa hora quedaba después de `created_at` y el CHECK
+ * `occurred_at <= created_at` lo rechazaba, y después de esa hora colocaba lo de hoy ANTES de lo
+ * ya registrado hoy (el kardex leído por `occurred_at` daba saldos incoherentes).
+ *
+ * La granularidad, declarada: se comparan dos `date` de Caracas. Si el día es HOY, el instante
+ * es `now()` —el inicio de la transacción, el mismo reloj que `created_at`—; si es un día
+ * anterior, el último milisegundo de ese día en Caracas: después de todo lo de ese día y antes
+ * de todo lo de hoy, sin una hora que nadie eligió.
+ */
+async function instanteDelHecho(sql: TransactionSql, fecha: string): Promise<string> {
+  const [fila] = await sql<{ t: string }[]>`
+    select to_char(
+             (case when ${fecha}::date = (now() at time zone 'America/Caracas')::date then now()
+                   else ((${fecha}::date + 1)::timestamp at time zone 'America/Caracas')
+                        - interval '1 millisecond'
+              end) at time zone 'UTC',
+             'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as t`;
+  return fila!.t;
+}
+
+/**
+ * LA TASA DE UNA LLEGADA EN DIVISA (D-09; ADR-0066 nota de la ola 3 §6). «La tasa del día» es la
+ * oficial VIGENTE a la fecha del hecho: la más reciente no posterior (`platform.rate_for`) — el
+ * BCV no publica sábados, domingos ni feriados, y esos días rige la última publicada —, y NO más
+ * antigua que el margen de plataforma (`platform.parameters.closing_rate_max_age_days`, el mismo
+ * dato que acota la tasa de cierre: `platform.closing_rate`). Fuera del margen no hay tasa que
+ * usar: `EXCHANGE_RATE_MISSING`, antes de escribir nada.
+ *
+ * Antes `rate_for` a secas admitía una tasa de CUALQUIER antigüedad: mientras existiera una
+ * vieja, la llegada en dólares nunca fallaba y se valoraba con ella.
+ *
+ * Solo se mira cuando la llegada cruza monedas: el documento o algún costo en una moneda que no
+ * es la funcional. Devuelve la tasa y su fecha para que la vista previa las diga.
+ */
+export async function tasaVigenteDeLaLlegada(
+  sql: TransactionSql,
+  input: RegisterArrivalRequest,
+  fecha: string,
+): Promise<Result<{ rate: string; rate_date: string } | null, ArrivalError>> {
+  const [empresa] = await sql<{ funcional: string }[]>`
+    select functional_currency_code as funcional from public.companies
+     where id = ${input.company_id}`;
+  if (!empresa) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  const monedas = new Set<string>([empresa.funcional, input.currency]);
+  for (const l of input.lines)
+    if (l.capture_currency !== undefined) monedas.add(l.capture_currency);
+  if (monedas.size === 1) return ok(null);
+  // Dos monedas que no son el ancla no cruzan: lo rechaza `costoDeLinea` con su motivo (422),
+  // no este control con un «falta la tasa» que no es verdad.
+  if ([...monedas].filter((m) => m !== ANCLA).length > 1) return ok(null);
+  let usada: { rate: string; rate_date: string } | null = null;
+  for (const moneda of monedas) {
+    if (moneda === ANCLA) continue;
+    const [t] = await sql<{ rate: string | null; rate_date: string | null }[]>`
+      select platform.closing_rate(${input.company_id}, ${ANCLA}, ${moneda}, ${fecha}::date)::text
+               as rate,
+             (select f.rate_date::text
+                from platform.rate_for(${input.company_id}, ${ANCLA}, ${moneda}, ${fecha}::date) f)
+               as rate_date`;
+    if (!t || t.rate === null || t.rate_date === null) {
+      return err({
+        code: "EXCHANGE_RATE_MISSING",
+        message:
+          "No hay tasa del BCV vigente para ese día: la última publicada es demasiado vieja o no existe. Tráela en Mi dinero y vuelve a registrar la llegada.",
+      });
+    }
+    usada = { rate: t.rate, rate_date: t.rate_date };
+  }
+  return ok(usada);
+}
+
 /** El ancla del sistema: la única moneda contra la que hay tasa publicada (ADR-0064). */
 const ANCLA = "USD";
 
@@ -231,6 +306,8 @@ export async function registerArrival(
   const cuentaPago = input.payment?.account_id ?? null;
   const admisible = await fechaAdmisible(sql, input.company_id, fecha, cuentaPago);
   if (!admisible.ok) return admisible;
+  const vigente = await tasaVigenteDeLaLlegada(sql, input, fecha);
+  if (!vigente.ok) return vigente;
 
   // Cada línea con su costo unitario resuelto por el SERVIDOR: la pantalla manda lo que la
   // persona escribió —por unidad o el total, en la moneda que tenga a mano— y nunca el
@@ -241,7 +318,21 @@ export async function registerArrival(
     if (!u.ok) return u;
     costos.push(u.value);
   }
+  // D-05: «el precio ya incluye IVA». Lo escrito es el precio con IVA del papel; el SERVIDOR le
+  // quita el IVA con la misma alícuota de compra que usará la factura, y lo que sigue —recepción,
+  // factura, kardex— trabaja con la base, como siempre. Solo cuando hay IVA que quitar: con
+  // proveedor y con factura (presente o por llegar). Sin factura, lo pagado ES el costo.
+  if (
+    input.prices_include_tax === true &&
+    input.supplier_id !== undefined &&
+    input.invoice !== "none"
+  ) {
+    const netos = await quitarIva(sql, input, fecha, costos);
+    if (!netos.ok) return netos;
+    for (const [i, n] of netos.value.entries()) costos[i] = n;
+  }
   const unitarios = costos.map((c) => c.unitario);
+  const instante = await instanteDelHecho(sql, fecha);
 
   // ── Camino «ya era mía»: inventario inicial o aporte ──────────────────────
   if (input.supplier_id === undefined) {
@@ -256,7 +347,7 @@ export async function registerArrival(
         quantity: l.quantity,
         amount: total.value,
         currency: input.currency,
-        occurred_at: `${fecha}T12:00:00.000Z`,
+        occurred_at: instante,
         accounting: "stock_opening",
         ...(l.lot_code === undefined ? {} : { lot_code: l.lot_code }),
         ...(l.lot_expires_at === undefined ? {} : { lot_expires_at: l.lot_expires_at }),
@@ -297,7 +388,7 @@ export async function registerArrival(
     supplier_id: input.supplier_id,
     warehouse_id: input.warehouse_id,
     currency: input.currency,
-    received_at: `${fecha}T12:00:00.000Z`,
+    received_at: instante,
     ...(input.purchase_order_id === undefined
       ? {}
       : { purchase_order_id: input.purchase_order_id }),
@@ -407,12 +498,15 @@ export async function registerArrival(
       gross_amount: monto.value.toFixed(8),
       currency: input.currency,
       instrument: input.payment.instrument,
-      paid_at: `${fecha}T12:00:00.000Z`,
+      paid_at: instante,
       ...(input.payment.account_id === undefined ? {} : { account_id: input.payment.account_id }),
       ...(input.payment.reference === undefined ? {} : { reference: input.payment.reference }),
       ...(input.payment.allow_negative_balance === undefined
         ? {}
         : { allow_negative_balance: input.payment.allow_negative_balance }),
+      ...(input.payment.overdraft_reason === undefined
+        ? {}
+        : { overdraft_reason: input.payment.overdraft_reason }),
     });
     if (!pagado.ok) return err(pagado.error);
     pago = pagado.value;
@@ -425,4 +519,143 @@ export async function registerArrival(
     payment: pago,
     moves: [],
   });
+}
+/**
+ * D-05: el IVA que se quita a un precio escrito CON IVA. La alícuota sale del mismo motor que la
+ * factura (`platform.resolve_tax`: compra, tipo del proveedor, categoría del producto, día del
+ * hecho) y el neto se guarda con 8 decimales: base × (1 + alícuota) reproduce lo escrito salvo en
+ * la octava cifra. Un proveedor extranjero no lleva IVA venezolano: se deja como está.
+ */
+async function quitarIva(
+  sql: TransactionSql,
+  input: RegisterArrivalRequest,
+  fecha: string,
+  costos: readonly CostoDeLinea[],
+): Promise<Result<CostoDeLinea[], ArrivalError>> {
+  const [prov] = await sql<{ kind: string; tipo: string | null }[]>`
+    select supplier_kind as kind, taxpayer_type_code as tipo from public.suppliers
+     where id = ${input.supplier_id ?? null} and company_id = ${input.company_id}`;
+  if (!prov) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (prov.kind !== "nacional") return ok([...costos]);
+  const netos: CostoDeLinea[] = [];
+  for (const [i, l] of input.lines.entries()) {
+    const c = costos[i]!;
+    // La línea que viene de un pedido trae el precio ACORDADO, no uno escrito del papel.
+    if (l.unit_amount === undefined && l.amount === undefined) {
+      netos.push(c);
+      continue;
+    }
+    let alicuota: string;
+    try {
+      const filas = await sql.savepoint(
+        (sp) => sp<{ rate: string }[]>`
+          select r.rate::text as rate
+            from public.products p
+            cross join lateral platform.resolve_tax(${input.company_id}, ${fecha}::date, 'VE',
+                                                    'iva', ${prov.tipo}, p.tax_category_code,
+                                                    'purchase') r
+           where p.id = ${l.product_id} and p.company_id = ${input.company_id}`,
+      );
+      const regla = filas[0];
+      if (!regla) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+      alicuota = regla.rate;
+    } catch (e) {
+      if ((e as { code?: string }).code === "LAD50") {
+        return err({
+          code: "TAX_RULE_MISSING",
+          message:
+            "No hay alícuota de IVA de compra vigente para ese producto ese día: sin ella no se puede quitar el IVA del precio. Escribe el precio sin IVA, como viene en la factura.",
+        });
+      }
+      throw e;
+    }
+    const bruto = parseDecimal(c.unitario);
+    const tasa = parseDecimal(alicuota);
+    if (!bruto.ok || !tasa.ok) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "Importe o alícuota no interpretables.",
+      });
+    }
+    const neto = bruto.value.dividedBy(tasa.value.plus(1)).toDecimalPlaces(8, 4);
+    netos.push({ ...c, unitario: neto.toFixed(8) });
+  }
+  return ok(netos);
+}
+
+/**
+ * LA VISTA PREVIA DE LA LLEGADA (D-05, y D-09 de paso): base, IVA y total ANTES de confirmar,
+ * calculados por el MISMO caso de uso que registra, no por una copia que pueda divergir. Corre
+ * `registerArrival` dentro de un savepoint que SIEMPRE se deshace: nada queda escrito (recepción,
+ * factura, kardex, actas, outbox). El pago no se previsualiza: lo que se enseña es el documento,
+ * y el saldo de la cuenta se pregunta al confirmar (ADR-0062 §4).
+ *
+ * Lo que falla al registrar falla aquí con el mismo código —la tasa del día que no existe, el
+ * proveedor sin RIF con factura—, y la pantalla lo enseña antes de «Sí, registrar».
+ */
+export async function previewArrival(
+  uow: UnitOfWork,
+  input: RegisterArrivalRequest,
+): Promise<Result<ArrivalPreviewResponse, ArrivalError>> {
+  const sinPago: RegisterArrivalRequest = { ...input };
+  delete sinPago.payment;
+  // D-09: qué tasa se va a usar y de qué fecha es, para decirlo antes de confirmar.
+  const [dia] = await uow.sql<{ d: string }[]>`
+    select (now() at time zone 'America/Caracas')::date::text as d`;
+  const tasa = await tasaVigenteDeLaLlegada(uow.sql, input, input.arrived_on ?? dia!.d);
+  const cambio = {
+    fx_rate: tasa.ok && tasa.value !== null ? tasa.value.rate : null,
+    fx_rate_date: tasa.ok && tasa.value !== null ? tasa.value.rate_date : null,
+  };
+  const DESHACER = new Error("vista previa: se deshace siempre");
+  let vista: Result<ArrivalPreviewResponse, ArrivalError> | null = null;
+  try {
+    await uow.sql.savepoint(async (sp) => {
+      const r = await registerArrival({ ...uow, sql: sp }, sinPago);
+      if (!r.ok) {
+        vista = r;
+      } else if (r.value.invoice !== null) {
+        vista = ok({
+          kind: r.value.kind,
+          currency: input.currency,
+          ...cambio,
+          subtotal: r.value.invoice.subtotal_amount,
+          tax_amount: r.value.invoice.tax_amount,
+          total_amount: r.value.invoice.total_amount,
+        });
+      } else if (r.value.receipt !== null) {
+        const [t] = await sp<{ s: string }[]>`
+          select coalesce(sum(amount_transaction_currency), 0)::numeric(24,8)::text as s
+            from public.goods_receipt_lines where goods_receipt_id = ${r.value.receipt.id}`;
+        // El IVA lo dirá la factura cuando llegue: aquí no se adivina.
+        vista = ok({
+          kind: r.value.kind,
+          currency: input.currency,
+          ...cambio,
+          subtotal: t!.s,
+          tax_amount: null,
+          total_amount: null,
+        });
+      } else {
+        vista = ok({
+          kind: r.value.kind,
+          currency: input.currency,
+          ...cambio,
+          subtotal: null,
+          tax_amount: null,
+          total_amount: null,
+        });
+      }
+      throw DESHACER;
+    });
+  } catch (e) {
+    if (e !== DESHACER) throw e;
+  }
+  return (
+    vista ??
+    err({
+      code: "VALIDATION_FAILED",
+      message: "No se pudo calcular la vista previa.",
+    })
+  );
 }

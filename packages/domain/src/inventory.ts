@@ -2,17 +2,18 @@ import { err, ok, type Result } from "@ladino/core";
 import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
 import {
+  CENTS_POLICY,
   Money,
   convert,
   makeFxRate,
   parseDecimal,
   roundForCost,
+  toCents,
   toMonetaryFact,
   type Decimal,
   type MonetaryFact,
 } from "@ladino/money";
 import {
-  COST_ROUNDING_POLICY,
   adjust as costAdjust,
   issue as costIssue,
   positionOf,
@@ -20,10 +21,14 @@ import {
   type Costed,
   type StockPosition,
 } from "@ladino/inventory";
+import { RETIRO_REASONS } from "@ladino/schemas";
 import type {
   ReceiveStockRequest,
   IssueStockRequest,
   AdjustStockRequest,
+  CountStockRequest,
+  CountStockResponse,
+  ExitReason,
   TransferStockRequest,
   InventoryMoveResponse,
   TransferResponse,
@@ -31,6 +36,7 @@ import type {
 import { RULES_VERSION } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
+import { modoDeVenta } from "./modo-venta.js";
 
 /**
  * Casos de uso de inventario (ADR-0034) — RIGOR MÁXIMO: dinero en una tabla
@@ -51,6 +57,7 @@ export type InventoryError =
   | { code: "DUPLICATE"; message: string }
   | { code: "VALIDATION_FAILED"; message: string }
   | { code: "NEGATIVE_STOCK"; message: string }
+  | { code: "CONFLICT"; message: string }
   | { code: "EXCHANGE_RATE_MISSING"; message: string }
   | { code: "UNIT_CONVERSION_MISSING"; message: string };
 
@@ -63,7 +70,7 @@ const MOVE_COLUMNS = `id, company_id, warehouse_id, product_id, lot_id, kind,
   rounding_policy_id, unit_cost::text as unit_cost,
   quantity_after::text as quantity_after, value_after::text as value_after,
   to_char(occurred_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as occurred_at,
-  reference, reason, transfer_id, source_document_id`;
+  reference, reason, exit_reason, transfer_id, source_document_id`;
 
 interface Contexto {
   readonly tenantId: string;
@@ -143,7 +150,12 @@ function hechoMonetario(
   if (!tasa.ok) return err({ code: "VALIDATION_FAILED", message: tasa.error.message });
   const conversion = convert(original.value, tasa.value);
   if (!conversion.ok) return err({ code: "VALIDATION_FAILED", message: conversion.error.message });
-  const redondeado = roundForCost(conversion.value.converted, COST_ROUNDING_POLICY);
+  // C3 (ADR-0075 §7, ADR-0024): el importe funcional se redondea UNA vez, de lo exacto al céntimo
+  // — round(round(x, 8), 2) ≠ round(x, 2) en el borde (0,004999996 → 0,00500000 → 0,01), y el
+  // libro en SQL hace round(x, 2). La política que se persiste es la que produjo el número:
+  // `ledger:cents:2:HALF_UP`. El costo unitario conserva la suya (inventory:cost:8:HALF_UP), que
+  // no necesita columna: lo deriva el oráculo `apply_inventory_move` como valor / cantidad a 8.
+  const redondeado = roundForCost(conversion.value.converted, CENTS_POLICY);
   if (!redondeado.ok) return err({ code: "VALIDATION_FAILED", message: redondeado.error.message });
   const fact = toMonetaryFact(conversion.value, redondeado.value);
   if (!fact.ok) return err({ code: "VALIDATION_FAILED", message: fact.error.message });
@@ -195,6 +207,10 @@ interface Insercion {
   readonly occurredAt: string | null;
   readonly reference: string | null;
   readonly reason: string | null;
+  /** El motivo de una salida con motivo (ADR-0078 §2): columna con CHECK. */
+  readonly exitReason?: ExitReason | null;
+  /** La referencia del soporte de una pérdida (RLIVA art. 14). */
+  readonly exitEvidence?: string | null;
   readonly note: string | null;
   readonly transferId: string | null;
   readonly counterpartId: string | null;
@@ -214,6 +230,14 @@ interface Insercion {
 async function insertar(sql: TransactionSql, m: Insercion): Promise<InventoryMoveResponse> {
   const negativo = m.costed.move.quantity.isNegative();
   const signo = (v: string): string => (negativo ? `-${v}` : v);
+  // ADR-0075 §7: en moneda PROPIA no hay conversión, y el importe de la transacción ES el
+  // funcional (CHECK inventory_moves_identity_chk). Como el valor del movimiento va al céntimo,
+  // el de la transacción también: antes llevaba el importe sin redondear (3 × 33,3333 = 99,9999
+  // contra 100,00) y la base rechazaba la entrada con un 23514 que salía como 422 genérico.
+  const identidad = m.fact.transactionCurrency === m.fact.functionalCurrency;
+  const importeTransaccion = identidad
+    ? m.costed.move.value.toAmountString()
+    : signo(m.fact.amountTransactionCurrency);
   const [fila] = await sql<InventoryMoveResponse[]>`
     insert into public.inventory_moves
       (id, tenant_id, company_id, warehouse_id, product_id, lot_id, kind, quantity,
@@ -221,11 +245,11 @@ async function insertar(sql: TransactionSql, m: Insercion): Promise<InventoryMov
        functional_amount, functional_currency, rate_source, rate_timestamp,
        rounding_policy_id, unit_cost, quantity_after, value_after,
        occurred_at, reference, reason, note, transfer_id, counterpart_move_id,
-       source_document_id, capture_currency, capture_mode)
+       source_document_id, capture_currency, capture_mode, exit_reason, exit_evidence)
     values (coalesce(${m.id}::uuid, platform.uuidv7()), ${m.tenantId}, ${m.companyId},
             ${m.warehouseId}, ${m.productId}, ${m.lotId}, ${m.kind},
             ${m.costed.move.quantity.toFixed()},
-            ${signo(m.fact.amountTransactionCurrency)}, ${m.fact.transactionCurrency}, ${m.fact.fxRate},
+            ${importeTransaccion}, ${m.fact.transactionCurrency}, ${m.fact.fxRate},
             ${m.costed.move.value.toAmountString()}, ${m.fact.functionalCurrency},
             ${m.fact.rateSource}, ${m.fact.rateTimestamp}, ${m.fact.roundingPolicyId},
             ${m.costed.move.unitCostAfter.toAmountString()},
@@ -233,7 +257,8 @@ async function insertar(sql: TransactionSql, m: Insercion): Promise<InventoryMov
             ${m.costed.move.valueAfter.toAmountString()},
             coalesce(${m.occurredAt}::timestamptz, now()), ${m.reference}, ${m.reason}, ${m.note},
             ${m.transferId}, ${m.counterpartId}, ${m.sourceDocumentId},
-            ${m.captureCurrency ?? null}, ${m.captureMode ?? null})
+            ${m.captureCurrency ?? null}, ${m.captureMode ?? null}, ${m.exitReason ?? null},
+            ${m.exitEvidence ?? null})
     returning ${sql.unsafe(MOVE_COLUMNS)}`;
   return fila!;
 }
@@ -344,6 +369,14 @@ function traducir(e: unknown): InventoryError | null {
         : "La operación dejaría la existencia en negativo y la empresa no lo permite.",
     };
   }
+  if (code === "LAD41" && message.includes("va al céntimo")) {
+    // ADR-0075 §7: no es una carrera, es un importe con fracción de céntimo — reintentar no sirve.
+    return {
+      code: "VALIDATION_FAILED",
+      message:
+        "El valor de un movimiento de inventario va al céntimo (ADR-0075 §7): llegó un importe con más de dos decimales.",
+    };
+  }
   if (code === "LAD41") {
     return {
       code: "VALIDATION_FAILED",
@@ -412,7 +445,8 @@ export function totalDeEntrada(
       message: "Cantidad o costo por unidad no interpretables.",
     });
   }
-  return ok(unitario.value.times(q.value).toDecimalPlaces(8, 4).toFixed(8));
+  // ADR-0075 §7: el valor de un movimiento va al céntimo; el costo unitario conserva sus 8.
+  return ok(toCents(unitario.value.times(q.value)).toFixed(2));
 }
 
 /**
@@ -578,7 +612,9 @@ async function ingresar(
  * cliente, lo pone el caso de uso que agrupa varios movimientos en un hecho
  * (consumeRecipe hoy; la factura de venta mañana).
  */
-export type IssueStockInput = IssueStockRequest & {
+export type IssueStockInput = Omit<IssueStockRequest, "reason"> & {
+  /** Obligatorio en la salida suelta (ADR-0078 §2); la receta no lo lleva: es costo de ventas. */
+  readonly reason?: ExitReason;
   readonly sourceDocumentId?: string;
   /** Por omisión, salida directa (consumo interno); la receta la declara costo de ventas. */
   readonly accountingSource?: OrigenSalida;
@@ -598,14 +634,20 @@ async function asentarMovimiento(
   fila: InventoryMoveResponse,
   hecho: {
     readonly sourceKind: "stock_opening" | OrigenSalida;
-    readonly evento: "stock.received" | "stock.shipped";
+    readonly evento: "stock.received" | "stock.shipped" | "stock.shrinkage" | "stock.withdrawn";
     readonly descripcion: string;
-    readonly amounts: { readonly functional_amount?: string; readonly cost_amount?: string };
+    readonly amounts: {
+      readonly functional_amount?: string;
+      readonly cost_amount?: string;
+      readonly tax_amount?: string;
+    };
   },
 ): Promise<Result<true, InventoryError>> {
   // Un movimiento sin valor (costo cero) no mueve el mayor: no hay nada que asentar.
+  // El débito fiscal de un retiro de costo cero sí se asienta: el libro lo lleva.
   const valor = parseDecimal(fila.functional_amount);
-  if (valor.ok && valor.value.isZero()) return ok(true);
+  const impuesto = parseDecimal(hecho.amounts.tax_amount ?? "0");
+  if (valor.ok && valor.value.isZero() && impuesto.ok && impuesto.value.isZero()) return ok(true);
   const generado = await generateJournalFromDocument(sql, {
     tenantId: ctx.tenantId,
     companyId: fila.company_id,
@@ -1074,7 +1116,13 @@ export type ReceiveStockInput = ReceiveStockRequest & {
   readonly sourceDocumentId?: string;
   readonly accounting?: AsientoEntrada;
 };
-export type AdjustStockInput = AdjustStockRequest & { readonly sourceDocumentId?: string };
+export type AdjustStockInput = AdjustStockRequest & {
+  readonly sourceDocumentId?: string;
+  /** El conteo asienta su faltante a pérdidas (`stock.counted`); el ajuste suelto, `stock.adjusted`. */
+  readonly evento?: "stock.adjusted" | "stock.counted";
+  /** El soporte del faltante de un conteo (RLIVA art. 14): se guarda en `exit_evidence`. */
+  readonly evidencia?: string;
+};
 
 export async function issueStock(
   uow: UnitOfWork,
@@ -1100,6 +1148,54 @@ export async function issueStock(
   // servidor. (Lo destapó el primer test de integración, no un unitario.)
   const occurredAt = input.occurred_at ?? null;
   const momentoTasa = ahora(input.occurred_at);
+  const origen = input.accountingSource ?? "inventory_move";
+  const motivo = input.reason ?? null;
+  // La salida SUELTA dice por qué sale (ADR-0078 §2): sin motivo no se sabe adónde va en el mayor.
+  if (origen === "inventory_move" && motivo === null) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Elige el motivo de la salida: merma, rotura, vencido, faltante, consumo propio, regalo, donación o muestra.",
+    });
+  }
+  const esRetiro = motivo !== null && RETIRO_REASONS.includes(motivo);
+  // LA PÉRDIDA JUSTIFICADA lleva su soporte (RLIVA art. 14, §2.13): sin evidencia no es faltante
+  // justificado, y Ladino no la registra como tal.
+  const evidencia = input.evidence?.trim() ?? null;
+  if (motivo !== null && !esRetiro && (evidencia === null || evidencia.length < 3)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Una merma, rotura, vencimiento o faltante necesita su evidencia: escribe la referencia del acta, la foto o el informe que la respalda (RLIVA art. 14).",
+    });
+  }
+  // EL RETIRO NO REESCRIBE UN PERÍODO YA DECLARADO (criterio B-1, decidido por criterio): si su
+  // fecha cae en un período cuya declaración de IVA se generó DESPUÉS de cerrarse, el débito ya no
+  // cabe en esa declaración. Día contra día (caracas_day), como B-1.
+  if (esRetiro && input.occurred_at !== undefined) {
+    const [declarado] = await sql<{ desde: string; hasta: string }[]>`
+      select p.period_from::text as desde, p.period_to::text as hasta
+        from public.iva_period_results p
+       where p.company_id = ${input.company_id}
+         and platform.caracas_day(${input.occurred_at}::timestamptz)
+               between p.period_from and p.period_to
+         and p.period_to < platform.caracas_day(p.created_at)
+       limit 1`;
+    if (declarado) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `El período del ${declarado.desde} al ${declarado.hasta} ya se declaró: un retiro con esa fecha cambiaría una declaración presentada. Regístralo con la fecha de hoy.`,
+      });
+    }
+  }
+  // El valor de mercado del retiro se resuelve ANTES de escribir nada: si falta el precio o la
+  // tasa, la salida no ocurre (y no queda un movimiento sin su débito fiscal).
+  let retiro: ValorDeRetiro | null = null;
+  if (esRetiro && (await modoDeVenta(sql, input.company_id, momentoTasa)) === "facturas") {
+    const v = await valorDeRetiro(sql, input.company_id, input.product_id, q.value, momentoTasa);
+    if (!v.ok) return v;
+    retiro = v.value;
+  }
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   const posicion = await bloquear(
@@ -1144,7 +1240,10 @@ export async function issueStock(
         fact: hecho.value.fact,
         occurredAt,
         reference: input.reference ?? null,
-        reason: input.reason ?? null,
+        // El texto libre `reason` es del ajuste y la revaluación; la salida usa su columna.
+        reason: null,
+        exitReason: motivo,
+        exitEvidence: esRetiro ? null : evidencia,
         note: input.note ?? null,
         transferId: null,
         counterpartId: null,
@@ -1157,26 +1256,290 @@ export async function issueStock(
     if (conocido) return err(conocido);
     throw e;
   }
-  await auditarYPublicar(sql, fila, ctx.value.tenantId, "stock.shipped", {
+  // UN evento por hecho, con el MISMO nombre que su hecho contable (pgTAP 026: el preset no usa un
+  // vocabulario paralelo al del outbox): el costo de una venta es `stock.shipped`; el retiro,
+  // `stock.withdrawn`; la merma, rotura, vencido o faltante, `stock.shrinkage`.
+  const eventoSalida =
+    origen === "sales_cost" ? "stock.shipped" : esRetiro ? "stock.withdrawn" : "stock.shrinkage";
+  await auditarYPublicar(sql, fila, ctx.value.tenantId, eventoSalida, {
     reference: fila.reference,
+    exit_reason: motivo,
   });
-  const origen = input.accountingSource ?? "inventory_move";
   const costo = fila.functional_amount.replace("-", "");
-  const contable = await asentarMovimiento(sql, actor.userId, ctx.value, fila, {
-    sourceKind: origen,
-    evento: "stock.shipped",
-    descripcion:
-      origen === "sales_cost"
-        ? `Costo de lo consumido${fila.reference ? `: ${fila.reference}` : ""}`
-        : `Salida de existencias${fila.reference ? `: ${fila.reference}` : ""}`,
-    // La salida directa elige lado por el signo; el costo de ventas va en positivo.
-    amounts:
-      origen === "sales_cost"
-        ? { cost_amount: costo }
-        : { functional_amount: fila.functional_amount },
-  });
+  const ref = fila.reference ? `: ${fila.reference}` : "";
+
+  // LA NOTA DE RETIRO (ADR-0078 §3): documento interno numerado por la base; el débito fiscal del
+  // asiento es exactamente el suyo, para que el libro y el mayor cuadren.
+  let numeroNota: number | null = null;
+  if (retiro !== null) {
+    const [nota] = await sql<{ id: string; note_number: string }[]>`
+      insert into public.inventory_withdrawal_notes
+        (tenant_id, company_id, note_number, move_id, warehouse_id, product_id, quantity,
+         exit_reason, price_list_id, list_unit_price, list_currency, fx_rate, rate_source,
+         base_functional, tax_category_snapshot, tax_treatment, tax_rule_id, tax_rate_snapshot,
+         tax_functional, functional_currency, rules_version)
+      values (${ctx.value.tenantId}, ${fila.company_id}, 0, ${fila.id}, ${fila.warehouse_id},
+              ${fila.product_id}, ${q.value.toFixed()}, ${motivo}, ${retiro.priceListId},
+              ${retiro.listUnitPrice}, ${retiro.listCurrency}, ${retiro.fxRate},
+              ${retiro.rateSource}, ${retiro.base}, ${retiro.taxCategory},
+              platform.tax_treatment_of(${retiro.taxCategory}), ${retiro.taxRuleId},
+              ${retiro.taxRate}, ${retiro.tax}, ${ctx.value.functionalCurrency},
+              ${RULES_VERSION})
+      returning id, note_number::text as note_number`;
+    numeroNota = Number(nota!.note_number);
+    await sql`
+      insert into public.audit_events
+        (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
+         actor_type, occurred_at, rules_version, payload)
+      values (${ctx.value.tenantId}, ${fila.company_id}, 'inventory_move', ${fila.id},
+              'inventory.withdrawal_note.issued', 'user', now(), ${RULES_VERSION},
+              ${sql.json({
+                note_id: nota!.id,
+                note_number: numeroNota,
+                exit_reason: motivo,
+                base_functional: retiro.base,
+                tax_functional: retiro.tax,
+                list_unit_price: retiro.listUnitPrice,
+                list_currency: retiro.listCurrency,
+                fx_rate: retiro.fxRate,
+                rate_source: retiro.rateSource,
+              })})`;
+  }
+
+  const contable =
+    origen === "sales_cost"
+      ? await asentarMovimiento(sql, actor.userId, ctx.value, fila, {
+          sourceKind: origen,
+          evento: "stock.shipped",
+          descripcion: `Costo de lo consumido${ref}`,
+          amounts: { cost_amount: costo },
+        })
+      : esRetiro
+        ? await asentarMovimiento(sql, actor.userId, ctx.value, fila, {
+            sourceKind: "inventory_move",
+            evento: eventoSalida,
+            descripcion:
+              `Retiro por ${ETIQUETA_MOTIVO[motivo]}` +
+              (numeroNota !== null ? ` (Nota de retiro NR-${numeroNota})` : "") +
+              ref,
+            // Sin RIF no hay débito: las dos líneas del IVA salen en cero y no se escriben.
+            amounts: { cost_amount: costo, tax_amount: retiro?.tax ?? "0" },
+          })
+        : await asentarMovimiento(sql, actor.userId, ctx.value, fila, {
+            sourceKind: "inventory_move",
+            evento: eventoSalida,
+            descripcion: `Salida por ${ETIQUETA_MOTIVO[motivo!]}${ref} · soporte: ${evidencia ?? "—"}`,
+            amounts: { functional_amount: fila.functional_amount },
+          });
   if (!contable.ok) return contable;
-  return ok(fila);
+  return ok({ ...fila, withdrawal_note_number: numeroNota });
+}
+
+/** El motivo en palabras: va en la descripción del asiento (I-11). */
+const ETIQUETA_MOTIVO: Record<ExitReason, string> = {
+  merma: "merma",
+  rotura: "rotura",
+  vencido: "vencimiento",
+  faltante: "faltante",
+  consumo_propio: "consumo propio",
+  regalo: "regalo",
+  donacion: "donación",
+  muestra: "muestra",
+};
+
+interface ValorDeRetiro {
+  readonly priceListId: string;
+  readonly listUnitPrice: string;
+  readonly listCurrency: string;
+  readonly fxRate: string;
+  readonly rateSource: string;
+  readonly base: string;
+  readonly taxCategory: string;
+  readonly taxRuleId: string | null;
+  readonly taxRate: string;
+  readonly tax: string;
+}
+
+/**
+ * EL VALOR DE MERCADO DEL RETIRO (LIVA art. 4.3, ADR-0078 §3). Decidido por criterio: el precio de
+ * la lista detal vigente (la lista por omisión de la empresa) a la tasa del día, al céntimo; la
+ * alícuota, la de la categoría del producto para la propia empresa como adquirente. Alternativa:
+ * el costo — VALIDAR-TRIBUTARIO en PENDIENTES_ASESOR. Sin precio o sin tasa NO se retira: un
+ * retiro sin valor de mercado no tendría débito que declarar.
+ */
+async function valorDeRetiro(
+  sql: TransactionSql,
+  companyId: string,
+  productId: string,
+  cantidadRetirada: Decimal,
+  momento: string,
+): Promise<Result<ValorDeRetiro, InventoryError>> {
+  const [base] = await sql<
+    {
+      lista: string | null;
+      moneda_lista: string | null;
+      funcional: string;
+      precio: string | null;
+      categoria: string;
+      tipo: string | null;
+    }[]
+  >`
+    select cs.default_price_list_id as lista, pl.currency_code as moneda_lista,
+           c.functional_currency_code as funcional,
+           case when cs.default_price_list_id is null then null
+                else platform.price_at(cs.default_price_list_id, p.id, ${momento}::timestamptz)::text
+           end as precio,
+           p.tax_category_code as categoria, c.taxpayer_type_code as tipo
+      from public.products p
+      join public.companies c on c.id = p.company_id
+      left join public.company_settings cs on cs.company_id = c.id
+      left join public.price_lists pl on pl.id = cs.default_price_list_id
+     where p.id = ${productId} and p.company_id = ${companyId}`;
+  if (!base) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (base.lista === null || base.precio === null || base.moneda_lista === null) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "El retiro se valora al precio de venta (LIVA art. 4.3) y este producto no tiene precio en tu lista de precios principal. Ponle precio y vuelve a registrar la salida.",
+    });
+  }
+  let tasa = "1";
+  let fuente = "identidad";
+  if (base.moneda_lista !== base.funcional) {
+    const [t] = await sql<{ rate: string | null; source: string | null }[]>`
+      select f.rate::text as rate, f.source
+        from platform.rate_for(${companyId}, ${base.moneda_lista}, ${base.funcional},
+                               ${diaNegocio(momento)}::date) f`;
+    if (!t?.rate) {
+      return err({
+        code: "EXCHANGE_RATE_MISSING",
+        message: `No hay tasa de ${base.moneda_lista} a ${base.funcional} vigente para hoy: el retiro se valora al precio de venta en bolívares. Carga la tasa con su fuente y vuelve a intentar.`,
+      });
+    }
+    tasa = t.rate;
+    fuente = t.source ?? "manual";
+  }
+  let regla: { tax_rule_id: string; rate: string } | undefined;
+  try {
+    [regla] = await sql.savepoint(
+      (sp) => sp<{ tax_rule_id: string; rate: string }[]>`
+        select t.tax_rule_id, t.rate::text as rate
+          from platform.resolve_tax(${companyId}, ${diaNegocio(momento)}::date, 'VE', 'iva',
+                                    ${base.tipo ?? "ordinario"}, ${base.categoria}) t`,
+    );
+  } catch (e) {
+    const conocido = traducir(e);
+    if (conocido) return err(conocido);
+    throw e;
+  }
+  const precio = parseDecimal(base.precio);
+  const factor = parseDecimal(tasa);
+  const alicuota = parseDecimal(regla?.rate ?? "0");
+  if (!precio.ok || !factor.ok || !alicuota.ok) {
+    return err({ code: "VALIDATION_FAILED", message: "El valor de mercado no se pudo calcular." });
+  }
+  // Al céntimo, mitad hacia arriba: es un importe del libro de ventas en bolívares.
+  const baseBs = precio.value.times(cantidadRetirada).times(factor.value).toDecimalPlaces(2, 4);
+  const impuesto = baseBs.times(alicuota.value).toDecimalPlaces(2, 4);
+  return ok({
+    priceListId: base.lista,
+    listUnitPrice: base.precio,
+    listCurrency: base.moneda_lista,
+    fxRate: tasa,
+    rateSource: fuente,
+    base: baseBs.toFixed(8),
+    taxCategory: base.categoria,
+    taxRuleId: regla?.tax_rule_id ?? null,
+    taxRate: regla?.rate ?? "0",
+    tax: impuesto.toFixed(8),
+  });
+}
+
+/**
+ * EL CONTEO (ADR-0078 §4, I-07). La persona escribe lo que contó; la diferencia contra el sistema
+ * se calcula AQUÍ, bajo el bloqueo de la posición —no en la pantalla, que leyó el saldo antes y
+ * puede estar vieja—. Con `preview` se devuelve sin escribir; sin él, la diferencia se registra
+ * como ajuste (permiso `inventory.adjust`, motivo obligatorio) al promedio vigente.
+ */
+export async function countStock(
+  uow: UnitOfWork,
+  input: CountStockRequest,
+): Promise<Result<CountStockResponse, InventoryError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "Contar existencias exige un usuario real.",
+    });
+  }
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "inventory.adjust", [
+    input.warehouse_id,
+  ]);
+  if (!ctx.ok) return ctx;
+  const contado = parseDecimal(input.counted);
+  if (!contado.ok) return err({ code: "VALIDATION_FAILED", message: contado.error.message });
+  // El lote ANTES de bloquear: `lock_stock_position` crea la posición si no existe, y la de un
+  // producto por lotes sin lote es una posición que no debe nacer.
+  const [prod] = await sql<{ tracks_lots: boolean }[]>`
+    select tracks_lots from public.products
+     where id = ${input.product_id} and company_id = ${input.company_id}`;
+  if (!prod) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (prod.tracks_lots && (input.lot_id ?? null) === null) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Elige el lote que contaste: este producto se lleva por lotes y cada lote se cuenta aparte.",
+    });
+  }
+  const posicion = await bloquear(
+    sql,
+    input.company_id,
+    input.warehouse_id,
+    input.product_id,
+    input.lot_id ?? null,
+  );
+  if (!posicion.ok) return posicion;
+  const sistema = posicion.value.quantity;
+  if (input.expected_system_quantity !== undefined) {
+    const esperado = parseDecimal(input.expected_system_quantity);
+    if (!esperado.ok || !esperado.value.equals(sistema)) {
+      return err({
+        code: "CONFLICT",
+        message: `La existencia cambió desde que calculaste la diferencia: el sistema tiene ahora ${sistema.toFixed()} y viste ${input.expected_system_quantity}. Vuelve a calcular la diferencia.`,
+      });
+    }
+  }
+  const delta = contado.value.minus(sistema);
+  const vista = {
+    system_quantity: sistema.toFixed(8),
+    counted: contado.value.toFixed(8),
+    delta: delta.toFixed(8),
+  };
+  if (input.preview === true || delta.isZero()) return ok({ ...vista, move: null });
+  // EL FALTANTE DE UN CONTEO VA A PÉRDIDAS (5.1.08) y lleva su soporte, igual que la salida
+  // «faltante» (RLIVA art. 14, §2.13): sin evidencia no es faltante justificado. El sobrante no
+  // la pide, y si vino no se guarda. La base lo repite (20261003110200).
+  const evidencia = input.evidence?.trim() ?? null;
+  if (delta.isNegative() && (evidencia === null || evidencia.length < 3)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "El conteo dio un faltante: va a pérdidas y necesita su evidencia. Escribe la referencia del acta, la foto o el informe que lo respalda (RLIVA art. 14).",
+    });
+  }
+  const ajuste = await adjustStock(uow, {
+    company_id: input.company_id,
+    warehouse_id: input.warehouse_id,
+    product_id: input.product_id,
+    ...(input.lot_id !== undefined ? { lot_id: input.lot_id } : {}),
+    delta: delta.toFixed(),
+    reason: `Conteo: contado ${contado.value.toFixed()}, sistema ${sistema.toFixed()} · ${input.reason}`,
+    evento: "stock.counted",
+    ...(delta.isNegative() && evidencia !== null ? { evidencia } : {}),
+    ...(input.reference !== undefined ? { reference: input.reference } : {}),
+  });
+  if (!ajuste.ok) return ajuste;
+  return ok({ ...vista, move: ajuste.value });
 }
 
 /** Ajuste: permiso PROPIO (`inventory.adjust`, segregación) y motivo obligatorio. */
@@ -1253,6 +1616,7 @@ export async function adjustStock(
         occurredAt,
         reference: input.reference ?? null,
         reason: input.reason,
+        exitEvidence: input.evidencia ?? null,
         note: null,
         transferId: null,
         counterpartId: null,
@@ -1273,7 +1637,7 @@ export async function adjustStock(
     tenantId: ctx.value.tenantId,
     companyId: input.company_id,
     sourceKind: "inventory_move",
-    sourceEvent: "stock.adjusted",
+    sourceEvent: input.evento ?? "stock.adjusted",
     sourceId: fila.id,
     postingDate: diaNegocio(input.occurred_at ?? new Date().toISOString()),
     postedBy: actor.userId,
@@ -1284,7 +1648,9 @@ export async function adjustStock(
   if (!contable.ok) {
     return err({ code: "VALIDATION_FAILED", message: contable.error.message });
   }
-  await auditarYPublicar(sql, fila, ctx.value.tenantId, "stock.adjusted", {
+  // El conteo publica y audita `stock.counted`, el nombre de su hecho contable; el ajuste suelto,
+  // `stock.adjusted`. Mismo payload.
+  await auditarYPublicar(sql, fila, ctx.value.tenantId, input.evento ?? "stock.adjusted", {
     reason: input.reason,
   });
   return ok(fila);
@@ -1488,7 +1854,10 @@ export async function revalorizar(
   tenantId: string,
   input: RevalueStockInput,
 ): Promise<Result<InventoryMoveResponse, InventoryError>> {
-  const importe = Money.of(input.amount, input.currency);
+  // ADR-0075 §7: el valor de un movimiento del kardex va al céntimo, half-up.
+  const bruto = parseDecimal(input.amount);
+  if (!bruto.ok) return err({ code: "VALIDATION_FAILED", message: bruto.error.message });
+  const importe = Money.of(toCents(bruto.value).toFixed(2), input.currency);
   if (!importe.ok) return err({ code: "VALIDATION_FAILED", message: importe.error.message });
   if (importe.value.amount.isZero()) {
     return err({
@@ -1509,7 +1878,7 @@ export async function revalorizar(
                 ${input.product_id}, ${input.lot_id ?? null}, 'revaluacion', 0,
                 ${importe.value.toAmountString()}, ${input.currency}, 1,
                 ${importe.value.toAmountString()}, ${input.currency}, 'identidad', now(),
-                'inventory:cost:8:HALF_UP', now(), ${input.reason},
+                ${CENTS_POLICY.id}, now(), ${input.reason},
                 ${input.sourceDocumentId ?? null})
         returning ${sp.unsafe(MOVE_COLUMNS)}`;
       return m!;

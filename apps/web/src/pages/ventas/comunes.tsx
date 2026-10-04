@@ -88,7 +88,10 @@ export function MensajeError({ error }: { error: unknown }): React.JSX.Element |
         <p className="font-medium text-warning-soft-foreground">
           {guia ?? deQuienFactura ?? "No se pudo completar"}
         </p>
-        <p className="mt-0.5 text-muted-foreground">{error.body.message}</p>
+        {/* F-03: la frase de persona primero; el texto técnico solo si el servidor no dio otra. */}
+        <p className="mt-0.5 text-muted-foreground">
+          {error.body.person_message ?? error.body.message}
+        </p>
         {deQuienFactura !== undefined && (
           <Link
             to="/empezar"

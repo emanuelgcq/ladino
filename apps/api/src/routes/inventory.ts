@@ -3,6 +3,7 @@ import { withTransaction, type Sql } from "@ladino/db";
 import {
   ReceiveStockApiRequest,
   IssueStockRequest,
+  CountStockRequest,
   AdjustStockRequest,
   TransferStockRequest,
   CreateWarehouseRequest,
@@ -16,6 +17,7 @@ import {
   receiveStock,
   totalDeEntrada,
   issueStock,
+  countStock,
   adjustStock,
   transferStock,
   consumeRecipe,
@@ -37,7 +39,7 @@ const MOVE_SELECT = `m.id, m.company_id, m.warehouse_id, m.product_id, m.lot_id,
   m.rounding_policy_id, m.unit_cost::text as unit_cost,
   m.quantity_after::text as quantity_after, m.value_after::text as value_after,
   to_char(m.occurred_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as occurred_at,
-  m.reference, m.reason, m.transfer_id, m.source_document_id,
+  m.reference, m.reason, m.exit_reason, m.transfer_id, m.source_document_id,
   p.sku as product_sku, p.name as product_name`;
 
 function coherente(header: string, body: string): void {
@@ -210,6 +212,20 @@ export function inventoryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const r = await withTransaction(sql, actor, (uow) => adjustStock(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
+  });
+
+  // Conteo (ADR-0078 §4, I-07): lo contado entra; la diferencia la calcula el servidor. Con
+  // `preview` solo se enseña (200); registrada, 201 con el ajuste; contado igual al sistema, 200
+  // sin movimiento.
+  app.post("/v1/inventory/counts", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = CountStockRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => countStock(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, r.value.move === null ? 200 : 201);
   });
 
   app.post("/v1/inventory/transfers", idempotencia, async (c) => {

@@ -30,7 +30,13 @@ import { useToast } from "../../ui/toast.js";
 import { KIND_LABEL, MensajeError } from "../ventas/comunes.js";
 import { fechaRelativa } from "../negocio/comunes.js";
 import { mostrarImporte } from "../../money.js";
-import { compararImportes, esCero } from "../../components/decimal-compare.js";
+import {
+  FALTA_LA_TASA,
+  decisionDeCobro,
+  estadoDeDeuda,
+  nominalPorMoneda,
+  textoDeDeuda,
+} from "../../components/deuda.js";
 import { errorDePersona } from "../../lib.js";
 import type { Customer, CodeCatalog, PriceList } from "../../lib.js";
 import { sufijoDeArchivo } from "../../app/rif.js";
@@ -38,7 +44,8 @@ import { avisoDigitoRif, formatearDocumento } from "@ladino/schemas";
 import { useConFacturas } from "../../app/modo-venta.js";
 
 /** La fila con la deuda funcional de HOY que calcula el servidor (ADR-0047). */
-type ClienteConDeuda = Customer & { readonly debt?: string };
+/** `debt` null = debe algo en divisa y falta la tasa de hoy (el servidor no lo puede valorar). */
+type ClienteConDeuda = Customer & { readonly debt?: string | null };
 
 /** Las facturas emitidas con saldo, tal como las devuelve el estado de cuenta. */
 interface DocumentoAbierto {
@@ -49,7 +56,8 @@ interface DocumentoAbierto {
   document_number: number | null;
   issued_at: string | null;
   total_amount: string;
-  balance: string;
+  /** null = documento en divisa sin tasa de hoy (o sin saldo calculable). */
+  balance: string | null;
   status: string;
   /** Días desde la emisión, contados por el servidor. */
   days_outstanding: number;
@@ -57,7 +65,19 @@ interface DocumentoAbierto {
 interface EstadoDeCuenta {
   currency: string;
   documents: DocumentoAbierto[];
-  total_outstanding: string;
+  /** null = hay deuda en divisa y falta la tasa de hoy; el nominal va en `debt.by_currency`. */
+  total_outstanding: string | null;
+  /** La deuda por la única función del servidor (ADR-0075 §5): nominal por moneda y a la tasa de hoy. */
+  debt: {
+    functional_currency: string;
+    as_of: string;
+    by_currency: {
+      currency: string;
+      nominal: string;
+      rate: string | null;
+      functional_today: string | null;
+    }[];
+  };
 }
 
 /**
@@ -81,6 +101,8 @@ export function Clientes(): React.JSX.Element {
   // K-11 (ADR-0068 §4): crear e importar exigen customer.manage en el servidor; sin él, la
   // pantalla no los ofrece.
   const gestiona = puede("customer.manage");
+  // P-04: la deuda de cada cliente se pide solo con `ar.read`; sin él, el servidor da 403.
+  const verDeuda = puede("ar.read");
   const [busqueda, setBusqueda] = useState("");
   const [pagina, setPagina] = useState(1);
   const [creando, setCreando] = useState(false);
@@ -89,13 +111,13 @@ export function Clientes(): React.JSX.Element {
   const qc = useQueryClient();
 
   const clientes = useQuery({
-    queryKey: ["clientes", empresa.id, busqueda, pagina],
+    queryKey: ["clientes", empresa.id, busqueda, pagina, verDeuda],
     queryFn: () => {
       const q = new URLSearchParams({
         page: String(pagina),
         per_page: String(PER_PAGE),
-        with_debt: "1",
       });
+      if (verDeuda) q.set("with_debt", "1");
       if (busqueda.trim() !== "") q.set("search", busqueda.trim());
       return llamar<{ items: ClienteConDeuda[]; total: number }>(`/v1/customers?${q.toString()}`);
     },
@@ -144,40 +166,55 @@ export function Clientes(): React.JSX.Element {
           return <Badge tone={e.tone}>{e.etiqueta}</Badge>;
         },
       },
-      {
-        id: "deuda",
-        header: "Deuda",
-        enableSorting: false,
-        // La misma deuda que ve el mostrador: funcional de HOY, del servidor.
-        accessorFn: (c) => c.debt,
-        cell: (c) => {
-          const debt = c.getValue<string | undefined>();
-          if (debt === undefined || esCero(debt)) {
-            return <span className="text-[0.82rem] text-muted-foreground">Al día</span>;
-          }
-          return (
-            <span className="font-mono text-[0.84rem] text-warning-soft-foreground">
-              {mostrarImporte({ amount: debt, currency: "VES" })}
-            </span>
-          );
-        },
-      },
-      {
-        id: "cuenta",
-        header: "",
-        enableSorting: false,
-        cell: (c) => (
-          <Link
-            to={`/admin/cuentas?cliente=${c.row.original.id}`}
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-1 text-[0.82rem] text-accent-soft-foreground hover:underline"
-          >
-            <Banknote className="size-3.5" /> Cuenta
-          </Link>
-        ),
-      },
+      // H1 (P-04): sin ar.read no hay columna de deuda ni enlace al estado de cuenta: el servidor
+      // no los da, y una columna vacía diría «Al día» de quien sí debe.
+      ...(verDeuda
+        ? ([
+            {
+              id: "deuda",
+              header: "Deuda",
+              enableSorting: false,
+              // La misma deuda que ve el mostrador: funcional de HOY, del servidor.
+              accessorFn: (c) => c.debt,
+              cell: (c) => {
+                const debt = c.getValue<string | null | undefined>();
+                const estado = estadoDeDeuda(debt);
+                if (estado === "sin_deuda") {
+                  return <span className="text-[0.82rem] text-muted-foreground">Al día</span>;
+                }
+                // Debe, y falta la tasa para decirlo en bolívares: se dice eso, no «Al día».
+                if (estado === "sin_valorar") {
+                  return (
+                    <span className="text-[0.82rem] text-warning-soft-foreground">
+                      {FALTA_LA_TASA}
+                    </span>
+                  );
+                }
+                return (
+                  <span className="font-mono text-[0.84rem] text-warning-soft-foreground">
+                    {textoDeDeuda(debt, "VES")}
+                  </span>
+                );
+              },
+            },
+            {
+              id: "cuenta",
+              header: "",
+              enableSorting: false,
+              cell: (c) => (
+                <Link
+                  to={`/admin/cuentas?cliente=${c.row.original.id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 text-[0.82rem] text-accent-soft-foreground hover:underline"
+                >
+                  <Banknote className="size-3.5" /> Cuenta
+                </Link>
+              ),
+            },
+          ] as ColumnDef<ClienteConDeuda, unknown>[])
+        : []),
     ],
-    [conFacturas],
+    [conFacturas, verDeuda],
   );
 
   return (
@@ -187,7 +224,9 @@ export function Clientes(): React.JSX.Element {
         description={
           conFacturas
             ? "El maestro de contrapartes de venta: RIF, clasificación fiscal y bloqueo de cobranzas."
-            : "Quién te compra, cómo contactarlo y quién te debe."
+            : verDeuda
+              ? "Quién te compra, cómo contactarlo y quién te debe."
+              : "Quién te compra y cómo contactarlo."
         }
         actions={
           gestiona ? (
@@ -807,7 +846,8 @@ function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element 
   });
 
   const abiertas = (estado.data?.documents ?? []).filter(
-    (d) => d.status === "issued" && compararImportes(d.balance, "0") > 0,
+    // Sin valorar (null) también está abierta: debe, y falta la tasa para decir cuánto en Bs.
+    (d) => d.status === "issued" && estadoDeDeuda(d.balance) !== "sin_deuda",
   );
 
   // «Desde hace N días»: la factura abierta MÁS VIEJA manda, con el color de
@@ -826,10 +866,36 @@ function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element 
     const filas = abiertas
       .map(
         (d) =>
-          `• ${KIND_LABEL[d.kind] ?? "Documento"} ${d.series}-${String(d.document_number ?? "")}: ${mostrarImporte({ amount: d.balance, currency: estado.data.currency })}`,
+          `• ${KIND_LABEL[d.kind] ?? "Documento"} ${d.series}-${String(d.document_number ?? "")}: ${textoDeDeuda(d.balance, estado.data.currency)}`,
       )
       .join("\n");
-    return `Hola ${cliente.legal_name}, te escribe ${empresa.trade_name ?? empresa.legal_name}. Tu cuenta pendiente:\n${filas}\nTotal: ${mostrarImporte({ amount: estado.data.total_outstanding, currency: estado.data.currency })}. ¡Gracias!`;
+    // F-04 (ADR-0075 §5): el aviso dice lo que se debe EN SU MONEDA y, al lado, los bolívares
+    // a la tasa de hoy con su fecha. Todas las cifras vienen del servidor: aquí solo se escriben.
+    const [a, m, dia] = estado.data.debt.as_of.split("-");
+    const fecha = `${dia ?? ""}/${m ?? ""}/${a ?? ""}`;
+    const enDivisa = estado.data.debt.by_currency.filter(
+      (x) =>
+        x.currency !== estado.data.debt.functional_currency &&
+        x.rate !== null &&
+        x.functional_today !== null,
+    );
+    const divisa = enDivisa
+      .map(
+        (x) =>
+          `${mostrarImporte({ amount: x.nominal, currency: x.currency })} = ${textoDeDeuda(x.functional_today, estado.data.debt.functional_currency)} a la tasa BCV del ${fecha} (${mostrarImporte({ amount: x.rate ?? "0", currency: estado.data.debt.functional_currency })} por ${x.currency})`,
+      )
+      .join("; ");
+    const total = textoDeDeuda(estado.data.total_outstanding, estado.data.currency);
+    // Sin tasa de hoy no hay total en bolívares que decirle al cliente: se le dice lo que debe
+    // en su moneda, que sí se conoce. Nunca «Total: Bs. 0,00».
+    const nominal = nominalPorMoneda(estado.data.debt.by_currency);
+    const cierre =
+      estado.data.total_outstanding === null
+        ? `Total: ${nominal === "" ? "pendiente" : nominal} al ${fecha}.`
+        : enDivisa.length > 0
+          ? `Total: ${total} al ${fecha}. De eso, en divisas: ${divisa}.`
+          : `Total: ${total} al ${fecha}.`;
+    return `Hola ${cliente.legal_name}, te escribe ${empresa.trade_name ?? empresa.legal_name}. Tu cuenta pendiente:\n${filas}\n${cierre} ¡Gracias!`;
   };
 
   const telefonoWa = (cliente.phone ?? "").replace(/[^0-9]/g, "").replace(/^0/, "58");
@@ -840,14 +906,19 @@ function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element 
         <p className="text-[0.85rem] text-muted-foreground">Debe hoy</p>
         <p className="text-3xl font-semibold tabular-nums">
           {estado.data
-            ? mostrarImporte({
-                amount: estado.data.total_outstanding,
-                currency: estado.data.currency,
-              })
+            ? textoDeDeuda(estado.data.total_outstanding, estado.data.currency)
             : estado.isError
               ? "—"
               : "…"}
         </p>
+        {/* Sin tasa del día: lo que SÍ se sabe es cuánto debe en su moneda. */}
+        {estado.data &&
+          estado.data.total_outstanding === null &&
+          nominalPorMoneda(estado.data.debt.by_currency) !== "" && (
+            <p className="text-[0.9rem] tabular-nums">
+              Debe {nominalPorMoneda(estado.data.debt.by_currency)}
+            </p>
+          )}
         {/* Un fallo del estado de cuenta no se disfraza de «…» eterno: se dice
             en voz de persona y se puede reintentar. */}
         {estado.isError && (
@@ -883,13 +954,18 @@ function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element 
                   </span>
                 </span>
                 <span className="tabular-nums">
-                  {mostrarImporte({
-                    amount: d.balance,
-                    currency: estado.data?.currency ?? "VES",
-                  })}
+                  {textoDeDeuda(d.balance, estado.data?.currency ?? "VES")}
                 </span>
+                {/* Sin valorar (saldo nulo): el botón queda APAGADO con su motivo; el cobro no
+                    se abre con un «0» precargado (components/deuda.ts, decisionDeCobro). */}
                 {puede("sales.payment.register") && (
-                  <Button variant="secondary" size="sm" onClick={() => setCobrando(d)}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={decisionDeCobro(d.balance).apagado}
+                    title={decisionDeCobro(d.balance).motivo ?? undefined}
+                    onClick={() => setCobrando(d)}
+                  >
                     Cobrar
                   </Button>
                 )}
@@ -915,10 +991,12 @@ function DeudaDelCliente({ cliente }: { cliente: Customer }): React.JSX.Element 
         </div>
       )}
 
-      {cobrando !== null && estado.data && (
+      {cobrando !== null && cobrando.balance !== null && estado.data && (
         <CobrarDocumento
           documentId={cobrando.id}
           customerId={cliente.id}
+          // Sin tasa de hoy el saldo no se conoce y el cobro NO se abre (el botón está apagado):
+          // aquí el saldo siempre es una cifra del servidor.
           saldo={{ amount: cobrando.balance, currency: estado.data.currency }}
           // El estado de cuenta no trae la moneda de emisión de cada factura:
           // se asume la funcional; la narrativa de tasas la da el detalle.

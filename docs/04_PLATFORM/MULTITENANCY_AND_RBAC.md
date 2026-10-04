@@ -84,3 +84,36 @@ Configurable SoD:
 - creador de pago != aprobador;
 - creador proveedor != aprobador cuenta bancaria;
 - cajero != cierre supervisor.
+
+## Segunda empresa, invitación por enlace y acceso perdido (ADR-0077, 2026-10-02)
+
+- **Cada empresa nueva es su propio tenant.** «Crear otra empresa» (`POST /v1/onboarding/another-company`,
+  `platform.bootstrap_another_tenant`) es del Titular de alguna cuenta; la persona nace Titular y
+  Dueño del tenant nuevo. El registro (`bootstrap_tenant`) sigue siendo uno por persona (LAD81).
+- **Dos vías crean membresías en un tenant ajeno:** `addMember` (quien tiene `membership.manage`
+  agrega por correo a alguien que ya tiene cuenta; reactiva, con su guarda, a un desactivado) y la
+  invitación por enlace. `member_invitations` guarda la huella del token;
+  `platform.accept_member_invitation` (SECURITY DEFINER, ejecutable solo por `ladino_api`) consume
+  la invitación una vez y crea la membresía y la asignación acotada a la empresa. **Nunca reactiva**
+  una membresía desactivada (LAD89). Quien invitó tiene que conservar `membership.manage` sobre la
+  empresa el día que se acepta (LAD90).
+- **El acceso perdido solo se dice a quien lo tuvo.** `platform.lost_access_to_company` responde sí
+  a una membresía desactivada con un rol que alcanzaba la empresa, o con el acta
+  `member.role_revoked` de esa membresía cuyo `assignment_company_id` (payload) es esa empresa, o
+  `null` si la asignación quitada era de nivel tenant y la empresa ya existía entonces (lo mismo
+  para una membresía desactivada con rol de nivel tenant, por su acta `member.deactivated`) — nunca
+  por la empresa de la cabecera de
+  quien quitó el rol; `my_lost_access` aplica la misma regla; el middleware de
+  alcance responde entonces `ACCESS_REVOKED` (404). Para cualquier otro, el 404 sigue indistinguible.
+- **La empresa activa es de la pestaña** (`sessionStorage`), no de la máquina.
+
+## Reversar un cobro y corregir una retención soportada (ADR-0075 §8, ola 3)
+
+| Permiso | Quién lo tiene (roles de sistema) | Qué abre |
+|---|---|---|
+| `ar.payment.reverse` | dueño y contador (migración 20261003180000) | `POST /v1/payments/{id}/reversal`: reversar un cobro con motivo y acta. No lo tiene el cajero: quien cobra no deshace su propio cobro |
+| `ar.retention.correct` | contador (migración 20260928190000) | `POST /v1/supported-retentions/{id}/reversal`: anular el comprobante de una retención soportada y reversar su abono |
+
+El contra-asiento de la reversa lo autoriza la operación que lo contiene (como la anulación de una
+venta, ADR-0068 §1): no hace falta `accounting.entry.reverse`. Sin cuatro ojos: permiso propio,
+motivo y acta. El 403 nombra el permiso en palabras («Necesitas el permiso para reversar un cobro…»).

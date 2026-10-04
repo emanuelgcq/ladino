@@ -133,6 +133,7 @@ beforeAll(async () => {
              (${ROL}, 'sales.invoice.issue'), (${ROL}, 'sales.payment.register'),
              (${ROL}, 'ar.read'), (${ROL}, 'supplier.manage'), (${ROL}, 'purchase.receive'),
              (${ROL}, 'purchase.invoice.register'), (${ROL}, 'ap.read'),
+             (${ROL}, 'purchase.credit_note.register'),
              (${ROL}, 'inventory.move'), (${ROL}, 'inventory.adjust'),
              (${ROL}, 'accounting.account.manage'), (${ROL}, 'accounting.template.manage'),
              (${ROL}, 'accounting.entry.post'), (${ROL}, 'accounting.read')
@@ -289,12 +290,62 @@ describe("el inventario en el mayor: kardex ↔ mayor en cero después de cada h
     await enVerde();
   });
 
+  it("ADR-0075 §7 · una factura que difiere de lo recibido en MENOS de medio céntimo no deja nada colgado", async () => {
+    // Recibido a 52 (el promedio vigente: el kardex no cambia de promedio), facturado a 52,0001:
+    // 0,0003 Bs de diferencia. Al céntimo no hay nada que revalorizar ni que asentar — y lo que
+    // NO puede pasar es que quede un pendiente en la cola que nunca se pueda contabilizar, ni
+    // que el puente (mercancía recibida por facturar) quede con un resto.
+    const rec = await pedir("POST", "/v1/goods-receipts", {
+      company_id: COMPANY,
+      supplier_id: PROVEEDOR,
+      warehouse_id: W1,
+      currency: "VES",
+      lines: [{ product_id: HARINA, quantity: "3", unit_price: "52" }],
+    });
+    expect(rec.status).toBe(201);
+    const recId = ((await rec.json()) as { id: string }).id;
+    const [linea] = await sql<{ id: string }[]>`
+      select id from public.goods_receipt_lines where goods_receipt_id = ${recId}`;
+    const r = await pedir("POST", "/v1/supplier-invoices", {
+      company_id: COMPANY,
+      supplier_id: PROVEEDOR,
+      supplier_document_number: `FAC-IMC-${RUN}`,
+      supplier_control_number: "00-0000902",
+      invoice_date: HOY,
+      currency: "VES",
+      lines: [
+        {
+          goods_receipt_line_id: linea!.id,
+          product_id: HARINA,
+          quantity: "3",
+          unit_price: "52.0001",
+        },
+      ],
+    });
+    expect(r.status).toBe(201);
+    const inv = ((await r.json()) as { id: string }).id;
+    const [cola] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.journal_generation_queue
+       where company_id = ${COMPANY} and source_id = ${inv} and status = 'pending'`;
+    expect(cola!.n).toBe(0);
+    const [reval] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.inventory_moves
+       where company_id = ${COMPANY} and source_document_id = ${inv} and kind = 'revaluacion'`;
+    expect(reval!.n).toBe(0);
+    expect(await saldoPapel("goods_received_not_invoiced")).toBe("0.00000000");
+    const [centimo] = await sql<{ n: number }[]>`
+      select count(*)::int as n from platform.cent_gaps(${COMPANY})`;
+    expect(centimo!.n).toBe(0);
+    await enVerde();
+  });
+
   it("SALIDA DIRECTA y AJUSTE · los dos asientan", async () => {
     const salida = await pedir("POST", "/v1/inventory/issues", {
       company_id: COMPANY,
       warehouse_id: W1,
       product_id: ACEITE,
       quantity: "1",
+      reason: "consumo_propio",
       reference: `consumo-${RUN}`,
     });
     expect(salida.status).toBe(201);
@@ -336,6 +387,139 @@ describe("el inventario en el mayor: kardex ↔ mayor en cero después de cada h
     await enVerde();
   });
 
+  it("C8 · FACTURACIÓN PARCIAL: 100,00 recibido por 3 unidades y tres facturas de 33,33 dejan el puente en 0,00", async () => {
+    // Cada factura difiere de su tercio de lo recibido (33,3333…) en −0,0033: menos de medio
+    // céntimo, que al céntimo es cero. Medida factura por factura, la diferencia se descarta
+    // tres veces y «mercancía recibida por facturar» se queda con 0,01 para siempre. La línea de
+    // la recepción se cierra con la tercera factura, y ahí el residuo tiene que salir.
+    const puenteAntes = Number(await saldoPapel("goods_received_not_invoiced"));
+    const rec = await pedir("POST", "/v1/goods-receipts", {
+      company_id: COMPANY,
+      supplier_id: PROVEEDOR,
+      warehouse_id: W1,
+      currency: "VES",
+      lines: [{ product_id: HARINA, quantity: "3", unit_price: "33.3333" }],
+    });
+    expect(rec.status, await rec.clone().text()).toBe(201);
+    const recId = ((await rec.json()) as { id: string }).id;
+    const [linea] = await sql<{ id: string; valor: string }[]>`
+      select id, functional_amount::text as valor from public.goods_receipt_lines
+       where goods_receipt_id = ${recId}`;
+    // La entrada va al kardex al céntimo: 3 × 33,3333 = 99,9999 → 100,00.
+    expect(Number(await saldoPapel("goods_received_not_invoiced")) - puenteAntes).toBe(-100);
+    for (const n of [1, 2, 3]) {
+      const r = await pedir("POST", "/v1/supplier-invoices", {
+        company_id: COMPANY,
+        supplier_id: PROVEEDOR,
+        supplier_document_number: `FAC-PARC-${RUN}-${n}`,
+        supplier_control_number: `00-000091${n}`,
+        invoice_date: HOY,
+        currency: "VES",
+        lines: [
+          {
+            goods_receipt_line_id: linea!.id,
+            product_id: HARINA,
+            quantity: "1",
+            unit_price: "33.33",
+          },
+        ],
+      });
+      expect(r.status, await r.clone().text()).toBe(201);
+    }
+    const [resto] = await sql<{ d: string }[]>`
+      select (${await saldoPapel("goods_received_not_invoiced")}::numeric
+              - ${String(puenteAntes)}::numeric)::text as d`;
+    expect(Number(resto!.d), `valor recibido ${linea!.valor}`).toBe(0);
+    await enVerde();
+  });
+
+  it("C5 · el costo de la factura se redondea UNA vez: en el borde, dos facturas parciales en divisa suman la diferencia que es", async () => {
+    // 0,5 USD × 20,00999999 = 10,004999995. Al céntimo, de lo exacto, es 10,00; pasando antes por
+    // 8 decimales es 10,00500000 → 10,01. La factura medía su costo con el segundo y la
+    // SIGUIENTE factura de la misma línea veía el de esta con el primero (round(x × tasa, 2) en
+    // SQL): dos reglas para el mismo número. Recibidas 2 unidades (20,00999999 → 20,01) y
+    // facturadas en dos facturas de 10,00 cada una, la diferencia total es 20,00 − 20,01 = −0,01.
+    // Con el doble redondeo salía +0,02.
+    const tasaPrevia = await sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext('ladino-e2e-rates'))`;
+      const previas = await tx<{ rate: string; source: string }[]>`
+        delete from public.exchange_rates
+         where company_id is null and from_currency = 'USD' and to_currency = 'VES'
+           and rate_date = ${HOY}::date
+        returning rate::text as rate, source`;
+      await tx`
+        insert into public.exchange_rates
+          (from_currency, to_currency, rate, rate_date, rate_timestamp, source)
+        values ('USD', 'VES', 20.00999999, ${HOY}::date, now(), 'e2e-inv-mayor-c5')`;
+      return previas;
+    });
+    try {
+      const rec = await pedir("POST", "/v1/goods-receipts", {
+        company_id: COMPANY,
+        supplier_id: PROVEEDOR,
+        warehouse_id: W1,
+        currency: "USD",
+        lines: [{ product_id: HARINA, quantity: "2", unit_price: "0.5" }],
+      });
+      expect(rec.status, await rec.clone().text()).toBe(201);
+      const recId = ((await rec.json()) as { id: string }).id;
+      const [linea] = await sql<{ id: string; valor: string; tasa: string }[]>`
+        select id, functional_amount::text as valor, fx_rate::text as tasa
+          from public.goods_receipt_lines where goods_receipt_id = ${recId}`;
+      // Si otra familia pisó la tasa del día mientras corría, este caso no prueba el borde.
+      expect(linea!.tasa).toBe("20.00999999");
+      const facturas: string[] = [];
+      for (const n of [1, 2]) {
+        const r = await pedir("POST", "/v1/supplier-invoices", {
+          company_id: COMPANY,
+          supplier_id: PROVEEDOR,
+          supplier_document_number: `FAC-C5-${RUN}-${n}`,
+          supplier_control_number: `00-000092${n}`,
+          invoice_date: HOY,
+          currency: "USD",
+          lines: [
+            {
+              goods_receipt_line_id: linea!.id,
+              product_id: HARINA,
+              quantity: "1",
+              unit_price: "0.5",
+            },
+          ],
+        });
+        expect(r.status, await r.clone().text()).toBe(201);
+        facturas.push(((await r.json()) as { id: string }).id);
+      }
+      // La diferencia factura/recepción que se asentó, sumada sobre las dos facturas: lo que la
+      // revalorización llevó al kardex más lo que llevó a variación.
+      const [dif] = await sql<{ total: string }[]>`
+        select coalesce(sum(jl.functional_debit - jl.functional_credit), 0)::text as total
+          from public.journal_entries e
+          join public.journal_lines jl on jl.entry_id = e.id
+          join public.company_account_settings s
+            on s.account_id = jl.account_id and s.company_id = e.company_id
+           and s.purpose in ('inventory_general', 'purchase_cost_variance')
+           and s.effective_to is null
+         where e.company_id = ${COMPANY} and e.source_kind = 'purchase_revaluation'
+           and e.source_id in ${sql(facturas)} and e.status = 'posted'`;
+      expect(Number(dif!.total), `valor recibido ${linea!.valor}`).toBe(-0.01);
+    } finally {
+      await sql.begin(async (tx) => {
+        await tx`select pg_advisory_xact_lock(hashtext('ladino-e2e-rates'))`;
+        await tx`delete from public.exchange_rates
+                   where company_id is null and source = 'e2e-inv-mayor-c5'`;
+        for (const p of tasaPrevia) {
+          await tx`
+            insert into public.exchange_rates
+              (from_currency, to_currency, rate, rate_date, rate_timestamp, source)
+            select 'USD', 'VES', ${p.rate}::numeric, ${HOY}::date, now(), ${p.source}
+             where not exists (select 1 from public.exchange_rates
+                                where company_id is null and from_currency = 'USD'
+                                  and to_currency = 'VES' and rate_date = ${HOY}::date)`;
+        }
+      });
+    }
+  });
+
   it("VARIANTE ROTA · una entrada escrita en el kardex sin asiento pone el invariante en rojo y la cobertura la señala", async () => {
     await sql.begin(async (tx) => {
       await tx`select set_config('ladino.actor_id', ${DUENO}, true)`;
@@ -353,5 +537,27 @@ describe("el inventario en el mayor: kardex ↔ mayor en cero después de cada h
       select ${g.diferencia}::numeric = 120 and ${g.en_cola}::numeric = 0 as ok`;
     expect(rojo!.ok, JSON.stringify(g)).toBe(true);
     expect(await huecos()).toEqual([{ kind: "entrada", problem: "missing" }]);
+  });
+
+  it("S2 · una nota de crédito PARCIAL del proveedor sobre una línea ya facturada entera no mueve el puente (va la última: la NC acredita inventario en el mayor)", async () => {
+    // La NC del proveedor se asienta contra la cuenta por pagar y el inventario, no contra
+    // «mercancía recibida por facturar»: no entra en el acumulado factura/recepción ni tiene por
+    // qué. El puente de la recepción de C8 sigue donde quedó.
+    const puenteAntes = await saldoPapel("goods_received_not_invoiced");
+    const [f] = await sql<{ id: string }[]>`
+      select id from public.supplier_invoices
+       where company_id = ${COMPANY} and supplier_document_number = ${`FAC-PARC-${RUN}-1`}`;
+    const nota = await pedir("POST", "/v1/supplier-credit-notes", {
+      company_id: COMPANY,
+      supplier_invoice_id: f!.id,
+      supplier_document_number: `NC-PARC-${RUN}`,
+      supplier_control_number: "00-0000919",
+      note_date: HOY,
+      currency: "VES",
+      reason: "Devolución de una de las tres unidades",
+      lines: [{ product_id: HARINA, quantity: "1", unit_price: "33.33", tax_amount: "5.33" }],
+    });
+    expect(nota.status, await nota.clone().text()).toBe(201);
+    expect(await saldoPapel("goods_received_not_invoiced")).toBe(puenteAntes);
   });
 });

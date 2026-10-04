@@ -11,6 +11,7 @@
  */
 import fs from "node:fs";
 import { comprobaciones, pedir, afirmar, sql, EMPRESAS, PERSONAS } from "./_app.mjs";
+import * as monedaA from "./_moneda.mjs";
 
 const c = comprobaciones("H");
 const RUN = Date.now().toString(36);
@@ -134,6 +135,105 @@ c.caso(
       pendientes.includes("F-88771") && pendientes.includes("F-89002"),
       "PENDIENTES_ASESOR no tiene el VALIDAR-TRIBUTARIO de F-88771 y F-89002",
     );
+  },
+);
+
+// ── Moneda A (ADR-0075 §4) ───────────────────────────────────────────────────
+c.caso(
+  "H-02",
+  "abonar la 000123 de E2 (registrada a 854,4637) cancela la CxP a ESA tasa y lleva la diferencia al diferencial",
+  async () => {
+    const [f] = await sql`
+      select id from public.supplier_invoices
+       where company_id = ${EMPRESAS.E2} and supplier_document_number = '000123'`;
+    afirmar(f, "no está la 000123 en E2");
+    const banco = await monedaA.bancoBsE2();
+    const r = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/supplier-payments", {
+      company_id: EMPRESAS.E2,
+      supplier_invoice_id: f.id,
+      gross_amount: "1.00000000",
+      currency: "USD",
+      instrument: "transferencia",
+      account_id: banco.id,
+      allow_negative_balance: true,
+      overdraft_reason: "Comprobación del recorrido: abono de 1 USD a la 000123",
+    });
+    afirmar(r.status === 201, `abonar 1 USD: ${r.status} ${r.texto.slice(0, 300)}`);
+    const [p] = await sql`
+      select functional_amount::text as salio, exchange_difference::text as dif
+        from public.supplier_payments where id = ${r.json.payment.id}`;
+    const lineas = await sql`
+      select s.purpose, l.functional_debit::text as debe, l.functional_credit::text as haber
+        from public.journal_entries e
+        join public.journal_lines l on l.entry_id = e.id
+        join public.company_account_settings s
+          on s.company_id = l.company_id and s.account_id = l.account_id
+         and s.purpose in ('ap_general', 'exchange_loss', 'exchange_gain')
+       where e.company_id = ${EMPRESAS.E2} and e.source_kind = 'payment_made'
+         and e.source_id = ${r.json.payment.id}`;
+    const cxp = lineas.find((l) => l.purpose === "ap_general");
+    afirmar(cxp, "el pago no tiene asiento con línea de cuentas por pagar");
+    // 1 USD a la tasa de REGISTRO (854,4637) son 854,46; antes se debitaba lo que salía hoy.
+    afirmar(Number(cxp.debe) === 854.46, `la CxP se debitó por ${cxp.debe}, no por 854,46`);
+    afirmar(
+      Number(p.dif) === Number((Number(p.salio) - 854.46).toFixed(2)),
+      `diferencial ${p.dif} con ${p.salio} salidos`,
+    );
+    if (Number(p.dif) !== 0) {
+      const papel = Number(p.dif) > 0 ? "exchange_loss" : "exchange_gain";
+      afirmar(
+        lineas.some((l) => l.purpose === papel),
+        `falta la línea de ${papel}`,
+      );
+    }
+  },
+);
+
+c.caso(
+  "H-02",
+  "ningún documento saldado desde el corte tiene residuo en el mayor (settled_ledger_gaps = 0 en E2 y E3)",
+  async () => {
+    await monedaA.compraUsdPagadaEnBs();
+    for (const e of [EMPRESAS.E2, EMPRESAS.E3]) {
+      const filas = await sql`select * from platform.settled_ledger_gaps(${e})`;
+      afirmar(
+        filas.length === 0,
+        `${filas.length} saldado(s) con residuo: ${JSON.stringify(filas[0])}`,
+      );
+    }
+  },
+);
+
+c.caso(
+  "H-06",
+  "el pedido nace en la moneda del precio y el campo de precio dice su moneda",
+  async () => {
+    const web = fs.readFileSync("apps/web/src/components/HacerPedido.tsx", "utf8");
+    afirmar(!web.includes('useState("VES")'), "la moneda del pedido sigue naciendo fija en VES");
+    // La propuesta sale de `monedaDelPedido` a través de `monedaQueSeEnsena`, que no propone nada
+    // mientras las listas cargan y no pisa lo que la persona ya eligió (revisión de moneda, X8).
+    const helper = fs.readFileSync("apps/web/src/moneda-del-pedido.ts", "utf8");
+    afirmar(
+      web.includes("monedaQueSeEnsena(monedaElegida, listas.isLoading, listas.data)") &&
+        helper.includes("return monedaDelPedido(listas);"),
+      "no propone la moneda de la lista",
+    );
+    afirmar(
+      web.includes("` en ${nombreCortoDeMoneda(moneda)}`") &&
+        web.includes("`Precio c/u${enMoneda}`"),
+      "el precio no dice en qué moneda va",
+    );
+    afirmar(
+      web.indexOf("¿En qué moneda van los precios?") < web.indexOf("`Precio c/u${enMoneda}`"),
+      "la moneda se elige después de escribir los precios",
+    );
+    // E2 vende con una lista en USD: es la que la pantalla propone.
+    const listas = await pedir(PERSONAS.duenoE2E3, "E2", "GET", "/v1/price-lists");
+    afirmar(listas.status === 200, `listas de E2: ${listas.status}`);
+    const activas = listas.json.filter((l) => l.status === "active");
+    const propuesta = (activas.find((l) => l.is_caja_default === true) ?? activas[0])
+      ?.currency_code;
+    afirmar(propuesta === "USD", `la lista con la que vende E2 está en ${propuesta}`);
   },
 );
 

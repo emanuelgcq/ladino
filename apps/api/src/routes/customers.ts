@@ -15,6 +15,7 @@ import {
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
+import { exigeArRead } from "./ar-read.js";
 import { leerMatriz } from "../csv.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -67,7 +68,10 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     // P-02: el documento se compara también NORMALIZADO por los dos lados (la misma expresión
     // del único customers_company_tax_id_uidx): «J40888777» encuentra «J-40888777-6» y al revés.
     const buscado = normalizarDocumento(search);
-    const filas = await withTransaction(sql, actor, ({ sql: tx }) => {
+    const filas = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      // P-04 (ADR-0048 §5, RESPUESTA §2.8): lo que debe cada cliente se lee con `ar.read`. El
+      // cajero lo tiene (para fiar); el almacenista no. La lista sin deuda sigue abierta.
+      if (conDeuda) await exigeArRead(tx, actor, companyId);
       const porDocumento =
         buscado === ""
           ? tx``
@@ -85,13 +89,13 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
       // Redondeada a 2 decimales AL SERVIR (2026-09-08): lo que se enseña es
       // lo que se puede pagar; los 8 decimales siguen en la base.
       const deudaJoin = conDeuda
-        ? tx`left join lateral (
-              select round(
-                       coalesce(sum(greatest(platform.document_debt_today(cu.company_id, d.id), 0)), 0),
-                       2)::text as debt
-                from public.documents d
-               where d.company_id = cu.company_id and d.customer_id = cu.id
-                 and d.kind in ('invoice', 'receipt', 'debit_note') and d.status = 'issued'
+        ? // F-04 (ADR-0075 §5): LA deuda del cliente, de la única función. La misma cifra que
+          // «Debe hoy» de la ficha, el estado de cuenta y «Lo que me deben». El `greatest(…, 0)`
+          // por documento que esta consulta tenía vive ahora DENTRO de la función (20261003210000
+          // §7.3), para las cuatro pantallas a la vez. H12: sin tasa de hoy y con deuda en divisa
+          // la cifra va en null — la lista no se cae y la pantalla dice «falta la tasa de hoy».
+          tx`left join lateral (
+              select round(platform.customer_debt_today(cu.company_id, cu.id), 2)::text as debt
             ) deuda on true`
         : tx``;
       const deudaCol = conDeuda ? ", deuda.debt" : "";

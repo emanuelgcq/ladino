@@ -3,6 +3,9 @@
 - **Estado:** Aceptado · **Fecha:** 2026-08-07 · **Impacto fiscal:** SÍ
 - **Enmendado el 2026-08-15** — ver §Enmienda. La decisión de fondo se mantiene; se admite el
   protocolo de dos transacciones y se corrige el alcance de la clave.
+- **Enmendado por ADR-0076 (2026-10-02):** la misma clave con OTRO cuerpo responde
+  `409 IDEMPOTENCY_BODY_MISMATCH` (con `details.previous_status`), no `IDEMPOTENCY_KEY_REUSED`, que
+  queda para la misma clave en otro endpoint; y la clave del cliente es por INTENTO.
 
 ## Contexto
 Conectividad irregular, usuarios que tocan dos veces, reintentos automáticos de la app móvil.

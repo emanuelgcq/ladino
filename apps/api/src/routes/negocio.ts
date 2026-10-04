@@ -4,6 +4,7 @@ import { UpdateCompanySettingsRequest } from "@ladino/schemas";
 import { getCompanySettings, setCompanySettings } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
+import { puedeLeerDeuda } from "./ar-read.js";
 
 /**
  * EL RESUMEN DEL NEGOCIO (Fase C): los números de Inicio y de Mi dinero, en
@@ -12,7 +13,9 @@ import { requireCompany } from "./products.js";
  * 8 pm de Caracas la venta sigue siendo de hoy aunque el UTC diga mañana
  * (la familia de bugs de CLAUDE.md §3).
  *
- * Permiso: `treasury.read` — es la vista del dinero del negocio entero.
+ * Permiso: `treasury.read` — es la vista del dinero del negocio entero. Los dos totales de DEUDA
+ * exigen además el permiso de su libro: `lo_que_me_deben` con `ar.read` y `lo_que_debo` con
+ * `ap.read`; sin él van en `null` y ni se consultan (N-07/P-04, ADR-0048 nota de re-revisión).
  */
 async function exigeTreasuryRead(
   tx: TransactionSql,
@@ -162,19 +165,21 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
         )
         select exists (select 1 from public.journal_templates t where t.company_id = ${companyId})
                  as lleva,
-               coalesce((select sum(resultado) from movs where dia = (select hoy from ventana)), 0)::text
+               -- P-01 (ADR-0063, ADR-0075 §7): se sirve AL CÉNTIMO. Con el mayor al céntimo la suma
+               -- ya lo es; el round() cubre la historia anterior a la regularización.
+               round(coalesce((select sum(resultado) from movs where dia = (select hoy from ventana)), 0), 2)::text
                  as res_hoy,
-               coalesce((select sum(resultado) from movs), 0)::text as res_mes,
-               coalesce((select sum(functional_amount) from gastos
-                          where dia = (select hoy from ventana)), 0)::text as gastos_hoy,
-               coalesce((select sum(functional_amount) from gastos
-                          where dia >= (select mes from ventana)), 0)::text as gastos_mes,
+               round(coalesce((select sum(resultado) from movs), 0), 2)::text as res_mes,
+               round(coalesce((select sum(functional_amount) from gastos
+                          where dia = (select hoy from ventana)), 0), 2)::text as gastos_hoy,
+               round(coalesce((select sum(functional_amount) from gastos
+                          where dia >= (select mes from ventana)), 0), 2)::text as gastos_mes,
                (select count(*)::int from public.journal_generation_queue q
                  where q.company_id = ${companyId} and q.status = 'pending') as pendientes`;
       const llevaContabilidad = contable?.lleva === true;
       const [sinContabilidad] = await tx<{ hoy: string; mes: string }[]>`
-        select (${ventas!.ganado_hoy}::numeric - ${contable!.gastos_hoy}::numeric)::text as hoy,
-               (${ventas!.ganado_mes}::numeric - ${contable!.gastos_mes}::numeric)::text as mes`;
+        select round(${ventas!.ganado_hoy}::numeric - ${contable!.gastos_hoy}::numeric, 2)::text as hoy,
+               round(${ventas!.ganado_mes}::numeric - ${contable!.gastos_mes}::numeric, 2)::text as mes`;
 
       // Lo que me deben / lo que debo: saldos que calcula el ESQUEMA, sumados
       // en SQL. Solo los positivos: un sobrepago no «resta deuda de otros».
@@ -185,14 +190,18 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
       // garantiza que pagar lo mostrado no deja residuo fantasma.
       // La familia completa de la deuda (ADR-0051): factura, recibo fiado y
       // nota de débito — el trío, nunca un filtro a medias.
-      const [deben] = await tx<{ total: string }[]>`
-        select round(coalesce(sum(saldo), 0), 2)::text as total
-          from (select greatest(platform.document_debt_today(${companyId}, d.id), 0) as saldo
-                  from public.documents d
-                 where d.company_id = ${companyId}
-                   and d.kind in ('invoice', 'receipt', 'debit_note')
-                   and d.status = 'issued') s`;
-      const [debo] = await tx<{ total: string }[]>`
+      // CADA TOTAL, SU PERMISO: «puede ver el dinero» no es «puede ver lo que deben los
+      // clientes». Sin ar.read / ap.read la cifra no se calcula y viaja en null.
+      const veCxc = await puedeLeerDeuda(tx, actor, companyId, "ar.read");
+      const veCxp = await puedeLeerDeuda(tx, actor, companyId, "ap.read");
+      const [deben] = !veCxc
+        ? [null]
+        : await tx<{ total: string }[]>`
+        -- F-04 (ADR-0075 §5): la única función de deuda, sobre todos los clientes.
+        select round(platform.customer_debt_today(${companyId}), 2)::text as total`;
+      const [debo] = !veCxp
+        ? [null]
+        : await tx<{ total: string }[]>`
         select round(coalesce(sum(saldo), 0), 2)::text as total
           -- En bolívares: una factura de proveedor en USD se valora a la tasa del día (la
           -- misma regla que lo que me deben). Antes se sumaban saldos de monedas distintas
@@ -253,8 +262,8 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
         ganado_desde_contabilidad: llevaContabilidad,
         pendientes_de_contabilizar: llevaContabilidad ? contable.pendientes : 0,
         lineas_sin_costo_mes: ventas!.lineas_sin_costo_mes,
-        lo_que_me_deben: deben!.total,
-        lo_que_debo: debo!.total,
+        lo_que_me_deben: deben?.total ?? null,
+        lo_que_debo: debo?.total ?? null,
         mi_dinero: dinero,
         por_agotarse: agotarse?.n ?? 0,
         tasa_del_dia: tasa ?? null,

@@ -64,3 +64,23 @@ POS-only y el contador externo como roles de fábrica.
   un permiso y no se lo conceda se pone en rojo — el gate compuesto responde cero.
 - El toggle «mostrar módulos avanzados» sobrevive, pero filtra DESPUÉS del rol: activa
   módulos de la empresa, no abre puertas que el rol cierra.
+
+## Nota de la re-revisión (ola 3, 2026-10-03): el resumen y los totales de deuda
+
+`treasury.read` sigue dando el resumen del negocio (`GET /v1/negocio/resumen`): eso no cambia. Pero
+«puede ver el dinero» no es «puede ver lo que deben los clientes» (RESPUESTA §2.8; N-07, P-04:
+ninguna pantalla revela lo que el rol no puede ver). Los dos totales de deuda exigen además el
+permiso de su libro:
+
+- `lo_que_me_deben` se calcula solo con `ar.read`;
+- `lo_que_debo` se calcula solo con `ap.read`.
+
+Sin el permiso la cifra **no se consulta** y viaja en `null`. `null` significa «no tienes acceso»,
+nunca «0.00»; la web no pinta esa tarjeta. **Contrato:** los dos campos de
+`NegocioResumenResponse` se amplían a nulo (antes siempre string). Los roles de fábrica con
+`treasury.read` (Dueño, Administrativo) tienen los tres permisos y no notan cambio; el efecto es
+sobre los roles a medida.
+
+*Decidido por criterio* (§2.16). Alternativas descartadas: (a) 403 en todo el resumen sin
+`ar.read` —el patrón de `with_debt=1`—, que dejaría sin Inicio ni «Mi dinero» a quien solo lleva
+la caja; (c) declarar los totales de deuda incluidos en `treasury.read`, que contradice §2.8.

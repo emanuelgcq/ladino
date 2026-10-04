@@ -175,6 +175,7 @@ export async function reprocessPendingJournals(
       functionalCurrency: moneda,
       amounts: importesDe(ctx),
       ...(condicionesDe(ctx) === undefined ? {} : { conditions: condicionesDe(ctx)! }),
+      ...(ctx["difference_is_rounding"] === true ? { differenceIsRounding: true } : {}),
       ...(enlace === undefined ? {} : { backlink: enlace }),
     });
     if (!r.ok) {

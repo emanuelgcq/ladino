@@ -310,6 +310,21 @@ export const PaymentResponse = z
     reference: z.string().nullable(),
     customer_credit_id: uuid.nullable(),
     supported_retention_id: uuid.nullable(),
+    /**
+     * La reversa de este cobro (ADR-0075 §8, H4), si la tiene: cuándo, quién y por qué. Un cobro
+     * reversado no cuenta en el saldo ni en lo pagado. Solo lo trae el detalle del documento.
+     */
+    reversal: z
+      .object({
+        id: uuid,
+        reversed_at: z.string().datetime({ offset: true }),
+        reversed_by: uuid.nullable(),
+        reversed_by_name: z.string().nullable(),
+        reason: z.string(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 export type PaymentResponse = z.infer<typeof PaymentResponse>;
@@ -338,8 +353,13 @@ export const DocumentDetailResponse = z
     lines: z.array(DocumentLineResponse),
     payments: z.array(PaymentResponse),
     exchange_differences: z.array(ExchangeGainLossResponse),
-    /** Calculado, nunca persistido: total − Σ cobros. */
-    balance: z.string(),
+    /** Calculado, nunca persistido. null = documento en divisa sin tasa de hoy (H12). */
+    balance: z.string().nullable(),
+    /** ADR-0076 (O-02): quién armó la cuenta del POS que esta venta cerró. null = no vino de una. */
+    pos_cart: z
+      .object({ author_id: uuid.nullable(), author_name: z.string().nullable() })
+      .strict()
+      .nullable(),
   })
   .strict();
 export type DocumentDetailResponse = z.infer<typeof DocumentDetailResponse>;
@@ -484,8 +504,9 @@ export type QuickSalePaymentInput = z.infer<typeof QuickSalePaymentInput>;
 
 /**
  * La VENTA RÁPIDA: factura emitida + cobros + vuelto, en una transacción.
- * El `Idempotency-Key` es el id de venta del cliente: reintentar con la misma
- * clave devuelve la MISMA venta, nunca una segunda factura.
+ * El `Idempotency-Key` es el INTENTO de cobro (ADR-0076), nunca el id de la cuenta:
+ * reintentar con la misma clave devuelve la MISMA venta; un cobro nuevo de una cuenta
+ * ya vendida da 409 POS_CART_SOLD, nunca una segunda factura.
  */
 export const QuickSaleRequest = z
   .object({
@@ -499,9 +520,14 @@ export const QuickSaleRequest = z
     lines: z.array(DocumentLineRequest).min(1).max(200),
     /** Hasta CUATRO formas de pago (una caja real: Bs, pago móvil, USD, Zelle). */
     payments: z.array(QuickSalePaymentInput).max(4).optional(),
-    /** La cuenta abierta que esta venta CIERRA: se borra en la MISMA
-     *  transacción (migración 44 — un carrito solo muere al cobrarse). */
+    /** La cuenta abierta que esta venta CIERRA: queda marcada como vendida en la MISMA
+     *  transacción (ADR-0076) — y un segundo cobro de esa cuenta da 409 POS_CART_SOLD. */
     cart_id: uuid.optional(),
+    /** Las ediciones de la cuenta que la caja llevaba al cobrar (ADR-0076): constancia en el
+     *  acta de la venta, y dos cobros de la misma cuenta nunca son bytes iguales. */
+    cart_version: z.number().int().min(0).max(1_000_000).optional(),
+    /** El intento de cobro: el mismo uuid que viaja como `Idempotency-Key` (ADR-0076). */
+    attempt_id: uuid.optional(),
   })
   .strict();
 export type QuickSaleRequest = z.infer<typeof QuickSaleRequest>;
@@ -528,6 +554,8 @@ export const UpsertPosCartRequest = z
     customer_id: uuid.nullable().optional(),
     lines: z.array(PosCartLine).max(500),
     note: z.string().trim().min(1).max(500).nullable().optional(),
+    /** La caja (equipo) donde se arma: un uuid que la web guarda en el disco (ADR-0076). */
+    station_id: uuid.nullable().optional(),
   })
   .strict();
 export type UpsertPosCartRequest = z.infer<typeof UpsertPosCartRequest>;
@@ -540,6 +568,14 @@ export const PosCartResponse = z
     lines: z.array(PosCartLine),
     note: z.string().nullable(),
     updated_at: z.string(),
+    /** De quién es la cuenta (ADR-0076, E-08): quién la armó, cuándo y en qué caja. */
+    created_at: z.string(),
+    created_by: uuid.nullable(),
+    author_name: z.string().nullable(),
+    station_id: uuid.nullable(),
+    /** ¿Puede quien pregunta cobrarla, cambiarla o borrarla? Su autor, o quien tenga
+     *  `pos.carts.manage`. Si no, la caja la enseña en solo lectura. */
+    editable: z.boolean(),
   })
   .strict();
 export type PosCartResponse = z.infer<typeof PosCartResponse>;
@@ -707,11 +743,12 @@ export const AgingResponse = z
           customer_id: uuid,
           bucket: z.enum(["0-30", "31-60", "61-90", "90+"]),
           document_count: z.number().int().nonnegative(),
-          amount: z.string(),
+          /** null = el tramo tiene deuda en divisa y falta la tasa de hoy (ADR-0075 §5, H12). */
+          amount: z.string().nullable(),
         })
         .strict(),
     ),
-    total: z.string(),
+    total: z.string().nullable(),
   })
   .strict();
 export type AgingResponse = z.infer<typeof AgingResponse>;
@@ -731,7 +768,15 @@ export const CustomerStatementResponse = z
           status: DocumentStatus,
           total_amount: z.string(),
           paid_amount: z.string(),
-          balance: z.string(),
+          /** null = documento en divisa sin tasa de hoy, o sin saldo calculable (H12). */
+          balance: z.string().nullable(),
+          /**
+           * La moneda del documento y lo que se debe EN ELLA (ADR-0075 §5): la deuda nominal.
+           * null = no se puede calcular (un cobro viejo en otra moneda sin tasa con que valorarlo):
+           * nunca «0», que diría que no debe.
+           */
+          debt_currency: z.string(),
+          debt_nominal: z.string().nullable(),
           days_outstanding: z.number().int(),
         })
         .strict(),
@@ -747,7 +792,35 @@ export const CustomerStatementResponse = z
         })
         .strict(),
     ),
-    total_outstanding: z.string(),
+    /** null = hay deuda en divisa y falta la tasa de hoy; el nominal va en `debt.by_currency`. */
+    total_outstanding: z.string().nullable(),
+    /**
+     * LA DEUDA, por la única función (ADR-0075 §5, F-04): nominal por moneda y, solo para
+     * mostrar, su valor en la moneda de la empresa a la tasa de hoy, con la tasa y su fecha.
+     * `total_outstanding` es la suma de `functional_today`. El aviso al cliente sale de aquí.
+     */
+    debt: z
+      .object({
+        functional_currency: z.string(),
+        as_of: z.string(),
+        by_currency: z.array(
+          z
+            .object({
+              currency: z.string(),
+              nominal: z.string(),
+              rate: z.string().nullable(),
+              functional_today: z.string().nullable(),
+            })
+            .strict(),
+        ),
+        /**
+         * Cuántos documentos del cliente NO entran en `by_currency` porque su deuda nominal no
+         * se puede calcular (un cobro viejo en otra moneda sin tasa). Con más de cero, las
+         * cifras de arriba son parciales y la pantalla lo dice.
+         */
+        unvalued_documents: z.number().int().nonnegative().optional(),
+      })
+      .strict(),
     total_credit_available: z.string(),
     aging: AgingResponse,
   })
@@ -1050,6 +1123,12 @@ export const RefundCustomerCreditRequest = z
      * egreso mayor que el saldo responde 409 INSUFFICIENT_FUNDS con el número delante.
      */
     allow_negative_balance: z.boolean().optional(),
+    /**
+     * D-11: POR QUÉ se deja la cuenta en negativo, en palabras de quien lo confirma. Obligatorio
+     * (con el permiso `treasury.overdraft`) cuando el egreso sobregira de verdad; queda en el
+     * acta `treasury.overdraft.confirmed`. El mínimo lo exige el caso de uso, con su mensaje.
+     */
+    overdraft_reason: z.string().trim().max(300).optional(),
   })
   .strict();
 export type RefundCustomerCreditRequest = z.infer<typeof RefundCustomerCreditRequest>;
@@ -1070,3 +1149,56 @@ export const CustomerRefundResponse = z
   })
   .strict();
 export type CustomerRefundResponse = z.infer<typeof CustomerRefundResponse>;
+
+/** La reversa de un cobro (ADR-0075 §8, R-61): motivo obligatorio, queda en el acta. */
+export const ReversePaymentRequest = z
+  .object({ company_id: uuid, reason: z.string().trim().min(10).max(300) })
+  .strict();
+export type ReversePaymentRequest = z.infer<typeof ReversePaymentRequest>;
+
+export const PaymentReversalResponse = z
+  .object({
+    id: uuid,
+    payment_id: uuid,
+    document_id: uuid,
+    kind: z.enum(["payment", "supported_retention"]),
+    reason: z.string(),
+    reversed_at: z.string().datetime({ offset: true }),
+    currency: z.string(),
+    amount: z.string(),
+    functional_amount: z.string(),
+    reversal_entry_id: uuid.nullable(),
+    igtf_reversal_entry_id: uuid.nullable(),
+    document: z.object({ id: uuid, status: DocumentStatus }).strict(),
+    /** Lo que el documento vuelve a deber, por la única función de deuda. Null sin tasa de hoy. */
+    debt: z
+      .object({
+        currency: z.string(),
+        /** null = no se puede calcular (un cobro viejo en otra moneda sin tasa). */
+        nominal: z.string().nullable(),
+        functional_currency: z.string(),
+        rate: z.string().nullable(),
+        rate_date: z.string(),
+        /** null = falta la tasa de hoy. */
+        functional_today: z.string().nullable(),
+      })
+      .strict()
+      .nullable(),
+    /** El IGTF que ese cobro percibió: restituido al cliente y pendiente de reintegro (P-67). */
+    igtf: z
+      .object({
+        perception_id: uuid,
+        status: z.literal("pendiente_reintegro"),
+        currency: z.string(),
+        restituted_amount: z.string(),
+        absorbed: z.boolean(),
+      })
+      .strict()
+      .nullable(),
+    supported_retention: z
+      .object({ id: uuid, status: z.literal("annulled") })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export type PaymentReversalResponse = z.infer<typeof PaymentReversalResponse>;

@@ -45,6 +45,15 @@ export interface CuentaAbierta {
   cliente: ClientePos | null;
   sinIdentificar: boolean;
   lineas: LineaCuenta[];
+  /** Cuántas ediciones lleva (ADR-0076): viaja como `cart_version` en el cobro. */
+  version?: number;
+  /**
+   * De quién es (ADR-0076, E-08). Solo las que vinieron de la nube lo traen; una cuenta nacida
+   * en esta caja es de quien la abrió. `editable: false` = solo lectura: la cobra o la cambia su
+   * autor o quien tenga permiso para cuentas ajenas, y el servidor lo exige igual.
+   */
+  autor?: { nombre: string | null; desde: string; caja: string | null } | null;
+  editable?: boolean;
 }
 
 /** Lo que la nube guarda de cada cuenta (el contrato del PUT). */
@@ -53,6 +62,34 @@ export interface CuentaNube {
   label: string;
   customer_id: string | null;
   lines: { product_id: string; qty: string }[];
+}
+
+/**
+ * LA CAJA de este equipo (ADR-0076): un uuid que se guarda en el disco del navegador y viaja
+ * con cada cuenta. Es lo que deja decir «armada en esta caja» o «en otra caja». Sin disco, cada
+ * carga es una caja nueva — se pierde solo ese rótulo.
+ */
+export function idDeCaja(): string {
+  const CLAVE = "ladino.pos.caja";
+  try {
+    const previa = localStorage.getItem(CLAVE);
+    if (previa !== null && /^[0-9a-f-]{36}$/i.test(previa)) return previa;
+    const nueva = crypto.randomUUID();
+    localStorage.setItem(CLAVE, nueva);
+    return nueva;
+  } catch {
+    return crypto.randomUUID();
+  }
+}
+
+/**
+ * La nube dijo que NO a una subida, y reintentar no lo arregla (un 4xx). `vendida` = la cuenta
+ * ya se cobró (el servidor lo dice al subirla, ADR-0076): esa cuenta muere aquí también y no se sube más.
+ */
+export class RechazoDefinitivo extends Error {
+  constructor(readonly vendida: boolean) {
+    super(vendida ? "La cuenta ya se cobró." : "La nube rechazó la cuenta.");
+  }
 }
 
 // ── La capa local: síncrona, tragándose sus errores ──────────────────────────
@@ -108,20 +145,32 @@ export interface SincronizadorNube {
   guardar: (cuenta: CuentaNube) => void;
   borrar: (id: string) => void;
   /**
-   * Suelta lo pendiente de una cuenta SIN tocar la nube: la que se cobró ya la borró el
-   * servidor en la transacción de la venta, y subirla después la resucitaba.
+   * Suelta lo pendiente de una cuenta SIN tocar la nube, y no la vuelve a subir: la que se cobró
+   * ya quedó marcada vendida en la transacción de la venta (ADR-0076), y subirla después era
+   * resucitarla (M-01, M-03). El servidor la rechaza igual; esto ahorra el viaje.
    */
   olvidar: (id: string) => void;
   /** Sube YA lo pendiente: al cambiar de cuenta, al cobrar, al salir. */
   vaciar: () => void;
+  /**
+   * ANTES DE COBRAR (ADR-0076): sube ya lo pendiente de esa cuenta y espera a que aterrice, con
+   * el envío que ya estuviera en vuelo. Así ningún PUT de la cuenta sale después de la venta.
+   * No falla: sin red, la venta sigue y el servidor marca la cuenta igual.
+   */
+  esperar: (id: string) => Promise<void>;
 }
 
 export function crearSincronizador(
   subir: (cuenta: CuentaNube) => Promise<void>,
   bajar: (id: string) => Promise<void>,
   esperaMs: number = ESPERA_NUBE,
+  /** La nube dijo que esa cuenta ya se cobró: la caja la quita (ADR-0076). */
+  alSaberVendida?: (id: string) => void,
 ): SincronizadorNube {
   const enVuelo = new Set<string>();
+  const vuelos = new Map<string, Promise<void>>();
+  /** Las que ya no se suben nunca más en esta caja: cobradas o rechazadas. */
+  const muertas = new Set<string>();
   const sucias = new Map<string, CuentaNube>();
   const porBorrar = new Set<string>();
   const temporizadores = new Map<string, ReturnType<typeof setTimeout>>();
@@ -138,8 +187,16 @@ export function crearSincronizador(
     );
   }
 
-  async function volar(id: string): Promise<void> {
-    if (enVuelo.has(id)) return; // ya hay uno en el aire: el estado quedó anotado
+  function volar(id: string): Promise<void> {
+    // Ya hay uno en el aire: el estado quedó anotado y ese mismo vuelo lo sube.
+    const enCurso = vuelos.get(id);
+    if (enCurso !== undefined) return enCurso;
+    const vuelo = volarYa(id).finally(() => vuelos.delete(id));
+    vuelos.set(id, vuelo);
+    return vuelo;
+  }
+
+  async function volarYa(id: string): Promise<void> {
     enVuelo.add(id);
     try {
       while (sucias.has(id) || porBorrar.has(id)) {
@@ -154,9 +211,18 @@ export function crearSincronizador(
         } else {
           const cuenta = sucias.get(id)!;
           sucias.delete(id);
+          if (muertas.has(id)) continue;
           try {
             await subir(cuenta);
-          } catch {
+          } catch (e) {
+            // Un NO definitivo no se reencola (M-03: antes el catch reencolaba la cuenta ya
+            // cobrada y el siguiente `vaciar()` la resucitaba).
+            if (e instanceof RechazoDefinitivo) {
+              muertas.add(id);
+              sucias.delete(id);
+              if (e.vendida) alSaberVendida?.(id);
+              break;
+            }
             // Sin red, la copia local manda. Lo que falló se REENCOLA (si no
             // llegó un estado más nuevo mientras tanto) y se sale del bucle:
             // el próximo toque o `vaciar()` lo vuelve a intentar. Antes se
@@ -174,6 +240,7 @@ export function crearSincronizador(
 
   return {
     guardar(cuenta: CuentaNube): void {
+      if (muertas.has(cuenta.id)) return;
       sucias.set(cuenta.id, cuenta);
       programar(cuenta.id);
     },
@@ -191,6 +258,14 @@ export function crearSincronizador(
       if (previo !== undefined) clearTimeout(previo);
       temporizadores.delete(id);
       sucias.delete(id);
+      muertas.add(id);
+    },
+    esperar(id: string): Promise<void> {
+      const previo = temporizadores.get(id);
+      if (previo !== undefined) clearTimeout(previo);
+      temporizadores.delete(id);
+      if (!sucias.has(id) && !vuelos.has(id)) return Promise.resolve();
+      return volar(id).catch(() => undefined);
     },
     vaciar(): void {
       for (const [id, t] of temporizadores) {

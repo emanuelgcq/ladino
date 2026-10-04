@@ -24,6 +24,7 @@ import {
   registerSupplierPayment,
   simplePurchase,
   registerArrival,
+  previewArrival,
   ventasIntermedias,
   closePurchaseOrder,
 } from "@ladino/domain";
@@ -555,6 +556,21 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     const r = await withTransaction(sql, actor, (uow) => registerArrival(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
+  });
+
+  /**
+   * La vista previa de la llegada (D-05): el MISMO caso de uso, deshecho al terminar. Sin
+   * idempotencia: no crea nada (como `/v1/pos/tender`).
+   */
+  app.post("/v1/arrivals/preview", async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = RegisterArrivalRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => previewArrival(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
   });
 
   /**

@@ -16,13 +16,19 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../ui
 import { LogoLadino } from "../components/LogoLadino.js";
 import { rifParaMostrar } from "./rif.js";
 import { Registro } from "../pages/registro/Registro.js";
+import {
+  almacenesDelNavegador,
+  recordarEmpresa,
+  resolverEmpresaDePestana,
+} from "./empresa-pestana.js";
 
 /**
  * Sesión y empresa activa, para todo el árbol.
  *
  * supabase-js SOLO para autenticación (signup, login, refresh): los datos van
- * SIEMPRE por la API con Bearer + X-Company-Id. La empresa elegida se persiste
- * POR USUARIO — dos contadores en la misma máquina no comparten esa elección.
+ * SIEMPRE por la API con Bearer + X-Company-Id. La empresa elegida vive en la
+ * PESTAÑA (ADR-0077 §1, O-01; ver empresa-pestana.ts) y se recuerda por
+ * usuario — dos contadores en la misma máquina no comparten esa elección.
  */
 export interface Sesion {
   readonly session: Session;
@@ -38,6 +44,8 @@ export interface Sesion {
    * se enseña — esconder es cortesía, el control vive en la API.
    */
   readonly puede: (permiso: string | readonly string[]) => boolean;
+  /** ADR-0077 §2 (A-13): abre el asistente de «Crear otra empresa», en un tenant nuevo. */
+  readonly crearOtraEmpresa: () => void;
 }
 
 const Ctx = createContext<Sesion | null>(null);
@@ -52,7 +60,52 @@ function mensajeDe(e: unknown): string {
   return e instanceof LlamadaApiError ? `${e.body.code}: ${e.body.message}` : String(e);
 }
 
-const claveEmpresa = (userId: string) => `ladino.company.${userId}`;
+/**
+ * LA INVITACIÓN POR ENLACE (ADR-0077 §3). `?invitacion=<token>` se lee UNA vez al cargar y se
+ * guarda en el disco hasta aceptarla o descartarla: quien se registra confirma su correo desde
+ * OTRA pestaña (el enlace del correo), y la invitación tiene que seguir ahí cuando entre.
+ */
+const CLAVE_INVITACION = "ladino.invitacion";
+const FORMA_TOKEN = /^[0-9a-f]{64}$/;
+function leerInvitacion(): string | null {
+  if (typeof window === "undefined") return null;
+  // H5: el enlace lleva el token en el FRAGMENTO (`#invitacion=`), que el navegador no manda al
+  // servidor web ni deja en sus logs. La query (`?invitacion=`) se sigue leyendo mientras queden
+  // enlaces viejos en circulación.
+  const q = new URLSearchParams(window.location.search);
+  const h = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const t = h.get("invitacion") ?? q.get("invitacion");
+  try {
+    if (t !== null && FORMA_TOKEN.test(t)) {
+      localStorage.setItem(CLAVE_INVITACION, t);
+      q.delete("invitacion");
+      h.delete("invitacion");
+      const resto = q.toString();
+      const fragmento = h.toString();
+      window.history.replaceState(
+        null,
+        "",
+        window.location.pathname + (resto ? "?" + resto : "") + (fragmento ? "#" + fragmento : ""),
+      );
+    }
+    return localStorage.getItem(CLAVE_INVITACION);
+  } catch {
+    return t !== null && FORMA_TOKEN.test(t) ? t : null;
+  }
+}
+function olvidarInvitacion(): void {
+  try {
+    localStorage.removeItem(CLAVE_INVITACION);
+  } catch {
+    // sin disco no había nada guardado
+  }
+}
+const INVITACION = leerInvitacion();
+
+interface AccesoPerdidoItem {
+  business_name: string;
+  admin_name: string | null;
+}
 
 /**
  * LOS ENLACES DEL CORREO (2026-09-14). Se leen UNA vez, al cargar el módulo y
@@ -113,6 +166,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   // antes de dejar pasar a la app se exige la contraseña nueva.
   const [recuperando, setRecuperando] = useState(LLEGADA.recuperacion);
   const [enlace, setEnlace] = useState<EnlaceDeCorreo | null>(LLEGADA.enlace);
+  // ADR-0077: la invitación pendiente, el acceso perdido (N-03), el corte en plena sesión (N-06)
+  // y el asistente de la otra empresa (A-13).
+  const [invitacion, setInvitacion] = useState<string | null>(INVITACION);
+  const [perdidos, setPerdidos] = useState<AccesoPerdidoItem[] | null>(null);
+  const [accesoRevocado, setAccesoRevocado] = useState(false);
+  const [creandoOtra, setCreandoOtra] = useState(false);
 
   useEffect(() => {
     void supabase.auth.getSession().then(({ data }) => {
@@ -121,6 +180,12 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     });
     const { data: sub } = supabase.auth.onAuthStateChange((ev, s) => {
       if (ev === "PASSWORD_RECOVERY") setRecuperando(true);
+      // H5: al salir, la invitación pendiente se borra del disco: el siguiente que entre en este
+      // navegador no la hereda. Cubre todos los «Salir», que pasan por signOut.
+      if (ev === "SIGNED_OUT") {
+        olvidarInvitacion();
+        setInvitacion(null);
+      }
       setSession(s);
     });
     return () => sub.subscription.unsubscribe();
@@ -130,12 +195,17 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
     setError("");
     try {
       const cs = await api<Company[]>(s, "/v1/companies");
+      // Sin empresas: ¿las tuvo? (N-03) Quien perdió el acceso no ve «monta tu negocio».
+      const acceso =
+        cs.length === 0
+          ? await api<{ lost_access: AccesoPerdidoItem[] }>(s, "/v1/me/access")
+          : { lost_access: [] };
+      setPerdidos(acceso.lost_access);
       setCompanies(cs);
-      // Restaurar la última empresa elegida por ESTE usuario, si sigue visible.
-      const guardada = localStorage.getItem(claveEmpresa(s.user.id));
-      const previa = cs.find((c) => c.id === guardada);
-      if (previa) setEmpresaState(previa);
-      else if (cs.length === 1) setEmpresaState(cs[0] ?? null);
+      setAccesoRevocado(false);
+      // La empresa de ESTA pestaña si sigue visible; si la pestaña es nueva, la última elegida.
+      const { pestana, disco } = almacenesDelNavegador();
+      setEmpresaState(resolverEmpresaDePestana(s.user.id, cs, pestana, disco));
     } catch (e) {
       setCompanies([]);
       setError(mensajeDe(e));
@@ -178,7 +248,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   const setEmpresa = useCallback(
     (c: Company) => {
       setEmpresaState(c);
-      if (session) localStorage.setItem(claveEmpresa(session.user.id), c.id);
+      setAccesoRevocado(false);
+      if (session) {
+        const { pestana, disco } = almacenesDelNavegador();
+        recordarEmpresa(session.user.id, c.id, pestana, disco);
+      }
     },
     [session],
   );
@@ -206,7 +280,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
         if (vigente) setPermisos(new Set(r.permissions));
       })
       .catch((e: unknown) => {
-        if (vigente) setErrorPermisos(mensajeDe(e));
+        if (!vigente) return;
+        if (e instanceof LlamadaApiError && e.body.code === "ACCESS_REVOKED")
+          setAccesoRevocado(true);
+        else setErrorPermisos(mensajeDe(e));
       });
     return () => {
       vigente = false;
@@ -225,17 +302,25 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   const llamar = useCallback(
     <T,>(path: string, init: RequestInit = {}): Promise<T> => {
       if (!session || !empresa) return Promise.reject(new Error("sin sesión o empresa"));
-      return api<T>(session, path, { ...init, companyId: empresa.id });
+      // N-06: si el acceso terminó en plena sesión (la caja abierta), la pestaña entera lo dice.
+      return api<T>(session, path, { ...init, companyId: empresa.id }).catch((e: unknown) => {
+        if (e instanceof LlamadaApiError && e.body.code === "ACCESS_REVOKED") {
+          setAccesoRevocado(true);
+        }
+        throw e;
+      });
     },
     [session, empresa],
   );
 
+  const crearOtraEmpresa = useCallback(() => setCreandoOtra(true), []);
+
   const valor = useMemo<Sesion | null>(
     () =>
       session && empresa && companies && permisos !== null
-        ? { session, companies, empresa, setEmpresa, llamar, puede }
+        ? { session, companies, empresa, setEmpresa, llamar, puede, crearOtraEmpresa }
         : null,
-    [session, empresa, companies, permisos, setEmpresa, llamar, puede],
+    [session, empresa, companies, permisos, setEmpresa, llamar, puede, crearOtraEmpresa],
   );
 
   if (enlace !== null) {
@@ -253,7 +338,59 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
   if (cargando) return <PantallaCentrada>Cargando…</PantallaCentrada>;
   if (!session) return <Login aviso={LLEGADA.fallo} />;
   if (recuperando) return <NuevaClave onLista={() => setRecuperando(false)} />;
+  if (invitacion !== null) {
+    return (
+      <Invitacion
+        session={session}
+        token={invitacion}
+        onAceptada={(companyId) => {
+          olvidarInvitacion();
+          setInvitacion(null);
+          const { pestana, disco } = almacenesDelNavegador();
+          recordarEmpresa(session.user.id, companyId, pestana, disco);
+          void recargar(session);
+        }}
+        onDescartar={() => {
+          olvidarInvitacion();
+          setInvitacion(null);
+        }}
+      />
+    );
+  }
   if (companies === null) return <PantallaCentrada>Cargando empresas…</PantallaCentrada>;
+  if (creandoOtra) {
+    return (
+      <Registro
+        otraEmpresa
+        token={session.access_token}
+        correo={session.user.email ?? ""}
+        onSalir={() => setCreandoOtra(false)}
+        onListo={(companyId) => {
+          if (companyId !== undefined) {
+            const { pestana, disco } = almacenesDelNavegador();
+            recordarEmpresa(session.user.id, companyId, pestana, disco);
+          }
+          setCreandoOtra(false);
+          void recargar(session);
+        }}
+      />
+    );
+  }
+  if (accesoRevocado) {
+    return (
+      <AccesoPerdido
+        perdidos={null}
+        onSeguir={() => {
+          setEmpresaState(null);
+          void recargar(session);
+        }}
+      />
+    );
+  }
+  // Sin ninguna empresa y con acceso perdido (N-03): nunca «monta tu negocio».
+  if (companies.length === 0 && error === "" && perdidos !== null && perdidos.length > 0) {
+    return <AccesoPerdido perdidos={perdidos} onSeguir={() => void recargar(session)} />;
+  }
   // Sin ninguna empresa: EL REGISTRO PREMIUM (pantalla completa, como el
   // Login). El formulario chiquito del selector murió con él.
   if (companies.length === 0 && error === "") {
@@ -262,7 +399,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }): Re
         token={session.access_token}
         correo={session.user.email ?? ""}
         onSalir={() => void supabase.auth.signOut()}
-        onListo={() => void recargar(session)}
+        onListo={(companyId) => {
+          if (companyId !== undefined) {
+            const { pestana, disco } = almacenesDelNavegador();
+            recordarEmpresa(session.user.id, companyId, pestana, disco);
+          }
+          void recargar(session);
+        }}
       />
     );
   }
@@ -810,5 +953,204 @@ function SelectorEmpresa({
         </Card>
       </div>
     </div>
+  );
+}
+
+const NOMBRE_DEL_ROL: Record<string, string> = {
+  owner: "dueño",
+  cashier: "cajero",
+  store_manager: "encargado",
+  back_office: "administrativo",
+  accountant: "contador",
+  warehouse_ops: "almacenista",
+};
+
+interface VistaInvitacion {
+  status: "pending" | "used" | "revoked" | "expired" | "other_email";
+  // E7: con other_email el servidor no dice ni la empresa ni quién invita (van en null).
+  company_name: string | null;
+  business_name: string | null;
+  role_key: string | null;
+  inviter_name: string | null;
+}
+
+const INVITACION_NO_DISPONIBLE: Record<Exclude<VistaInvitacion["status"], "pending">, string> = {
+  used: "Esta invitación ya se usó. Si no fuiste tú, pide a quien te invitó un enlace nuevo.",
+  revoked: "Esta invitación fue anulada. Pide a quien te invitó un enlace nuevo.",
+  expired: "Esta invitación venció. Pide a quien te invitó un enlace nuevo.",
+  other_email: "Esta invitación es para otro correo. Entra con ese correo o pide otra.",
+};
+
+/**
+ * «Te invitaron a <empresa>» (ADR-0077 §3, N-08/K-09): quien abre el enlace —recién registrado o
+ * no— ve a qué negocio lo invitan, con qué oficio y quién, ANTES de entrar. Nunca «monta tu
+ * negocio».
+ */
+function Invitacion({
+  session,
+  token,
+  onAceptada,
+  onDescartar,
+}: {
+  session: Session;
+  token: string;
+  onAceptada: (companyId: string) => void;
+  onDescartar: () => void;
+}): React.JSX.Element {
+  const [vista, setVista] = useState<VistaInvitacion | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [aceptando, setAceptando] = useState(false);
+  useEffect(() => {
+    let vigente = true;
+    void api<VistaInvitacion>(session, "/v1/invitations/preview", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    })
+      .then((v) => {
+        if (vigente) setVista(v);
+      })
+      .catch((e: unknown) => {
+        if (!vigente) return;
+        setError(
+          e instanceof LlamadaApiError && e.status === 404
+            ? "Ese enlace de invitación no es válido. Pide uno nuevo a quien te invitó."
+            : e instanceof LlamadaApiError
+              ? (e.body.person_message ?? e.body.message)
+              : "No se pudo abrir la invitación. Revisa tu conexión y reintenta.",
+        );
+      });
+    return () => {
+      vigente = false;
+    };
+    // La sesión se renueva sola (TOKEN_REFRESHED): la vista previa se pide una vez por token.
+  }, [token]);
+
+  async function aceptar(): Promise<void> {
+    setAceptando(true);
+    setError(null);
+    try {
+      const r = await api<{ company_id: string }>(session, "/v1/invitations/accept", {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      });
+      onAceptada(r.company_id);
+    } catch (e) {
+      setError(
+        e instanceof LlamadaApiError
+          ? (e.body.person_message ?? e.body.message)
+          : "No se pudo aceptar. Revisa tu conexión y reintenta.",
+      );
+      setAceptando(false);
+    }
+  }
+
+  const conDatos = vista !== null && vista.company_name !== null;
+  const titulo = conDatos ? "Te invitaron a " + vista.company_name : "Tu invitación";
+  return (
+    <PantallaAuth>
+      <Card className="shadow-overlay">
+        <CardHeader>
+          <CardTitle>{titulo}</CardTitle>
+          {conDatos && (
+            <CardDescription>
+              {(vista.inviter_name ?? "Quien administra el negocio") +
+                " te invitó a trabajar como " +
+                (NOMBRE_DEL_ROL[vista.role_key ?? ""] ?? vista.role_key ?? "") +
+                (vista.business_name !== null && vista.business_name !== vista.company_name
+                  ? " en " + vista.business_name
+                  : "") +
+                "."}
+            </CardDescription>
+          )}
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {vista === null && error === null && (
+            <p className="text-[0.9rem] text-muted-foreground">Abriendo la invitación…</p>
+          )}
+          {vista !== null && vista.status !== "pending" && (
+            <p role="alert" className="text-[0.9rem] text-destructive-soft-foreground">
+              {INVITACION_NO_DISPONIBLE[vista.status]}
+            </p>
+          )}
+          {error !== null && (
+            <p role="alert" className="text-[0.9rem] text-destructive-soft-foreground">
+              {error}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2 pt-1">
+            {vista !== null && vista.status === "pending" && (
+              <Button variant="primary" onClick={() => void aceptar()} disabled={aceptando}>
+                {aceptando ? "Entrando…" : "Aceptar la invitación"}
+              </Button>
+            )}
+            <Button variant="ghost" onClick={onDescartar} disabled={aceptando}>
+              {/* E6: el botón borra la invitación del disco, y lo dice. */}
+              {vista !== null && vista.status === "pending" ? "Descartar" : "Seguir"}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                olvidarInvitacion();
+                void supabase.auth.signOut();
+              }}
+            >
+              <LogOut /> Salir
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </PantallaAuth>
+  );
+}
+
+/**
+ * «Tu acceso a esta empresa ya no está activo» (ADR-0077 §3, N-03 y N-06). Con `perdidos`: la
+ * persona entra y no ve ninguna empresa porque la desactivaron o le quitaron el rol — se dice con
+ * el nombre de quien administra. Sin `perdidos` (null): el corte llegó en plena sesión, con la
+ * caja abierta. Nunca «Vamos a montar tu negocio».
+ */
+function AccesoPerdido({
+  perdidos,
+  onSeguir,
+}: {
+  perdidos: AccesoPerdidoItem[] | null;
+  onSeguir: () => void;
+}): React.JSX.Element {
+  return (
+    <PantallaAuth>
+      <Card className="shadow-overlay">
+        <CardHeader>
+          <CardTitle>Tu acceso a esta empresa ya no está activo</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {perdidos === null || perdidos.length === 0 ? (
+            <p role="alert" className="text-[0.95rem]">
+              Habla con quien administra el negocio.
+            </p>
+          ) : (
+            perdidos.map((p) => (
+              <p key={p.business_name} role="alert" className="text-[0.95rem]">
+                {p.business_name +
+                  ": habla con " +
+                  (p.admin_name ?? "quien administra el negocio") +
+                  (p.admin_name === null ? "." : ", que administra el negocio.")}
+              </p>
+            ))
+          )}
+          <p className="text-[0.85rem] text-muted-foreground">
+            Lo que registraste sigue guardado en el negocio. Si te devuelven el acceso, entras igual
+            que siempre.
+          </p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button variant="primary" onClick={onSeguir}>
+              {perdidos === null ? "Volver a mis empresas" : "Volver a revisar"}
+            </Button>
+            <Button variant="ghost" onClick={() => void supabase.auth.signOut()}>
+              <LogOut /> Salir
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </PantallaAuth>
   );
 }

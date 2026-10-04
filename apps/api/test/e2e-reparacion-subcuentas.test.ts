@@ -79,6 +79,7 @@ beforeAll(async () => {
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values
              (${ROL}, null, ${`e2ersc_${RUN}`}, 'Dueño', true)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
+             (${ROL}, 'treasury.overdraft'),
              (${ROL}, 'treasury.read'), (${ROL}, 'treasury.account.manage'),
              (${ROL}, 'treasury.reassign'), (${ROL}, 'accounting.account.manage'),
              (${ROL}, 'accounting.template.manage'), (${ROL}, 'accounting.entry.post'),
@@ -133,6 +134,7 @@ beforeAll(async () => {
     amount: "10.00",
     reason: "Antes de la reparación",
     allow_negative_balance: true,
+    overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
   });
   expect(t.status).toBe(201);
 });

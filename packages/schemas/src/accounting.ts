@@ -138,8 +138,14 @@ export const JournalLineResponse = z
     account_id: uuid,
     account_code: z.string(),
     account_name: z.string(),
+    /** Debe y Haber EN MONEDA FUNCIONAL (ADR-0075 §6, H1): iguales a functional_debit/credit. */
     debit_amount: z.string(),
     credit_amount: z.string(),
+    /**
+     * El importe ORIGINAL de la línea, en `transaction_currency`, y la tasa que lo lleva a la
+     * moneda funcional (`fx_rate`). En una línea en moneda funcional es el mismo importe a tasa 1.
+     */
+    original_amount: z.string().optional(),
     transaction_currency: z.string(),
     fx_rate: z.string(),
     functional_debit: z.string(),

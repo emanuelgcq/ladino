@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { ArrowLeftRight, ArrowUpFromLine, Scale, TimerReset } from "lucide-react";
+import { ArrowLeftRight, ArrowUpFromLine, ClipboardList, Scale, TimerReset } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
@@ -20,7 +20,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../../ui/
 import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { MensajeError } from "../ventas/comunes.js";
-import { errorDePersona } from "../../lib.js";
+import { errorDePersona, LlamadaApiError } from "../../lib.js";
 import type {
   ExpiringLot,
   InventoryMove,
@@ -49,7 +49,47 @@ import { sufijoDeArchivo } from "../../app/rif.js";
  * que vivía aquí era la segunda puerta: mandaba todo contra «aportes en inventario» aunque la
  * mercancía se hubiera comprado y pagado.
  */
-type Operacion = "salida" | "ajuste" | "transferencia";
+type Operacion = "salida" | "conteo" | "ajuste" | "transferencia";
+
+/**
+ * EL MOTIVO DE LA SALIDA, lista cerrada (ADR-0078 §2, I-01): lo que la base guarda y lo que decide
+ * adónde va en el mayor. La pantalla solo lo nombra; la cuenta y el débito los decide el servidor.
+ */
+const MOTIVOS_SALIDA: { value: string; label: string; retiro: boolean }[] = [
+  { value: "merma", label: "Merma", retiro: false },
+  { value: "rotura", label: "Rotura", retiro: false },
+  { value: "vencido", label: "Vencido", retiro: false },
+  { value: "faltante", label: "Faltante justificado", retiro: false },
+  { value: "consumo_propio", label: "Consumo propio", retiro: true },
+  { value: "regalo", label: "Regalo", retiro: true },
+  { value: "donacion", label: "Donación", retiro: true },
+  { value: "muestra", label: "Muestra", retiro: true },
+];
+const NOMBRE_MOTIVO: Record<string, string> = Object.fromEntries(
+  MOTIVOS_SALIDA.map((m) => [m.value, m.label]),
+);
+
+/** El tipo del kardex en palabras de persona (I-06). */
+const TIPO_LEGIBLE: Record<string, string> = {
+  entrada: "Entrada",
+  salida: "Salida",
+  ajuste: "Ajuste",
+  revaluacion: "Revaluación",
+  transferencia_in: "Traslado (entra)",
+  transferencia_out: "Traslado (sale)",
+};
+
+/** Los campos que el servidor rechazó, por nombre de campo (I-09): se marcan en el formulario. */
+function camposDelError(e: unknown): Record<string, string> {
+  if (!(e instanceof LlamadaApiError) || !Array.isArray(e.body.details)) return {};
+  const campos: Record<string, string> = {};
+  for (const d of e.body.details as { path?: unknown; message?: unknown }[]) {
+    const ruta: unknown[] = Array.isArray(d.path) ? (d.path as unknown[]) : [];
+    const clave = [...ruta].reverse().find((p): p is string => typeof p === "string");
+    if (clave !== undefined && typeof d.message === "string") campos[clave] = d.message;
+  }
+  return campos;
+}
 
 const OPERACION: Record<
   Operacion,
@@ -68,7 +108,15 @@ const OPERACION: Record<
     icono: <ArrowUpFromLine />,
     permiso: "inventory.move",
     consecuencia:
-      "Se valorará al costo promedio vigente, que calcula el servidor. Si dejara la existencia en negativo se rechaza, salvo permiso expreso.",
+      "Sale al costo promedio vigente, que calcula el servidor. Merma, rotura, vencido y faltante van a «Pérdidas por mermas y faltantes»; consumo propio, regalo, donación y muestra son un retiro: si facturas, llevan IVA sobre el precio de venta y una Nota de retiro numerada.",
+  },
+  conteo: {
+    etiqueta: "Conteo",
+    articulo: "el",
+    icono: <ClipboardList />,
+    permiso: "inventory.adjust",
+    consecuencia:
+      "Escribe lo que contaste: el sistema calcula la diferencia contra su existencia y te la enseña antes de registrarla como ajuste, con tu nombre y el motivo.",
   },
   ajuste: {
     etiqueta: "Ajuste",
@@ -315,10 +363,10 @@ function Kardex({
   const POR_PAGINA = 100;
   const [pagina, setPagina] = useState(1);
   const movimientos = useQuery({
-    queryKey: ["kardex", empresa.id, balance.product_id, pagina],
+    queryKey: ["kardex", empresa.id, balance.product_id, balance.warehouse_id, pagina],
     queryFn: () =>
       llamar<{ items: InventoryMove[]; total: number }>(
-        `/v1/inventory/moves?product_id=${balance.product_id}&per_page=${POR_PAGINA}&page=${pagina}`,
+        `/v1/inventory/moves?product_id=${balance.product_id}&warehouse_id=${balance.warehouse_id}&per_page=${POR_PAGINA}&page=${pagina}`,
       ),
   });
 
@@ -338,7 +386,7 @@ function Kardex({
           const k = c.getValue<string>();
           return (
             <Badge tone={k === "entrada" ? "accent" : k === "salida" ? "warning" : "neutral"}>
-              {k}
+              {TIPO_LEGIBLE[k] ?? k}
             </Badge>
           );
         },
@@ -411,7 +459,8 @@ function Kardex({
         id: "ref",
         header: "Referencia",
         enableSorting: false,
-        accessorFn: (m) => `${m.reference ?? "—"}${m.reason != null ? ` · ${m.reason}` : ""}`,
+        accessorFn: (m) =>
+          `${m.reference ?? "—"}${m.exit_reason != null ? ` · ${NOMBRE_MOTIVO[m.exit_reason] ?? m.exit_reason}` : ""}${m.reason != null ? ` · ${m.reason}` : ""}`,
         cell: (c) => (
           <span className="block max-w-44 truncate text-[0.82rem] text-muted-foreground">
             {c.getValue<string>()}
@@ -426,7 +475,9 @@ function Kardex({
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
       <DialogContent className="max-w-5xl">
         <DialogTitle>
-          Kardex — <span className="font-mono">{balance.product_sku}</span> {balance.product_name}
+          Kardex — <span className="font-mono">{balance.product_sku}</span> {balance.product_name} ·{" "}
+          {balance.warehouse_name}
+          {balance.lot_code !== null ? ` · lote ${balance.lot_code}` : ""}
         </DialogTitle>
         <DialogDescription>
           Saldo y costo de cada línea son los que el kardex calculó y guardó al registrar. Un
@@ -478,24 +529,89 @@ function Movimiento({
     currency: "USD",
     reason: "",
     reference: "",
+    /** El soporte de una pérdida (RLIVA art. 14): obligatorio en merma, rotura, vencido y faltante. */
+    evidence: "",
+    /** El lote contado, si el producto se lleva por lotes (el servidor lo exige). */
+    lot_id: "",
   });
   const [confirmando, setConfirmando] = useState(false);
+  // Los lotes de ESTA posición, para el conteo: se piden al servidor, no se deducen.
+  const lotes = useQuery({
+    queryKey: ["lotes-conteo", empresa.id, producto?.id, form.warehouse_id],
+    enabled: operacion === "conteo" && producto !== null && form.warehouse_id !== "",
+    queryFn: () =>
+      llamar<{ items: { lot_id: string | null; lot_code: string | null; quantity: string }[] }>(
+        `/v1/inventory/stock?product_id=${producto?.id ?? ""}&warehouse_id=${form.warehouse_id}`,
+      ),
+  });
+  const opcionesLote = (lotes.data?.items ?? [])
+    .filter((b) => b.lot_id !== null)
+    .map((b) => ({ value: b.lot_id ?? "", label: b.lot_code ?? "lote" }));
   const [error, setError] = useState<unknown>(null);
+  /** La diferencia del conteo, CALCULADA POR EL SERVIDOR (I-07): la pantalla no resta. */
+  const [diferencia, setDiferencia] = useState<{
+    system_quantity: string;
+    counted: string;
+    delta: string;
+  } | null>(null);
+  const campos = camposDelError(error);
 
   const def = OPERACION[operacion];
   const cantidadValida =
     operacion === "ajuste"
       ? /^-?\d{1,16}(\.\d{1,8})?$/.test(form.quantity)
-      : /^\d{1,16}(\.\d{1,8})?$/.test(form.quantity);
+      : operacion === "conteo"
+        ? /^\d{1,16}(\.\d{1,8})?$/.test(form.quantity)
+        : /^\d{1,16}(\.\d{1,8})?$/.test(form.quantity) && /[1-9]/.test(form.quantity);
+  const motivoRetiro = MOTIVOS_SALIDA.find((m) => m.value === form.reason)?.retiro === true;
+  const motivoPerdida =
+    operacion === "salida" && NOMBRE_MOTIVO[form.reason] !== undefined && !motivoRetiro;
+  // El faltante de un conteo va a pérdidas y lleva la misma evidencia que la salida «faltante»
+  // (RLIVA art. 14). El signo lo dice el servidor en la vista previa: la pantalla no resta.
+  const faltanteDeConteo =
+    operacion === "conteo" && diferencia !== null && diferencia.delta.startsWith("-");
   const listo =
     producto !== null &&
     form.warehouse_id !== "" &&
     cantidadValida &&
-    // La SALIDA también exige motivo: sin él no se sabe si fue merma, consumo o regalo, y en el
-    // mayor cae igual en «Ajuste de inventario» (QA de pantalla 2026-09-15, h. 42).
-    ((operacion !== "ajuste" && operacion !== "salida") || form.reason.trim().length >= 3) &&
+    // La salida exige un motivo DE LA LISTA (ADR-0078 §2); el ajuste y el conteo, uno escrito.
+    (operacion === "transferencia" ||
+      (operacion === "salida"
+        ? NOMBRE_MOTIVO[form.reason] !== undefined &&
+          (!motivoPerdida || form.evidence.trim().length >= 3)
+        : form.reason.trim().length >= 3)) &&
+    (operacion !== "conteo" || opcionesLote.length === 0 || form.lot_id !== "") &&
     (operacion !== "transferencia" ||
       (form.to_warehouse_id !== "" && form.to_warehouse_id !== form.warehouse_id));
+
+  /** El conteo pregunta al servidor la diferencia antes de registrarla. */
+  async function calcularDiferencia(): Promise<void> {
+    setError(null);
+    try {
+      const r = await llamar<{ system_quantity: string; counted: string; delta: string }>(
+        "/v1/inventory/counts",
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": crypto.randomUUID() },
+          body: JSON.stringify({
+            company_id: empresa.id,
+            product_id: producto?.id ?? "",
+            warehouse_id: form.warehouse_id,
+            counted: form.quantity,
+            reason: form.reason.trim(),
+            ...(form.lot_id === "" ? {} : { lot_id: form.lot_id }),
+            preview: true,
+          }),
+        },
+      );
+      setDiferencia(r);
+      // Un faltante sin evidencia no se confirma todavía: aparece el campo y se pide.
+      if (r.delta.startsWith("-") && form.evidence.trim().length < 3) return;
+      setConfirmando(true);
+    } catch (e) {
+      setError(e);
+    }
+  }
 
   async function enviar(): Promise<void> {
     setError(null);
@@ -513,9 +629,51 @@ function Movimiento({
             ...comun,
             warehouse_id: form.warehouse_id,
             quantity: form.quantity,
-            reason: form.reason.trim(),
+            reason: form.reason,
+            ...(motivoPerdida ? { evidence: form.evidence.trim() } : {}),
           }),
         });
+      } else if (operacion === "conteo") {
+        let r: { delta: string; move: unknown };
+        try {
+          r = await llamar<{ delta: string; move: unknown }>("/v1/inventory/counts", {
+            method: "POST",
+            headers: { "Idempotency-Key": crypto.randomUUID() },
+            body: JSON.stringify({
+              ...comun,
+              warehouse_id: form.warehouse_id,
+              counted: form.quantity,
+              reason: form.reason.trim(),
+              ...(form.lot_id === "" ? {} : { lot_id: form.lot_id }),
+              ...(faltanteDeConteo ? { evidence: form.evidence.trim() } : {}),
+              // Lo que la persona VIO: si el sistema cambió desde entonces, 409 y se recalcula.
+              ...(diferencia !== null
+                ? { expected_system_quantity: diferencia.system_quantity }
+                : {}),
+            }),
+          });
+        } catch (e) {
+          // Solo el 409 que produce «la existencia cambió» (code CONFLICT del conteo): cualquier otro
+          // 409 (llave de idempotencia en curso, existencia negativa…) enseña su propio mensaje.
+          if (e instanceof LlamadaApiError && e.status === 409 && e.body.code === "CONFLICT") {
+            // La existencia cambió: se vuelve a pedir la diferencia y se confirma de nuevo.
+            await calcularDiferencia();
+            setError(e);
+            return;
+          }
+          throw e;
+        }
+        // El aviso enseña el delta REAL que devolvió el servidor, no el de la vista previa.
+        if (r.move === null) {
+          toast.success("Conteo registrado", "Sin diferencia: no se registró ningún ajuste.");
+        } else {
+          toast.success(
+            "Conteo registrado",
+            `Ajuste de ${mostrarCantidad(r.delta)} × ${producto?.detalle ?? ""}`,
+          );
+        }
+        onCerrar(true);
+        return;
       } else if (operacion === "ajuste") {
         await llamar("/v1/inventory/adjustments", {
           method: "POST",
@@ -540,16 +698,15 @@ function Movimiento({
         });
       }
       toast.success(
-        `${def.etiqueta} registrada`,
+        `${def.etiqueta} ${def.articulo === "el" ? "registrado" : "registrada"}`,
         `${mostrarCantidad(form.quantity)} × ${producto?.detalle ?? ""}`,
       );
       onCerrar(true);
     } catch (e) {
-      // Sin aviso aparte: el diálogo de confirmación y el formulario ya dicen el motivo. El
-      // aviso «No se pudo registrar» sin motivo era la tercera copia del mismo error (QA
-      // 2026-09-15, h. 45).
+      // UN solo aviso (I-09): el error vuelve al formulario, que marca el campo rechazado; la
+      // confirmación se cierra en vez de repetirlo detrás.
       setError(e);
-      throw e;
+      setConfirmando(false);
     }
   }
 
@@ -611,13 +768,26 @@ function Movimiento({
             </FormField>
           )}
           <FormField
-            label={operacion === "ajuste" ? "Delta (con signo)" : "Cantidad"}
+            label={
+              operacion === "ajuste"
+                ? "Delta (con signo)"
+                : operacion === "conteo"
+                  ? "Lo que contaste"
+                  : "Cantidad"
+            }
             required
-            {...(operacion === "ajuste" ? { hint: "Ej. -3 para faltante, 3 para sobrante." } : {})}
+            error={campos["quantity"] ?? campos["delta"] ?? campos["counted"]}
+            {...(operacion === "ajuste"
+              ? { hint: "Ej. -3 para faltante, 3 para sobrante. Si contaste, usa «Conteo»." }
+              : operacion === "conteo"
+                ? { hint: "Lo que hay en el estante. La diferencia la calcula el sistema." }
+                : {})}
           >
             {(a) => (
               <Input
                 id={a.id}
+                aria-invalid={a["aria-invalid"]}
+                aria-describedby={a["aria-describedby"]}
                 inputMode="decimal"
                 className="text-right font-mono"
                 value={form.quantity}
@@ -625,14 +795,75 @@ function Movimiento({
               />
             )}
           </FormField>
-          {(operacion === "ajuste" || operacion === "salida") && (
-            <FormField label="Motivo" required className="sm:col-span-2">
+          {operacion === "salida" && (
+            <FormField
+              label="Motivo"
+              required
+              className="sm:col-span-2"
+              error={campos["reason"]}
+              {...(motivoRetiro
+                ? {
+                    hint: "Es un retiro (LIVA art. 4.3): si facturas, lleva IVA sobre el precio de venta y una Nota de retiro numerada.",
+                  }
+                : {})}
+            >
+              {(a) => (
+                <SimpleSelect
+                  id={a.id}
+                  value={form.reason === "" ? null : form.reason}
+                  onValueChange={(v) => setForm({ ...form, reason: v })}
+                  placeholder="¿Por qué sale?"
+                  options={MOTIVOS_SALIDA.map((m) => ({ value: m.value, label: m.label }))}
+                />
+              )}
+            </FormField>
+          )}
+          {(motivoPerdida || faltanteDeConteo) && (
+            <FormField
+              label="Evidencia"
+              required
+              className="sm:col-span-2"
+              error={campos["evidence"]}
+              hint={
+                faltanteDeConteo
+                  ? "El conteo da un faltante: va a pérdidas. Referencia del acta, la foto o el informe que respalda la pérdida (RLIVA art. 14)."
+                  : "Referencia del acta, la foto o el informe que respalda la pérdida (RLIVA art. 14)."
+              }
+            >
               {(a) => (
                 <Input
                   id={a.id}
+                  aria-invalid={a["aria-invalid"]}
+                  aria-describedby={a["aria-describedby"]}
+                  value={form.evidence}
+                  onChange={(e) => setForm({ ...form, evidence: e.target.value })}
+                />
+              )}
+            </FormField>
+          )}
+          {operacion === "conteo" && opcionesLote.length > 0 && (
+            <FormField label="Lote contado" required error={campos["lot_id"]}>
+              {(a) => (
+                <SimpleSelect
+                  id={a.id}
+                  value={form.lot_id === "" ? null : form.lot_id}
+                  onValueChange={(v) => setForm({ ...form, lot_id: v })}
+                  placeholder="Elige el lote que contaste"
+                  options={opcionesLote}
+                />
+              )}
+            </FormField>
+          )}
+          {(operacion === "ajuste" || operacion === "conteo") && (
+            <FormField label="Motivo" required className="sm:col-span-2" error={campos["reason"]}>
+              {(a) => (
+                <Input
+                  id={a.id}
+                  aria-invalid={a["aria-invalid"]}
+                  aria-describedby={a["aria-describedby"]}
                   placeholder={
-                    operacion === "salida"
-                      ? "Obligatorio: merma, consumo interno, regalo…"
+                    operacion === "conteo"
+                      ? "Obligatorio: conteo de fin de mes, revisión del estante…"
                       : "Obligatorio: queda en la auditoría"
                   }
                   value={form.reason}
@@ -661,8 +892,16 @@ function Movimiento({
           <Button variant="ghost" onClick={() => onCerrar(false)}>
             Cancelar
           </Button>
-          <Button variant="primary" disabled={!listo} onClick={() => setConfirmando(true)}>
-            Registrar {def.etiqueta.toLowerCase()}…
+          <Button
+            variant="primary"
+            disabled={!listo}
+            onClick={() =>
+              operacion === "conteo" ? void calcularDiferencia() : setConfirmando(true)
+            }
+          >
+            {operacion === "conteo"
+              ? "Calcular la diferencia…"
+              : `Registrar ${def.etiqueta.toLowerCase()}…`}
           </Button>
         </div>
 
@@ -673,7 +912,28 @@ function Movimiento({
           confirmLabel={`Registrar ${def.articulo} ${def.etiqueta.toLowerCase()}`}
           onConfirm={enviar}
         >
-          {mostrarCantidad(form.quantity || "0")} × {producto?.label ?? "—"}
+          {operacion === "conteo" && diferencia !== null ? (
+            <>
+              {producto?.label ?? "—"} · {nombreDeposito(form.warehouse_id)}. El sistema tiene{" "}
+              {mostrarCantidad(diferencia.system_quantity)}; contaste{" "}
+              {mostrarCantidad(diferencia.counted)}.{" "}
+              {/^-?0+(\.0+)?$/.test(diferencia.delta) ? (
+                "No hay diferencia: no se registra ningún ajuste. "
+              ) : (
+                <>
+                  Diferencia: <strong>{mostrarCantidad(diferencia.delta)}</strong>
+                  {diferencia.delta.startsWith("-") ? " (faltante)" : " (sobrante)"}.{" "}
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              {mostrarCantidad(form.quantity || "0")} × {producto?.label ?? "—"}
+              {operacion === "salida" && NOMBRE_MOTIVO[form.reason] !== undefined
+                ? ` · ${NOMBRE_MOTIVO[form.reason]}`
+                : ""}
+            </>
+          )}
           {operacion === "transferencia"
             ? ` · de ${nombreDeposito(form.warehouse_id)} a ${nombreDeposito(form.to_warehouse_id)}`
             : ` · ${nombreDeposito(form.warehouse_id)}`}

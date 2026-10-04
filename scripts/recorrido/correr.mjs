@@ -41,7 +41,7 @@ const EMPRESAS = {
 };
 const BLOQUES = "ABCDEFGHIJKLMNOP".split("");
 /** Filas de invariante (no INFORME) que `invariantes.sql` devuelve por empresa: súbela al añadir una. */
-const INVARIANTES_ESPERADOS = 15;
+const INVARIANTES_ESPERADOS = 21;
 const ESQUEMAS = ["public", "platform", "auth", "storage", "supabase_migrations"];
 
 function correr(cmd, args, { entrada, silencioso = false } = {}) {
@@ -168,6 +168,18 @@ export function restaurar() {
     psql("select platform.grant_invited_owner_warehouse_ops();", "supabase_admin"),
     "grant_invited_owner_warehouse_ops",
   );
+  // EL ORDEN ES EL DE R-71, el que hará el dueño en producción: primero la regularización del
+  // céntimo, después todo lo que postea asientos desde saldos heredados. Desde la 20261003190000
+  // la base rechaza al postear una línea con más de dos decimales (LAD71): una reparación que
+  // corra ANTES del céntimo arma su asiento con las fracciones viejas y muere. La de ADR-0070
+  // lo dice con palabras (LAD82: «corre antes adr-0075-centimo.mjs»).
+  // ADR-0075 §7: la regularización del céntimo al corte (kardex y mayor a «Diferencias por redondeo»).
+  obligatorio(
+    correr(process.execPath, [path.join(RAIZ, "scripts", "reparar", "adr-0075-centimo.mjs")], {
+      silencioso: true,
+    }),
+    "reparación ADR-0075 (céntimo)",
+  );
   obligatorio(
     correr(process.execPath, [path.join(RAIZ, "scripts", "reparar", "adr-0070-subcuentas.mjs")], {
       silencioso: true,
@@ -179,6 +191,15 @@ export function restaurar() {
       silencioso: true,
     }),
     "reparación P-02 (RIF normalizado)",
+  );
+  // ADR-0075 §6: el saldo en divisa de cada caja pasa al mayor (E-11, J-04).
+  obligatorio(
+    correr(
+      process.execPath,
+      [path.join(RAIZ, "scripts", "reparar", "adr-0075-divisa-del-mayor.mjs")],
+      { silencioso: true },
+    ),
+    "reparación ADR-0075 (divisa del mayor)",
   );
   const docs = psql("select count(*) from public.documents").stdout.trim();
   console.log(`✓ escenario restaurado (${docs} documentos)`);

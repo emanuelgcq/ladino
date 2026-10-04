@@ -7,6 +7,7 @@ import {
   ConfirmOrderRequest,
   CreateInvoiceRequest,
   AnnulInvoiceRequest,
+  ReversePaymentRequest,
   RegisterPaymentRequest,
   PosQuoteRequest,
   QuickSaleRequest,
@@ -28,6 +29,8 @@ import {
   createInvoice,
   annulInvoice,
   registerPayment,
+  reversePayment,
+  reverseSupportedRetention,
   createReturn,
   confirmReturn,
   cancelReturn,
@@ -53,6 +56,7 @@ import {
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
+import { exigeArRead } from "./ar-read.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -78,32 +82,6 @@ function coherente(companyIdHeader: string, companyIdBody: string): void {
     throw new DominioError({
       code: "VALIDATION_FAILED",
       message: "El company_id del cuerpo no coincide con X-Company-Id.",
-    });
-  }
-}
-
-/**
- * Cuentas por cobrar: la RLS ya limita a las empresas del usuario, pero
- * «puede ver la empresa» no es «puede ver lo que se le debe a la empresa».
- * `ar.read` es un permiso propio y se comprueba aquí, en servidor.
- */
-async function exigeArRead(
-  tx: TransactionSql,
-  actor: { kind: string; userId?: string },
-  companyId: string,
-): Promise<void> {
-  if (actor.kind !== "user" || actor.userId === undefined) {
-    throw new DominioError({
-      code: "PERMISSION_REQUIRED",
-      message: "Consultar cuentas por cobrar exige un usuario real.",
-    });
-  }
-  const [permiso] = await tx<{ ok: boolean }[]>`
-    select platform.ladino_user_has_permission(${actor.userId}, 'ar.read', ${companyId}) as ok`;
-  if (!permiso?.ok) {
-    throw new DominioError({
-      code: "PERMISSION_REQUIRED",
-      message: "Consultar cuentas por cobrar exige el permiso ar.read.",
     });
   }
 }
@@ -143,9 +121,11 @@ export function salesRoutes(
                -- ¿tiene cobros? Un documento emitido CON abonos se lee «Abonada» en la lista:
                -- antes un fiado con abono parcial y uno sin abono decían ambos «Emitida» (QA de
                -- pantalla 2026-09-15, h. 21).
+               -- H4 (ADR-0075 §8): un cobro reversado no es un cobro. Solo cuentan los vivos.
                exists (select 1 from public.payments p
                         where p.company_id = documents.company_id
-                          and p.document_id = documents.id) as has_payments,
+                          and p.document_id = documents.id
+                          and not exists (select 1 from public.payment_reversals pr where pr.payment_id = p.id)) as has_payments,
                count(*) over ()::int as total
           from public.documents
          where company_id = ${companyId}
@@ -194,7 +174,20 @@ export function salesRoutes(
                to_char(paid_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as paid_at,
                currency, amount::text as amount, fx_rate::text as fx_rate, rate_source,
                functional_amount::text as functional_amount, instrument, reference,
-               customer_credit_id, supported_retention_id
+               customer_credit_id, supported_retention_id,
+               -- H4: cada cobro dice si está reversado, cuándo, por quién y por qué.
+               (select jsonb_build_object(
+                         'id', pr.id,
+                         'reversed_at', to_char(pr.reversed_at at time zone 'utc',
+                                                'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+                         'reversed_by', pr.created_by,
+                         'reversed_by_name',
+                           (select nullif(btrim(up.full_name), '') from public.users_profile up
+                             where up.user_id = pr.created_by),
+                         'reason', pr.reason)
+                  from public.payment_reversals pr
+                 where pr.company_id = payments.company_id and pr.payment_id = payments.id)
+                 as reversal
           from public.payments where document_id = ${id} order by paid_at, id`;
       const diferencias = await tx<Record<string, unknown>[]>`
         select id, document_id, payment_id, amount_transaction::text as amount_transaction,
@@ -202,16 +195,36 @@ export function salesRoutes(
                functional_at_payment::text as functional_at_payment,
                difference::text as difference, fx_rate_issue::text as fx_rate_issue,
                fx_rate_payment::text as fx_rate_payment, occurred_on::text as occurred_on
-          from public.exchange_gain_loss where document_id = ${id} order by occurred_on, id`;
+          from public.exchange_gain_loss
+         where document_id = ${id}
+           -- H4: el diferencial de un cobro reversado se descuenta (la tabla es append-only: la
+           -- fila queda y deja de contar; el mayor ya lo deshizo con el contra-asiento).
+           and not exists (select 1 from public.payment_reversals pr
+                            where pr.payment_id = exchange_gain_loss.payment_id)
+         order by occurred_on, id`;
       // El saldo lo dice el esquema, no esta capa — y viene ya en céntimos (ADR-0063 §4).
-      const [saldo] = await tx<{ balance: string }[]>`
-        select platform.document_debt_today(${companyId}, ${id})::text as balance`;
+      // H12: sin tasa de hoy, un documento en divisa trae su saldo en null (no «0», que diría
+      // que no debe). Sin fila —anulado o borrador— no hay saldo: «0», como siempre.
+      const [saldo] = await tx<{ balance: string | null }[]>`
+        select dd.functional_today::text as balance
+          from platform.document_debt(${companyId}, ${id}) dd`;
+      // ADR-0076 (O-02, decidido por criterio): quién ARMÓ la cuenta que esta venta cerró se lee
+      // de su lápida en pos_carts (sale_id); `documents`, tabla fiscal, no se toca. null = la venta
+      // no vino de una cuenta del POS.
+      const [cuenta] = await tx<{ author_id: string | null; author_name: string | null }[]>`
+        select pc.created_by as author_id,
+               (select nullif(btrim(up.full_name), '') from public.users_profile up
+                 where up.user_id = pc.created_by) as author_name
+          from public.pos_carts pc
+         where pc.company_id = ${companyId} and pc.sale_id = ${id}
+         limit 1`;
       return {
         document: documento,
         lines,
         payments,
         exchange_differences: diferencias,
-        balance: saldo?.balance ?? "0",
+        balance: saldo === undefined ? "0" : saldo.balance,
+        pos_cart: cuenta ?? null,
       };
     });
     if (detalle === null)
@@ -291,6 +304,37 @@ export function salesRoutes(
     return c.json(r.value, 201);
   });
 
+  /**
+   * LA REVERSA DE UN COBRO (ADR-0075 §8, R-61). Permiso propio (`ar.payment.reverse`), motivo y
+   * acta. 201: crea un hecho nuevo (la fila de reversa); el cobro original no cambia.
+   */
+  app.post("/v1/payments/:id/reversal", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const id = idValido(c.req.param("id"));
+    const parsed = ReversePaymentRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => reversePayment(uow, id, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
+  /** La reversa de un comprobante de retención soportada (`ar.retention.correct`, contador). */
+  app.post("/v1/supported-retentions/:id/reversal", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const id = idValido(c.req.param("id"));
+    const parsed = ReversePaymentRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      reverseSupportedRetention(uow, id, parsed.data),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
   // ── El punto de venta (Fase C) ────────────────────────────────────────────
 
   /** Cotiza el carrito SIN escribir nada. Cálculo puro: no exige idempotencia. */
@@ -321,8 +365,9 @@ export function salesRoutes(
   });
 
   /**
-   * La venta rápida. El `Idempotency-Key` es el id de venta del CLIENTE: un
-   * reintento devuelve LA MISMA venta, jamás una segunda factura.
+   * La venta rápida. El `Idempotency-Key` es el INTENTO de cobro (ADR-0076): el reintento de
+   * ese intento devuelve LA MISMA venta; un cobro nuevo de una cuenta ya vendida lo para la
+   * cuenta (POS_CART_SOLD), jamás una segunda factura.
    */
   app.post("/v1/pos/sales", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);
@@ -338,8 +383,8 @@ export function salesRoutes(
   // ── Cuentas abiertas del POS (migración 44) ───────────────────────────────
   // El PUT es idempotente POR NATURALEZA (el id lo pone la caja: misma clave,
   // mismo carrito), así que no lleva `Idempotency-Key` — el mismo principio
-  // que la subida de imágenes de producto. El borrado real al cobrar lo hace
-  // quickSale dentro de su transacción con `cart_id`.
+  // que la subida de imágenes de producto. Al cobrar, quickSale MARCA la cuenta
+  // vendida dentro de su transacción con `cart_id` (ADR-0076): desde ahí el PUT da 409.
 
   app.get("/v1/pos/carts", async (c) => {
     const { companyId } = requireCompany(c);
@@ -621,9 +666,12 @@ export function salesRoutes(
                round(amount, 2)::text as amount
           from platform.ar_aging(${companyId}, ${id}, ${ref!.d}::date)`;
       const [total] = await tx<{ t: string }[]>`
-        select round(coalesce(sum(amount), 0), 2)::text as t
+        select round(case when bool_or(amount is null) then null
+                          else coalesce(sum(amount), 0) end, 2)::text as t
           from platform.ar_aging(${companyId}, ${id}, ${ref!.d}::date)`;
-      return { reference_date: ref!.d, buckets, total: total?.t ?? "0" };
+      // H12: sin tasa de hoy, el equivalente en Bs de lo que está en divisa va en null (la
+      // pantalla dice «falta la tasa de hoy»); nunca una suma parcial ni un 500.
+      return { reference_date: ref!.d, buckets, total: total === undefined ? "0" : total.t };
     });
     return c.json(cuerpo, 200);
   });
@@ -649,8 +697,17 @@ export function salesRoutes(
                -- enseñaba como no pagada. Una anulada no tiene saldo: se enseñan sus cobros.
                round(coalesce(d.total_amount - platform.document_balance(${companyId}, d.id),
                               (select sum(p.functional_amount) from public.payments p
-                                where p.document_id = d.id), 0), 2)::text as paid_amount,
+                                where p.document_id = d.id
+                                  and not exists (select 1 from public.payment_reversals pr where pr.payment_id = p.id)), 0), 2)::text as paid_amount,
                round(platform.document_debt_today(${companyId}, d.id), 2)::text as balance,
+               -- La deuda NOMINAL, en la moneda del documento (ADR-0075 §5).
+               d.transaction_currency as debt_currency,
+               -- Una anulada no debe: «0». Una emitida cuyo nominal no se puede calcular (un
+               -- cobro viejo en otra moneda sin tasa): NULL, nunca «0» — diría que no debe.
+               (case when d.status = 'annulled' then '0'
+                     else (select dd.nominal::text
+                             from platform.document_debt(${companyId}, d.id) dd) end)
+                 as debt_nominal,
                -- El día de CARACAS, no el UTC (CLAUDE.md §3: una fecha contra un reloj).
                greatest(0, platform.caracas_day(now()) - platform.caracas_day(d.issued_at))::int
                  as days_outstanding
@@ -663,33 +720,56 @@ export function salesRoutes(
                applied_amount::text as applied_amount, status
           from public.customer_credits
          where company_id = ${companyId} and customer_id = ${id} order by created_at, id`;
-      const [totales] = await tx<{ pendiente: string; credito: string }[]>`
-        select round(coalesce((select sum(platform.document_debt_today(${companyId}, d.id))
-                           from public.documents d
-                          where d.company_id = ${companyId} and d.customer_id = ${id}
-                            and d.kind in ('invoice', 'receipt', 'debit_note')
-                            and d.status in ('issued', 'paid')), 0), 2)::text
-                 as pendiente,
+      const [totales] = await tx<{ pendiente: string | null; credito: string }[]>`
+        select round(platform.customer_debt_today(${companyId}, ${id}), 2)::text as pendiente,
                round(coalesce((select sum(cc.amount - cc.applied_amount)
                            from public.customer_credits cc
                           where cc.company_id = ${companyId} and cc.customer_id = ${id}
                             and cc.status = 'available'), 0), 2)::text as credito`;
+      // LA DEUDA POR MONEDA (F-04): nominal y, para mostrar, a la tasa de hoy. Misma función y
+      // mismos documentos que `total_outstanding`: la suma de functional_today ES ese total.
+      const porMoneda = await tx<Record<string, unknown>[]>`
+        select dd.currency, sum(dd.nominal)::text as nominal, max(dd.rate)::text as rate,
+               round(sum(dd.functional_today), 2)::text as functional_today
+          from public.documents d
+          cross join lateral platform.document_debt(${companyId}, d.id) dd
+         where d.company_id = ${companyId} and d.customer_id = ${id}
+           and d.kind in ('invoice', 'receipt', 'debit_note')
+           and d.status in ('issued', 'paid')
+           and dd.nominal <> 0
+         group by dd.currency
+         order by dd.currency`;
       const buckets = await tx<Record<string, unknown>[]>`
         select customer_id, bucket, document_count::int as document_count,
                round(amount, 2)::text as amount
           from platform.ar_aging(${companyId}, ${id}, platform.caracas_day(now()))`;
       const [ref] = await tx<{ d: string }[]>`select platform.caracas_day(now())::text as d`;
-      const [totalAging] = await tx<{ t: string }[]>`
-        select round(coalesce(sum(amount), 0), 2)::text as t
+      const [totalAging] = await tx<{ t: string | null }[]>`
+        select round(case when bool_or(amount is null) then null
+                          else coalesce(sum(amount), 0) end, 2)::text as t
           from platform.ar_aging(${companyId}, ${id}, platform.caracas_day(now()))`;
       return {
         customer_id: id,
         currency: empresa.moneda,
         documents: documentos,
         credits,
-        total_outstanding: totales?.pendiente ?? "0",
+        // H12: null = hay deuda en divisa y falta la tasa de hoy. El nominal va en `debt`.
+        total_outstanding: totales === undefined ? "0" : totales.pendiente,
+        debt: {
+          functional_currency: empresa.moneda,
+          as_of: ref!.d,
+          by_currency: porMoneda,
+          // Los que `by_currency` no puede sumar: se dicen, no se callan.
+          unvalued_documents: documentos.filter(
+            (d) => d["status"] !== "annulled" && d["debt_nominal"] === null,
+          ).length,
+        },
         total_credit_available: totales?.credito ?? "0",
-        aging: { reference_date: ref!.d, buckets, total: totalAging?.t ?? "0" },
+        aging: {
+          reference_date: ref!.d,
+          buckets,
+          total: totalAging === undefined ? "0" : totalAging.t,
+        },
       };
     });
     if (cuerpo === null)
@@ -1058,6 +1138,9 @@ export function salesRoutes(
                coalesce(sum(difference), 0)::text as neto
           from public.exchange_gain_loss
          where company_id = ${companyId}
+           -- H4: el diferencial de un cobro reversado no cuenta.
+           and not exists (select 1 from public.payment_reversals pr
+                            where pr.payment_id = exchange_gain_loss.payment_id)
            and (${desde}::date is null or occurred_on >= ${desde}::date)
            and (${hasta}::date is null or occurred_on <= ${hasta}::date)`;
       const porMes = await tx<Record<string, unknown>[]>`
@@ -1065,6 +1148,8 @@ export function salesRoutes(
                sum(difference)::text as amount
           from public.exchange_gain_loss
          where company_id = ${companyId}
+           and not exists (select 1 from public.payment_reversals pr
+                            where pr.payment_id = exchange_gain_loss.payment_id)
            and (${desde}::date is null or occurred_on >= ${desde}::date)
            and (${hasta}::date is null or occurred_on <= ${hasta}::date)
          group by 1 order by 1`;

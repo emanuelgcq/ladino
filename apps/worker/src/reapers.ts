@@ -131,7 +131,7 @@ export interface OpcionesPurga {
  */
 /**
  * Purga de cuentas abiertas ABANDONADAS del POS (migración 44). Un carrito
- * vivo se borra al cobrarse, en la transacción de la venta; lo que llega aquí
+ * cobrado queda marcado vendido (ADR-0076) y esta purga no lo toca; lo que llega aquí
  * es lo que nadie tocó en 30 días — la cuenta que la cajera abrió y olvidó.
  * No toca dinero ni documentos: es intención, y la intención caduca.
  * El grant del worker sobre `pos_carts` es SOLO select y delete.
@@ -146,9 +146,13 @@ export async function purgarCarritosPos(
   return withTransaction(sql, { kind: "system" }, async ({ sql: tx }) => {
     const borradas = await tx<{ id: string }[]>`
       delete from public.pos_carts
-       where id in (
+       where sold_at is null -- también fuera: la lápida no se purga ni en carrera (ADR-0076)
+         and id in (
          select id from public.pos_carts
           where updated_at < now() - make_interval(days => ${dias})
+            -- Una cuenta VENDIDA es una lápida (ADR-0076): sin ella, una subida vieja la
+            -- resucitaría; y con su created_by + sale_id dice quién armó esa venta.
+            and sold_at is null
           limit ${lote}
        )
       returning id`;

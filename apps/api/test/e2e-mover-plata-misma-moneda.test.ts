@@ -103,6 +103,7 @@ beforeAll(async () => {
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope) values
              (${ROL}, null, ${`e2ej01_${RUN}`}, 'Dueño', true)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
+             (${ROL}, 'treasury.overdraft'),
              (${ROL}, 'treasury.read'), (${ROL}, 'treasury.account.manage'),
              (${ROL}, 'treasury.reassign'), (${ROL}, 'accounting.account.manage'),
              (${ROL}, 'accounting.template.manage'), (${ROL}, 'accounting.entry.post'),
@@ -177,6 +178,7 @@ describe("J-01 · mover plata entre dos cuentas en bolívares, como vienen de f�
       amount: "10.00",
       reason: "Sacar efectivo del banco",
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(r.status).toBe(201);
     const t = (await r.json()) as { id: string; accounting: string; journal_entry_id: string };

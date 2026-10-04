@@ -23,6 +23,7 @@ import { SimpleSelect } from "../../ui/select.js";
 import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
+import { decisionDeCobro, textoDeDeuda } from "../../components/deuda.js";
 import { EntityPicker, type EntityOption } from "../../components/forms.js";
 import { ConfirmarSobregiro, esSinSaldo } from "../../components/sobregiro.js";
 import { useConFacturas } from "../../app/modo-venta.js";
@@ -35,6 +36,8 @@ import {
 } from "../../components/formas-de-pago.js";
 import { numeroDocumento } from "../../components/documento.js";
 import { errorDePersona } from "../../lib.js";
+import { conLlaveDeIntento, intentoAnteriorPudoQuedar } from "../../llave-intento.js";
+import { RevisaIntentoAnterior } from "../../components/RevisaIntentoAnterior.js";
 import { fechaLocal } from "../../fechas.js";
 
 /** El `source_kind` con el que cada tipo de documento genera su asiento. */
@@ -110,6 +113,8 @@ interface Detalle {
   exchange_differences: Diferencia[];
   /** NULL en una anulada: no hay deuda, que no es lo mismo que deuda cero. */
   balance: string | null;
+  /** ADR-0076 (O-02): quién armó la cuenta del POS que esta venta cerró. */
+  pos_cart?: { author_id: string | null; author_name: string | null } | null;
 }
 /** Un documento emitido SOBRE este (nota de crédito, de débito…), del listado. */
 interface DocumentoRelacionado {
@@ -319,7 +324,12 @@ export function DetalleFactura(): React.JSX.Element {
         title={`${KIND_LABEL[doc.kind] ?? doc.kind} ${numeroDe(doc)}`}
         description={
           cliente.data !== undefined
-            ? `${cliente.data.legal_name}${cliente.data.tax_id === null ? "" : ` · ${formatearDocumento(cliente.data.tax_id)}`}`
+            ? `${cliente.data.legal_name}${cliente.data.tax_id === null ? "" : ` · ${formatearDocumento(cliente.data.tax_id)}`}${
+                // O-02 (ADR-0076): el vendedor es quien cobró; quién armó la cuenta, aquí.
+                detalle.data?.pos_cart != null
+                  ? ` · Armó la cuenta: ${detalle.data.pos_cart.author_name ?? "otra persona"}`
+                  : ""
+              }`
             : undefined
         }
         actions={
@@ -358,15 +368,25 @@ export function DetalleFactura(): React.JSX.Element {
                 onCargado={() => invalidarTrasCambio()}
               />
             )}
-            {cobrable &&
-              balance !== null &&
-              !esCero(balance) &&
-              !balance.startsWith("-") &&
-              puede("sales.payment.register") && (
-                <Button variant="primary" onClick={() => setPagando(true)}>
+            {/* La misma conducta que la ficha del cliente (components/deuda.ts): con el saldo
+                sin valorar el botón se enseña APAGADO y dice por qué; antes se ocultaba. */}
+            {cobrable && decisionDeCobro(balance).visible && puede("sales.payment.register") && (
+              <>
+                <Button
+                  variant="primary"
+                  disabled={decisionDeCobro(balance).apagado}
+                  title={decisionDeCobro(balance).motivo ?? undefined}
+                  onClick={() => setPagando(true)}
+                >
                   <HandCoins /> Registrar cobro
                 </Button>
-              )}
+                {decisionDeCobro(balance).motivo !== null && (
+                  <span className="text-[0.82rem] text-muted-foreground">
+                    {decisionDeCobro(balance).motivo}
+                  </span>
+                )}
+              </>
+            )}
             {devolvible && puede("sales.return.manage") && (
               <Button variant="secondary" onClick={() => setDevolviendo(true)}>
                 <Undo2 /> Devolución
@@ -645,14 +665,14 @@ export function DetalleFactura(): React.JSX.Element {
               <Fila etiqueta="Saldo" destacada>
                 <span
                   className={
-                    balance === null || esCero(balance) || balance.startsWith("-")
+                    balance !== null && (esCero(balance) || balance.startsWith("-"))
                       ? "font-mono text-accent-soft-foreground"
                       : "font-mono text-warning-soft-foreground"
                   }
                 >
-                  {balance === null
-                    ? "—"
-                    : mostrarImporte({ amount: balance, currency: doc.functional_currency })}
+                  {/* null = documento en divisa sin tasa de hoy: debe, y se dice (una anulada o
+                      un borrador llegan con «0»). */}
+                  {textoDeDeuda(balance, doc.functional_currency)}
                 </span>
               </Fila>
             </CardContent>
@@ -988,19 +1008,24 @@ function Devolucion({
     }
   }
 
-  /** El pago del saldo a favor, en su propio paso: la misma llave, con o sin confirmación. */
-  async function reembolsar(creditId: string, monto: string, forzar: boolean): Promise<void> {
-    await llamar(`/v1/customer-credits/${creditId}/refunds`, {
-      method: "POST",
-      headers: { "Idempotency-Key": llaveReembolso.current },
-      body: JSON.stringify({
-        company_id: empresa.id,
-        account_id: cajaReembolso,
-        amount: monto,
-        reason: `Reembolso de la devolución: ${motivo.trim()}`,
-        ...(forzar ? { allow_negative_balance: true } : {}),
+  /**
+   * El pago del saldo a favor, en su propio paso. La llave es por INTENTO (ADR-0076, F-08): el
+   * 409 de saldo la estrena, así «confirmar el sobregiro» —otro cuerpo— viaja con la suya.
+   */
+  async function reembolsar(creditId: string, monto: string, forzar: string | null): Promise<void> {
+    await conLlaveDeIntento(llaveReembolso, (k) =>
+      llamar(`/v1/customer-credits/${creditId}/refunds`, {
+        method: "POST",
+        headers: { "Idempotency-Key": k },
+        body: JSON.stringify({
+          company_id: empresa.id,
+          account_id: cajaReembolso,
+          amount: monto,
+          reason: `Reembolso de la devolución: ${motivo.trim()}`,
+          ...(forzar !== null ? { allow_negative_balance: true, overdraft_reason: forzar } : {}),
+        }),
       }),
-    });
+    );
   }
 
   async function devolver(): Promise<void> {
@@ -1009,28 +1034,32 @@ function Devolucion({
     try {
       let id = creada;
       if (id === null) {
-        const r = await llamar<{ id: string }>("/v1/returns", {
-          method: "POST",
-          headers: { "Idempotency-Key": llaveCrear.current },
-          body: JSON.stringify({
-            company_id: empresa.id,
-            source_document_id: documento.id,
-            warehouse_id: deposito,
-            reason: motivo.trim(),
-            lines: elegidas.map((x) => ({ source_line_id: x.linea.id, quantity: x.cantidad })),
+        const r = await conLlaveDeIntento(llaveCrear, (k) =>
+          llamar<{ id: string }>("/v1/returns", {
+            method: "POST",
+            headers: { "Idempotency-Key": k },
+            body: JSON.stringify({
+              company_id: empresa.id,
+              source_document_id: documento.id,
+              warehouse_id: deposito,
+              reason: motivo.trim(),
+              lines: elegidas.map((x) => ({ source_line_id: x.linea.id, quantity: x.cantidad })),
+            }),
           }),
-        });
+        );
         id = r.id;
         setCreada(id);
       }
-      const confirmada = await llamar<{
-        credit_note_id: string | null;
-        customer_credit_id: string | null;
-        igtf_not_refunded?: { notice: string } | null;
-      }>(`/v1/returns/${id}/confirm`, {
-        method: "POST",
-        headers: { "Idempotency-Key": llaveConfirmar.current },
-      });
+      const confirmada = await conLlaveDeIntento(llaveConfirmar, (k) =>
+        llamar<{
+          credit_note_id: string | null;
+          customer_credit_id: string | null;
+          igtf_not_refunded?: { notice: string } | null;
+        }>(`/v1/returns/${id}/confirm`, {
+          method: "POST",
+          headers: { "Idempotency-Key": k },
+        }),
+      );
       if (
         cajaReembolso !== null &&
         confirmada.customer_credit_id !== null &&
@@ -1042,7 +1071,7 @@ function Devolucion({
           `/v1/documents/${confirmada.credit_note_id}`,
         );
         try {
-          await reembolsar(confirmada.customer_credit_id, nota.document.total_amount, false);
+          await reembolsar(confirmada.customer_credit_id, nota.document.total_amount, null);
         } catch (e) {
           const falta = esSinSaldo(e);
           if (falta === null) throw e;
@@ -1156,7 +1185,18 @@ function Devolucion({
                 — no se crea otro borrador.
               </p>
             )}
-            {error !== null && <MensajeError error={error} />}
+            {/* ADR-0076 §9: la devolución (o su reembolso) pudo quedar hecha con la llave anterior.
+                No se reintenta a ciegas: se cierra y el documento se vuelve a leer. */}
+            {error !== null &&
+              (intentoAnteriorPudoQuedar(error) ? (
+                <RevisaIntentoAnterior
+                  error={error}
+                  etiqueta="Cerrar y revisar la factura"
+                  onIr={() => onClose(true)}
+                />
+              ) : (
+                <MensajeError error={error} />
+              ))}
           </div>
           <div className="mt-4 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => void cancelar()} disabled={ocupado}>
@@ -1184,8 +1224,17 @@ function Devolucion({
             );
             onClose(true);
           }}
-          onConfirmar={async () => {
-            await reembolsar(sinSaldo.creditId, sinSaldo.monto, true);
+          onConfirmar={async (porQue) => {
+            try {
+              await reembolsar(sinSaldo.creditId, sinSaldo.monto, porQue);
+            } catch (e) {
+              // ADR-0076 §9: el reembolso pudo quedar hecho — el aviso va al diálogo de la
+              // devolución, con su camino a revisar, no al error genérico de la confirmación.
+              if (!intentoAnteriorPudoQuedar(e)) throw e;
+              setSinSaldo(null);
+              setError(e);
+              return;
+            }
             setSinSaldo(null);
             toast.success(
               "Devolución confirmada",

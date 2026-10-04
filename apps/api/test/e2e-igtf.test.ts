@@ -380,7 +380,8 @@ describe("IGTF — la percepción es POR PAGO", () => {
 
     // El asiento de la percepción: POSTEADO, cuadrado y por el funcional.
     const [asiento] = await sql<{ status: string; debe: string; haber: string }[]>`
-      select e.status, sum(l.debit_amount)::text as debe, sum(l.credit_amount)::text as haber
+      select e.status, sum(l.functional_debit)::text as debe,
+             sum(l.functional_credit)::text as haber
         from public.journal_entries e
         join public.journal_lines l on l.entry_id = e.id
        where e.company_id = ${COMPANY} and e.source_kind = 'igtf_perception'
@@ -462,7 +463,7 @@ describe("IGTF — ADR-0053: se percibe lo que la moneda sabe cobrar", () => {
 
     // El asiento, cuadrado por el funcional REDONDEADO: lo que entró en caja.
     const [asiento] = await sql<{ debe: string; haber: string }[]>`
-      select sum(l.debit_amount)::text as debe, sum(l.credit_amount)::text as haber
+      select sum(l.functional_debit)::text as debe, sum(l.functional_credit)::text as haber
         from public.journal_entries e
         join public.journal_lines l on l.entry_id = e.id
        where e.company_id = ${COMPANY} and e.source_kind = 'igtf_perception'

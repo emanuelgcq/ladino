@@ -298,3 +298,27 @@ export function allocate(
 
   return ok(parts);
 }
+
+/**
+ * EL CÉNTIMO DEL MAYOR (ADR-0075 §7, respuesta del dueño del 2026-09-28). La política única con
+ * que se redondea a céntimos —half-up, comercial— todo importe funcional que va al mayor o al
+ * valor del kardex. Ocho decimales quedan SOLO para costos unitarios y tasas (enmienda a ADR-0063).
+ * La gemela en SQL es `platform.round_cents(numeric)` (migración 20261003140000): las dos tienen
+ * que decir lo mismo, y cualquier módulo nuevo que asiente reutiliza una de las dos.
+ * VALIDAR-CONTABLE (PENDIENTES_ASESOR): half-up y la cuenta «Diferencias por redondeo».
+ */
+export const CENTS_POLICY: RoundingPolicy = Object.freeze({
+  id: "ledger:cents:2:HALF_UP",
+  scale: 2,
+  mode: "HALF_UP",
+});
+
+/** Un importe funcional al céntimo, half-up (lejos del cero en la mitad, como `round()` de Postgres). */
+export function toCents(amount: Decimal): Decimal {
+  return amount.toDecimalPlaces(2, LadinoDecimal.ROUND_HALF_UP);
+}
+
+/** ¿Ya está al céntimo? */
+export function isAtCents(amount: Decimal): boolean {
+  return amount.equals(toCents(amount));
+}

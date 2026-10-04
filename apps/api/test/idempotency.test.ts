@@ -51,6 +51,12 @@ function appPara(userId: string): Hono {
     const body = await c.req.json<{ nombre: string }>();
     return c.json({ id: "cosa-1", nombre: body.nombre, ejecucion: ejecuciones }, 201);
   });
+  // Una SEGUNDA ruta con el mismo middleware: la misma llave en otro endpoint (ADR-0056/0076).
+  app.use("/v1/otras", idempotencyMiddleware({ sql: sqlApi }));
+  app.post("/v1/otras", async (c) => {
+    ejecuciones += 1;
+    return c.json({ id: "otra-1" }, 201);
+  });
   return app;
 }
 
@@ -120,13 +126,75 @@ describe("idempotencia de extremo a extremo", () => {
     expect(await replay.json()).toEqual(await primera.json());
   });
 
-  it("3. misma clave, cuerpo distinto → 409 IDEMPOTENCY_KEY_REUSED, sin ejecutar", async () => {
+  it("3. misma clave, cuerpo distinto → 409 IDEMPOTENCY_BODY_MISMATCH (ADR-0076), sin ejecutar", async () => {
     const app = appPara(USUARIO_A);
     await pedir(app, "K-3", { nombre: "gamma" });
     const res = await pedir(app, "K-3", { nombre: "OTRA COSA" });
 
     expect(res.status).toBe(409);
-    expect((await res.json()).code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect((await res.json()).code).toBe("IDEMPOTENCY_BODY_MISMATCH");
+    expect(ejecuciones).toBe(1);
+  });
+
+  it("3-bis. el BODY_MISMATCH dice el estado del intento anterior (ADR-0076): completed ⇒ no se estrena", async () => {
+    const app = appPara(USUARIO_A);
+    await pedir(app, "K-3B", { nombre: "gamma" });
+    const res = await pedir(app, "K-3B", { nombre: "OTRA" });
+    expect(res.status).toBe(409);
+    const cuerpo = (await res.json()) as { code: string; details: { previous_status: string } };
+    expect(cuerpo.code).toBe("IDEMPOTENCY_BODY_MISMATCH");
+    expect(cuerpo.details.previous_status).toBe("completed");
+  });
+
+  // ADR-0076 §12: el texto de persona lo elige el servidor por el estado del intento anterior.
+  // «Vuelve a intentarlo» solo vale cuando nada quedó; un caso por estado, con su texto exacto.
+  it.each([
+    [
+      "completed",
+      '{"status":201}',
+      "Esa operación ya quedó registrada antes con otros datos. Revísala antes de repetirla.",
+    ],
+    [
+      "in_progress",
+      null,
+      "Esa operación todavía se está registrando. Espera un momento y revisa si quedó.",
+    ],
+    ["failed", '{"status":422}', "Esa operación ya se envió con otros datos; vuelve a intentarlo."],
+  ])(
+    "3-quater. BODY_MISMATCH sobre un intento %s: el mensaje de persona es el de ese estado",
+    async (estado, respuesta, texto) => {
+      const llave = `K-3Q-${estado}`;
+      await sql`insert into public.idempotency_keys
+        (tenant_id, company_id, actor_id, key, endpoint, request_hash, expires_at, status,
+         response)
+        values (${TENANT}, ${COMPANY}, ${USUARIO_A}, ${llave}, 'POST /v1/cosas',
+                ${Buffer.alloc(32)}, now() + interval '1 hour', ${estado}, ${respuesta}::jsonb)`;
+      const res = await pedir(appPara(USUARIO_A), llave, { nombre: "otro cuerpo" });
+      expect(res.status).toBe(409);
+      const cuerpo = (await res.json()) as {
+        code: string;
+        person_message: string;
+        details: { previous_status: string };
+      };
+      expect(cuerpo.code).toBe("IDEMPOTENCY_BODY_MISMATCH");
+      expect(cuerpo.details.previous_status).toBe(estado);
+      expect(cuerpo.person_message).toBe(texto);
+      expect(ejecuciones).toBe(0);
+    },
+  );
+
+  it("3-ter. misma clave y MISMO cuerpo en OTRA ruta → 409 IDEMPOTENCY_KEY_REUSED, sin ejecutar", async () => {
+    const app = appPara(USUARIO_A);
+    await pedir(app, "K-3T", { nombre: "delta" });
+    const otra = await app.request("/v1/otras", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": "K-3T" },
+      body: JSON.stringify({ nombre: "delta" }),
+    });
+    expect(otra.status).toBe(409);
+    const cuerpo = (await otra.json()) as { code: string; message: string };
+    expect(cuerpo.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    expect(cuerpo.message).toBe("Esta clave ya se usó en otra operación.");
     expect(ejecuciones).toBe(1);
   });
 

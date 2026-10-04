@@ -148,7 +148,12 @@ select is(
                                'ap.credit_note_received',
                                -- El IGTF asumido por la empresa (20261002100000, F-05): la misma
                                -- percepción, asentada como gasto.
-                               'igtf.perception_absorbed')),
+                               'igtf.perception_absorbed',
+                               -- Salidas y conteo de inventario (20261003110000 y 110100,
+                               -- ADR-0078): el retiro, la pérdida y el conteo publican en el
+                               -- outbox el MISMO nombre que su hecho contable (issueStock y
+                               -- countStock), registrados en EVENT_CATALOG.md.
+                               'stock.withdrawn', 'stock.shrinkage', 'stock.counted')),
   0::bigint,
   'los eventos del preset son los del OUTBOX, con su nombre real: no se inventa un vocabulario paralelo');
 

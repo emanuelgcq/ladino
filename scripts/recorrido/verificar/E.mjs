@@ -9,9 +9,12 @@
  */
 import { inflateSync } from "node:zlib";
 import { comprobaciones, pedir, pedirBytes, afirmar, sql, EMPRESAS, PERSONAS } from "./_app.mjs";
+import fsMonedaB from "node:fs";
 import { textoDe, tiene, idDocumento } from "./_pdf.mjs";
 import { pedir as pedirIgtf, EMPRESAS as EMP_IGTF, PERSONAS as PER_IGTF } from "./_app.mjs";
 import { textoDe as textoIgtf, tiene as tieneIgtf } from "./_pdf.mjs";
+import * as v0076 from "./_app.mjs";
+import * as monedaA from "./_moneda.mjs";
 
 const c = comprobaciones("E");
 
@@ -342,6 +345,260 @@ c.caso(
         `falta el IGTF en ${q || "cortesía"}`,
       );
     }
+  },
+);
+
+// E-12 (ola 3): ninguna tabla con tenant_id deja a ladino_api con `true` (las siete del hallazgo y
+// cualquiera que venga). La consulta del REPRODUCIR, restringida a tablas con tenant_id.
+c.caso("E-12", "cero policies de ladino_api con true en tablas con tenant_id", async () => {
+  const filas = await sql`
+    select p.tablename, p.cmd from pg_policies p
+     where p.schemaname = 'public' and 'ladino_api' = any (p.roles)
+       and (p.qual = 'true' or p.with_check = 'true')
+       and exists (select 1 from information_schema.columns c
+                    where c.table_schema = 'public' and c.table_name = p.tablename
+                      and c.column_name = 'tenant_id')`;
+  afirmar(filas.length === 0, filas.map((f) => `${f.tablename}/${f.cmd}`).join(", "));
+});
+
+// ── ADR-0076 · de quién es la cuenta (E-08) ─────────────────────────────────────────────────
+c.caso(
+  "E-08 (ADR-0076)",
+  "la cuenta del dueño se ve en la caja del cajero con autor y hora, en solo lectura; el administrativo la gestiona (el encargado no: §2.8)",
+  async () => {
+    const id = crypto.randomUUID();
+    const crear = await v0076.pedir(v0076.PERSONAS.duenoE2E3, "E2", "PUT", `/v1/pos/carts/${id}`, {
+      company_id: v0076.EMPRESAS.E2,
+      label: "Cuenta del dueño",
+      customer_id: null,
+      lines: [],
+      station_id: crypto.randomUUID(),
+    });
+    v0076.afirmar(crear.status === 200, `el PUT del dueño dio ${crear.status}`);
+    try {
+      const delCajero = await v0076.pedir(v0076.PERSONAS.cajero, "E2", "GET", "/v1/pos/carts");
+      const vista = delCajero.json.items.find((x) => x.id === id);
+      v0076.afirmar(vista, "el cajero no ve la cuenta");
+      v0076.afirmar(vista.editable === false, "para el cajero no es de solo lectura");
+      v0076.afirmar(vista.created_by && vista.created_at, "no dice autor y hora");
+      const pisar = await v0076.pedir(v0076.PERSONAS.cajero, "E2", "PUT", `/v1/pos/carts/${id}`, {
+        company_id: v0076.EMPRESAS.E2,
+        label: "Secuestrada",
+        customer_id: null,
+        lines: [],
+      });
+      v0076.afirmar(pisar.status === 403, `el cajero la pisó: ${pisar.status}`);
+      const borrar = await v0076.pedir(
+        v0076.PERSONAS.cajero,
+        "E2",
+        "DELETE",
+        `/v1/pos/carts/${id}`,
+      );
+      v0076.afirmar(borrar.status === 403, `el cajero la borró: ${borrar.status}`);
+      const delAdministrativo = await v0076.pedir(
+        v0076.PERSONAS.administrativo,
+        "E2",
+        "GET",
+        "/v1/pos/carts",
+      );
+      v0076.afirmar(
+        delAdministrativo.json.items.find((x) => x.id === id)?.editable === true,
+        "el administrativo no la gestiona",
+      );
+    } finally {
+      await v0076.pedir(v0076.PERSONAS.duenoE2E3, "E2", "DELETE", `/v1/pos/carts/${id}`);
+    }
+  },
+);
+
+// ── ADR-0077 §2 (E-15, A-10): con documentos, «Cambiar el RIF» manda a la corrección ────────────
+c.caso(
+  "E-15",
+  "E2 con facturas: cambiar el RIF dice «Corregir RIF» y «Crear otra empresa», no una salida falsa",
+  async () => {
+    const r = await pedir(PERSONAS.duenoE2E3, "E2", "PUT", "/v1/companies/tax-id", {
+      tax_id: "J-40555123-7",
+    });
+    afirmar(r.status === 422, `PUT /v1/companies/tax-id dio ${r.status}`);
+    const m = r.json?.message ?? "";
+    afirmar(m.includes("«Corregir RIF»"), `no nombra la corrección: ${m}`);
+    afirmar(m.includes("art. 13.5 de la PA 00071"), `sin el aviso del dueño: ${m}`);
+    afirmar(m.includes("«Crear otra empresa»"), `no nombra la otra empresa: ${m}`);
+  },
+);
+
+// E-11 (ADR-0075 §6, familia «moneda B»): la línea de caja de un hecho en divisa guarda su moneda, su
+// importe original y su tasa. Se mira en lo ya asentado después del arreglo: ninguna línea de una
+// subcuenta de caja EN DIVISA escrita por el generador desde el acta de regularización está en
+// VES/identidad (las de un asiento manual o de la revaluación al cierre sí pueden: no mueven dólares).
+c.caso(
+  "E-11",
+  "desde la regularización, ningún cobro, pago, gasto o cierre en divisa se asienta como bolívares",
+  async () => {
+    for (const e of ["E1", "E2", "E3"]) {
+      const [corte] = await sql`
+        select max(occurred_at) as desde from public.audit_events
+         where company_id = ${EMPRESAS[e]} and event_type = 'treasury.currency_regularized'`;
+      const malas = await sql`
+        select en.source_kind, en.entry_number
+          from public.journal_lines l
+          join public.journal_entries en on en.id = l.entry_id
+          join public.company_accounts ca
+            on ca.company_id = l.company_id and ca.ledger_account_id = l.account_id
+          join public.companies co on co.id = l.company_id
+         where l.company_id = ${EMPRESAS[e]}
+           and ca.currency <> co.functional_currency_code
+           and l.transaction_currency = co.functional_currency_code
+           and en.source_kind in ('payment_received', 'payment_made', 'expense', 'cash_closing',
+                                  'igtf_perception', 'customer_refund', 'treasury_transfer')
+           and en.created_at > coalesce(${corte?.desde ?? null}::timestamptz, 'infinity')`;
+      afirmar(
+        malas.length === 0,
+        `${e}: ${malas.map((m) => `${m.source_kind} #${m.entry_number}`).join(", ")}`,
+      );
+    }
+  },
+);
+
+c.caso("E-11", "el generador toma el original de platform.treasury_original_of", async () => {
+  const gen = fsMonedaB.readFileSync("packages/domain/src/journal-generator.ts", "utf8");
+  afirmar(gen.includes("platform.treasury_original_of"), "el generador no lee el importe original");
+  const [f] = await sql`
+    select count(*)::int as n from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'platform' and p.proname = 'treasury_original_of'`;
+  afirmar(f.n === 1, "falta platform.treasury_original_of");
+});
+
+// ── Moneda A (ADR-0075 §1) ───────────────────────────────────────────────────
+c.caso(
+  "E-05",
+  "una factura nueva de E2 en USD: el IVA en Bs es la alícuota de la base en Bs, línea por línea",
+  async () => {
+    const { doc, importes } = await monedaA.ventaUsdCobradaEnBs();
+    const lineas = await monedaA.sql`
+      select line_subtotal_functional::text as base,
+             (line_total_functional - line_subtotal_functional)::text as iva,
+             round(line_subtotal_functional * tax_rate_snapshot, 2)::text as esperado,
+             round(line_subtotal_transaction * fx_rate, 2)::text as base_esperada
+        from public.document_lines where document_id = ${doc.id}`;
+    monedaA.afirmar(lineas.length > 0, "la factura no tiene líneas");
+    for (const l of lineas) {
+      monedaA.afirmar(
+        Number(l.base) === Number(l.base_esperada),
+        `base ${l.base} ≠ ${l.base_esperada}`,
+      );
+      monedaA.afirmar(
+        Number(l.iva) === Number(l.esperado),
+        `IVA ${l.iva} ≠ ${l.esperado} (alícuota × base)`,
+      );
+    }
+    const suma = lineas.reduce((a, l) => a + Math.round(Number(l.iva) * 100), 0);
+    monedaA.afirmar(
+      suma === Math.round(Number(importes.iva) * 100),
+      `el pie (${importes.iva}) no suma sus líneas`,
+    );
+  },
+);
+
+c.caso(
+  "E-05",
+  "fiscal_amount_gaps = 0 en E1, E2 y E3: lo emitido desde el corte cumple la regla",
+  async () => {
+    await monedaA.ventaUsdCobradaEnBs();
+    for (const e of Object.values(monedaA.EMPRESAS)) {
+      const filas = await monedaA.sql`select * from platform.fiscal_amount_gaps(${e})`;
+      monedaA.afirmar(filas.length === 0, `${filas.length} hueco(s): ${JSON.stringify(filas[0])}`);
+    }
+  },
+);
+
+// ── Moneda X, «el cobro y el cierre» (ADR-0075 §1-4, nota de aplicación) ─────
+/** La factura de E2 en USD de `_moneda.mjs`, con su línea: producto, cantidad y cliente. */
+async function ventaConSuLinea() {
+  const { doc, importes } = await monedaA.ventaUsdCobradaEnBs();
+  const [l] = await monedaA.sql`
+    select l.product_id, l.quantity::text as quantity, d.customer_id,
+           (select w.id from public.warehouses w where w.company_id = d.company_id limit 1)
+             as warehouse_id
+      from public.document_lines l join public.documents d on d.id = l.document_id
+     where l.document_id = ${doc.id} order by l.line_number limit 1`;
+  monedaA.afirmar(l, "la factura de E2 no tiene línea");
+  return { importes, linea: l };
+}
+
+c.caso(
+  "E-05",
+  "la caja cotiza en Bs EXACTAMENTE lo que la factura emitida dice: base, IVA y total",
+  async () => {
+    const { importes, linea } = await ventaConSuLinea();
+    const q = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/pos/quote", {
+      company_id: monedaA.E2,
+      customer_id: linea.customer_id,
+      lines: [{ product_id: linea.product_id, quantity: linea.quantity }],
+    });
+    monedaA.afirmar(q.status === 200, `cotizar: ${q.status} ${q.texto.slice(0, 300)}`);
+    const caja = {
+      base: q.json.functional_subtotal,
+      iva: q.json.functional_tax_amount,
+      total: q.json.functional_total,
+      usd: q.json.total,
+    };
+    const factura = {
+      base: importes.base,
+      iva: importes.iva,
+      total: importes.total,
+      usd: importes.usd,
+    };
+    monedaA.afirmar(
+      JSON.stringify(caja) === JSON.stringify(factura),
+      `la caja dice ${JSON.stringify(caja)} y la factura ${JSON.stringify(factura)}`,
+    );
+  },
+);
+
+c.caso(
+  "E-05",
+  "pagar en Bs el total de la factura el mismo día la cierra en cero exacto, sin diferencial",
+  async () => {
+    const { linea } = await ventaConSuLinea();
+    const f = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/invoices", {
+      company_id: monedaA.E2,
+      customer_id: linea.customer_id,
+      warehouse_id: linea.warehouse_id,
+      lines: [{ product_id: linea.product_id, quantity: linea.quantity }],
+    });
+    monedaA.afirmar(f.status === 201, `emitir en E2: ${f.status} ${f.texto.slice(0, 300)}`);
+    const [d] = await monedaA.sql`
+      select total_amount::text as total, amount_transaction_currency::text as usd,
+             (select functional_today::text from platform.document_debt(${monedaA.E2}, d.id)) as deuda
+        from public.documents d where d.id = ${f.json.id}`;
+    monedaA.afirmar(
+      Number(d.deuda) === Number(d.total),
+      `la deuda del día (${d.deuda}) no es el total en Bs de la factura (${d.total})`,
+    );
+    const banco = await monedaA.bancoBsE2();
+    const cobro = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/payments", {
+      company_id: monedaA.E2,
+      document_id: f.json.id,
+      currency: "VES",
+      amount: d.total,
+      instrument: "transferencia",
+      account_id: banco.id,
+    });
+    monedaA.afirmar(cobro.status === 201, `cobrar: ${cobro.status} ${cobro.texto.slice(0, 300)}`);
+    monedaA.afirmar(
+      cobro.json.document_status === "paid" && cobro.json.exchange_difference === null,
+      `quedó ${cobro.json.document_status} con diferencial ${JSON.stringify(cobro.json.exchange_difference)}`,
+    );
+    const [p] = await monedaA.sql`
+      select settled_transaction_amount::text as saldado from public.payments
+       where id = ${cobro.json.payment.id}`;
+    monedaA.afirmar(p.saldado === d.usd, `saldó ${p.saldado} USD de ${d.usd}`);
+    const abierto = await monedaA.abiertoEnMayor("ar", f.json.id);
+    monedaA.afirmar(
+      abierto === null || Number(abierto) === 0,
+      `el mayor todavía le carga ${abierto} a la factura`,
+    );
   },
 );
 

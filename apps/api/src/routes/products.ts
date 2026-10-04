@@ -15,6 +15,7 @@ import {
   updateProduct,
   setProductTaxCategory,
   setProductImage,
+  autorizarImagenProducto,
   interpretarFilasProductos,
   anotarCodigosExistentes,
   guardarCostoReferencia,
@@ -261,6 +262,14 @@ export function productsRoutes(
     if (!UUID_RE.test(id)) {
       throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
     }
+    // C-09: se autoriza (permiso y producto) ANTES de procesar y subir. Un 403 o un 404 no
+    // deja objetos huérfanos en el almacenamiento.
+    const { actor } = c.get("ladino.auth");
+    const permiso = await withTransaction(sql, actor, (uow) =>
+      autorizarImagenProducto(uow, id, companyId),
+    );
+    if (!permiso.ok) throw new DominioError(permiso.error);
+
     if (storage === undefined) {
       throw new DominioError({
         code: "VALIDATION_FAILED",
@@ -316,7 +325,6 @@ export function productsRoutes(
     await subirObjeto(storage, BUCKET_IMAGENES, `${rutaBase}/thumb-400.webp`, t400, "image/webp");
     await subirObjeto(storage, BUCKET_IMAGENES, `${rutaBase}/thumb-96.webp`, t96, "image/webp");
 
-    const { actor } = c.get("ladino.auth");
     const r = await withTransaction(sql, actor, (uow) =>
       setProductImage(uow, id, { company_id: companyId, image_path: rutaOriginal }),
     );
@@ -543,7 +551,7 @@ export function productsRoutes(
    * lo procesa. El mismo archivo con el mismo formato devuelve el trabajo existente (200,
    * `reused: true`): la llave es el hash, garantizada por el único del esquema. EXIGE y HONRA
    * `Idempotency-Key` (regla 4, H4), con el hash canónico del archivo: la misma llave con el mismo
-   * archivo reenviado devuelve la misma respuesta; con otro archivo, 409 IDEMPOTENCY_KEY_REUSED.
+   * archivo reenviado devuelve la misma respuesta; con otro archivo, 409 IDEMPOTENCY_BODY_MISMATCH.
    */
   app.post("/v1/products/import/jobs", idempotenciaSubida, async (c) => {
     const { companyId } = requireCompany(c);

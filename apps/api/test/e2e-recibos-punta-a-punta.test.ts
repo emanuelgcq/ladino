@@ -272,6 +272,7 @@ describe("negocio sin RIF, de punta a punta", () => {
       account_id: caja.id,
       amount: "10.00",
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(g.status).toBe(201);
     const despues = await resumen();

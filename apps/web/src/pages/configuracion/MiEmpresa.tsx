@@ -622,10 +622,12 @@ function DialogoRif({
         </DialogTitle>
         <DialogDescription>
           {esCorreccion
-            ? "Solo para un error de tipeo descubierto tarde. Exige motivo y deja acta — y conviene consultar al contador sobre lo ya facturado."
+            ? "Solo para un error de tipeo descubierto tarde. Exige motivo y deja acta. Los documentos ya emitidos no se reemiten; si el RIF anterior era erróneo, esas facturas no cumplen el art. 13.5 de la PA 00071: consulta con tu asesor si procede anular y reemitir."
             : sinRif
               ? "Con tu RIF activas las facturas. La razón social y la dirección fiscal tienen que estar cargadas."
-              : "Sin documentos emitidos, el cambio es directo y queda auditado."}
+              : "Si todavía no has emitido documentos, el cambio es directo y queda auditado. Si ya emitiste, el camino es «Corregir RIF», con el motivo."}
+          {/* A-10: el texto del dueño (RESPUESTA §3 A-10), siempre que hay un RIF que cambiar. */}
+          {!sinRif && " Actualiza tu RIF ante el SENIAT dentro del mes siguiente (COT art. 35)."}
         </DialogDescription>
         <div className="space-y-3 pt-2">
           {!hayDireccion && !pideDireccion && (

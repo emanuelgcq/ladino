@@ -497,6 +497,190 @@
         ],
         "additionalProperties": false
       },
+      "CreateInvitationRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role_key": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "cashier",
+              "store_manager",
+              "back_office",
+              "accountant",
+              "warehouse_ops"
+            ]
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "format": "email"
+          }
+        },
+        "required": [
+          "company_id",
+          "role_key"
+        ],
+        "additionalProperties": false
+      },
+      "InvitationResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role_key": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "cashier",
+              "store_manager",
+              "back_office",
+              "accountant",
+              "warehouse_ops"
+            ]
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "token": {
+            "type": "string",
+            "nullable": true
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "notice": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "company_id",
+          "role_key",
+          "email",
+          "token",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "InvitationTokenRequest": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "additionalProperties": false
+      },
+      "InvitationPreviewResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "used",
+              "revoked",
+              "expired",
+              "other_email"
+            ]
+          },
+          "company_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "business_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "role_key": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "owner",
+              "cashier",
+              "store_manager",
+              "back_office",
+              "accountant",
+              "warehouse_ops"
+            ]
+          },
+          "inviter_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "expires_at": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "status",
+          "company_name",
+          "business_name",
+          "role_key",
+          "inviter_name",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "AcceptInvitationResponse": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "company_id"
+        ],
+        "additionalProperties": false
+      },
+      "MeAccessResponse": {
+        "type": "object",
+        "properties": {
+          "lost_access": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "business_name": {
+                  "type": "string"
+                },
+                "admin_name": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "business_name",
+                "admin_name"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "lost_access"
+        ],
+        "additionalProperties": false
+      },
       "SetCompanyFiscalAddressRequest": {
         "type": "object",
         "properties": {
@@ -2341,7 +2525,8 @@
             "type": "boolean"
           },
           "debt": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -2433,7 +2618,8 @@
                   "type": "boolean"
                 },
                 "debt": {
-                  "type": "string"
+                  "type": "string",
+                  "nullable": true
                 }
               },
               "required": [
@@ -2710,10 +2896,30 @@
             "type": "string",
             "nullable": true
           },
+          "exit_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "merma",
+              "rotura",
+              "vencido",
+              "faltante",
+              "consumo_propio",
+              "regalo",
+              "donacion",
+              "muestra"
+            ]
+          },
           "transfer_id": {
             "type": "string",
             "nullable": true,
             "format": "uuid"
+          },
+          "withdrawal_note_number": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "exclusiveMinimum": true
           }
         },
         "required": [
@@ -2738,6 +2944,7 @@
           "occurred_at",
           "reference",
           "reason",
+          "exit_reason",
           "transfer_id"
         ],
         "additionalProperties": false
@@ -2830,10 +3037,30 @@
                   "type": "string",
                   "nullable": true
                 },
+                "exit_reason": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "merma",
+                    "rotura",
+                    "vencido",
+                    "faltante",
+                    "consumo_propio",
+                    "regalo",
+                    "donacion",
+                    "muestra"
+                  ]
+                },
                 "transfer_id": {
                   "type": "string",
                   "nullable": true,
                   "format": "uuid"
+                },
+                "withdrawal_note_number": {
+                  "type": "integer",
+                  "nullable": true,
+                  "minimum": 0,
+                  "exclusiveMinimum": true
                 }
               },
               "required": [
@@ -2858,6 +3085,7 @@
                 "occurred_at",
                 "reference",
                 "reason",
+                "exit_reason",
                 "transfer_id"
               ],
               "additionalProperties": false
@@ -3093,6 +3321,19 @@
           },
           "reason": {
             "type": "string",
+            "enum": [
+              "merma",
+              "rotura",
+              "vencido",
+              "faltante",
+              "consumo_propio",
+              "regalo",
+              "donacion",
+              "muestra"
+            ]
+          },
+          "evidence": {
+            "type": "string",
             "minLength": 3,
             "maxLength": 500
           },
@@ -3111,7 +3352,8 @@
           "company_id",
           "warehouse_id",
           "product_id",
-          "quantity"
+          "quantity",
+          "reason"
         ],
         "additionalProperties": false
       },
@@ -3305,10 +3547,30 @@
                 "type": "string",
                 "nullable": true
               },
+              "exit_reason": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "merma",
+                  "rotura",
+                  "vencido",
+                  "faltante",
+                  "consumo_propio",
+                  "regalo",
+                  "donacion",
+                  "muestra"
+                ]
+              },
               "transfer_id": {
                 "type": "string",
                 "nullable": true,
                 "format": "uuid"
+              },
+              "withdrawal_note_number": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0,
+                "exclusiveMinimum": true
               }
             },
             "required": [
@@ -3333,6 +3595,7 @@
               "occurred_at",
               "reference",
               "reason",
+              "exit_reason",
               "transfer_id"
             ],
             "additionalProperties": false
@@ -3420,10 +3683,30 @@
                 "type": "string",
                 "nullable": true
               },
+              "exit_reason": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "merma",
+                  "rotura",
+                  "vencido",
+                  "faltante",
+                  "consumo_propio",
+                  "regalo",
+                  "donacion",
+                  "muestra"
+                ]
+              },
               "transfer_id": {
                 "type": "string",
                 "nullable": true,
                 "format": "uuid"
+              },
+              "withdrawal_note_number": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0,
+                "exclusiveMinimum": true
               }
             },
             "required": [
@@ -3448,6 +3731,7 @@
               "occurred_at",
               "reference",
               "reason",
+              "exit_reason",
               "transfer_id"
             ],
             "additionalProperties": false
@@ -3822,10 +4106,30 @@
                   "type": "string",
                   "nullable": true
                 },
+                "exit_reason": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "merma",
+                    "rotura",
+                    "vencido",
+                    "faltante",
+                    "consumo_propio",
+                    "regalo",
+                    "donacion",
+                    "muestra"
+                  ]
+                },
                 "transfer_id": {
                   "type": "string",
                   "nullable": true,
                   "format": "uuid"
+                },
+                "withdrawal_note_number": {
+                  "type": "integer",
+                  "nullable": true,
+                  "minimum": 0,
+                  "exclusiveMinimum": true
                 }
               },
               "required": [
@@ -3850,6 +4154,7 @@
                 "occurred_at",
                 "reference",
                 "reason",
+                "exit_reason",
                 "transfer_id"
               ],
               "additionalProperties": false
@@ -4592,6 +4897,40 @@
                   "type": "string",
                   "nullable": true,
                   "format": "uuid"
+                },
+                "reversal": {
+                  "type": "object",
+                  "nullable": true,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "reversed_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "reversed_by": {
+                      "type": "string",
+                      "nullable": true,
+                      "format": "uuid"
+                    },
+                    "reversed_by_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "reversed_at",
+                    "reversed_by",
+                    "reversed_by_name",
+                    "reason"
+                  ],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -4670,7 +5009,28 @@
             }
           },
           "balance": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
+          },
+          "pos_cart": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "author_id": {
+                "type": "string",
+                "nullable": true,
+                "format": "uuid"
+              },
+              "author_name": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "author_id",
+              "author_name"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -4678,7 +5038,8 @@
           "lines",
           "payments",
           "exchange_differences",
-          "balance"
+          "balance",
+          "pos_cart"
         ],
         "additionalProperties": false
       },
@@ -5109,6 +5470,208 @@
         ],
         "additionalProperties": false
       },
+      "ReversePaymentRequest": {
+        "type": "object",
+        "properties": {
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "company_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "PaymentReversalResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "payment",
+              "supported_retention"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "reversed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string"
+          },
+          "functional_amount": {
+            "type": "string"
+          },
+          "reversal_entry_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "igtf_reversal_entry_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "document": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "confirmed",
+                  "issued",
+                  "paid",
+                  "annulled",
+                  "cancelled"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "status"
+            ],
+            "additionalProperties": false
+          },
+          "debt": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "currency": {
+                "type": "string"
+              },
+              "nominal": {
+                "type": "string",
+                "nullable": true
+              },
+              "functional_currency": {
+                "type": "string"
+              },
+              "rate": {
+                "type": "string",
+                "nullable": true
+              },
+              "rate_date": {
+                "type": "string"
+              },
+              "functional_today": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "currency",
+              "nominal",
+              "functional_currency",
+              "rate",
+              "rate_date",
+              "functional_today"
+            ],
+            "additionalProperties": false
+          },
+          "igtf": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "perception_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pendiente_reintegro"
+                ]
+              },
+              "currency": {
+                "type": "string"
+              },
+              "restituted_amount": {
+                "type": "string"
+              },
+              "absorbed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "perception_id",
+              "status",
+              "currency",
+              "restituted_amount",
+              "absorbed"
+            ],
+            "additionalProperties": false
+          },
+          "supported_retention": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "annulled"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "payment_id",
+          "document_id",
+          "kind",
+          "reason",
+          "reversed_at",
+          "currency",
+          "amount",
+          "functional_amount",
+          "reversal_entry_id",
+          "igtf_reversal_entry_id",
+          "document",
+          "debt",
+          "igtf",
+          "supported_retention"
+        ],
+        "additionalProperties": false
+      },
       "RegisterPaymentRequest": {
         "type": "object",
         "properties": {
@@ -5242,6 +5805,40 @@
                 "type": "string",
                 "nullable": true,
                 "format": "uuid"
+              },
+              "reversal": {
+                "type": "object",
+                "nullable": true,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "reversed_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "reversed_by": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "uuid"
+                  },
+                  "reversed_by_name": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "reversed_at",
+                  "reversed_by",
+                  "reversed_by_name",
+                  "reason"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -5481,6 +6078,10 @@
           },
           "allow_negative_balance": {
             "type": "boolean"
+          },
+          "overdraft_reason": {
+            "type": "string",
+            "maxLength": 300
           }
         },
         "required": [
@@ -5681,7 +6282,8 @@
                   "minimum": 0
                 },
                 "amount": {
-                  "type": "string"
+                  "type": "string",
+                  "nullable": true
                 }
               },
               "required": [
@@ -5694,7 +6296,8 @@
             }
           },
           "total": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -5765,7 +6368,15 @@
                   "type": "string"
                 },
                 "balance": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "debt_currency": {
                   "type": "string"
+                },
+                "debt_nominal": {
+                  "type": "string",
+                  "nullable": true
                 },
                 "days_outstanding": {
                   "type": "integer"
@@ -5781,6 +6392,8 @@
                 "total_amount",
                 "paid_amount",
                 "balance",
+                "debt_currency",
+                "debt_nominal",
                 "days_outstanding"
               ],
               "additionalProperties": false
@@ -5825,7 +6438,58 @@
             }
           },
           "total_outstanding": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
+          },
+          "debt": {
+            "type": "object",
+            "properties": {
+              "functional_currency": {
+                "type": "string"
+              },
+              "as_of": {
+                "type": "string"
+              },
+              "by_currency": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "currency": {
+                      "type": "string"
+                    },
+                    "nominal": {
+                      "type": "string"
+                    },
+                    "rate": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "functional_today": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "currency",
+                    "nominal",
+                    "rate",
+                    "functional_today"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "unvalued_documents": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "functional_currency",
+              "as_of",
+              "by_currency"
+            ],
+            "additionalProperties": false
           },
           "total_credit_available": {
             "type": "string"
@@ -5859,7 +6523,8 @@
                       "minimum": 0
                     },
                     "amount": {
-                      "type": "string"
+                      "type": "string",
+                      "nullable": true
                     }
                   },
                   "required": [
@@ -5872,7 +6537,8 @@
                 }
               },
               "total": {
-                "type": "string"
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [
@@ -5889,6 +6555,7 @@
           "documents",
           "credits",
           "total_outstanding",
+          "debt",
           "total_credit_available",
           "aging"
         ],
@@ -6233,10 +6900,12 @@
             "type": "integer"
           },
           "lo_que_me_deben": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "lo_que_debo": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "mi_dinero": {
             "type": "array",
@@ -7341,6 +8010,15 @@
           "cart_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "cart_version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "attempt_id": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
@@ -7564,6 +8242,40 @@
                       "type": "string",
                       "nullable": true,
                       "format": "uuid"
+                    },
+                    "reversal": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "reversed_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "reversed_by": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "uuid"
+                        },
+                        "reversed_by_name": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "reversed_at",
+                        "reversed_by",
+                        "reversed_by_name",
+                        "reason"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -7872,6 +8584,11 @@
             "nullable": true,
             "minLength": 1,
             "maxLength": 500
+          },
+          "station_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
           }
         },
         "required": [
@@ -7923,6 +8640,26 @@
           },
           "updated_at": {
             "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "author_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "station_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "editable": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -7931,7 +8668,12 @@
           "customer_id",
           "lines",
           "note",
-          "updated_at"
+          "updated_at",
+          "created_at",
+          "created_by",
+          "author_name",
+          "station_id",
+          "editable"
         ],
         "additionalProperties": false
       },
@@ -7982,6 +8724,26 @@
                 },
                 "updated_at": {
                   "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "created_by": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "author_name": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "station_id": {
+                  "type": "string",
+                  "nullable": true,
+                  "format": "uuid"
+                },
+                "editable": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -7990,7 +8752,12 @@
                 "customer_id",
                 "lines",
                 "note",
-                "updated_at"
+                "updated_at",
+                "created_at",
+                "created_by",
+                "author_name",
+                "station_id",
+                "editable"
               ],
               "additionalProperties": false
             }
@@ -9623,6 +10390,10 @@
           },
           "allow_negative_balance": {
             "type": "boolean"
+          },
+          "overdraft_reason": {
+            "type": "string",
+            "maxLength": 300
           }
         },
         "required": [
@@ -10428,6 +11199,10 @@
               },
               "allow_negative_balance": {
                 "type": "boolean"
+              },
+              "overdraft_reason": {
+                "type": "string",
+                "maxLength": 300
               }
             },
             "required": [
@@ -10482,6 +11257,9 @@
             },
             "minItems": 1,
             "maxItems": 200
+          },
+          "prices_include_tax": {
+            "type": "boolean"
           },
           "freight": {
             "type": "object",
@@ -10992,10 +11770,30 @@
                   "type": "string",
                   "nullable": true
                 },
+                "exit_reason": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "merma",
+                    "rotura",
+                    "vencido",
+                    "faltante",
+                    "consumo_propio",
+                    "regalo",
+                    "donacion",
+                    "muestra"
+                  ]
+                },
                 "transfer_id": {
                   "type": "string",
                   "nullable": true,
                   "format": "uuid"
+                },
+                "withdrawal_note_number": {
+                  "type": "integer",
+                  "nullable": true,
+                  "minimum": 0,
+                  "exclusiveMinimum": true
                 }
               },
               "required": [
@@ -11020,6 +11818,7 @@
                 "occurred_at",
                 "reference",
                 "reason",
+                "exit_reason",
                 "transfer_id"
               ],
               "additionalProperties": false
@@ -11032,6 +11831,53 @@
           "invoice",
           "payment",
           "moves"
+        ],
+        "additionalProperties": false
+      },
+      "ArrivalPreviewResponse": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "own",
+              "receipt",
+              "invoiced",
+              "unsupported"
+            ]
+          },
+          "currency": {
+            "type": "string"
+          },
+          "subtotal": {
+            "type": "string",
+            "nullable": true
+          },
+          "tax_amount": {
+            "type": "string",
+            "nullable": true
+          },
+          "total_amount": {
+            "type": "string",
+            "nullable": true
+          },
+          "fx_rate": {
+            "type": "string",
+            "nullable": true
+          },
+          "fx_rate_date": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "kind",
+          "currency",
+          "subtotal",
+          "tax_amount",
+          "total_amount",
+          "fx_rate",
+          "fx_rate_date"
         ],
         "additionalProperties": false
       },
@@ -11171,6 +12017,10 @@
               },
               "allow_negative_balance": {
                 "type": "boolean"
+              },
+              "overdraft_reason": {
+                "type": "string",
+                "maxLength": 300
               }
             },
             "required": [
@@ -12100,6 +12950,9 @@
                   "type": "string"
                 },
                 "credit_amount": {
+                  "type": "string"
+                },
+                "original_amount": {
                   "type": "string"
                 },
                 "transaction_currency": {
@@ -14702,6 +15555,40 @@
                     "type": "string",
                     "nullable": true,
                     "format": "uuid"
+                  },
+                  "reversal": {
+                    "type": "object",
+                    "nullable": true,
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "reversed_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "reversed_by": {
+                        "type": "string",
+                        "nullable": true,
+                        "format": "uuid"
+                      },
+                      "reversed_by_name": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "reason": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "reversed_at",
+                      "reversed_by",
+                      "reversed_by_name",
+                      "reason"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [
@@ -15801,6 +16688,13 @@
           "total_functional": {
             "type": "string"
           },
+          "pending_refund_functional": {
+            "type": "string"
+          },
+          "pending_refund_count": {
+            "type": "integer",
+            "minimum": 0
+          },
           "functional_currency": {
             "type": "string"
           }
@@ -16515,6 +17409,10 @@
           },
           "allow_negative_balance": {
             "type": "boolean"
+          },
+          "overdraft_reason": {
+            "type": "string",
+            "maxLength": 300
           }
         },
         "required": [
@@ -17384,6 +18282,277 @@
           },
           "404": {
             "description": "La membresía no existe en este negocio o, para un gestor acotado, no tiene rol en esta empresa.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/onboarding/another-company": {
+      "post": {
+        "summary": "Crear otra empresa, en un tenant nuevo (ADR-0077 §2)",
+        "description": "El mismo alta de /v1/onboarding en un tenant NUEVO, del que la persona nace Titular y Dueño. Solo para el Titular de alguna cuenta (asignación owner de nivel tenant). Sin X-Company-Id y sin Idempotency-Key: la clave natural (nombre o RIF entre los negocios de la persona, LAD94 → 409) impide fundarla dos veces.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardBusinessRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "La empresa nueva, con su tenant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardBusinessResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No es Titular de ninguna cuenta (PERMISSION_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ya tiene un negocio con ese nombre o ese RIF (DUPLICATE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me/access": {
+      "get": {
+        "summary": "Los negocios donde la persona perdió el acceso (N-03)",
+        "description": "Negocios donde la persona tiene membresía (desactivada o sin rol) y ninguna empresa visible, con el nombre de quien los administra. Solo la historia propia.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "La lista (vacía si no perdió nada).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeAccessResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/invitations": {
+      "post": {
+        "summary": "Invitar a una persona por enlace (ADR-0077 §3)",
+        "description": "Crea una invitación de un solo uso que vence a los 7 días, con uno de los seis roles de sistema, opcionalmente ligada a un correo. El token viaja UNA vez, en esta respuesta; la base guarda su huella. Exige membership.manage sobre la empresa de la cabecera.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvitationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "La invitación, con su token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin membership.manage sobre esta empresa.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/invitations/preview": {
+      "post": {
+        "summary": "Lo que ve quien abre el enlace de invitación",
+        "description": "Empresa, negocio, rol, quién invita y el estado (pending, used, revoked, expired, other_email). Sin X-Company-Id: la persona todavía no es miembro.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "La vista previa.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationPreviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Ese token no corresponde a ninguna invitación.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/invitations/accept": {
+      "post": {
+        "summary": "Aceptar la invitación",
+        "description": "Un solo uso, con la fila bloqueada: crea o reactiva la membresía y la asignación acotada a la empresa. La misma persona que repite recibe la empresa sin efecto doble. Sin X-Company-Id y sin Idempotency-Key.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitationTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "La empresa a la que entró.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcceptInvitationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token ausente, inválido o expirado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "La invitación es para otro correo (INVITATION_FOR_OTHER_EMAIL).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Ese token no corresponde a ninguna invitación.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ya se usó, venció, o quien la envió ya no gestiona la empresa (INVITATION_UNAVAILABLE).",
             "content": {
               "application/json": {
                 "schema": {
@@ -18420,7 +19589,7 @@
     "/v1/products/import/jobs": {
       "post": {
         "summary": "Confirmar una importación: crea el TRABAJO que el worker procesa",
-        "description": "Multipart con `file` y `number_format` opcional. La petición solo crea el trabajo (202). El mismo archivo con el mismo formato devuelve el trabajo existente (200, `reused: true`): la llave es el sha256 del archivo. Exige `Idempotency-Key` con hash canónico (archivo + formato): la misma llave con otro archivo da 409 IDEMPOTENCY_KEY_REUSED. Dentro del trabajo, el código del producto es la llave: si ya existe, la fila actualiza su precio en vez de duplicar (ADR-0074, C-04).",
+        "description": "Multipart con `file` y `number_format` opcional. La petición solo crea el trabajo (202). El mismo archivo con el mismo formato devuelve el trabajo existente (200, `reused: true`): la llave es el sha256 del archivo. Exige `Idempotency-Key` con hash canónico (archivo + formato): la misma llave con otro archivo da 409 IDEMPOTENCY_BODY_MISMATCH. Dentro del trabajo, el código del producto es la llave: si ya existe, la fila actualiza su precio en vez de duplicar (ADR-0074, C-04).",
         "security": [
           {
             "bearerAuth": []
@@ -19706,7 +20875,7 @@
     "/v1/customers": {
       "get": {
         "summary": "Listar clientes (búsqueda por RIF o razón social, paginación en servidor)",
-        "description": "`with_debt=1` añade a cada cliente lo que debe (suma de saldos positivos de sus facturas emitidas, calculada por el esquema) — la cifra de la pantalla de Clientes.",
+        "description": "`with_debt=1` añade a cada cliente lo que debe (suma de saldos positivos de sus facturas emitidas, calculada por el esquema) — la cifra de la pantalla de Clientes. Pedir la deuda exige el permiso ar.read: sin él, 403 PERMISSION_REQUIRED (P-04). La lista sin `with_debt` no lo exige.",
         "security": [
           {
             "bearerAuth": []
@@ -20853,8 +22022,8 @@
     },
     "/v1/inventory/issues": {
       "post": {
-        "summary": "Salida de existencias al costo promedio (permiso inventory.move sobre el almacén)",
-        "description": "El costo lo calcula el promedio ponderado móvil; el cliente no lo envía.",
+        "summary": "Salida con motivo al costo promedio (permiso inventory.move sobre el almacén)",
+        "description": "El costo lo calcula el promedio ponderado móvil; el cliente no lo envía. El motivo es obligatorio y de lista cerrada (ADR-0078): merma, rotura, vencido y faltante van a «Pérdidas por mermas y faltantes»; consumo propio, regalo, donación y muestra son retiro (LIVA art. 4.3) y, en una empresa que factura, emiten Nota de retiro con débito fiscal al valor de mercado (withdrawal_note_number).",
         "security": [
           {
             "bearerAuth": []
@@ -21034,6 +22203,471 @@
           },
           "409": {
             "description": "Existencia negativa sin política o sin inventory.negative (NEGATIVE_STOCK), o referencia duplicada (DUPLICATE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inventory/counts": {
+      "post": {
+        "summary": "Conteo de existencias (permiso inventory.adjust sobre el almacén)",
+        "description": "La persona escribe lo que contó; el servidor calcula la diferencia contra el sistema bajo el bloqueo de la posición (ADR-0078 §4). Con preview: true solo la devuelve (200); sin él la registra como ajuste con su motivo (201). Contado igual al sistema: 200 sin movimiento.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "company_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "warehouse_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "product_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "lot_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "format": "uuid"
+                  },
+                  "counted": {
+                    "type": "string",
+                    "pattern": "^\\d{1,16}(\\.\\d{1,8})?$"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 400
+                  },
+                  "preview": {
+                    "type": "boolean"
+                  },
+                  "expected_system_quantity": {
+                    "type": "string",
+                    "pattern": "^-?\\d{1,16}(\\.\\d{1,8})?$"
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 500
+                  },
+                  "reference": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60
+                  }
+                },
+                "required": [
+                  "company_id",
+                  "warehouse_id",
+                  "product_id",
+                  "counted",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "La diferencia calculada, sin movimiento.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "system_quantity": {
+                      "type": "string"
+                    },
+                    "counted": {
+                      "type": "string"
+                    },
+                    "delta": {
+                      "type": "string"
+                    },
+                    "move": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "company_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "warehouse_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "product_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "lot_id": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "uuid"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "entrada",
+                            "salida",
+                            "ajuste",
+                            "transferencia_in",
+                            "transferencia_out"
+                          ]
+                        },
+                        "quantity": {
+                          "type": "string"
+                        },
+                        "functional_amount": {
+                          "type": "string"
+                        },
+                        "functional_currency": {
+                          "type": "string"
+                        },
+                        "amount_transaction_currency": {
+                          "type": "string"
+                        },
+                        "transaction_currency": {
+                          "type": "string"
+                        },
+                        "fx_rate": {
+                          "type": "string"
+                        },
+                        "rate_source": {
+                          "type": "string"
+                        },
+                        "rate_timestamp": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "rounding_policy_id": {
+                          "type": "string"
+                        },
+                        "unit_cost": {
+                          "type": "string"
+                        },
+                        "quantity_after": {
+                          "type": "string"
+                        },
+                        "value_after": {
+                          "type": "string"
+                        },
+                        "occurred_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "reference": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "reason": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "exit_reason": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "merma",
+                            "rotura",
+                            "vencido",
+                            "faltante",
+                            "consumo_propio",
+                            "regalo",
+                            "donacion",
+                            "muestra"
+                          ]
+                        },
+                        "transfer_id": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "uuid"
+                        },
+                        "withdrawal_note_number": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "company_id",
+                        "warehouse_id",
+                        "product_id",
+                        "lot_id",
+                        "kind",
+                        "quantity",
+                        "functional_amount",
+                        "functional_currency",
+                        "amount_transaction_currency",
+                        "transaction_currency",
+                        "fx_rate",
+                        "rate_source",
+                        "rate_timestamp",
+                        "rounding_policy_id",
+                        "unit_cost",
+                        "quantity_after",
+                        "value_after",
+                        "occurred_at",
+                        "reference",
+                        "reason",
+                        "exit_reason",
+                        "transfer_id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "system_quantity",
+                    "counted",
+                    "delta",
+                    "move"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "La diferencia registrada como ajuste.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "system_quantity": {
+                      "type": "string"
+                    },
+                    "counted": {
+                      "type": "string"
+                    },
+                    "delta": {
+                      "type": "string"
+                    },
+                    "move": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "company_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "warehouse_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "product_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "lot_id": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "uuid"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "entrada",
+                            "salida",
+                            "ajuste",
+                            "transferencia_in",
+                            "transferencia_out"
+                          ]
+                        },
+                        "quantity": {
+                          "type": "string"
+                        },
+                        "functional_amount": {
+                          "type": "string"
+                        },
+                        "functional_currency": {
+                          "type": "string"
+                        },
+                        "amount_transaction_currency": {
+                          "type": "string"
+                        },
+                        "transaction_currency": {
+                          "type": "string"
+                        },
+                        "fx_rate": {
+                          "type": "string"
+                        },
+                        "rate_source": {
+                          "type": "string"
+                        },
+                        "rate_timestamp": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "rounding_policy_id": {
+                          "type": "string"
+                        },
+                        "unit_cost": {
+                          "type": "string"
+                        },
+                        "quantity_after": {
+                          "type": "string"
+                        },
+                        "value_after": {
+                          "type": "string"
+                        },
+                        "occurred_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "reference": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "reason": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "exit_reason": {
+                          "type": "string",
+                          "nullable": true,
+                          "enum": [
+                            "merma",
+                            "rotura",
+                            "vencido",
+                            "faltante",
+                            "consumo_propio",
+                            "regalo",
+                            "donacion",
+                            "muestra"
+                          ]
+                        },
+                        "transfer_id": {
+                          "type": "string",
+                          "nullable": true,
+                          "format": "uuid"
+                        },
+                        "withdrawal_note_number": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0,
+                          "exclusiveMinimum": true
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "company_id",
+                        "warehouse_id",
+                        "product_id",
+                        "lot_id",
+                        "kind",
+                        "quantity",
+                        "functional_amount",
+                        "functional_currency",
+                        "amount_transaction_currency",
+                        "transaction_currency",
+                        "fx_rate",
+                        "rate_source",
+                        "rate_timestamp",
+                        "rounding_policy_id",
+                        "unit_cost",
+                        "quantity_after",
+                        "value_after",
+                        "occurred_at",
+                        "reference",
+                        "reason",
+                        "exit_reason",
+                        "transfer_id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "system_quantity",
+                    "counted",
+                    "delta",
+                    "move"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
             "content": {
               "application/json": {
                 "schema": {
@@ -23187,6 +24821,208 @@
         }
       }
     },
+    "/v1/payments/{id}/reversal": {
+      "post": {
+        "summary": "Reversar un cobro, con motivo (permiso ar.payment.reverse: dueño y contador)",
+        "description": "ADR-0075 §8. El cobro no se edita ni se borra: se escribe su reversa (append-only), sale de la caja lo que entró, su asiento se revierte con un contra-asiento y el documento vuelve a deber por la única función de deuda (una factura `paid` vuelve a `issued`). Si el cobro percibió IGTF, la percepción queda `pendiente_reintegro` y lo percibido se restituye al cliente (PA SNAT/2022/000013 art. 4). Un cobro se reversa una sola vez → 409 PAYMENT_ALREADY_REVERSED. Si su IGTF se documentó con nota de débito → 409 IGTF_NOTE_ISSUED. El abono de una retención soportada se reversa desde su comprobante.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReversePaymentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Cobro reversado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentReversalResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/supported-retentions/{id}/reversal": {
+      "post": {
+        "summary": "Reversar un comprobante de retención soportada (permiso ar.retention.correct: contador)",
+        "description": "ADR-0072 §5 y ADR-0075 §8. Reversa el abono del comprobante por la vía de la reversa de cobros y deja el comprobante `annulled` con el motivo: sale del libro de ventas y de la declaración. Corregirlo es reversarlo y volver a cargarlo (su número queda libre).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "required": true,
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReversePaymentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Comprobante reversado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentReversalResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/negocio/resumen": {
       "get": {
         "summary": "Los números de Inicio y Mi dinero, calculados TODOS en el servidor",
@@ -24677,7 +26513,7 @@
     "/v1/pos/sales": {
       "post": {
         "summary": "La venta rápida: factura + cobros + vuelto, en una transacción",
-        "description": "Emite por el MISMO camino que /v1/invoices (numeración gapless, kardex, asiento) y registra hasta dos cobros. El vuelto del efectivo lo calcula el servidor; una tarjeta no da vuelto. El `Idempotency-Key` es el id de venta del cliente: reintentar devuelve LA MISMA venta, nunca una segunda factura. Sin `payments` (o con pagos que no alcanzan) la venta queda FIADA y `balance` dice el saldo — solo con cliente identificado: una venta de mostrador con saldo se rechaza (422).",
+        "description": "Emite por el MISMO camino que /v1/invoices (numeración gapless, kardex, asiento) y registra hasta dos cobros. El vuelto del efectivo lo calcula el servidor; una tarjeta no da vuelto. El `Idempotency-Key` es el INTENTO de cobro (ADR-0076), nunca el id de la cuenta: reintentar con la misma devuelve LA MISMA venta; la misma llave con otro cuerpo da 409 IDEMPOTENCY_BODY_MISMATCH. Con `cart_id`, la cuenta queda marcada vendida en la misma transacción y un segundo cobro de ella da 409 POS_CART_SOLD (con la venta en `details`); una cuenta que armó otra persona la cobra su autor o quien tenga pos.carts.manage (403). `cart_version` y `attempt_id` quedan en el acta `pos.cart.sold`. Sin `payments` (o con pagos que no alcanzan) la venta queda FIADA y `balance` dice el saldo — solo con cliente identificado: una venta de mostrador con saldo se rechaza (422).",
         "security": [
           {
             "bearerAuth": []
@@ -24754,7 +26590,7 @@
             }
           },
           "409": {
-            "description": "Numeración, regla tributaria, tasa o existencias: lo que impida emitir.",
+            "description": "Numeración, regla tributaria, tasa o existencias: lo que impida emitir; POS_CART_SOLD si la cuenta ya se cobró; IDEMPOTENCY_BODY_MISMATCH si la llave ya viajó con otro cuerpo.",
             "content": {
               "application/json": {
                 "schema": {
@@ -24901,7 +26737,7 @@
     "/v1/pos/carts": {
       "get": {
         "summary": "Las cuentas abiertas de la caja (permiso sales.invoice.issue)",
-        "description": "La INTENCIÓN de cada venta en armado: productos, cantidades, cliente y nota — nunca precios (al retomar se recotiza a la tasa de HOY). Ordenadas por último toque.",
+        "description": "La INTENCIÓN de cada venta en armado: productos, cantidades, cliente y nota — nunca precios (al retomar se recotiza a la tasa de HOY). Ordenadas por último toque. Cada una dice quién la armó, cuándo y en qué caja, y si quien pregunta puede cobrarla (`editable`: su autor o pos.carts.manage). Las ya cobradas no salen (ADR-0076).",
         "security": [
           {
             "bearerAuth": []
@@ -24975,7 +26811,7 @@
     "/v1/pos/carts/{id}": {
       "put": {
         "summary": "Guardar una cuenta abierta (crea o pisa; permiso sales.invoice.issue)",
-        "description": "El id lo pone la CAJA: misma clave, mismo carrito — idempotente por naturaleza, sin `Idempotency-Key`. Última escritura gana. No reserva mercancía ni congela precios: para eso están el pedido y la factura. La cuenta solo muere al cobrarse (`cart_id` en /v1/pos/sales, misma transacción) o purgada tras 30 días sin tocar.",
+        "description": "El id lo pone la CAJA: misma clave, mismo carrito — idempotente por naturaleza, sin `Idempotency-Key`. Última escritura gana entre su autor y quien tenga pos.carts.manage; los demás reciben 403. No reserva mercancía ni congela precios: para eso están el pedido y la factura. La cuenta muere al cobrarse (`cart_id` en /v1/pos/sales, misma transacción): desde ahí, todo PUT responde 409 POS_CART_SOLD (ADR-0076). Sin cobrar, se purga tras 30 días sin tocar.",
         "security": [
           {
             "bearerAuth": []
@@ -25051,6 +26887,16 @@
               }
             }
           },
+          "409": {
+            "description": "POS_CART_SOLD: esa cuenta ya se cobró.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
             "content": {
@@ -25065,7 +26911,7 @@
       },
       "delete": {
         "summary": "Descartar una cuenta abierta (permiso sales.invoice.issue)",
-        "description": "Para la que se abandona SIN venta. Descartar lo ya borrado no es error: responde `deleted: false`. El cierre normal es el cobro, no este endpoint.",
+        "description": "Para la que se abandona SIN venta. Descartar lo ya borrado no es error: responde `deleted: false`, igual que una cuenta ya cobrada (no se borra: ADR-0076). Una ajena la borra su autor o quien tenga pos.carts.manage (403). El cierre normal es el cobro.",
         "security": [
           {
             "bearerAuth": []
@@ -29391,6 +31237,99 @@
           },
           "409": {
             "description": "Documento duplicado del proveedor, sin tasa, o sin regla de IVA.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Forma inválida, o company_id del cuerpo ≠ X-Company-Id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/arrivals/preview": {
+      "post": {
+        "summary": "Vista previa de una llegada: base, IVA y total antes de confirmar (D-05)",
+        "description": "El MISMO cálculo que `POST /v1/arrivals`, deshecho al terminar: no escribe nada y no lleva Idempotency-Key. El pago del cuerpo se ignora. Con `prices_include_tax` el servidor quita el IVA del precio escrito. Falla con los mismos códigos que el registro (sin tasa del día, proveedor sin RIF con factura…), para decirlo antes de confirmar.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "X-Company-Id",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterArrivalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Lo que se registraría: base, IVA y total del documento.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArrivalPreviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sin token válido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Company visible pero sin el permiso requerido.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Company o recurso no visible — indistinguible de inexistente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sin tasa del día, o sin regla de IVA.",
             "content": {
               "application/json": {
                 "schema": {

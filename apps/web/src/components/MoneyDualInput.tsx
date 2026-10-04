@@ -52,11 +52,12 @@ export function MoneyDualInput({
   // servidor, y se vacía en cuanto la persona toca el suyo para no enseñar un número viejo.
   const [enFuncional, setEnFuncional] = useState(valor.currency === funcional ? valor.amount : "");
   const [enAncla, setEnAncla] = useState(valor.currency === ANCLA ? valor.amount : "");
-  const { llamar } = useSesion();
+  const { llamar, empresa } = useSesion();
 
   const limpio = valor.amount.trim().replace(",", ".");
   const vista = useQuery({
-    queryKey: ["dual", limpio, valor.currency, fecha],
+    // La tasa es de la empresa: la clave la lleva, o dos empresas compartirían la vista (H10).
+    queryKey: ["dual", empresa.id, limpio, valor.currency, fecha],
     enabled: importeValido(limpio),
     staleTime: 60_000,
     queryFn: () =>

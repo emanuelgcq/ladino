@@ -14,6 +14,7 @@ import {
   Menu as MenuIcono,
   Moon,
   MoreHorizontal,
+  Plus,
   Search,
   Sun,
   X,
@@ -516,7 +517,7 @@ function TopBar({
 }
 
 function CompanySwitcher(): React.JSX.Element {
-  const { companies, empresa, setEmpresa } = useSesion();
+  const { companies, empresa, setEmpresa, puede, crearOtraEmpresa } = useSesion();
   const [filtro, setFiltro] = useState("");
   const visibles = useMemo(
     () =>
@@ -559,6 +560,16 @@ function CompanySwitcher(): React.JSX.Element {
             {c.id === empresa.id && <Check className="size-4 text-accent" />}
           </MenuItem>
         ))}
+        {/* ADR-0077 §2 (A-13): la otra empresa nace en un tenant nuevo; el servidor exige ser
+            Titular de alguna cuenta y, si no, lo dice. */}
+        {puede("company.manage") && (
+          <>
+            <MenuSeparator />
+            <MenuItem onClick={crearOtraEmpresa}>
+              <Plus className="size-4 text-muted-foreground" /> Crear otra empresa
+            </MenuItem>
+          </>
+        )}
       </MenuContent>
     </Menu>
   );

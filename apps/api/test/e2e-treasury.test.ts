@@ -126,6 +126,7 @@ beforeAll(async () => {
              (${ROL_CERRADOR}, null, ${`e2eteso_cierre_${RUN}`}, 'Cerrador', false),
              (${ROL_CAJERA}, null, ${`e2eteso_cajera_${RUN}`}, 'Cajera', false)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
+             (${ROL}, 'treasury.overdraft'),
              (${ROL}, 'treasury.read'), (${ROL}, 'treasury.account.manage'),
              (${ROL}, 'expense.register'), (${ROL}, 'expense.read'),
              (${ROL}, 'cash.close'), (${ROL}, 'fx.rate.manage'),
@@ -245,6 +246,7 @@ describe("tesorería de extremo a extremo", () => {
     const r = await pedir("POST", "/v1/expenses", GESTOR, {
       ...cuerpo,
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(r.status).toBe(201);
     const g = (await r.json()) as Record<string, unknown>;
@@ -309,6 +311,7 @@ describe("tesorería de extremo a extremo", () => {
       account_id: ZELLE,
       amount: "10.00000000",
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(gasto.status).toBe(201);
     const g = (await gasto.json()) as Record<string, string>;
@@ -372,6 +375,7 @@ describe("tesorería de extremo a extremo", () => {
       account_id: CAJA,
       amount: "100.00000000",
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(r.status).toBe(201);
     const g = (await r.json()) as Record<string, unknown>;
@@ -400,8 +404,8 @@ describe("tesorería de extremo a extremo", () => {
     const res = (await r.json()) as {
       functional_currency: string;
       mi_dinero: { currency: string; balance: string }[];
-      lo_que_me_deben: string;
-      lo_que_debo: string;
+      lo_que_me_deben: string | null;
+      lo_que_debo: string | null;
       tasa_del_dia: { rate: string; source: string } | null;
       vendido_hoy: string;
     };
@@ -410,16 +414,42 @@ describe("tesorería de extremo a extremo", () => {
     const porMoneda = new Map(res.mi_dinero.map((m) => [m.currency, m.balance]));
     expect(porMoneda.get("VES")).toBe("0.00");
     expect(porMoneda.get("USD")).toBe("-10.00");
-    // Sin ventas ni compras en esta empresa: deudas en cero, no en null — y a
-    // DOS decimales desde 2026-09-08: la deuda mostrada es presentación.
-    expect(res.lo_que_me_deben).toBe("0.00");
-    expect(res.lo_que_debo).toBe("0.00");
+    // El gestor tiene treasury.read, pero NO ar.read ni ap.read: el resumen se sirve y los dos
+    // totales de deuda llegan en null —«no tienes acceso», nunca «0.00»— (N-07/P-04, ADR-0048
+    // nota de la re-revisión). Antes aseveraba "0.00": pasaba gracias al permiso anidado.
+    expect(res.lo_que_me_deben).toBeNull();
+    expect(res.lo_que_debo).toBeNull();
     expect(res.tasa_del_dia).not.toBeNull();
     expect(res.tasa_del_dia!.rate).toBe("40.00000000");
 
     const sinPermiso = await pedir("GET", "/v1/negocio/resumen", MIRON);
     // El mirón SÍ tiene treasury.read en esta fixture: también ve el resumen.
     expect(sinPermiso.status).toBe(200);
+    const deMiron = async (): Promise<{
+      lo_que_me_deben: string | null;
+      lo_que_debo: string | null;
+    }> =>
+      (await (await pedir("GET", "/v1/negocio/resumen", MIRON)).json()) as {
+        lo_que_me_deben: string | null;
+        lo_que_debo: string | null;
+      };
+    expect(await deMiron()).toMatchObject({ lo_que_me_deben: null, lo_que_debo: null });
+    // Con ar.read ve lo que le deben (cero, a dos decimales: sin ventas aquí) y sigue sin ver lo
+    // que debe; con ap.read además, ve las dos. Cada cifra, su permiso.
+    try {
+      await sql`insert into public.role_permissions (role_id, permission_key)
+                values (${ROL_MIRON}, 'ar.read')`;
+      expect(await deMiron()).toMatchObject({ lo_que_me_deben: "0.00", lo_que_debo: null });
+      await sql`insert into public.role_permissions (role_id, permission_key)
+                values (${ROL_MIRON}, 'ap.read')`;
+      expect(await deMiron()).toMatchObject({ lo_que_me_deben: "0.00", lo_que_debo: "0.00" });
+      await sql`delete from public.role_permissions
+                 where role_id = ${ROL_MIRON} and permission_key = 'ar.read'`;
+      expect(await deMiron()).toMatchObject({ lo_que_me_deben: null, lo_que_debo: "0.00" });
+    } finally {
+      await sql`delete from public.role_permissions
+                 where role_id = ${ROL_MIRON} and permission_key in ('ar.read', 'ap.read')`;
+    }
   });
 
   // ── ADR-0067: la cuenta se pregunta, no se adivina ───────────────────────
@@ -501,6 +531,7 @@ describe("tesorería de extremo a extremo", () => {
       account_id: BANESCO,
       amount: "10",
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(bueno.status, await bueno.clone().text()).toBe(201);
 
@@ -520,6 +551,7 @@ describe("tesorería de extremo a extremo", () => {
       account_id: sinAsignar!.id,
       amount: "20",
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(malo.status, await malo.clone().text()).toBe(201);
 

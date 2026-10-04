@@ -310,7 +310,13 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
       if (!entrada) return null;
       const lines = await tx<Record<string, unknown>[]>`
         select jl.id, jl.line_number, jl.account_id, a.code as account_code, a.name as account_name,
-               jl.debit_amount::text as debit_amount, jl.credit_amount::text as credit_amount,
+               -- H1 (ADR-0075 §6): Debe y Haber se sirven en moneda FUNCIONAL. En la base,
+               -- debit_amount / credit_amount de una línea en divisa llevan el importe
+               -- ORIGINAL (ADR-0020): servirlos tal cual enseñaba 0,30 al Debe contra 12,00 al
+               -- Haber. El original va APARTE, con su moneda y su tasa.
+               jl.functional_debit::text as debit_amount,
+               jl.functional_credit::text as credit_amount,
+               jl.amount_transaction_currency::text as original_amount,
                jl.transaction_currency, jl.fx_rate::text as fx_rate,
                jl.functional_debit::text as functional_debit,
                jl.functional_credit::text as functional_credit, jl.functional_currency,
@@ -612,10 +618,11 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
       // obliga a quien lee a saber el signo de cada cuenta para entender la fila.
       const filas = await tx<{ kind: string; code: string; name: string; importe: string }[]>`
         select a.kind, a.code, a.name,
-               case when a.kind = 'ingreso'
+               -- K-08 (ADR-0063, ADR-0075 §7): los estados se sirven al céntimo.
+               round(case when a.kind = 'ingreso'
                     then coalesce(sum(jl.functional_credit), 0) - coalesce(sum(jl.functional_debit), 0)
                     else coalesce(sum(jl.functional_debit), 0) - coalesce(sum(jl.functional_credit), 0)
-               end::text as importe
+               end, 2)::text as importe
           from public.accounts a
           join public.journal_lines jl on jl.account_id = a.id
           join public.journal_entries e on e.id = jl.entry_id
@@ -638,9 +645,9 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
              and e.posting_date between ${desde}::date and ${hasta}::date
            group by a.kind, a.id
         )
-        select coalesce(sum(acreedor) filter (where kind = 'ingreso'), 0)::text as ti,
-               coalesce(-sum(acreedor) filter (where kind = 'gasto'), 0)::text as tg,
-               coalesce(sum(acreedor), 0)::text as res
+        select round(coalesce(sum(acreedor) filter (where kind = 'ingreso'), 0), 2)::text as ti,
+               round(coalesce(-sum(acreedor) filter (where kind = 'gasto'), 0), 2)::text as tg,
+               round(coalesce(sum(acreedor), 0), 2)::text as res
           from saldos`;
       const mapear = (k: string) =>
         filas
@@ -672,10 +679,10 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
       // comprobación activo == pasivo + patrimonio, en SQL con `numeric`.
       const filas = await tx<{ kind: string; code: string; name: string; importe: string }[]>`
         select a.kind, a.code, a.name,
-               case when a.kind = 'activo'
+               round(case when a.kind = 'activo'
                     then coalesce(sum(jl.functional_debit), 0) - coalesce(sum(jl.functional_credit), 0)
                     else coalesce(sum(jl.functional_credit), 0) - coalesce(sum(jl.functional_debit), 0)
-               end::text as importe
+               end, 2)::text as importe
           from public.accounts a
           join public.journal_lines jl on jl.account_id = a.id
           join public.journal_entries e on e.id = jl.entry_id
@@ -704,12 +711,13 @@ export function accountingRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHa
              and e.status in ('posted', 'reversed') and e.posting_date <= ${hasta}::date
            group by a.kind, a.id
         )
-        select coalesce(sum(deudor) filter (where kind = 'activo'), 0)::text as ta,
-               coalesce(-sum(deudor) filter (where kind = 'pasivo'), 0)::text as tp,
-               coalesce(-sum(deudor) filter (where kind in ('patrimonio', 'ingreso', 'gasto')), 0)::text
+        -- K-08: al céntimo al servir (ADR-0063); 'cuadra' se decide sobre lo exacto.
+        select round(coalesce(sum(deudor) filter (where kind = 'activo'), 0), 2)::text as ta,
+               round(coalesce(-sum(deudor) filter (where kind = 'pasivo'), 0), 2)::text as tp,
+               round(coalesce(-sum(deudor) filter (where kind in ('patrimonio', 'ingreso', 'gasto')), 0), 2)::text
                  as tq,
-               coalesce(-sum(deudor) filter (where kind in ('ingreso', 'gasto')), 0)::text as resultado,
-               coalesce(-sum(deudor) filter (where kind in ('pasivo', 'patrimonio', 'ingreso', 'gasto')), 0)::text
+               round(coalesce(-sum(deudor) filter (where kind in ('ingreso', 'gasto')), 0), 2)::text as resultado,
+               round(coalesce(-sum(deudor) filter (where kind in ('pasivo', 'patrimonio', 'ingreso', 'gasto')), 0), 2)::text
                  as tpq,
                coalesce(sum(deudor) filter (where kind = 'activo'), 0)
                  = coalesce(-sum(deudor) filter (where kind in ('pasivo', 'patrimonio', 'ingreso', 'gasto')), 0)

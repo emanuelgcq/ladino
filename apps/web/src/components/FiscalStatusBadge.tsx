@@ -63,14 +63,27 @@ const MAPA: Record<EstadoFiscal, { etiqueta: string; tone: BadgeTone; icono: Luc
   partially_paid: { etiqueta: "Abonada", tone: "info", icono: CircleDollarSign },
 };
 
+/**
+ * F-14 (ola 3): el glosario SIMPLE de la empresa sin RIF (modo recibos). Solo cambia la palabra,
+ * nunca el color ni el estado: «Abonada» es jerga de cuentas por cobrar.
+ */
+const SIMPLE: Partial<Record<EstadoFiscal, string>> = {
+  partially_paid: "Pagado en parte",
+};
+
 export function FiscalStatusBadge({
   estado,
   className,
+  simple = false,
 }: {
   estado: string;
   className?: string;
+  /** El vocabulario de quien no factura (sin RIF): ver `useConFacturas`. */
+  simple?: boolean;
 }): React.JSX.Element {
-  const def = (MAPA as Record<string, (typeof MAPA)[EstadoFiscal] | undefined>)[estado];
+  const base = (MAPA as Record<string, (typeof MAPA)[EstadoFiscal] | undefined>)[estado];
+  const palabra = simple ? (SIMPLE as Record<string, string | undefined>)[estado] : undefined;
+  const def = base === undefined || palabra === undefined ? base : { ...base, etiqueta: palabra };
   if (def === undefined) {
     // Un estado que el badge no conoce se ENSEÑA, no se disfraza del parecido.
     return (

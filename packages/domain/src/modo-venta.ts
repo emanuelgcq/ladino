@@ -28,6 +28,34 @@ export async function modoDeVenta(
  * activa primero su facturación. VALIDAR con el asesor que ningún caso real
  * necesite estas piezas antes de facturar (PENDIENTES_ASESOR).
  */
+/**
+ * LOS LIBROS FISCALES SON DE QUIEN TIENE RIF (AF3-13, auditoría fiscal de la ola 3; regla MODO
+ * del dueño en D-01: la empresa sin RIF no deja rastro en libros ni declaraciones).
+ *
+ * Una empresa sin RIF puede guardar la factura de su proveedor como soporte de costo
+ * (`fiscal_support = true`, IVA al costo), y `platform.purchases_book` no mira el modo: sin
+ * esta puerta, el libro de compras se le podía leer y generar con ese renglón. Se cierra en la
+ * LECTURA y en la GENERACIÓN, que es donde manda la regla.
+ *
+ * Mira el RIF y no el modo de venta, decidido por criterio: el sujeto de la regla es «sin RIF»,
+ * y una empresa con RIF que todavía no activó la facturación sí lleva libro de compras. La
+ * alternativa era `exigeEmpresaQueFactura`, que dejaría sin libros a esa empresa en transición.
+ */
+export async function exigeEmpresaConRif(
+  sql: TransactionSql,
+  companyId: string,
+): Promise<Result<void, { code: "REGIME_KIND_NOT_ALLOWED"; message: string }>> {
+  const [empresa] = await sql<{ sin_rif: boolean }[]>`
+    select upper(btrim(tax_id)) like 'PEND-%' as sin_rif from public.companies
+     where id = ${companyId}`;
+  if (empresa?.sin_rif !== true) return ok(undefined);
+  return err({
+    code: "REGIME_KIND_NOT_ALLOWED",
+    message:
+      "Los libros de compras y ventas son de quien tiene RIF, y este negocio no tiene RIF: sus compras y ventas no van a libros ni a declaraciones. Cuando tengas tu RIF, regístralo en Mi empresa.",
+  });
+}
+
 export async function exigeEmpresaQueFactura(
   sql: TransactionSql,
   companyId: string,

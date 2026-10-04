@@ -33,8 +33,9 @@ interface Resumen {
   ganado_desde_contabilidad: boolean;
   pendientes_de_contabilizar: number;
   lineas_sin_costo_mes: number;
-  lo_que_me_deben: string;
-  lo_que_debo: string;
+  /** null = el rol no tiene ar.read / ap.read: la tarjeta no se pinta (nunca «0»). */
+  lo_que_me_deben: string | null;
+  lo_que_debo: string | null;
   mi_dinero: { currency: string; balance: string }[];
   por_agotarse: number;
   tasa_del_dia: {
@@ -124,7 +125,7 @@ export function Inicio(): React.JSX.Element {
         a: "/inventario",
       });
     }
-    if (!esCero(r.lo_que_me_deben) && puedeVerDeuda) {
+    if (r.lo_que_me_deben !== null && !esCero(r.lo_que_me_deben) && puedeVerDeuda) {
       recordatorios.push({
         texto: `Te deben ${mostrarImporte({ amount: r.lo_que_me_deben, currency: moneda })}. Un mensaje a tiempo cobra la mitad.`,
         // La deuda vive en la administración (decisión del dueño, 2026-09-05).
@@ -250,34 +251,39 @@ export function Inicio(): React.JSX.Element {
             )}
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="py-4">
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <ArrowDownToLine className="size-4" />
-              <span className="text-[0.85rem]">Lo que me deben</span>
-            </div>
-            <p className="mt-1 text-xl font-semibold tabular-nums">
-              {r !== null ? mostrarImporte({ amount: r.lo_que_me_deben, currency: moneda }) : "…"}
-            </p>
-            {/* Lo fiado se debe en dólares y se cobra a la tasa del día del pago (regla
-                del dueño): por eso esta cifra sube o baja con la tasa (h. 71). */}
-            <p className="text-[0.75rem] text-faint-foreground">
-              En dólares de referencia, a la tasa de hoy: cambia cuando cambia la tasa.
-            </p>
-            {puedeVerDeuda ? (
-              <Link
-                to="/clientes"
-                className="text-[0.8rem] text-accent-soft-foreground hover:underline"
-              >
-                Ver quién
-              </Link>
-            ) : (
-              <p className="text-[0.8rem] text-muted-foreground">
-                El detalle lo ve quien administra.
+        {/* Sin ar.read el servidor manda null: la tarjeta no se pinta (nunca «0»). */}
+        {(r === null || r.lo_que_me_deben !== null) && (
+          <Card>
+            <CardContent className="py-4">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <ArrowDownToLine className="size-4" />
+                <span className="text-[0.85rem]">Lo que me deben</span>
+              </div>
+              <p className="mt-1 text-xl font-semibold tabular-nums">
+                {r !== null && r.lo_que_me_deben !== null
+                  ? mostrarImporte({ amount: r.lo_que_me_deben, currency: moneda })
+                  : "…"}
               </p>
-            )}
-          </CardContent>
-        </Card>
+              {/* Lo fiado se debe en dólares y se cobra a la tasa del día del pago (regla
+                del dueño): por eso esta cifra sube o baja con la tasa (h. 71). */}
+              <p className="text-[0.75rem] text-faint-foreground">
+                En dólares de referencia, a la tasa de hoy: cambia cuando cambia la tasa.
+              </p>
+              {puedeVerDeuda ? (
+                <Link
+                  to="/clientes"
+                  className="text-[0.8rem] text-accent-soft-foreground hover:underline"
+                >
+                  Ver quién
+                </Link>
+              ) : (
+                <p className="text-[0.8rem] text-muted-foreground">
+                  El detalle lo ve quien administra.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
         <Card>
           <CardContent className="py-4">
             <div className="flex items-center gap-2 text-muted-foreground">

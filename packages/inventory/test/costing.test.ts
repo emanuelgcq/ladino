@@ -150,10 +150,23 @@ describe("P3 — el redondeo vive en el importe de la salida, no en el promedio"
         const pos = must(receive(emptyPosition(VES), have, value)).position;
         const q = take.greaterThan(have) ? have : take; // dentro de la existencia
         const out = must(issue(pos, q, { allowNegative: false }));
-        const exact = value.amount.times(q).div(have); // 50 dígitos significativos
+        // Sobre el valor de la POSICIÓN: la entrada ya se escribió al céntimo (ADR-0075 §7).
+        const exact = pos.value.amount.times(q).div(have); // 50 dígitos significativos
         const diff = out.move.value.amount.negated().minus(exact).abs();
-        expect(diff.lessThan("0.00000001")).toBe(true);
+        // LA TOLERANCIA MÍNIMA QUE LA REGLA PERMITE (ADR-0075 §7). El valor de la salida es
+        // half-up al céntimo de lo exacto: el error máximo es EXACTAMENTE medio céntimo, y se
+        // alcanza (un empate: 0,01 entre 2 → 0,005 → 0,01). Por eso «≤ 0,005» y no «<»: una cota
+        // menor rechazaría un redondeo correcto, y una mayor dejaría pasar otro modo (truncar o
+        // redondear siempre hacia arriba yerran hasta un céntimo entero).
+        expect(diff.lessThanOrEqualTo("0.005")).toBe(true);
+        if (!q.equals(have)) {
+          // Lo que sale ES un importe al céntimo, salvo que vacíe (ahí sale el valor entero).
+          const v = out.move.value.amount;
+          expect(v.equals(v.toDecimalPlaces(2))).toBe(true);
+        }
         if (q.equals(have)) {
+          // Vaciar no redondea: saca TODO el valor, error cero.
+          expect(diff.isZero()).toBe(true);
           expect(out.position.value.isZero()).toBe(true);
           expect(out.position.quantity.isZero()).toBe(true);
         }
@@ -210,23 +223,61 @@ describe("ejemplos calculados a mano (los mismos que pgTAP 019)", () => {
     expect(s1.move.value.toAmountString()).toBe("-330.00000000");
     expect(s1.position.quantity.toFixed()).toBe("12");
     expect(s1.position.value.toAmountString()).toBe("1320.00000000");
-    // 7 × 123.45678901 = 864.19752307 exacto
+    // 7 × 123.45678901 = 864.19752307 exacto, que entra al kardex al céntimo: 864.20
     const e3 = must(receive(s1.position, dec("7"), ves("864.19752307")));
-    expect(e3.position.value.toAmountString()).toBe("2184.19752307");
-    // 2184.19752307 / 19 = 114.9577643721052… → HALF_UP a 8 → 114.95776437
-    expect(e3.move.unitCostAfter.toAmountString()).toBe("114.95776437");
+    expect(e3.position.value.toAmountString()).toBe("2184.20000000");
+    // 1320 + 864.20 = 2184.20; 2184.20 / 19 = 114.9578947368… → HALF_UP a 8 → 114.95789474
+    expect(e3.move.unitCostAfter.toAmountString()).toBe("114.95789474");
     const s2 = must(issue(e3.position, dec("19"), { allowNegative: false }));
-    expect(s2.move.value.toAmountString()).toBe("-2184.19752307");
+    expect(s2.move.value.toAmountString()).toBe("-2184.20000000");
     expect(s2.position.value.isZero()).toBe(true);
-    expect(s2.position.lastUnitCost.toAmountString()).toBe("114.95776437");
+    expect(s2.position.lastUnitCost.toAmountString()).toBe("114.95789474");
   });
 
-  it("empate exacto: 1 unidad a 0.000000005 de valor → HALF_UP sube (la política que persiste)", () => {
-    // valor 0.00000001 con existencia 2: salida de 1 → 0.000000005 → 0.00000001
-    const p = must(receive(emptyPosition(VES), dec("2"), ves("0.00000001"))).position;
+  it("empate exacto: 1 unidad a 0.005 de valor → HALF_UP sube (la política que persiste)", () => {
+    // El menor valor representable del kardex es ahora un céntimo (ADR-0075 §7).
+    // valor 0.01 con existencia 2: salida de 1 → 0.005 exacto → HALF_UP → 0.01
+    const p = must(receive(emptyPosition(VES), dec("2"), ves("0.01"))).position;
     const s = must(issue(p, dec("1"), { allowNegative: false }));
-    expect(s.move.value.toAmountString()).toBe("-0.00000001");
+    expect(s.move.value.toAmountString()).toBe("-0.01000000");
     expect(COST_ROUNDING_POLICY.mode).toBe("HALF_UP");
+    // La reconstrucción del valor: tras el empate, a la segunda unidad le queda 0.
+    expect(s.position.value.toAmountString()).toBe("0.00000000");
+  });
+
+  it("el caso que la regla nueva crea: 0.00000001 ya NO es un valor de kardex", () => {
+    // ENTRADA: un costo de 0.00000001 se escribe al céntimo → la cantidad entra con valor 0.00.
+    // No falla: una entrada de costo cero es legítima (muestra, regalo); lo que deja de existir
+    // es la fracción.
+    const e = must(receive(emptyPosition(VES), dec("2"), ves("0.00000001")));
+    expect(e.move.value.toAmountString()).toBe("0.00000000");
+    expect(e.position.value.isZero()).toBe(true);
+    expect(e.position.quantity.toFixed()).toBe("2");
+    // En el borde, medio céntimo sube: 0.005 → 0.01; y 0.00499999 → 0.00.
+    expect(
+      must(receive(emptyPosition(VES), dec("1"), ves("0.005"))).move.value.toAmountString(),
+    ).toBe("0.01000000");
+    expect(
+      must(receive(emptyPosition(VES), dec("1"), ves("0.00499999"))).move.value.toAmountString(),
+    ).toBe("0.00000000");
+    // SALIDA sobre una posición HEREDADA que aún guarda 0.00000001 (anterior al corte): la salida
+    // parcial vale 0.00 —el polvo no sale a pedazos— y la que VACÍA saca todo el valor, polvo
+    // incluido, de modo que la posición cierra en cero exacto. Quien lo limpia antes es la
+    // regularización al corte (platform.cent_regularization_prepare).
+    const heredada = must(
+      positionOf({
+        quantity: "2",
+        value: "0.00000001",
+        lastUnitCost: "0.00000001",
+        currency: "VES",
+      }),
+    );
+    const parcial = must(issue(heredada, dec("1"), { allowNegative: false }));
+    expect(parcial.move.value.amount.isZero()).toBe(true);
+    expect(parcial.position.value.toAmountString()).toBe("0.00000001");
+    const vacia = must(issue(parcial.position, dec("1"), { allowNegative: false }));
+    expect(vacia.move.value.toAmountString()).toBe("-0.00000001");
+    expect(vacia.position.value.isZero()).toBe(true);
   });
 
   it("negativo y luego entrada barata: el promedio NO se vuelve negativo, el residuo queda en el valor", () => {
@@ -253,8 +304,12 @@ describe("ejemplos calculados a mano (los mismos que pgTAP 019)", () => {
     expect(!r.ok && r.error.code).toBe("MONEY");
     expect(!r.ok && r.error.details?.["moneyCode"]).toBe("MONEY_AMOUNT_OUT_OF_RANGE");
     // Y justo por debajo del borde sí entra: la cota es la del tipo, no un margen.
-    const ok = must(receive(emptyPosition(VES), dec("0.00000001"), ves("99999999.99999999")));
-    expect(ok.move.unitCostAfter.toAmountString()).toBe("9999999999999999.00000000");
+    const ok = must(receive(emptyPosition(VES), dec("0.00000001"), ves("99999999.99")));
+    expect(ok.move.unitCostAfter.toAmountString()).toBe("9999999999000000.00000000");
+    // El dato de HEAD (99999999.99999999) entra ahora al céntimo como 100000000.00, y su costo
+    // unitario (10^16) no cabe: falla por la misma cota del tipo, no se aproxima.
+    const borde = receive(emptyPosition(VES), dec("0.00000001"), ves("99999999.99999999"));
+    expect(!borde.ok && borde.error.code).toBe("MONEY");
   });
 
   it("existencia cero: la salida se valora al último promedio conocido", () => {
@@ -268,11 +323,15 @@ describe("ejemplos calculados a mano (los mismos que pgTAP 019)", () => {
   });
 
   it("límite de numeric(24,8): una entrada al máximo entra y sale entera", () => {
-    const max = "9999999999999999.99999999";
+    const max = "9999999999999999.99000000";
     const e = must(receive(emptyPosition(VES), dec("1"), ves(max)));
     expect(e.move.unitCostAfter.toAmountString()).toBe(max);
     const s = must(issue(e.position, dec("1"), { allowNegative: false }));
     expect(s.position.value.isZero()).toBe(true);
+    // El máximo de HEAD (…,99999999) al céntimo SUBE a 10^16, que no cabe en numeric(24,8): la
+    // entrada falla diciéndolo, no se trunca al máximo.
+    const sube = receive(emptyPosition(VES), dec("1"), ves("9999999999999999.99999999"));
+    expect(!sube.ok && sube.error.code).toBe("MONEY");
     // Y dos entradas al máximo NO caben: el error es explícito, no un desbordamiento silencioso.
     const doble = receive(e.position, dec("1"), ves(max));
     expect(!doble.ok && doble.error.code).toBe("MONEY");

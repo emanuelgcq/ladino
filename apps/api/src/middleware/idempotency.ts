@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Context, Next } from "hono";
 import { withTransaction, SYSTEM_ACTOR_ID, type Actor, type Sql, type JSONValue } from "@ladino/db";
 import { tenantVisible } from "@ladino/domain";
-import { mensajePersona } from "./errors.js";
+import { mensajePersona, personaDeOtroCuerpo } from "./errors.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -90,6 +90,22 @@ function hashCuerpo(bytes: Uint8Array): Buffer {
 function actorId(actor: Actor): string {
   return actor.kind === "user" ? actor.userId : SYSTEM_ACTOR_ID;
 }
+
+/**
+ * H2 (revisión ADR-0077): lo que NO se guarda de una respuesta en `idempotency_keys`, por ruta.
+ * El token de una invitación es un secreto de un solo uso: la respuesta original lo lleva, la
+ * guardada no, y el replay de la misma llave devuelve la invitación sin él y lo dice.
+ */
+const REDACTORES: Record<string, (body: JSONValue) => JSONValue> = {
+  "POST /v1/invitations": (body) =>
+    body !== null && typeof body === "object" && !Array.isArray(body) && "token" in body
+      ? {
+          ...body,
+          token: null,
+          notice: "El enlace ya se mostró y no se guarda. Si lo perdiste, crea otro.",
+        }
+      : body,
+};
 
 export function idempotencyMiddleware(cfg: IdempotencyConfig) {
   const ttl = cfg.ttlHours ?? 24;
@@ -255,8 +271,16 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
       // Misma llave y mismo cuerpo en OTRO endpoint (`{}` para confirmar dos
       // devoluciones distintas) no es un replay: devolvía la respuesta de la
       // primera y la segunda nunca ocurría (auditoría 2026-09-11, M-24).
-      if (Buffer.compare(existente.request_hash, cuerpo) !== 0 || existente.endpoint !== endpoint) {
-        return { tipo: "reutilizada" as const };
+      if (existente.endpoint !== endpoint) return { tipo: "reutilizada" as const };
+      // Misma llave, mismo endpoint, OTRO cuerpo (ADR-0076, D-03/F-03/F-08): no es un replay ni
+      // «ya se registró» — puede que no se registrara nada (la llave quedó `failed` tras un 4xx).
+      // La llave es por INTENTO: el cliente estrena una tras un 4xx. Aquí se dice qué pasó, en
+      // palabras, y NADA se ejecuta: aceptar el cuerpo nuevo bajo la llave vieja sería el replay
+      // indebido que la cabecera descarta.
+      if (Buffer.compare(existente.request_hash, cuerpo) !== 0) {
+        // `previous_status` (decidido por criterio, ADR-0076): si el intento anterior quedó
+        // `completed` o `in_progress`, el cliente NO estrena llave — podría duplicar algo hecho.
+        return { tipo: "otro_cuerpo" as const, previo: existente.status };
       }
       if (existente.status === "in_progress") return { tipo: "en_vuelo" as const };
       if (existente.status === "completed") {
@@ -281,8 +305,18 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
         return c.json(
           {
             code: "IDEMPOTENCY_KEY_REUSED",
-            message: "Esta clave ya se usó con un cuerpo distinto.",
+            message: "Esta clave ya se usó en otra operación.",
             person_message: mensajePersona("IDEMPOTENCY_KEY_REUSED"),
+          },
+          409,
+        );
+      case "otro_cuerpo":
+        return c.json(
+          {
+            code: "IDEMPOTENCY_BODY_MISMATCH",
+            message: "Esta clave ya se usó con un cuerpo distinto: cada intento lleva clave nueva.",
+            person_message: personaDeOtroCuerpo(t1.previo),
+            details: { previous_status: t1.previo },
           },
           409,
         );
@@ -336,7 +370,7 @@ export function idempotencyMiddleware(cfg: IdempotencyConfig) {
         const cerradas = await tx<{ id: string }[]>`
           update public.idempotency_keys
              set status = ${exito ? "completed" : "failed"},
-                 response = ${tx.json({ status: res.status, body })}
+                 response = ${tx.json({ status: res.status, body: REDACTORES[endpoint]?.(body) ?? body })}
            where id = ${t1.id} and status = 'in_progress'
           returning id`;
         if (cerradas.length === 0) {

@@ -21,9 +21,17 @@ export interface OnboardingError {
   readonly message: string;
 }
 
+/**
+ * Con `otraEmpresa` (ADR-0077 §2, A-13): «Crear otra empresa» desde el selector. El mismo alta
+ * entera —empresa, depósito, plan contable, plantillas— en un tenant NUEVO, del que la persona nace
+ * Titular y Dueño. La puerta es `platform.bootstrap_another_tenant`: solo el Titular de alguna
+ * cuenta (LAD93), y nunca el mismo negocio dos veces (nombre o RIF entre los suyos, LAD94), que es
+ * la clave natural de este alta.
+ */
 export async function onboardBusiness(
   uow: UnitOfWork,
   input: OnboardBusinessRequest,
+  opciones: { readonly otraEmpresa?: boolean } = {},
 ): Promise<Result<OnboardBusinessResponse, OnboardingError>> {
   const { sql, actor } = uow;
   if (actor.kind !== "user") {
@@ -36,15 +44,47 @@ export async function onboardBusiness(
   // ── 1. El tenant, la membresía y el par de roles del fundador ─────────────
   // SAVEPOINT porque LAD80/LAD81 son errores ESPERABLES de Postgres y un error
   // crudo condena la transacción (la lección de S0.5, otra vez).
+  // La otra empresa necesita el RIF ya normalizado para su clave natural: se valida ANTES de
+  // escribir nada (un err tras escribir se commitearía igual).
+  let rifNormalizado: string | null = null;
+  if (
+    opciones.otraEmpresa === true &&
+    input.tax_id !== undefined &&
+    input.tax_id !== null &&
+    input.tax_id.trim() !== ""
+  ) {
+    const leido = validarRif(input.tax_id);
+    if (!leido.ok) return leido;
+    rifNormalizado = leido.value.normalizado;
+  }
   let tenantId: string;
   try {
     tenantId = await sql.savepoint(async (sp) => {
-      const [r] = await sp<{ id: string }[]>`
-        select platform.bootstrap_tenant(${actor.userId}, ${input.business_name}) as id`;
+      const [r] =
+        opciones.otraEmpresa === true
+          ? await sp<{ id: string }[]>`
+              select platform.bootstrap_another_tenant(${actor.userId}, ${input.business_name},
+                                                       ${rifNormalizado}) as id`
+          : await sp<{ id: string }[]>`
+              select platform.bootstrap_tenant(${actor.userId}, ${input.business_name}) as id`;
       return r!.id;
     });
   } catch (e) {
     const code = (e as { code?: string }).code;
+    if (code === "LAD93") {
+      return err({
+        code: "PERMISSION_REQUIRED",
+        message:
+          "Crear otra empresa es del Titular de una cuenta: quien fundó su negocio en Ladino. Si trabajas en el negocio de otra persona, pídeselo a ella.",
+      });
+    }
+    if (code === "LAD94") {
+      return err({
+        code: "DUPLICATE",
+        message:
+          "Ya tienes un negocio con ese nombre o con ese RIF. Elige otro nombre, o entra a ese negocio desde el selector de empresas.",
+      });
+    }
     if (code === "LAD81") {
       return err({
         code: "DUPLICATE",

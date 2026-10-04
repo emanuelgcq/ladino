@@ -282,6 +282,7 @@ describe("una venta por cada oficio", () => {
       warehouse_id: DEPOSITO,
       product_id: PRODUCTO,
       quantity: "1",
+      reason: "merma",
       reference: `suelta-cajero-${RUN}`,
     });
     expect(r.status).toBe(403);

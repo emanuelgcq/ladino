@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { useSesion } from "../app/session.js";
 import { errorDePersona, LlamadaApiError } from "../lib.js";
+import { conLlaveDeIntento, intentoAnteriorPudoQuedar } from "../llave-intento.js";
+import { RevisaIntentoAnterior } from "./RevisaIntentoAnterior.js";
 import {
   Dialog,
   DialogContent,
@@ -22,6 +24,7 @@ import { mostrarImporte } from "../money.js";
 import { fechaLocal, hoyLocal } from "../fechas.js";
 import { opcionesDeCobro, type FormaDePago, type OpcionDeCobro } from "./formas-de-pago.js";
 import { mostrarTasa, tasaLimpia } from "../tasa.js";
+import { textoDeDeuda } from "./deuda.js";
 
 /**
  * EL diálogo de cobro de un documento (M-05): antes había dos —uno en el
@@ -36,9 +39,9 @@ import { mostrarTasa, tasaLimpia } from "../tasa.js";
  * queda, estado del documento— lo dice el servidor al terminar y se muestra
  * tal cual llegó.
  *
- * La llave de idempotencia nace UNA vez por apertura del diálogo: un rechazo
- * (4xx) se corrige y se reintenta con la misma llave; una respuesta perdida
- * tras el éxito no cobra dos veces.
+ * La llave de idempotencia es por INTENTO (ADR-0076, F-03): un rechazo (4xx) la
+ * estrena — corregir el importe y registrar ya no choca con «ya se registró» —, y un
+ * fallo de red la conserva: la respuesta perdida tras el éxito no cobra dos veces.
  */
 interface CuentaTesoreria {
   id: string;
@@ -112,7 +115,7 @@ export function CobrarDocumento({
   const [cuentaId, setCuentaId] = useState<string | null>(null);
   const [creditoId, setCreditoId] = useState<string | null>(null);
   const [resultado, setResultado] = useState<Registrado | null>(null);
-  // Estable por apertura: se crea una vez y no cambia entre reintentos.
+  // Por intento: se conserva ante un fallo de red y se estrena tras un 4xx (conLlaveDeIntento).
   const llave = useRef(crypto.randomUUID());
 
   const formas = useQuery({
@@ -124,7 +127,10 @@ export function CobrarDocumento({
     queryKey: ["statement", empresa.id, customerId],
     enabled: customerId !== null,
     staleTime: 30_000,
-    queryFn: () => llamar<{ credits: Credito[] }>(`/v1/customers/${customerId}/statement`),
+    queryFn: () =>
+      llamar<{ credits: Credito[]; documents: { id: string; balance: string }[] }>(
+        `/v1/customers/${customerId}/statement`,
+      ),
   });
   // Ver las cuentas exige treasury.read (o cash.close): un cajero sin él
   // recibe 403 y el selector sencillamente no aparece — el servidor resuelve
@@ -227,30 +233,32 @@ export function CobrarDocumento({
 
   const cobrar = useMutation({
     mutationFn: () =>
-      llamar<Registrado>("/v1/payments", {
-        method: "POST",
-        headers: { "Idempotency-Key": llave.current },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          document_id: documentId,
-          currency: monedaCobro,
-          amount: importe.trim().replace(",", "."),
-          instrument: elegida?.instrument,
-          // F-05: lo tecleado es lo ENTREGADO; si la forma causa IGTF, el servidor lo separa.
-          ...(esCredito ? {} : { igtf_included: true }),
-          ...(referencia.trim() === "" || esEfectivo || esCredito
-            ? {}
-            : { reference: referencia.trim() }),
-          ...(esCredito && creditoId !== null ? { customer_credit_id: creditoId } : {}),
-          ...(esCredito
-            ? {}
-            : cuentaFija !== undefined
-              ? { account_id: cuentaFija }
-              : cuentaId !== null
-                ? { account_id: cuentaId }
-                : {}),
+      conLlaveDeIntento(llave, (k) =>
+        llamar<Registrado>("/v1/payments", {
+          method: "POST",
+          headers: { "Idempotency-Key": k },
+          body: JSON.stringify({
+            company_id: empresa.id,
+            document_id: documentId,
+            currency: monedaCobro,
+            amount: importe.trim().replace(",", "."),
+            instrument: elegida?.instrument,
+            // F-05: lo tecleado es lo ENTREGADO; si la forma causa IGTF, el servidor lo separa.
+            ...(esCredito ? {} : { igtf_included: true }),
+            ...(referencia.trim() === "" || esEfectivo || esCredito
+              ? {}
+              : { reference: referencia.trim() }),
+            ...(esCredito && creditoId !== null ? { customer_credit_id: creditoId } : {}),
+            ...(esCredito
+              ? {}
+              : cuentaFija !== undefined
+                ? { account_id: cuentaFija }
+                : cuentaId !== null
+                  ? { account_id: cuentaId }
+                  : {}),
+          }),
         }),
-      }),
+      ),
     onSuccess: (r) => {
       setResultado(r);
       toast.success("Cobro registrado");
@@ -432,7 +440,15 @@ export function CobrarDocumento({
                   )}
                 </div>
               )}
-              {cobrar.isError && <ErrorDeCobro error={cobrar.error} />}
+              {cobrar.isError && (
+                <ErrorDeCobro
+                  error={cobrar.error}
+                  onRevisar={() => {
+                    void qc.invalidateQueries({ queryKey: ["statement", empresa.id, customerId] });
+                    onCerrar();
+                  }}
+                />
+              )}
             </div>
             <DialogFooter>
               <Button variant="ghost" onClick={onCerrar} disabled={cobrar.isPending}>
@@ -462,9 +478,25 @@ export function CobrarDocumento({
                   })}
                 </span>
               </Fila>
+              {/* F-04 (ADR-0075 §5): lo que queda por cobrar es LA deuda del servidor —la misma
+                  cifra de la ficha y del estado de cuenta—, no el saldo contable del cobro. Sale
+                  del estado de cuenta, que se vuelve a pedir al cobrar. */}
               <Fila etiqueta="Saldo restante">
                 <span className="font-mono">
-                  {mostrarImporte({ amount: resultado.balance, currency: saldo.currency })}
+                  {(() => {
+                    const deuda =
+                      customerId === null || statement.isFetching
+                        ? undefined
+                        : statement.data?.documents.find((d) => d.id === documentId)?.balance;
+                    if (deuda !== undefined) {
+                      // null = el servidor no puede valorarla hoy: se dice, no se pinta «0».
+                      return textoDeDeuda(deuda, saldo.currency);
+                    }
+                    if (resultado.document_status === "paid") {
+                      return mostrarImporte({ amount: "0", currency: saldo.currency });
+                    }
+                    return statement.isFetching ? "…" : "Míralo en el estado de cuenta";
+                  })()}
                 </span>
               </Fila>
               <Fila etiqueta="Estado del documento">
@@ -520,7 +552,23 @@ export function CobrarDocumento({
  * (MensajeError sabe llevar a la casilla que falta); cualquier otro, en voz
  * de persona — nunca un `e.message` crudo.
  */
-function ErrorDeCobro({ error }: { error: unknown }): React.JSX.Element {
+function ErrorDeCobro({
+  error,
+  onRevisar,
+}: {
+  error: unknown;
+  onRevisar: () => void;
+}): React.JSX.Element {
+  // ADR-0076: el cobro anterior con esta llave pudo quedar hecho — se revisa, no se repite.
+  if (intentoAnteriorPudoQuedar(error)) {
+    return (
+      <RevisaIntentoAnterior
+        error={error}
+        etiqueta="Cerrar y revisar los cobros"
+        onIr={onRevisar}
+      />
+    );
+  }
   if (error instanceof LlamadaApiError) return <MensajeError error={error} />;
   return (
     <p role="alert" className="text-[0.88rem] text-destructive-soft-foreground">

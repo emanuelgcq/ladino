@@ -86,7 +86,8 @@ export const CustomerResponse = z
      * `with_debt=1` — es lo que ese cliente debe, sumado por el esquema.
      */
     is_system: z.boolean().optional(),
-    debt: z.string().optional(),
+    /** null = debe algo en divisa y falta la tasa de hoy para decirlo en la moneda de la empresa. */
+    debt: z.string().nullable().optional(),
   })
   .strict();
 export type CustomerResponse = z.infer<typeof CustomerResponse>;

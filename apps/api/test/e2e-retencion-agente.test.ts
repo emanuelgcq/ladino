@@ -160,6 +160,7 @@ beforeAll(async () => {
     await tx`insert into public.roles (id, tenant_id, key, name, requires_scope)
              values (${ROL}, null, ${`e2eret_${RUN}`}, 'Agente', true)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
+             (${ROL}, 'treasury.overdraft'),
              (${ROL}, 'supplier.manage'), (${ROL}, 'purchase.order.manage'),
              (${ROL}, 'purchase.receive'), (${ROL}, 'purchase.invoice.register'),
              (${ROL}, 'purchase.payment.register'), (${ROL}, 'retention.receipt.issue'),
@@ -572,6 +573,7 @@ describe("el agente retiene solo y el comprobante es un documento", () => {
         currency: "VES",
         instrument: "transferencia",
         allow_negative_balance: true,
+        overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
       });
       expect(p.status).toBe(201);
       const pago = (await p.json()) as { payment: Record<string, string> };

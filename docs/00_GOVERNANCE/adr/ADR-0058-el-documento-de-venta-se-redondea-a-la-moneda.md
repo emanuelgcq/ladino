@@ -103,3 +103,12 @@ sales:document:<minorUnits>:<modo>      p. ej. sales:document:2:HALF_UP
 - El kardex valorado (`inventory:cost:8:HALF_UP`) y los gastos
   (`treasury:expense:8:HALF_UP`) no cambian: son costeo y valoración, no
   documentos que se cobren (spec §6.6).
+
+## Nota — ADR-0075 §1 (E-05, ola 3, 2026-10-03): el importe fiscal en Bs sale de la base en Bs
+
+El punto 4 de este ADR sigue valiendo para la moneda del documento: base e IVA de cada línea a las unidades mínimas de ESA moneda, y el pie por suma. Lo que cambia es la **conversión a moneda funcional** de un documento emitido en divisa:
+
+- antes: el total funcional de la línea era `round(total_divisa × tasa, 2)` y el IVA funcional, total − base; el IVA en Bs resultaba ser el IVA en divisa ya redondeado por la tasa, no la alícuota de la base en Bs;
+- ahora (ADR-0075 §1): `base_bs = round(base_divisa × tasa, 2)`, `iva_bs = round(base_bs × alícuota, 2)`, y el total funcional es su suma.
+
+El importe en divisa es la contraprestación y la deuda; el importe en Bs es el fiscal (factura, libro y declaración). Lo vigila `platform.fiscal_amount_gaps`. Los documentos emitidos antes no se tocan. La pregunta al asesor que este ADR dejaba marcada (VALIDAR-TRIBUTARIO) queda respondida por el dueño en RESPUESTA §2.7 y registrada como P-85 para confirmación.

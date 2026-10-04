@@ -123,3 +123,36 @@ export async function descargarObjeto(
     return null;
   }
 }
+
+/**
+ * Borra objetos con la credencial de servicio (A-14: la purga de logos huérfanos). Es limpieza:
+ * un fallo se registra en el log y no se le cuenta a nadie como error — los objetos se quedan y
+ * la siguiente purga los vuelve a intentar.
+ */
+export async function borrarObjetos(
+  cfg: StorageConfig,
+  bucket: string,
+  paths: readonly string[],
+): Promise<void> {
+  if (paths.length === 0) return;
+  try {
+    const r = await fetch(`${cfg.url}/object/${bucket}`, {
+      method: "DELETE",
+      headers: { ...cabecerasServicio(cfg.serviceKey), "Content-Type": "application/json" },
+      body: JSON.stringify({ prefixes: paths }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!r.ok) {
+      console.error(
+        JSON.stringify({
+          nivel: "warn",
+          evento: "api.storage_purge_failed",
+          bucket,
+          status: r.status,
+        }),
+      );
+    }
+  } catch {
+    console.error(JSON.stringify({ nivel: "warn", evento: "api.storage_purge_failed", bucket }));
+  }
+}

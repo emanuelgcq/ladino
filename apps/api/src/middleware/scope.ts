@@ -65,8 +65,31 @@ export function contextMiddleware(sql: Sql) {
              and c.id in (select platform.ladino_user_company_ids(${auth.userId}))`,
       );
       if (!fila) {
+        // N-06 (ADR-0077 §3): quien TUVO acceso —tiene membresía en el tenant de esa empresa,
+        // desactivada o sin rol— sabe que existe; decirle que su acceso terminó no revela nada.
+        // Mismo 404 (el catálogo: 404 antes que 403), con su propio code y su frase.
+        // Si la pregunta falla (la API desplegada antes que su migración), se responde el 404
+        // genérico de siempre: el aviso es una cortesía y no puede convertir un 404 en un 500.
+        const [perdido] = await withTransaction(
+          sql,
+          auth.actor,
+          ({ sql: tx }) =>
+            tx<{ perdido: boolean }[]>`
+            select platform.lost_access_to_company(${header}) as perdido`,
+        ).catch(() => [undefined]);
+        if (perdido?.perdido === true) {
+          return c.json(
+            {
+              code: "ACCESS_REVOKED",
+              message: "Tu acceso a esta empresa ya no está activo.",
+              person_message: mensajePersona("ACCESS_REVOKED"),
+              request_id: requestId,
+            },
+            404,
+          );
+        }
         // Inexistente, de otro tenant, o del tenant pero sin asignación que la
-        // alcance: LOS TRES indistinguibles, cuerpo incluido.
+        // alcance, para quien nunca fue miembro: LOS TRES indistinguibles, cuerpo incluido.
         return c.json(
           {
             code: "NOT_FOUND",

@@ -118,6 +118,7 @@ beforeAll(async () => {
              (${ROL_COMPRAS}, null, ${`e2ecmp_compras_${RUN}`}, 'Compras', true),
              (${ROL_MIRON}, null, ${`e2ecmp_miron_${RUN}`}, 'Mirón', false)`;
     await tx`insert into public.role_permissions (role_id, permission_key) values
+             (${ROL_COMPRAS}, 'treasury.overdraft'),
              (${ROL_COMPRAS}, 'supplier.manage'),
              (${ROL_COMPRAS}, 'purchase.order.manage'),
              (${ROL_COMPRAS}, 'purchase.receive'),
@@ -195,13 +196,15 @@ async function exportarCompras(): Promise<string> {
 }
 
 describe("compras de extremo a extremo", () => {
-  it("un proveedor nacional sin RIF se rechaza; el extranjero se acepta sin él", async () => {
-    const malo = await pedir("POST", "/v1/suppliers", COMPRADOR, {
+  it("un proveedor nacional sin RIF se guarda (D-04); el extranjero se acepta sin él", async () => {
+    // D-04 (ola 3, RESPUESTA §3): antes 422. El RIF lo exige la compra CON factura, no el
+    // proveedor: e2e-llegada-sin-rif.test.ts prueba la otra mitad.
+    const informal = await pedir("POST", "/v1/suppliers", COMPRADOR, {
       company_id: COMPANY,
       legal_name: "Nacional sin RIF",
       supplier_kind: "nacional",
     });
-    expect(malo.status).toBe(422);
+    expect(informal.status).toBe(201);
 
     const bueno = await pedir("POST", "/v1/suppliers", COMPRADOR, {
       company_id: COMPANY,
@@ -414,6 +417,8 @@ describe("compras de extremo a extremo", () => {
       warehouse_id: W1,
       product_id: PROD_A,
       quantity: String(salida),
+      reason: "merma",
+      evidence: "acta de merma e2e",
     });
     expect(iss.status).toBe(201);
 
@@ -791,6 +796,7 @@ describe("compras de extremo a extremo", () => {
       // saldo ya viene neto y lo que sale del banco es ese saldo entero. El comprobante sí
       // se emite aquí, y dice lo que se retuvo.
       allow_negative_balance: true,
+      overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
     });
     expect(p.status).toBe(201);
     const cuerpo = (await p.json()) as {
@@ -879,6 +885,7 @@ describe("compras de extremo a extremo", () => {
         reference: `TRF-${RUN}`,
         // Se prueba la compra en un paso, no el saldo: el sobregiro se confirma (ADR-0062 §4).
         allow_negative_balance: true,
+        overdraft_reason: "Fixture E2E: se confirma el sobregiro con su motivo",
       },
     });
     expect(r.status).toBe(201);

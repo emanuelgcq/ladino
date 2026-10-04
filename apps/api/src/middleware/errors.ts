@@ -81,6 +81,9 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // curso (LAD91); asiento que el período de cierre no admite (LAD92). Los levanta el esquema.
   LAD91: { code: "PERIOD_OUT_OF_RANGE", status: 422 },
   LAD92: { code: "VALIDATION_FAILED", status: 422 },
+  // ADR-0075 §7 (C5c): al postear, una línea de asiento con más de dos decimales en moneda
+  // funcional. Lo levanta `platform.assert_entry_balanced()`, junto a la partida doble.
+  LAD71: { code: "VALIDATION_FAILED", status: 422 },
   LAD62: { code: "ACCOUNT_NOT_POSTABLE", status: 409 },
   // Migración 22 (ADR-0039). Los levanta el ESQUEMA —resolve_retention y el
   // trigger del comprobante—, así que llegan aquí aunque el caso de uso no los
@@ -154,6 +157,8 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   FISCAL_NUMBERING_INVALID: 409, // LAD49
   TAX_RULE_MISSING: 409, // LAD50
   EXCHANGE_RATE_MISSING: 409, // LAD51
+  // El estado cambió bajo el pie del cliente (el conteo con su existencia esperada, ADR-0078).
+  CONFLICT: 409,
   APPEND_ONLY_VIOLATION: 409, // LAD06 por la vía del caso de uso
   // Contabilidad. Los cuatro son «lo que pides es imposible con el estado
   // actual del libro», no un cuerpo malformado: 409 y el cliente arregla el
@@ -186,6 +191,14 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   // bien; lo que impide anular es el estado (el dinero ya entró), y el mensaje
   // dice el camino.
   DOCUMENT_HAS_PAYMENTS: 409,
+  // ADR-0075 §8: un cobro se reversa una sola vez; y si su IGTF se documentó con una nota de
+  // débito, la reversa para. 409: el cuerpo está bien; lo impide el estado.
+  PAYMENT_ALREADY_REVERSED: 409,
+  IGTF_NOTE_ISSUED: 409,
+  RETENTION_PERIOD_DECLARED: 409,
+  // ADR-0075 §4 (encargo X): el cobro o pago no cuadra con lo que el mayor le carga al documento.
+  // 409: el cuerpo está bien; lo que no cuadra es el estado del documento.
+  SETTLEMENT_MISMATCH: 409,
   // Migración 60: el depósito principal, o uno con mercancía, no se apaga. 409: el cuerpo
   // está bien; lo que lo impide es el estado, y el mensaje dice qué hacer primero.
   WAREHOUSE_IN_USE: 409,
@@ -197,11 +210,21 @@ const POR_CODIGO_DOMINIO: Record<string, number> = {
   // ADR-0068 §3 (N-02): un gestor acotado a la empresa no toca al Titular de la cuenta ni
   // desactiva a quien trabaja en otra empresa. 403 con su mensaje de persona, no el genérico.
   MEMBER_PROTECTED: 403,
+  // ADR-0077 §3 (N-08): la invitación ya se usó, venció o quien la envió ya no gestiona la empresa
+  // (409: el cuerpo está bien, el estado no); o es para otro correo (403: no es para esta cuenta).
+  INVITATION_UNAVAILABLE: 409,
+  INVITATION_FOR_OTHER_EMAIL: 403,
+  // ADR-0077 §3 (N-06): lo responde el middleware de alcance, con 404 como el NOT_FOUND al que
+  // sustituye para quien TUVO acceso; esta entrada solo documenta el code.
+  ACCESS_REVOKED: 404,
   // QA 2026-09-15 h. 67: un asiento generado por un documento se corrige desde el documento.
   ENTRY_GENERATED_BY_DOCUMENT: 409,
   // ADR-0062 §4: el egreso deja la cuenta en negativo y nadie lo confirmó. 409: el cuerpo está
   // bien; lo que no alcanza es el saldo, y el mensaje dice cuánto hay.
   INSUFFICIENT_FUNDS: 409,
+  // ADR-0076 (M-01): la cuenta del POS ya se cobró. 409: el cuerpo está bien; lo que lo impide
+  // es que esa cuenta ya es una venta, y el mensaje dice cuál y qué hacer (otra cuenta).
+  POS_CART_SOLD: 409,
   // ADR-0072 §1 (A-03): sin tipo de contribuyente vigente en la fecha del documento no se
   // factura. 409: el cuerpo está bien; falta una declaración, y el mensaje dice dónde hacerla.
   TAXPAYER_TYPE_REQUIRED: 409,
@@ -393,10 +416,18 @@ export function mensajePersona(code: string): string {
       return "Tu usuario no puede hacer esto. Pídele acceso a quien administra el negocio.";
     case "NOT_FOUND":
       return "Eso no existe o no está disponible para ti.";
+    case "ACCESS_REVOKED":
+      return "Tu acceso a esta empresa ya no está activo. Habla con quien administra el negocio.";
+    case "INVITATION_UNAVAILABLE":
+      return "Esta invitación ya no se puede usar. Pide a quien te invitó un enlace nuevo.";
+    case "INVITATION_FOR_OTHER_EMAIL":
+      return "Esta invitación es para otro correo. Entra con la cuenta del correo al que te invitaron.";
     case "DUPLICATE":
       return "Ya hay uno igual registrado. Busca el que existe en vez de crear otro.";
     case "EXCHANGE_RATE_MISSING":
       return "Falta la tasa BCV. Tráela en Mi dinero y vuelve a intentar.";
+    case "CONFLICT":
+      return "Algo cambió mientras lo revisabas. Vuelve a calcularlo y confirma de nuevo.";
     case "STORAGE_UNAVAILABLE":
       return "No se pudo guardar el archivo. Intenta de nuevo en un rato; si sigue, avísanos.";
     case "RATE_ONLY_FROM_BCV":
@@ -440,7 +471,12 @@ export function mensajePersona(code: string): string {
     case "TENANT_SCOPE_REQUIRED":
       return "La aplicación mandó la operación incompleta. Recarga la página y vuelve a intentar.";
     case "IDEMPOTENCY_KEY_REUSED":
-      return "Esa operación ya se registró con otros datos. Revisa si quedó hecha antes de repetirla.";
+      // Solo la MISMA llave en OTRO endpoint (ADR-0056). Otro cuerpo es IDEMPOTENCY_BODY_MISMATCH.
+      return "Esa operación se envió como si fuera otra; vuelve a intentarlo.";
+    case "POS_CART_SOLD":
+      return "Esa cuenta ya se cobró. Si el cliente quiere algo más, ábrele una cuenta nueva.";
+    case "IDEMPOTENCY_BODY_MISMATCH":
+      return "Esa operación ya se envió con otros datos; vuelve a intentarlo.";
     case "IDEMPOTENCY_IN_PROGRESS":
       return "La operación anterior sigue en curso. Espera un momento y no la repitas.";
     case "RETRY":
@@ -511,7 +547,9 @@ const ACCION_DE_PERMISO: Readonly<Record<string, string>> = {
   "accounting.read": "ver la contabilidad",
   "accounting.template.manage": "configurar cómo se contabiliza cada operación",
   "ap.read": "ver lo que el negocio debe a sus proveedores",
+  "ar.payment.reverse": "reversar un cobro",
   "ar.read": "ver lo que deben los clientes",
+  "ar.retention.correct": "corregir una retención que le practicaron al negocio",
   "branch.manage": "administrar sucursales",
   "branch.read": "ver las sucursales",
   "cash_register.manage": "administrar las cajas",
@@ -556,6 +594,7 @@ const ACCION_DE_PERMISO: Readonly<Record<string, string>> = {
   "purchase.invoice.register": "registrar facturas de proveedores",
   "purchase.landed_cost.apply": "cargar gastos de importación",
   "purchase.order.manage": "hacer órdenes de compra",
+  "purchase.payment.approve": "aprobar pagos grandes a proveedores",
   "purchase.payment.register": "pagar a proveedores",
   "purchase.price_variance.approve": "aprobar un precio de compra fuera de lo pactado",
   "purchase.receive": "recibir mercancía",
@@ -566,16 +605,19 @@ const ACCION_DE_PERMISO: Readonly<Record<string, string>> = {
   "role.read": "ver los roles",
   "sales.invoice.annul": "anular ventas",
   "sales.invoice.issue": "vender",
+  "pos.carts.manage": "cobrar, cambiar o borrar una cuenta de la caja que armó otra persona",
   "sales.order.manage": "hacer pedidos de venta",
   "sales.payment.register": "registrar cobros",
   "sales.price_list.override": "cambiar la lista de precios de una venta",
   "sales.quote.manage": "hacer cotizaciones",
+  "sales.refund": "devolver dinero a un cliente",
   "sales.return.manage": "registrar devoluciones",
   "supplier.bank_account.approve": "aprobar la cuenta bancaria de un proveedor",
   "supplier.manage": "crear y editar proveedores",
   "tax.rules.manage": "cargar reglas de impuestos",
   "tenant.read": "ver los datos de la cuenta",
   "treasury.account.manage": "administrar cuentas y formas de pago",
+  "treasury.overdraft": "dejar una cuenta en negativo",
   "treasury.read": "ver el dinero del negocio",
   "treasury.reassign": "reasignar pagos entre cuentas",
   "warehouse.manage": "administrar almacenes",
@@ -583,9 +625,35 @@ const ACCION_DE_PERMISO: Readonly<Record<string, string>> = {
   "warehouse.read": "ver los almacenes",
 };
 
+/**
+ * El `IDEMPOTENCY_BODY_MISMATCH` de persona, según cómo quedó el intento anterior con esa llave
+ * (decidido por criterio, ADR-0076 §12). «Vuelve a intentarlo» solo vale cuando nada quedó
+ * (`failed`): con `completed` o `in_progress`, repetir es justo lo que NO hay que hacer.
+ */
+export function personaDeOtroCuerpo(previo: string): string {
+  if (previo === "completed") {
+    return "Esa operación ya quedó registrada antes con otros datos. Revísala antes de repetirla.";
+  }
+  if (previo === "in_progress") {
+    return "Esa operación todavía se está registrando. Espera un momento y revisa si quedó.";
+  }
+  return mensajePersona("IDEMPOTENCY_BODY_MISMATCH");
+}
+
 /** El 403 de persona: el primer permiso reconocible del `message` técnico, en palabras. */
+/**
+ * D-11 / H-05: el 403 de un sobregiro no dice «pide el permiso» a secas: dice qué hacer AHORA
+ * (otra cuenta) y a quién acudir. Es el único permiso con frase propia; los demás, la genérica.
+ */
+const PERSONA_PROPIA_DE_PERMISO: Record<string, string> = {
+  "treasury.overdraft":
+    "Esta cuenta no tiene saldo suficiente. Elige otra cuenta o pídele a quien administra que lo registre.",
+};
+
 export function personaDePermiso(message: string): string {
   for (const clave of message.match(/[a-z_]+(?:\.[a-z_]+)+/g) ?? []) {
+    const propia = PERSONA_PROPIA_DE_PERMISO[clave];
+    if (propia !== undefined) return propia;
     const accion = ACCION_DE_PERMISO[clave];
     if (accion !== undefined) {
       return `Necesitas el permiso para ${accion}. Pídeselo a quien administra el negocio.`;

@@ -116,3 +116,18 @@ begin
     raise exception 'A-03: E2 no quedó ordinario o E3 no quedó especial desde el 2026-09-24';
   end if;
 end $$;
+
+-- ── Ola 3 · permisos (H7 de la revisión): la tasa del día, para que las comprobaciones no dependan
+-- de la fecha en que se corren. SOLO en la base LOCAL del recorrido: copia el valor de la última
+-- tasa oficial del escenario al día de Caracas de HOY si falta, con una fuente que lo dice. No es
+-- una tasa del BCV ni sale de aquí: es un dato de prueba (la tasa real la trae la API en producción).
+insert into public.exchange_rates
+  (from_currency, to_currency, rate, rate_date, rate_timestamp, source)
+select 'USD', 'VES', u.rate, platform.caracas_day(now()), now(),
+       'Escenario: tasa del día simulada para las comprobaciones'
+  from (select r.rate from public.exchange_rates r
+         where r.company_id is null and r.from_currency = 'USD' and r.to_currency = 'VES'
+         order by r.rate_date desc, r.rate_timestamp desc limit 1) u
+ where not exists (select 1 from public.exchange_rates r
+                    where r.company_id is null and r.from_currency = 'USD' and r.to_currency = 'VES'
+                      and r.rate_date = platform.caracas_day(now()));

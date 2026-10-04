@@ -3,7 +3,8 @@ import { formatearDocumento } from "@ladino/schemas";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { useSesion } from "../app/session.js";
-import { errorDePersona } from "../lib.js";
+import { errorDePersona, type PriceList } from "../lib.js";
+import { monedaQueSeEnsena, nombreCortoDeMoneda } from "../moneda-del-pedido.js";
 import { esCero } from "./decimal-compare.js";
 import { Button } from "../ui/button.js";
 import { Input } from "../ui/input.js";
@@ -59,7 +60,21 @@ export function HacerPedido({
   const qc = useQueryClient();
 
   const [proveedor, setProveedor] = useState<EntityOption | null>(null);
-  const [moneda, setMoneda] = useState("VES");
+  // H-06: la moneda nace de la lista de precios de la empresa, no fija en bolívares. `null` =
+  // la persona no la ha tocado y vale la propuesta.
+  const [monedaElegida, setMonedaElegida] = useState<string | null>(null);
+  const listas = useQuery({
+    queryKey: ["listas-de-precios", empresa.id],
+    enabled: abierto,
+    staleTime: 5 * 60_000,
+    retry: false,
+    queryFn: () => llamar<PriceList[]>("/v1/price-lists"),
+  });
+  // Mientras las listas cargan no se propone ninguna (null): el selector no salta solo de
+  // dólares a bolívares con la persona ya escribiendo, y lo que ella eligió no se le cambia.
+  const moneda = monedaQueSeEnsena(monedaElegida, listas.isLoading, listas.data);
+  const enMoneda = moneda === null ? "" : ` en ${nombreCortoDeMoneda(moneda)}`;
+  const setMoneda = setMonedaElegida;
   const [esperado, setEsperado] = useState("");
   const [lineas, setLineas] = useState<LineaPedido[]>([lineaVacia()]);
 
@@ -110,6 +125,7 @@ export function HacerPedido({
       importeValido(l.precio.trim().replace(",", ".")),
   );
   const listo =
+    moneda !== null &&
     proveedor !== null &&
     depositoElegido !== null &&
     validas.length > 0 &&
@@ -117,7 +133,7 @@ export function HacerPedido({
 
   const limpiar = (): void => {
     setProveedor(null);
-    setMoneda("VES");
+    setMonedaElegida(null);
     setEsperado("");
     setDeposito(null);
     setLineas([lineaVacia()]);
@@ -180,6 +196,24 @@ export function HacerPedido({
             )}
           </FormField>
 
+          <FormField
+            label="¿En qué moneda van los precios?"
+            hint="Los precios de abajo se guardan en esta moneda."
+          >
+            {(p) => (
+              <SimpleSelect
+                id={p.id}
+                value={moneda}
+                onValueChange={setMoneda}
+                placeholder="Cargando…"
+                options={[
+                  { value: "USD", label: "Dólares (USD)" },
+                  { value: "VES", label: "Bolívares (Bs.)" },
+                ]}
+              />
+            )}
+          </FormField>
+
           <div className="space-y-2">
             {lineas.map((l, i) => (
               <div key={l.id} className="flex items-start gap-2">
@@ -219,9 +253,9 @@ export function HacerPedido({
                       prev.map((x) => (x.id === l.id ? { ...x, precio: e.target.value } : x)),
                     )
                   }
-                  placeholder="Precio c/u"
-                  className="w-28"
-                  aria-label={`Precio acordado de cada uno, línea ${i + 1}`}
+                  placeholder={`Precio c/u${enMoneda}`}
+                  className="w-36"
+                  aria-label={`Precio acordado de cada uno${enMoneda}, línea ${i + 1}`}
                 />
                 {lineas.length > 1 && (
                   <Button
@@ -244,20 +278,7 @@ export function HacerPedido({
             </Button>
           </div>
 
-          <div className="grid gap-2 sm:grid-cols-3">
-            <FormField label="¿En qué moneda?">
-              {(p) => (
-                <SimpleSelect
-                  id={p.id}
-                  value={moneda}
-                  onValueChange={setMoneda}
-                  options={[
-                    { value: "VES", label: "Bolívares (Bs.)" },
-                    { value: "USD", label: "Dólares (USD)" },
-                  ]}
-                />
-              )}
-            </FormField>
+          <div className="grid gap-2 sm:grid-cols-2">
             <FormField label="¿Para cuándo?" hint="Si lo sabes.">
               {(p) => (
                 <Input

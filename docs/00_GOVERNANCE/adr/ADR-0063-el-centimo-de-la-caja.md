@@ -75,3 +75,15 @@ contabilidad e inventario reciben esos importes redondeados a 2 al servir.
 conserva el polvo de los cobros anteriores a esta decisión (se sirve redondeado, y el arqueo lo
 absorbe la primera vez que alguien cuenta esa caja y explica la diferencia). No se toca dato de
 producción para limpiarlo: R8.
+
+
+## Enmienda — ADR-0075 §7 (2026-10-03, migración 20261003140000)
+
+**Ocho decimales solo para costos unitarios y tasas; ningún importe del mayor con más de dos.**
+Deja de valer «Lo que NO cambia» en lo que dice de la escala de los asientos derivados del costeo:
+el VALOR de cada movimiento del kardex se escribe al céntimo half-up (`costing.ts`, verificado por
+`apply_inventory_move` con tolerancia de medio céntimo), el acumulado es la suma de esos céntimos y
+el asiento usa el mismo valor. El costo unitario y el promedio siguen con 8. Todo asiento lleva sus
+líneas al céntimo y el residuo de conversión a «Diferencias por redondeo» (5.1.10,
+`rounding_difference`), en el generador (`journal-generator.ts`, un solo sitio). El polvo heredado lo
+limpia la regularización al corte (`scripts/reparar/adr-0075-centimo.mjs`), con acta.

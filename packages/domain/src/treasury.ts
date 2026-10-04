@@ -2,7 +2,8 @@ import { err, ok, type Result } from "@ladino/core";
 import { fechaContableDe } from "./fecha-contable.js";
 import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
-import { Money, minorUnitsOf, parseDecimal } from "@ladino/money";
+import { Money, minorUnitsOf, parseDecimal, toCents } from "@ladino/money";
+import { formatMoney } from "@ladino/money/format";
 import type {
   CreateCompanyAccountRequest,
   UpdateCompanyAccountRequest,
@@ -38,6 +39,7 @@ import { generateJournalFromDocument } from "./journal-generator.js";
  */
 export type TreasuryError =
   | CompanyScopeError
+  | { code: "PERMISSION_REQUIRED"; message: string }
   | { code: "VALIDATION_FAILED"; message: string }
   | { code: "INSUFFICIENT_FUNDS"; message: string }
   | { code: "DUPLICATE"; message: string }
@@ -154,32 +156,143 @@ export async function resolverCuentaEfectivo(
   return creada!.id;
 }
 
+/** D-11: lo que la confirmación de un sobregiro trae del cuerpo, y de qué operación viene. */
+export interface ConfirmacionDeSobregiro {
+  /** `allow_negative_balance` del cuerpo. */
+  readonly permitir: boolean | undefined;
+  /** `overdraft_reason` del cuerpo. */
+  readonly motivo: string | undefined;
+  /** Qué egreso es: queda en el acta. */
+  readonly operacion: "expense" | "transfer" | "supplier_payment" | "refund";
+}
+
+/** El motivo de un sobregiro es una frase, no un «ok»: mínimo de caracteres útiles. */
+export const MOTIVO_DE_SOBREGIRO_MINIMO = 5;
+
 /**
  * ¿Alcanza el saldo para lo que va a salir? (ADR-0062 §4). La cuenta se BLOQUEA: dos egresos
- * simultáneos del mismo saldo pasaban los dos. Un egreso que deja la cuenta en negativo exige
- * `allow_negative_balance`, y la pantalla lo pide con el número delante (QA h. 33, 50, 77).
+ * simultáneos del mismo saldo pasaban los dos.
+ *
+ * DEJAR UNA CUENTA EN NEGATIVO EXIGE TRES COSAS (D-11, H-05; RESPUESTA §2.8): que el cuerpo lo
+ * confirme (`allow_negative_balance`), que quien opera tenga `treasury.overdraft` en la empresa,
+ * y un motivo. Y deja el acta `treasury.overdraft.confirmed` en ESTA transacción: quién, cuenta,
+ * importe, saldo resultante y motivo. Antes bastaba con que el cuerpo lo pidiera, y el acta del
+ * egreso no decía que se había permitido el negativo.
+ *
+ * Los cuatro ojos (`platform.approval_allowed`) NO aplican aquí, decidido por criterio (ADR-0066
+ * nota de la ola 3 §8, ADR-0068 §8): el sobregiro se confirma EN EL ACTO, quien registra es quien
+ * confirma, y sin una aprobación pendiente la regla lo haría imposible en cualquier empresa con
+ * más de una persona.
+ *
+ * Si el saldo alcanza no hay sobregiro que confirmar: no se pide permiso ni motivo, aunque el
+ * cuerpo traiga la confirmación.
  */
 export async function exigeSaldo(
   sql: TransactionSql,
   accountId: string,
   monto: string,
-  permitirNegativo: boolean | undefined,
+  confirmacion: ConfirmacionDeSobregiro,
 ): Promise<Result<true, TreasuryError>> {
-  if (permitirNegativo === true) return ok(true);
-  const [fila] = await sql<{ nombre: string; moneda: string; saldo: string; alcanza: boolean }[]>`
+  // H6 (ADR-0068 §8): el saldo solo va en el mensaje si quien opera ve el dinero (treasury.read).
+  // El actor sale del GUC de la transacción: el mismo que fija la API y que lee la RLS.
+  const [fila] = await sql<
+    {
+      nombre: string;
+      moneda: string;
+      saldo: string;
+      saldo_despues: string;
+      alcanza: boolean;
+      ve_saldo: boolean;
+      puede_sobregirar: boolean;
+      tenant_id: string;
+      company_id: string;
+      actor_id: string | null;
+    }[]
+  >`
     select ca.name as nombre, ca.currency as moneda,
            coalesce(b.balance, 0)::text as saldo,
-           coalesce(b.balance, 0) >= ${monto}::numeric as alcanza
+           (coalesce(b.balance, 0) - ${monto}::numeric)::numeric(24,8)::text as saldo_despues,
+           coalesce(b.balance, 0) >= ${monto}::numeric as alcanza,
+           coalesce(platform.ladino_user_has_permission(
+             platform.ladino_service_actor_id(), 'treasury.read', ca.company_id), false) as ve_saldo,
+           coalesce(platform.ladino_user_has_permission(
+             platform.ladino_service_actor_id(), 'treasury.overdraft', ca.company_id), false)
+             as puede_sobregirar,
+           ca.tenant_id, ca.company_id, platform.ladino_service_actor_id() as actor_id
       from public.company_accounts ca
       left join public.company_account_balances b on b.account_id = ca.id
      where ca.id = ${accountId}
      for update of ca`;
   if (!fila) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   if (fila.alcanza) return ok(true);
-  return err({
-    code: "INSUFFICIENT_FUNDS",
-    message: `«${fila.nombre}» tiene ${fila.saldo} ${fila.moneda} y esta operación saca ${monto}: quedaría en negativo. Revisa de qué cuenta sale, o confirma que quieres registrarlo igual.`,
-  });
+
+  if (confirmacion.permitir !== true) {
+    // H-05: a quien no puede sobregirar no se le propone «regístralo igual»: se le dice qué hacer.
+    const salida = fila.puede_sobregirar
+      ? "Revisa de qué cuenta sale, o regístralo igual con su motivo."
+      : "Elige otra cuenta o pídele a quien administra que lo registre.";
+    return err({
+      code: "INSUFFICIENT_FUNDS",
+      message: fila.ve_saldo
+        ? `«${fila.nombre}» tiene ${importeDePersona(fila.saldo, fila.moneda)} y esta operación saca ${importeDePersona(monto, fila.moneda)}: quedaría en negativo. ${salida}`
+        : `En «${fila.nombre}» no alcanza para sacar ${importeDePersona(monto, fila.moneda)}: quedaría en negativo. ${salida}`,
+    });
+  }
+  if (!fila.puede_sobregirar) {
+    // El 403 de persona lo pone la API a partir de la clave del permiso (errors.ts).
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "Dejar una cuenta en negativo exige el permiso treasury.overdraft.",
+    });
+  }
+  const motivo = (confirmacion.motivo ?? "").trim();
+  if (motivo.length < MOTIVO_DE_SOBREGIRO_MINIMO) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Para dejar una cuenta en negativo hay que decir el motivo: escribe por qué se registra sin saldo (queda en el historial).",
+    });
+  }
+  await auditarTesoreria(
+    sql,
+    fila.tenant_id,
+    fila.company_id,
+    "company_account",
+    accountId,
+    "treasury.overdraft.confirmed",
+    {
+      actor_id: fila.actor_id,
+      account_id: accountId,
+      account_name: fila.nombre,
+      currency: fila.moneda,
+      amount: monto,
+      balance_before: fila.saldo,
+      balance_after: fila.saldo_despues,
+      reason: motivo,
+      operation: confirmacion.operacion,
+    },
+  );
+  return ok(true);
+}
+
+/**
+ * D-13 (ola 3): el importe de un mensaje, como lo lee una persona —«Bs. 120.000,00»—, no como lo
+ * guarda la base («120000.00000000»). Formatear no redondea (MONEY_AND_ROUNDING_SPEC §5): se
+ * redondea antes, explícito, a los decimales de la moneda, y SOLO para el texto del aviso.
+ */
+function importeDePersona(monto: string, moneda: string): string {
+  const d = parseDecimal(monto);
+  if (!d.ok) return `${monto} ${moneda}`;
+  try {
+    const visible = d.value.toDecimalPlaces(minorUnitsOf(moneda), 4).toFixed(minorUnitsOf(moneda));
+    // El CLDR de es-VE todavía dice «Bs.S»: la reconversión ya pasó y la app dice «Bs.».
+    return formatMoney({ amount: visible, currency: moneda }, { locale: "es-VE" }).replace(
+      "Bs.S",
+      "Bs.",
+    );
+  } catch {
+    return `${monto} ${moneda}`;
+  }
 }
 
 /** La cuenta, validada: existe en ESTA empresa, activa, con su moneda. */
@@ -555,17 +668,18 @@ export async function registerExpense(
   if (!tasa.ok) return tasa;
   const tasaDec = parseDecimal(tasa.value.rate);
   if (!tasaDec.ok) return err({ code: "VALIDATION_FAILED", message: tasaDec.error.message });
-  const funcional = importe.value.amount.times(tasaDec.value).toDecimalPlaces(8, 4);
+  // P-03 (ADR-0075 §7): el equivalente funcional de lo que sale de la caja va al céntimo,
+  // half-up. Antes 4.278,3125 en la caja y en el mayor.
+  const funcional = toCents(importe.value.amount.times(tasaDec.value));
 
   // El saldo se comprueba AQUÍ, después de la tasa y justo antes de escribir: sin tasa el
   // gasto no se puede ni valorar, y decir «no alcanza» taparía el motivo real. Además, la
   // cuenta queda bloqueada el menor tiempo posible (ADR-0062 §4).
-  const alcanza = await exigeSaldo(
-    sql,
-    input.account_id,
-    importe.value.toAmountString(),
-    input.allow_negative_balance,
-  );
+  const alcanza = await exigeSaldo(sql, input.account_id, importe.value.toAmountString(), {
+    permitir: input.allow_negative_balance,
+    motivo: input.overdraft_reason,
+    operacion: "expense",
+  });
   if (!alcanza.ok) return alcanza;
 
   // El DÍA contable del gasto: si el llamante fechó el pago, su fecha manda;
@@ -678,11 +792,26 @@ export async function closeCashRegister(
 
   // El candado va en la CUENTA, no en el saldo: serializa cierres concurrentes
   // de la misma caja aunque la fila de saldo aún no exista.
-  const [cuenta] = await sql<{ currency: string; name: string; is_active: boolean }[]>`
-    select currency, name, is_active from public.company_accounts
+  const [cuenta] = await sql<
+    { currency: string; name: string; is_active: boolean; kind: string; is_system: boolean }[]
+  >`
+    select currency, name, is_active, kind, is_system from public.company_accounts
      where id = ${input.account_id} and company_id = ${input.company_id}
      for update`;
   if (!cuenta) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  // J-03 (ADR-0048, RESPUESTA §2.8): el cierre solo acepta CAJAS, y nadie lee el saldo de una
+  // cuenta que su rol no ve. Con solo `cash.close` se ve la caja (no la de sistema, igual que
+  // `listCompanyAccounts`): cualquier otra cuenta no existe para él. Quien sí la ve recibe el
+  // motivo, nunca el saldo. Va ANTES del cálculo: el mensaje de la diferencia lleva lo esperado.
+  const veTodo = (await companyScope(sql, actor.userId, input.company_id, "treasury.read")).ok;
+  const esSuCaja = cuenta.kind === "cash" && (veTodo || !cuenta.is_system);
+  if (!esSuCaja) {
+    if (!veTodo) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `Solo se cierran cajas: «${cuenta.name}» no es una caja.`,
+    });
+  }
   if (!cuenta.is_active) {
     return err({
       code: "VALIDATION_FAILED",
@@ -927,12 +1056,11 @@ export async function transferBetweenAccounts(
   }
   const importe = Money.of(input.amount, origen.value.currency);
   if (!importe.ok) return err({ code: "VALIDATION_FAILED", message: importe.error.message });
-  const alcanza = await exigeSaldo(
-    sql,
-    input.from_account_id,
-    importe.value.toAmountString(),
-    input.allow_negative_balance,
-  );
+  const alcanza = await exigeSaldo(sql, input.from_account_id, importe.value.toAmountString(), {
+    permitir: input.allow_negative_balance,
+    motivo: input.overdraft_reason,
+    operacion: "transfer",
+  });
   if (!alcanza.ok) return alcanza;
 
   const [empresa] = await sql<{ moneda: string }[]>`
@@ -949,7 +1077,9 @@ export async function transferBetweenAccounts(
     fuenteTasa = tasa.value.source;
   }
   if (!tasaDec.ok) return err({ code: "VALIDATION_FAILED", message: "Tasa no interpretable." });
-  const funcional = importe.value.amount.times(tasaDec.value).toDecimalPlaces(8, 4);
+  // P-03 (ADR-0075 §7): el equivalente funcional de lo que sale de la caja va al céntimo,
+  // half-up. Antes 4.278,3125 en la caja y en el mayor.
+  const funcional = toCents(importe.value.amount.times(tasaDec.value));
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   let transferencia: Record<string, unknown>;

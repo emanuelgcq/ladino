@@ -17,12 +17,16 @@ import {
   setCompanyTaxId,
   correctCompanyTaxId,
   setCompanyLogo,
+  autorizarLogo,
+  logosPurgables,
   getMyProfile,
   setMyProfile,
+  myLostAccess,
 } from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { CTX } from "../middleware/context.js";
-import { subirObjeto, firmarUrls } from "../storage.js";
+import { createHash } from "node:crypto";
+import { subirObjeto, firmarUrls, borrarObjetos } from "../storage.js";
 import type { StorageConfig } from "../config.js";
 
 const BUCKET_LOGOS = "company-logos";
@@ -161,6 +165,35 @@ export function companiesRoutes(
   });
 
   /**
+   * «Crear otra empresa» (ADR-0077 §2, A-13): el mismo alta, en un tenant NUEVO, solo para el
+   * Titular de alguna cuenta. Sin X-Company-Id (la empresa no existe todavía) y sin
+   * Idempotency-Key, como /v1/onboarding: la clave natural (nombre o RIF entre los negocios de la
+   * persona, LAD94 → 409) y el candado por persona impiden fundarla dos veces.
+   */
+  app.post("/v1/onboarding/another-company", async (c) => {
+    const parsed = OnboardBusinessRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      onboardBusiness(uow, parsed.data, { otraEmpresa: true }),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
+  });
+
+  /**
+   * N-03 (ADR-0077 §3): los negocios donde la persona tuvo acceso y hoy no (desactivada o sin
+   * rol), con el nombre de quien los administra. La web lo pide cuando no ve ninguna empresa, para
+   * decir «Tu acceso ya no está activo» en vez de «Vamos a montar tu negocio».
+   */
+  app.get("/v1/me/access", async (c) => {
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => myLostAccess(uow));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
+  });
+
+  /**
    * ADR-0048: los permisos del usuario en la empresa activa, DE UNA VEZ. La
    * webapp forma el menú y esconde botones con esta lista; cada operación
    * sigue autorizándose por su cuenta en el servidor — esconder es cortesía,
@@ -268,6 +301,11 @@ export function companiesRoutes(
       });
     }
     const companyId = ctx.companyId;
+    // A-07: se autoriza ANTES de tocar el almacenamiento. Un 403 no deja objetos huérfanos.
+    const { actor } = c.get("ladino.auth");
+    const permiso = await withTransaction(sql, actor, (uow) => autorizarLogo(uow, companyId));
+    if (!permiso.ok) throw new DominioError(permiso.error);
+
     if (storage === undefined) {
       throw new DominioError({
         code: "VALIDATION_FAILED",
@@ -317,16 +355,27 @@ export function companiesRoutes(
       });
     }
 
-    const version = Date.now().toString(36);
+    // A-14: la versión es la DIRECCIÓN POR CONTENIDO del archivo subido. El mismo logo otra vez
+    // es la misma ruta (el upsert no crea objetos); otro logo es otra ruta, y la anterior se
+    // conserva hasta que la purga decida que nadie la necesita.
+    const version = createHash("sha256").update(original).digest("hex").slice(0, 32);
     const rutaBase = `${companyId}/logo/${version}`;
     const ruta256 = `${rutaBase}/logo-256.webp`;
     await subirObjeto(storage, BUCKET_LOGOS, ruta256, l256, "image/webp");
     await subirObjeto(storage, BUCKET_LOGOS, `${rutaBase}/logo-64.webp`, l64, "image/webp");
     await subirObjeto(storage, BUCKET_LOGOS, `${rutaBase}/logo-pdf.png`, lPdf, "image/png");
 
-    const { actor } = c.get("ladino.auth");
     const r = await withTransaction(sql, actor, (uow) => setCompanyLogo(uow, companyId, ruta256));
     if (!r.ok) throw new DominioError(r.error);
+
+    // A-14: tras cada logo nuevo, se purgan las versiones huérfanas de más de 30 días. Es
+    // limpieza: si falla, se queda para la próxima y el logo nuevo ya está puesto.
+    try {
+      const purgables = await withTransaction(sql, actor, (uow) => logosPurgables(uow, companyId));
+      await borrarObjetos(storage, BUCKET_LOGOS, purgables);
+    } catch {
+      console.error(JSON.stringify({ nivel: "warn", evento: "api.logo_purge_failed" }));
+    }
 
     const firmadas = await firmarUrls(storage, BUCKET_LOGOS, [ruta256]);
     return c.json({ logo_path: ruta256, logo_url: firmadas.get(ruta256) ?? null }, 201);

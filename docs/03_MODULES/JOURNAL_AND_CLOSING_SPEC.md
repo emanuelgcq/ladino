@@ -75,6 +75,18 @@ period open→soft_closed→closed→reopened.
   los dos períodos. La ventana legal para deducir el crédito (LIVA, «doce períodos») **no se
   aplica**: está pendiente de fuente (P-35).
 
+## Revaluación al cierre (ADR-0075 §6, migración 20261003180000)
+
+Cerrar un período mensual asienta primero la revaluación de las partidas monetarias en divisa a la
+tasa BCV del último día del período (VEN-NIF PYME secc. 30): cada caja en divisa, y las cuentas por
+cobrar y por pagar en divisa por moneda. `platform.fx_revaluation_items(empresa, fecha)` dice qué
+lleva el mayor, qué debe llevar y el ajuste; `closeFiscalPeriod` escribe un asiento `exchange_diff`
+/ `fx.revaluation_at_close` fechado ese día, contra los papeles `exchange_gain` y `exchange_loss`, y
+deja el acta `accounting.fx_revalued_at_close`. No guarda estado: cerrar otra vez el mismo período
+ajusta solo la diferencia. Sin diferencias no hay asiento. Sin tasa a esa fecha, o sin esas cuentas,
+el período no se cierra y el mensaje dice qué falta. El período de cierre del ejercicio no revalúa.
+El método queda en PENDIENTES_ASESOR P-86.
+
 ## Dependencias
 - Accounting
 - AR/AP

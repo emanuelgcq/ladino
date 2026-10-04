@@ -21,6 +21,7 @@ export {
   updateProduct,
   setProductTaxCategory,
   setProductImage,
+  autorizarImagenProducto,
   type ProductError,
 } from "./products.js";
 export {
@@ -44,6 +45,7 @@ export {
   totalDeEntrada,
   unitarioDeEntrada,
   issueStock,
+  countStock,
   issueStockBatch,
   adjustStock,
   transferStock,
@@ -57,6 +59,7 @@ export { consumeRecipe, type RecipeError } from "./recipes.js";
 // ADR-0066: la ÚNICA puerta por la que la mercancía entra al negocio.
 export {
   registerArrival,
+  previewArrival,
   ventasIntermedias,
   DIAS_HACIA_ATRAS,
   type ArrivalError,
@@ -227,6 +230,8 @@ export {
   setCompanyTaxId,
   correctCompanyTaxId,
   setCompanyLogo,
+  autorizarLogo,
+  logosPurgables,
   getMyProfile,
   setMyProfile,
   type CompanyProfileError,
@@ -236,7 +241,23 @@ export {
   addMember,
   removeAssignment,
   setMemberStatus,
+  createInvitation,
+  previewInvitation,
+  acceptInvitation,
+  myLostAccess,
   type MembersError,
 } from "./members.js";
 export { diaNegocio, ZONA_NEGOCIO } from "./dia-negocio.js";
-export { modoDeVenta, exigeEmpresaQueFactura } from "./modo-venta.js";
+export { modoDeVenta, exigeEmpresaQueFactura, exigeEmpresaConRif } from "./modo-venta.js";
+export { repairCents, type CentRegularization } from "./cent-regularization.js";
+export {
+  reversePayment,
+  reverseSupportedRetention,
+  type PaymentReversalError,
+  type PaymentReversalResult,
+  type ReversePaymentInput,
+} from "./payment-reversals.js";
+export {
+  repairTreasuryCurrency,
+  type TreasuryCurrencyRegularization,
+} from "./treasury-currency.js";

@@ -266,6 +266,75 @@ export const SetMemberStatusRequest = z
 export type SetMemberStatusRequest = z.infer<typeof SetMemberStatusRequest>;
 export type ListCompaniesResponse = z.infer<typeof ListCompaniesResponse>;
 
+/**
+ * LA INVITACIÓN POR ENLACE (ADR-0077 §3). El token sale UNA vez, en la respuesta que lo crea; la
+ * base guarda solo su huella. El correo es opcional: si se da, solo esa cuenta acepta.
+ */
+const RolAsignable = z.enum([
+  "owner",
+  "cashier",
+  "store_manager",
+  "back_office",
+  "accountant",
+  "warehouse_ops",
+]);
+export const CreateInvitationRequest = z
+  .object({
+    company_id: z.string().uuid(),
+    role_key: RolAsignable,
+    email: z.string().trim().email().max(320).optional(),
+  })
+  .strict();
+export type CreateInvitationRequest = z.infer<typeof CreateInvitationRequest>;
+
+export const InvitationResponse = z
+  .object({
+    id: z.string().uuid(),
+    company_id: z.string().uuid(),
+    role_key: RolAsignable,
+    email: z.string().nullable(),
+    /**
+     * 64 caracteres hex, en la respuesta que la crea. El replay de la misma Idempotency-Key la
+     * devuelve con `null` y un `notice`: el token no se guarda en ninguna parte (H2).
+     */
+    token: z.string().nullable(),
+    expires_at: z.string(),
+    notice: z.string().optional(),
+  })
+  .strict();
+export type InvitationResponse = z.infer<typeof InvitationResponse>;
+
+export const InvitationTokenRequest = z
+  .object({ token: z.string().regex(/^[0-9a-f]{64}$/) })
+  .strict();
+export type InvitationTokenRequest = z.infer<typeof InvitationTokenRequest>;
+
+export const InvitationPreviewResponse = z
+  .object({
+    status: z.enum(["pending", "used", "revoked", "expired", "other_email"]),
+    // E7: con `other_email` (quien pregunta no es el destinatario) todo lo demás viaja en null.
+    company_name: z.string().nullable(),
+    business_name: z.string().nullable(),
+    role_key: RolAsignable.nullable(),
+    inviter_name: z.string().nullable(),
+    expires_at: z.string().nullable(),
+  })
+  .strict();
+export type InvitationPreviewResponse = z.infer<typeof InvitationPreviewResponse>;
+
+export const AcceptInvitationResponse = z.object({ company_id: z.string().uuid() }).strict();
+export type AcceptInvitationResponse = z.infer<typeof AcceptInvitationResponse>;
+
+/** N-03: los negocios donde la persona tuvo acceso y hoy no, con quien los administra. */
+export const MeAccessResponse = z
+  .object({
+    lost_access: z.array(
+      z.object({ business_name: z.string(), admin_name: z.string().nullable() }).strict(),
+    ),
+  })
+  .strict();
+export type MeAccessResponse = z.infer<typeof MeAccessResponse>;
+
 /** Cuerpo de error del contrato (`API_SPEC.md` §Errores). */
 export const ErrorResponse = z.object({
   code: z.string(),

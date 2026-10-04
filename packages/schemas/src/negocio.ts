@@ -30,10 +30,15 @@ export const NegocioResumenResponse = z
     pendientes_de_contabilizar: z.number().int(),
     /** Líneas vendidas EN EL MES sin costo congelado: el aviso de «sin costo». */
     lineas_sin_costo_mes: z.number().int(),
-    /** Suma de saldos pendientes de facturas emitidas (solo positivos). */
-    lo_que_me_deben: cifra,
-    /** Suma de saldos pendientes de facturas de proveedor asentadas. */
-    lo_que_debo: cifra,
+    /**
+     * Suma de saldos pendientes de facturas emitidas (solo positivos). `null` = quien pregunta no
+     * tiene `ar.read`: «no tienes acceso», nunca «0.00» (N-07/P-04).
+     */
+    lo_que_me_deben: cifra.nullable(),
+    /**
+     * Suma de saldos pendientes de facturas de proveedor asentadas. `null` = sin `ap.read`.
+     */
+    lo_que_debo: cifra.nullable(),
     /** El dinero por MONEDA: la suma de los saldos de las cuentas activas. */
     mi_dinero: z.array(z.object({ currency: z.string(), balance: cifra }).strict()),
     /** Productos bajo su mínimo. */

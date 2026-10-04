@@ -31,6 +31,9 @@ export { ExactMoney } from "./exact-money.js";
 export type { Roundable, RoundedMoney, RoundingMode, RoundingPolicy } from "./rounding.js";
 export {
   allocate,
+  CENTS_POLICY,
+  isAtCents,
+  toCents,
   ISO_PRESENTATION_MODE,
   isRoundingOf,
   roundForCost,

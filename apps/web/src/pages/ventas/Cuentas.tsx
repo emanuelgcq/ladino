@@ -15,11 +15,13 @@ import { Skeleton } from "../../ui/card.js";
 import { Table, TBody, TD, TDNum, TH, THead, TR } from "../../ui/table.js";
 import { mostrarImporte } from "../../money.js";
 import { esCero } from "../../components/decimal-compare.js";
+import { FALTA_LA_TASA, nominalPorMoneda, textoDeDeuda } from "../../components/deuda.js";
 import { KIND_LABEL, MensajeError } from "./comunes.js";
 import { numeroDocumento } from "../../components/documento.js";
 import { Button } from "../../ui/button.js";
 import { Badge, type BadgeTone } from "../../ui/badge.js";
 import { fechaLocal } from "../../fechas.js";
+import { useConFacturas } from "../../app/modo-venta.js";
 
 /**
  * Estado de cuenta del cliente con su AGING visual. Todas las cifras —saldos,
@@ -50,14 +52,17 @@ interface Statement {
     applied_amount: string;
     status: string;
   }[];
-  total_outstanding: string;
+  /** null = hay deuda en divisa y falta la tasa de hoy; el nominal va en `debt.by_currency`. */
+  total_outstanding: string | null;
+  debt?: { by_currency: { currency: string; nominal: string | null }[] };
   total_credit_available: string;
 }
 /** La antigüedad viene de SU endpoint (/aging): la fuente canónica del bucket. */
 interface Aging {
   reference_date: string;
-  buckets: { bucket: string; document_count: number; amount: string }[];
-  total: string;
+  /** `amount` y `total` null = ese tramo tiene deuda en divisa y falta la tasa de hoy. */
+  buckets: { bucket: string; document_count: number; amount: string | null }[];
+  total: string | null;
 }
 
 export function Cuentas(): React.JSX.Element {
@@ -65,6 +70,8 @@ export function Cuentas(): React.JSX.Element {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const [cliente, setCliente] = useState<EntityOption | null>(null);
+  // F-14: la empresa en modo recibos lee el glosario simple, como en Clientes.tsx.
+  const conFacturas = useConFacturas();
 
   // ?cliente=<id> — la paleta y otros módulos llegan aquí con el cliente puesto.
   const clienteParam = params.get("cliente");
@@ -103,8 +110,12 @@ export function Cuentas(): React.JSX.Element {
   return (
     <div>
       <PageHeader
-        title="Cuentas por cobrar"
-        description="Estado de cuenta por cliente: saldo, antigüedad y cada documento con su historia."
+        title={conFacturas ? "Cuentas por cobrar" : "Te deben"}
+        description={
+          conFacturas
+            ? "Estado de cuenta por cliente: saldo, antigüedad y cada documento con su historia."
+            : "Lo que te debe cada cliente, cuánto tiempo lleva debiéndolo y cada recibo con su historia."
+        }
       />
       <div className="mb-4 max-w-md">
         <EntityPicker
@@ -189,11 +200,12 @@ function EstadoDeCuenta({
   aging: Aging;
   onAbrirDocumento: (id: string) => void;
 }): React.JSX.Element {
+  const conFacturas = useConFacturas();
   const barras = aging.buckets.map((b) => ({
     nombre: ETIQUETA_BUCKET[b.bucket] ?? b.bucket,
     // SOLO altura de barra; la cifra visible es el string del servidor.
-    v: Number(b.amount),
-    etiqueta: mostrarImporte({ amount: b.amount, currency: data.currency }),
+    v: b.amount === null ? 0 : Number(b.amount),
+    etiqueta: textoDeDeuda(b.amount, data.currency),
     tardio: b.bucket === "61-90" || b.bucket === "90+",
   }));
 
@@ -204,7 +216,19 @@ function EstadoDeCuenta({
           <CardTitle>Saldo pendiente</CardTitle>
         </CardHeader>
         <CardContent>
-          <DualMoney variant="kpi" amount={data.total_outstanding} currency={data.currency} />
+          {data.total_outstanding === null ? (
+            // Debe, y falta la tasa para decirlo en bolívares: el texto único y el nominal.
+            <div>
+              <p className="text-2xl font-semibold">{FALTA_LA_TASA}</p>
+              {nominalPorMoneda(data.debt?.by_currency) !== "" && (
+                <p className="mt-1 text-[0.9rem] tabular-nums">
+                  Debe {nominalPorMoneda(data.debt?.by_currency)}
+                </p>
+              )}
+            </div>
+          ) : (
+            <DualMoney variant="kpi" amount={data.total_outstanding} currency={data.currency} />
+          )}
           {!esCero(data.total_credit_available) && (
             <p className="mt-2 text-[0.85rem] text-muted-foreground">
               Saldo a favor disponible:{" "}
@@ -218,11 +242,17 @@ function EstadoDeCuenta({
 
       <Card className="lg:col-span-2">
         <CardHeader>
-          <CardTitle>Antigüedad de saldos</CardTitle>
+          <CardTitle>
+            {conFacturas ? "Antigüedad de saldos" : "Cuánto tiempo llevan debiendo"}
+          </CardTitle>
           <span className="text-[0.8rem] text-muted-foreground">al {aging.reference_date}</span>
         </CardHeader>
         <CardContent>
-          {barras.length === 0 || esCero(aging.total) ? (
+          {aging.total === null ? (
+            <p className="text-[0.88rem] text-warning-soft-foreground">
+              {FALTA_LA_TASA}: la antigüedad en bolívares no se puede decir hasta cargarla.
+            </p>
+          ) : barras.length === 0 || esCero(aging.total) ? (
             <p className="text-[0.88rem] text-muted-foreground">Nada vencido ni por vencer.</p>
           ) : (
             <div className="h-36">
@@ -246,8 +276,8 @@ function EstadoDeCuenta({
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[0.8rem] text-muted-foreground">
             {aging.buckets.map((b) => (
               <span key={b.bucket} className="font-mono">
-                {ETIQUETA_BUCKET[b.bucket] ?? b.bucket}:{" "}
-                {mostrarImporte({ amount: b.amount, currency: data.currency })} ({b.document_count})
+                {ETIQUETA_BUCKET[b.bucket] ?? b.bucket}: {textoDeDeuda(b.amount, data.currency)} (
+                {b.document_count})
               </span>
             ))}
           </div>
@@ -323,7 +353,7 @@ function EstadoDeCuenta({
                   <TH>Documento</TH>
                   <TH>Estado</TH>
                   <TH className="text-right">Total</TH>
-                  <TH className="text-right">Cobrado</TH>
+                  <TH className="text-right">{conFacturas ? "Cobrado" : "Pagado"}</TH>
                   <TH className="text-right">Saldo</TH>
                   <TH className="text-right">Días</TH>
                 </TR>
@@ -353,6 +383,7 @@ function EstadoDeCuenta({
                     </TD>
                     <TD>
                       <FiscalStatusBadge
+                        simple={!conFacturas}
                         estado={
                           d.status === "issued" && !/^0*(\.0*)?$/.test(d.paid_amount)
                             ? "partially_paid"
@@ -370,14 +401,16 @@ function EstadoDeCuenta({
                       deuda que mostrar, y pintarla como 0 diría «pagada». */}
                     <TDNum
                       className={
-                        d.balance === null || esCero(d.balance)
+                        (d.balance === null && d.status === "annulled") || esCero(d.balance)
                           ? "text-faint-foreground"
                           : "text-warning-soft-foreground"
                       }
                     >
-                      {d.balance === null
+                      {/* Una anulada no tiene saldo («—»). Una EMITIDA con saldo nulo debe, y
+                          falta la tasa para decirlo en bolívares. */}
+                      {d.balance === null && d.status === "annulled"
                         ? "—"
-                        : mostrarImporte({ amount: d.balance, currency: data.currency })}
+                        : textoDeDeuda(d.balance, data.currency)}
                     </TDNum>
                     <TDNum
                       className={d.days_outstanding > 60 ? "text-warning-soft-foreground" : ""}

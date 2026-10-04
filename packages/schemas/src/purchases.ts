@@ -306,6 +306,12 @@ export const RegisterSupplierPaymentRequest = z
      * egreso mayor que el saldo responde 409 INSUFFICIENT_FUNDS con el número delante.
      */
     allow_negative_balance: z.boolean().optional(),
+    /**
+     * D-11: POR QUÉ se deja la cuenta en negativo, en palabras de quien lo confirma. Obligatorio
+     * (con el permiso `treasury.overdraft`) cuando el egreso sobregira de verdad; queda en el
+     * acta `treasury.overdraft.confirmed`. El mínimo lo exige el caso de uso, con su mensaje.
+     */
+    overdraft_reason: z.string().trim().max(300).optional(),
   })
   .strict();
 export type RegisterSupplierPaymentRequest = z.infer<typeof RegisterSupplierPaymentRequest>;
@@ -337,6 +343,8 @@ export const SimplePurchaseRequest = z
         account_id: uuid.optional(),
         /** Igual que en el pago suelto: confirmar que la cuenta quede en negativo (ADR-0062 §4). */
         allow_negative_balance: z.boolean().optional(),
+        /** D-11: el motivo del sobregiro, como en el pago suelto. */
+        overdraft_reason: z.string().trim().max(300).optional(),
       })
       .strict()
       .optional(),
@@ -717,10 +725,18 @@ export const RegisterArrivalRequest = z
         account_id: uuid.optional(),
         reference: z.string().trim().min(1).max(100).optional(),
         allow_negative_balance: z.boolean().optional(),
+        /** D-11: el motivo del sobregiro, como en el pago suelto. */
+        overdraft_reason: z.string().trim().max(300).optional(),
       })
       .strict()
       .optional(),
     lines: z.array(ArrivalLineRequest).min(1).max(200),
+    /**
+     * D-05 (ola 3): el costo escrito YA INCLUYE el IVA. Por omisión, el precio se escribe sin IVA,
+     * como viene en la factura. Con `true`, el servidor le quita el IVA con la alícuota de compra
+     * del día; solo cuenta con proveedor y con factura (presente o por llegar).
+     */
+    prices_include_tax: z.boolean().optional(),
     /**
      * El TRANSPORTE y lo que se pagó aparte por traerla (ADR-0066, entrega ii). No es un gasto
      * del mes: es COSTO de esta mercancía, y se reparte entre sus líneas por valor. Solo cuando
@@ -767,6 +783,29 @@ export const ArrivalResponse = z
   })
   .strict();
 export type ArrivalResponse = z.infer<typeof ArrivalResponse>;
+
+/**
+ * LA VISTA PREVIA DE UNA LLEGADA (D-05): lo que el servidor va a registrar, sin registrarlo. Base,
+ * IVA y total del documento cuando lo hay; con la factura por llegar, solo la base (el IVA lo dirá
+ * la factura); sin proveedor, nada que enseñar.
+ */
+export const ArrivalPreviewResponse = z
+  .object({
+    kind: z.enum(["own", "receipt", "invoiced", "unsupported"]),
+    currency: z.string(),
+    subtotal: z.string().nullable(),
+    tax_amount: z.string().nullable(),
+    total_amount: z.string().nullable(),
+    /**
+     * D-09: la tasa oficial que usaría el registro y la FECHA en que se publicó (la vigente a la
+     * fecha de la llegada: puede ser de un día anterior si ese día no hubo publicación). Nulas si
+     * la llegada no cruza monedas.
+     */
+    fx_rate: z.string().nullable(),
+    fx_rate_date: z.string().nullable(),
+  })
+  .strict();
+export type ArrivalPreviewResponse = z.infer<typeof ArrivalPreviewResponse>;
 
 /**
  * Lo que se vendió entre la fecha de la llegada y hoy. La pantalla lo muestra ANTES de

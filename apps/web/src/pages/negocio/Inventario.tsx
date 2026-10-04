@@ -23,6 +23,8 @@ interface ProductoFila {
   sku: string;
   name: string;
   kind: "good" | "service";
+  /** I-05: inactivo = no se vende, no «no existe». Aquí solo importa «inactive». */
+  status?: string;
   stock_quantity?: string | null;
 }
 interface Movimiento {
@@ -79,7 +81,7 @@ export function InventarioNegocio(): React.JSX.Element {
     initialPageParam: 1,
     queryFn: ({ pageParam }) =>
       llamar<{ items: ProductoFila[]; total: number }>(
-        `/v1/products?with_stock=1&only_active=1&per_page=100&page=${pageParam}`,
+        `/v1/products?with_stock=1&per_page=100&page=${pageParam}`,
       ),
     getNextPageParam: (ultima, todas) => {
       const cargados = todas.reduce((n, p) => n + p.items.length, 0);
@@ -101,7 +103,12 @@ export function InventarioNegocio(): React.JSX.Element {
     queryFn: () => llamar<{ items: unknown[] }>("/v1/inventory/low-stock"),
   });
 
-  const fisicos = todosLosProductos.filter((p) => p.kind === "good");
+  // INACTIVO = NO SE VENDE, no «no existe» (ADR-0078 §7, I-05): el pausado CON existencia sigue
+  // aquí, con su marca, y cuenta en «Con existencia»; el pausado sin existencia no es mercancía de
+  // nadie y no infla «Sin existencia».
+  const fisicos = todosLosProductos.filter(
+    (p) => p.kind === "good" && (p.status !== "inactive" || !esCero(p.stock_quantity ?? "0")),
+  );
   const conExistencia = fisicos.filter(
     (p) => compararImportes(p.stock_quantity ?? "0", "0") > 0,
   ).length;
@@ -265,7 +272,17 @@ function Existencias({
             const q = p.stock_quantity ?? "0";
             return (
               <tr key={p.id} className="border-b border-border last:border-0">
-                <td className="px-3 py-2">{p.name}</td>
+                <td className="px-3 py-2">
+                  {p.name}
+                  {p.status === "inactive" && (
+                    <span
+                      className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[0.75rem] text-muted-foreground"
+                      title="Pausado: no se vende, pero su mercancía sigue aquí."
+                    >
+                      Inactivo · no se vende
+                    </span>
+                  )}
+                </td>
                 <td className="px-3 py-2 text-right tabular-nums">
                   {esCero(q) ? (
                     <span className="text-destructive-soft-foreground">Sin existencia</span>

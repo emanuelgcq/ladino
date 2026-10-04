@@ -56,8 +56,9 @@ interface Cuenta {
 }
 interface Resumen {
   functional_currency: string;
-  lo_que_me_deben: string;
-  lo_que_debo: string;
+  /** null = el rol no tiene ar.read / ap.read: la tarjeta no se pinta (nunca «0»). */
+  lo_que_me_deben: string | null;
+  lo_que_debo: string | null;
   tasa_del_dia: { rate: string; rate_date: string; source: string; es_de_hoy: boolean } | null;
 }
 /** Una fila del informe de ADR-0067 §4. */
@@ -225,50 +226,63 @@ export function Dinero(): React.JSX.Element {
 
       {puedeDinero && !resumen.isError && (
         <div className="grid gap-4 sm:grid-cols-2">
-          <Card>
-            <CardContent className="py-4">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <ArrowDownToLine className="size-4" />
-                <span className="text-[0.9rem]">Lo que me deben</span>
-              </div>
-              <p className="mt-1 text-2xl font-semibold tabular-nums">
-                {resumen.data
-                  ? mostrarImporte({ amount: resumen.data.lo_que_me_deben, currency: funcional })
-                  : "…"}
-              </p>
-              {puedeVerDeuda ? (
+          {/* Sin ar.read / ap.read el servidor manda null: esa tarjeta no se pinta. */}
+          {(!resumen.data || resumen.data.lo_que_me_deben !== null) && (
+            <Card>
+              <CardContent className="py-4">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <ArrowDownToLine className="size-4" />
+                  <span className="text-[0.9rem]">Lo que me deben</span>
+                </div>
+                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                  {resumen.data && resumen.data.lo_que_me_deben !== null
+                    ? mostrarImporte({ amount: resumen.data.lo_que_me_deben, currency: funcional })
+                    : "…"}
+                </p>
+                {/* J-04 (ADR-0075 §6): es un cálculo a la tasa de hoy, no el saldo del mayor. */}
+                <p className="text-[0.8rem] text-muted-foreground">
+                  Lo que te deben en dólares va a la tasa BCV de hoy.
+                </p>
+                {puedeVerDeuda ? (
+                  <Link
+                    to="/admin/clientes"
+                    className="text-[0.85rem] text-accent-soft-foreground hover:underline"
+                  >
+                    Ver quién me debe
+                  </Link>
+                ) : (
+                  <p className="text-[0.85rem] text-muted-foreground">
+                    El detalle lo ve quien administra el negocio.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+          {(!resumen.data || resumen.data.lo_que_debo !== null) && (
+            <Card>
+              <CardContent className="py-4">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <ArrowUpFromLine className="size-4" />
+                  <span className="text-[0.9rem]">Lo que debo</span>
+                </div>
+                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                  {resumen.data && resumen.data.lo_que_debo !== null
+                    ? mostrarImporte({ amount: resumen.data.lo_que_debo, currency: funcional })
+                    : "…"}
+                </p>
+                {/* J-04 (ADR-0075 §6): es un cálculo a la tasa de hoy, no el saldo del mayor. */}
+                <p className="text-[0.8rem] text-muted-foreground">
+                  Lo que debes en dólares va a la tasa BCV de hoy.
+                </p>
                 <Link
-                  to="/admin/clientes"
+                  to="/compras"
                   className="text-[0.85rem] text-accent-soft-foreground hover:underline"
                 >
-                  Ver quién me debe
+                  Ver qué debo
                 </Link>
-              ) : (
-                <p className="text-[0.85rem] text-muted-foreground">
-                  El detalle lo ve quien administra el negocio.
-                </p>
-              )}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="py-4">
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <ArrowUpFromLine className="size-4" />
-                <span className="text-[0.9rem]">Lo que debo</span>
-              </div>
-              <p className="mt-1 text-2xl font-semibold tabular-nums">
-                {resumen.data
-                  ? mostrarImporte({ amount: resumen.data.lo_que_debo, currency: funcional })
-                  : "…"}
-              </p>
-              <Link
-                to="/compras"
-                className="text-[0.85rem] text-accent-soft-foreground hover:underline"
-              >
-                Ver qué debo
-              </Link>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
@@ -624,7 +638,7 @@ function MoverPlata({
   const listo = montoOk && destino !== null && motivo.trim().length >= 3;
 
   const mover = useMutation({
-    mutationFn: (forzar: boolean) =>
+    mutationFn: (forzar: string | null) =>
       llamar<{ amount: string; currency: string; accounting: "posted" | "queued" }>(
         "/v1/treasury/transfers",
         {
@@ -636,7 +650,7 @@ function MoverPlata({
             to_account_id: destino,
             amount: limpio,
             reason: motivo.trim(),
-            ...(forzar ? { allow_negative_balance: true } : {}),
+            ...(forzar !== null ? { allow_negative_balance: true, overdraft_reason: forzar } : {}),
           }),
         },
       ),
@@ -713,7 +727,7 @@ function MoverPlata({
             <Button
               variant="primary"
               disabled={!listo || mover.isPending}
-              onClick={() => mover.mutate(false)}
+              onClick={() => mover.mutate(null)}
             >
               Mover
             </Button>
@@ -724,8 +738,8 @@ function MoverPlata({
         <ConfirmarSobregiro
           mensaje={sinSaldo}
           onCancelar={() => setSinSaldo(null)}
-          onConfirmar={async () => {
-            await mover.mutateAsync(true);
+          onConfirmar={async (porQue) => {
+            await mover.mutateAsync(porQue);
             setSinSaldo(null);
           }}
         />

@@ -92,7 +92,9 @@ describe("costeo promedio ponderado móvil, de punta a punta", () => {
     expect(e2.ok && e2.value.unit_cost).toBe("110.00000000");
     expect(e2.ok && e2.value.value_after).toBe("1650.00000000");
 
-    const s1 = await como(JEFE, (uow) => issueStock(uow, { ...posicion(), quantity: "3" }));
+    const s1 = await como(JEFE, (uow) =>
+      issueStock(uow, { ...posicion(), quantity: "3", reason: "merma", evidence: "acta de merma" }),
+    );
     expect(s1.ok && s1.value.functional_amount).toBe("-330.00000000");
     expect(s1.ok && s1.value.quantity_after).toBe("12.00000000");
     // El costo unitario NO cambia al salir: es el punto del promedio móvil.
@@ -121,9 +123,45 @@ describe("costeo promedio ponderado móvil, de punta a punta", () => {
     expect(r.value.fx_rate).toBe("41.15226301");
     expect(r.value.rate_source).toBe("BCV:tasa-oficial");
     expect(r.value.functional_currency).toBe("VES");
-    // 21 × 41.15226301 = 864.19752321 exacto (cabe en 8 decimales).
-    expect(r.value.functional_amount).toBe("864.19752321");
-    expect(r.value.rounding_policy_id).toBe("inventory:cost:8:HALF_UP");
+    // 21 × 41.15226301 = 864.19752321, y el valor del movimiento va al céntimo (ADR-0075 §7).
+    expect(r.value.functional_amount).toBe("864.20000000");
+    // C3 (ADR-0024, regla 3): la política guardada es la que PRODUJO el importe. El costo unitario
+    // conserva la suya de 8 decimales, que el oráculo deriva (valor / cantidad) y no necesita columna.
+    expect(r.value.rounding_policy_id).toBe("ledger:cents:2:HALF_UP");
+  });
+
+  it("C3 · el importe se redondea UNA vez, de lo exacto al céntimo: el borde donde round(round(x,8),2) ≠ round(x,2)", async () => {
+    // 0,5 × 20,00999999 = 10,004999995 exacto. A 8 decimales es 10,00500000 y de ahí al céntimo
+    // sube a 10,01; de lo exacto al céntimo es 10,00, que es lo que hace el libro en SQL (round(x, 2)).
+    const r = await como(JEFE, (uow) =>
+      receiveStock(uow, {
+        ...posicion(),
+        quantity: "1",
+        amount: "0.50000000",
+        currency: "USD",
+        fx: { rate: "20.00999999", source: "BCV:tasa-oficial", at: "2026-08-26T10:00:00.000Z" },
+      }),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.functional_amount).toBe("10.00000000");
+    expect(r.value.rounding_policy_id).toBe("ledger:cents:2:HALF_UP");
+    const [sqlDice] = await sql<{ v: string }[]>`
+      select platform.round_cents(0.5 * 20.00999999)::text as v`;
+    expect(Number(r.value.functional_amount)).toBe(Number(sqlDice!.v));
+  });
+
+  it("una entrada en moneda PROPIA cuyo importe no está al céntimo entra, al céntimo en sus dos importes", async () => {
+    // 3 × 33,3333 = 99,9999. Antes la base la rechazaba (inventory_moves_identity_chk): el
+    // importe de la transacción iba sin redondear y el funcional al céntimo.
+    const r = await como(JEFE, (uow) =>
+      receiveStock(uow, { ...posicion(), quantity: "3", amount: "99.9999", currency: "VES" }),
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.functional_amount).toBe("100.00000000");
+    expect(r.value.amount_transaction_currency).toBe("100.00000000");
+    expect(r.value.fx_rate).toBe("1.00000000");
   });
 
   it("SIN fx la tasa se RESUELVE de la guardada del día del movimiento; sin tasa para esa fecha, no se persiste", async () => {
@@ -173,7 +211,14 @@ describe("costeo promedio ponderado móvil, de punta a punta", () => {
 
 describe("negativo: nunca silencioso", () => {
   it("sin allow_negative_stock la salida que deja negativo se rechaza con palabras", async () => {
-    const r = await como(JEFE, (uow) => issueStock(uow, { ...posicion(), quantity: "99999" }));
+    const r = await como(JEFE, (uow) =>
+      issueStock(uow, {
+        ...posicion(),
+        quantity: "99999",
+        reason: "merma",
+        evidence: "acta de merma",
+      }),
+    );
     expect(!r.ok && r.error.code).toBe("NEGATIVE_STOCK");
   });
 });
@@ -219,7 +264,9 @@ describe("ajuste", () => {
     if (!up.ok) return;
     expect(up.value.reason).toBe("sobrante de conteo");
     // 2 × el promedio vigente antes del ajuste.
-    const esperado = (BigInt(antes!.c.replace(".", "")) * 2n).toString();
+    // ADR-0075 §7: al céntimo, half-up (en unidades de 10^-8: redondeo a múltiplos de 10^6).
+    const exacto = BigInt(antes!.c.replace(".", "")) * 2n;
+    const esperado = (((exacto + 500000n) / 1000000n) * 1000000n).toString();
     expect(up.value.functional_amount.replace(".", "")).toBe(esperado);
 
     const down = await como(JEFE, (uow) =>
@@ -260,9 +307,28 @@ describe("transferencia: un solo hecho, dos patas", () => {
       BigInt(r.value.out.functional_amount.replace(/[.-]/g, "")) -
         BigInt(r.value.in.functional_amount.replace(".", "")),
     ).toBe(0n);
-    // El destino recibe AL COSTO DE ORIGEN: el promedio de origen no cambia.
-    expect(r.value.out.unit_cost).toBe(origenAntes!.c);
-    expect(r.value.in.unit_cost).toBe(origenAntes!.c);
+    // El destino recibe AL COSTO DE ORIGEN. Con el valor al céntimo (ADR-0075 §7) el promedio
+    // derivado (valor / cantidad) se mueve a lo sumo medio céntimo repartido entre la cantidad;
+    // antes era idéntico a 8 decimales.
+    // LA TOLERANCIA, que es la mínima que la regla permite: |Δ costo unitario| ≤ 0,005 / q + 10^-8,
+    // donde q es la EXISTENCIA sobre la que se reparte el medio céntimo del valor (la que queda en
+    // esa pata: quantity_after) y 10^-8 son los dos medios últimos dígitos de redondear a 8 el
+    // promedio de antes y el de después. En unidades de 10^-8 (u y q vienen con 8 decimales):
+    //   |d| ≤ 500000 / (qty / 10^8) + 1   ⇔   |d| × qty ≤ 500000 × 10^8 + qty.
+    // B3: antes decía (500000 + qty) × 10^8, que dejaba pasar UN BOLÍVAR por unidad.
+    const cerca = (u: string, q: string) => {
+      const d = BigInt(u.replace(".", "")) - BigInt(origenAntes!.c.replace(".", ""));
+      const qty = BigInt(q.replace(/[.-]/g, ""));
+      return (d < 0n ? -d : d) * qty <= 500000n * 100000000n + qty;
+    };
+    expect(cerca(r.value.out.unit_cost, r.value.out.quantity_after)).toBe(true);
+    expect(cerca(r.value.in.unit_cost, r.value.in.quantity_after)).toBe(true);
+    // Y la tolerancia MUERDE: un destino desviado un céntimo por unidad no pasa (con la de antes
+    // pasaba), ni uno desviado el doble de lo permitido.
+    const desviado = (u: string, unidades: bigint) =>
+      (BigInt(u.replace(".", "")) + unidades).toString().replace(/(d{8})$/, ".$1");
+    expect(cerca(desviado(origenAntes!.c, 1000000n), r.value.in.quantity_after)).toBe(false);
+    expect(cerca(desviado(origenAntes!.c, -1000000n), r.value.in.quantity_after)).toBe(false);
 
     const [div] = await sql<{ n: number }[]>`
       select count(*)::int as n from platform.stock_reconciliation(${COMPANY})`;

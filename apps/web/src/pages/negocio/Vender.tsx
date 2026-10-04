@@ -23,6 +23,8 @@ import {
   SUFIJO_CON_IGTF,
 } from "../../components/capa-fiscal/Igtf.js";
 import { errorDePersona, LlamadaApiError } from "../../lib.js";
+import { conLlaveDeIntento, intentoAnteriorPudoQuedar } from "../../llave-intento.js";
+import { RevisaIntentoAnterior } from "../../components/RevisaIntentoAnterior.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { talonariosConPapel, type Talonario } from "../setup/Talonario.js";
 import { abrirPdf as abrirPdfApi } from "../../pdf.js";
@@ -45,6 +47,8 @@ import {
   type CuentaAbierta,
   cantidadTexto,
   leerCantidad,
+  idDeCaja,
+  RechazoDefinitivo,
 } from "../../pos-cuentas.js";
 import { mostrarImporte, mostrarCantidad } from "../../money.js";
 import { compararImportes } from "../../components/decimal-compare.js";
@@ -82,8 +86,8 @@ import { tasaLimpia } from "../../tasa.js";
  * CUANDO EL CARRITO SE QUEDA QUIETO (orden del dueño, 2026-09-10: subir en
  * cada toque convertía un carrito de diez renglones en diez viajes de red).
  * La nube también recibe de golpe al cambiar de ficha, al cobrar y al salir.
- * Una cuenta solo se cierra al COBRARSE — el servidor borra su fila en la
- * transacción de la venta — o descartándola a propósito con confirmación.
+ * Una cuenta solo se cierra al COBRARSE — el servidor la marca vendida en la
+ * transacción de la venta (ADR-0076) — o descartándola a propósito con confirmación.
  *
  * Teclado, sin ratón: cédula → Enter → (si es nuevo: nombre → Tab → teléfono
  * → Enter) → buscar producto → Enter agrega → F2 abre Cobrar → Enter cobra.
@@ -149,6 +153,21 @@ function useDebounced<T>(valor: T, ms: number, salto?: unknown): T {
   return v;
 }
 
+/** «Armada por Luisa, hoy a las 9:12, en otra caja» — de quién es una cuenta (ADR-0076). */
+function textoDeAutor(c: CuentaAbierta): string {
+  if (!c.autor) return "Cuenta de esta caja.";
+  const d = new Date(c.autor.desde);
+  const hoy = new Date();
+  const mismoDia = d.toDateString() === hoy.toDateString();
+  const hora = d.toLocaleTimeString("es-VE", { hour: "numeric", minute: "2-digit" });
+  const cuando = mismoDia
+    ? `hoy a las ${hora}`
+    : `el ${d.toLocaleDateString("es-VE", { day: "numeric", month: "short" })} a las ${hora}`;
+  const donde =
+    c.autor.caja === null ? "" : c.autor.caja === idDeCaja() ? ", en esta caja" : ", en otra caja";
+  return `Armada por ${c.autor.nombre ?? "otra persona"}, ${cuando}${donde}.`;
+}
+
 function cuentaNueva(existentes: CuentaAbierta[]): CuentaAbierta {
   return {
     id: crypto.randomUUID(),
@@ -193,6 +212,8 @@ function VenderDeEmpresa(): React.JSX.Element {
   cuentasRef.current = cuentas;
   const [descartando, setDescartando] = useState<CuentaAbierta | null>(null);
 
+  // La nube dijo que una cuenta ya se cobró (otra pestaña, otra caja): se suelta aquí también.
+  const alSaberVendidaRef = useRef<(id: string) => void>(() => undefined);
   const sincronizador = useMemo(
     () =>
       crearSincronizador(
@@ -204,9 +225,21 @@ function VenderDeEmpresa(): React.JSX.Element {
               label: cuenta.label,
               customer_id: cuenta.customer_id,
               lines: cuenta.lines,
+              station_id: idDeCaja(),
             }),
-          }).then(() => undefined),
+          }).then(
+            () => undefined,
+            (e: unknown) => {
+              // ADR-0076: un 4xx no se arregla reintentando. «Ya se cobró» mata la cuenta aquí.
+              if (e instanceof LlamadaApiError && e.status >= 400 && e.status < 500) {
+                throw new RechazoDefinitivo(e.body.code === "POS_CART_SOLD");
+              }
+              throw e;
+            },
+          ),
         (id) => llamar(`/v1/pos/carts/${id}`, { method: "DELETE" }).then(() => undefined),
+        undefined,
+        (id) => alSaberVendidaRef.current(id),
       ),
     [llamar, empresa.id],
   );
@@ -218,7 +251,15 @@ function VenderDeEmpresa(): React.JSX.Element {
 
   /** TODA mutación de cuentas pasa por aquí: estado + disco síncrono + nube. */
   function tocar(id: string, cambio: (c: CuentaAbierta) => CuentaAbierta): void {
-    const siguientes = cuentasRef.current.map((c) => (c.id === id ? cambio(c) : c));
+    const actual = cuentasRef.current.find((c) => c.id === id);
+    if (actual?.editable === false) {
+      // E-08 (ADR-0076): la cuenta de otra persona se ve, no se cambia. El servidor lo exige igual.
+      toast.error("Esta cuenta es de otra persona", textoDeAutor(actual));
+      return;
+    }
+    const siguientes = cuentasRef.current.map((c) =>
+      c.id === id ? { ...cambio(c), version: (c.version ?? 0) + 1 } : c,
+    );
     cuentasRef.current = siguientes;
     setCuentas(siguientes);
     escribirCuentasLocales(empresa.id, siguientes);
@@ -240,12 +281,37 @@ function VenderDeEmpresa(): React.JSX.Element {
     const siguientes = restantes.length > 0 ? restantes : [cuentaNueva([])];
     setCuentas(siguientes);
     escribirCuentasLocales(empresa.id, siguientes);
-    // La cuenta cobrada ya no existe en el servidor (la venta la borró): solo se suelta lo que
-    // quedaba por subir. Antes, la subida diferida la volvía a crear con lo ya vendido y la caja
+    // La cuenta cobrada quedó marcada vendida en el servidor (ADR-0076): solo se suelta lo que
+    // quedaba por subir, y no se vuelve a subir. Antes, la subida diferida la volvía a crear con lo ya vendido y la caja
     // la restauraba al volver — cuentas fantasma y «Cuenta 11» con una sola abierta (h. 85).
     if (avisarNube) sincronizador.borrar(id);
     else sincronizador.olvidar(id);
     if (activa.id === id) setActivaId(siguientes[0]!.id);
+  }
+
+  // M-03 (ADR-0076): otra pestaña u otra caja reescribió en el disco una cuenta ya cobrada; al
+  // subirla, la nube responde «ya se cobró» y aquí se suelta, dicho.
+  alSaberVendidaRef.current = (id) => {
+    if (!cuentasRef.current.some((c) => c.id === id)) return;
+    quitarCuenta(id, false);
+    toast.warning("Una cuenta ya se había cobrado", "La quitamos de la caja: ya es una venta.");
+  };
+
+  /** «No, quitarlas»: las recuperadas salen de esta caja; las propias, también de la nube. */
+  function quitarRecuperadas(): void {
+    const ids = new Set(recuperadas.map((c) => c.id));
+    const restantes = cuentasRef.current.filter((c) => !ids.has(c.id));
+    const siguientes = restantes.length > 0 ? restantes : [cuentaNueva([])];
+    cuentasRef.current = siguientes;
+    setCuentas(siguientes);
+    escribirCuentasLocales(empresa.id, siguientes);
+    for (const c of recuperadas) {
+      // La ajena la conserva la nube para su autor: aquí solo deja de verse.
+      if (c.editable !== false) sincronizador.borrar(c.id);
+      else sincronizador.olvidar(c.id);
+    }
+    if (ids.has(activa.id)) setActivaId(siguientes[0]!.id);
+    setRecuperadas([]);
   }
 
   // La lista de la nube, una vez al montar: lo de allá que aquí no está,
@@ -262,9 +328,15 @@ function VenderDeEmpresa(): React.JSX.Element {
           label: string;
           customer_id: string | null;
           lines: { product_id: string; qty: string }[];
+          created_at: string;
+          author_name: string | null;
+          station_id: string | null;
+          editable: boolean;
         }[];
       }>("/v1/pos/carts"),
   });
+  // E-08 (ADR-0076): lo que vuelve de la nube se ANUNCIA al abrir la caja, nunca en silencio.
+  const [recuperadas, setRecuperadas] = useState<CuentaAbierta[]>([]);
   const fusionado = useRef(false);
   useEffect(() => {
     if (fusionado.current || !nube.data) return;
@@ -284,7 +356,10 @@ function VenderDeEmpresa(): React.JSX.Element {
           qty: Number(l.qty),
           nombre: "", // lo dirá la cotización al abrir la ficha
         })),
+        autor: { nombre: s.author_name, desde: s.created_at, caja: s.station_id },
+        editable: s.editable,
       }));
+    if (entrantes.length > 0) setRecuperadas(entrantes);
     // La «Cuenta 1» recién nacida y vacía no estorba… salvo que ya venga algo.
     const base =
       entrantes.length > 0
@@ -605,14 +680,14 @@ function VenderDeEmpresa(): React.JSX.Element {
     !excedeForma;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "F2" && puedeCobrar) {
+      if (e.key === "F2" && puedeCobrar && activa.editable !== false) {
         e.preventDefault();
         setCobrando(true);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [puedeCobrar]);
+  }, [puedeCobrar, activa.editable]);
 
   const items = productos.data?.items ?? [];
 
@@ -717,6 +792,11 @@ function VenderDeEmpresa(): React.JSX.Element {
                     }}
                   >
                     {c.cliente?.legal_name ?? c.etiqueta}
+                    {c.editable === false && (
+                      <span className="ml-1 text-[0.72rem] opacity-70">
+                        · {c.autor?.nombre ?? "otra persona"}
+                      </span>
+                    )}
                     {c.lineas.length > 0 && (
                       <span className="ml-1 tabular-nums opacity-70">{c.lineas.length}</span>
                     )}
@@ -726,7 +806,10 @@ function VenderDeEmpresa(): React.JSX.Element {
                       className="rounded p-1 text-faint-foreground hover:text-foreground"
                       aria-label={`Cerrar ${c.cliente?.legal_name ?? c.etiqueta}`}
                       onClick={() => {
-                        if (c.lineas.length > 0 || c.cliente !== null) setDescartando(c);
+                        // La ajena (solo lectura) se quita de ESTA caja; la nube la conserva
+                        // para su autor (ADR-0076).
+                        if (c.editable === false) quitarCuenta(c.id, false);
+                        else if (c.lineas.length > 0 || c.cliente !== null) setDescartando(c);
                         else quitarCuenta(c.id, true);
                       }}
                     >
@@ -920,7 +1003,8 @@ function VenderDeEmpresa(): React.JSX.Element {
                 // con cliente, fiaba la diferencia sin querer.
                 cotizacion.isFetching ||
                 deposito === null ||
-                !clienteResuelto
+                !clienteResuelto ||
+                activa.editable === false
               }
               onClick={() => setCobrando(true)}
             >
@@ -928,6 +1012,12 @@ function VenderDeEmpresa(): React.JSX.Element {
                 ? "Calculando…"
                 : `Cobrar ${activa.lineas.length > 0 && clienteResuelto ? "· F2" : ""}`}
             </Button>
+            {activa.editable === false && (
+              <p role="status" className="text-center text-[0.8rem] text-warning-soft-foreground">
+                {textoDeAutor(activa)} Solo lectura: la cobra su autor o quien tenga permiso para
+                cuentas ajenas.
+              </p>
+            )}
             {activa.lineas.length > 0 && !clienteResuelto && (
               <p className="text-center text-[0.8rem] text-warning-soft-foreground">
                 Primero di quién compra: la cédula arriba, o «Venta sin identificar».
@@ -976,6 +1066,13 @@ function VenderDeEmpresa(): React.JSX.Element {
             lineas={lineas}
             clienteId={activa.cliente?.id ?? null}
             cartId={activa.id}
+            cartVersion={activa.version ?? 0}
+            antesDeCobrar={() => sincronizador.esperar(activa.id)}
+            onCuentaYaCobrada={(mensaje) => {
+              setCobrando(false);
+              toast.error("Esa cuenta ya se cobró", mensaje);
+              quitarCuenta(activa.id, false);
+            }}
             deposito={deposito}
             onCerrar={() => setCobrando(false)}
             clienteNombre={activa.sinIdentificar ? null : (activa.cliente?.legal_name ?? null)}
@@ -984,8 +1081,9 @@ function VenderDeEmpresa(): React.JSX.Element {
               setCuentaMovil(false);
               setVenta(v);
               setDeudor(activa.cliente?.legal_name ?? null);
-              // La cuenta cobrada MUERE: el servidor la borró en la MISMA
-              // transacción de la venta (cart_id); aquí solo cae la ficha.
+              // La cuenta cobrada MUERE: el servidor la marcó vendida en la MISMA
+              // transacción de la venta (cart_id, ADR-0076); aquí cae la ficha y la
+              // caja no la vuelve a subir.
               quitarCuenta(activa.id, false);
               // «Me deben» de Inicio y Mi dinero se refresca al instante: la
               // venta fiada es deuda desde ya. Y lo que la venta MOVIÓ también:
@@ -998,6 +1096,44 @@ function VenderDeEmpresa(): React.JSX.Element {
               void qc.invalidateQueries({ queryKey: ["negocio-clientes", empresa.id] });
             }}
           />
+        )}
+        {recuperadas.length > 0 && (
+          <Dialog open onOpenChange={(v) => !v && setRecuperadas([])}>
+            <DialogContent className="max-w-md">
+              <DialogTitle>
+                Recuperamos{" "}
+                {recuperadas.length === 1 ? "1 cuenta" : `${String(recuperadas.length)} cuentas`} de
+                la nube
+              </DialogTitle>
+              <div className="space-y-3 pt-1">
+                <ul className="space-y-1.5 text-[0.88rem]">
+                  {recuperadas.map((c) => (
+                    <li key={c.id}>
+                      <span className="font-medium">{c.cliente?.legal_name ?? c.etiqueta}</span>
+                      {c.lineas.length > 0 &&
+                        ` · ${String(c.lineas.length)} producto${c.lineas.length === 1 ? "" : "s"}`}
+                      <span className="block text-[0.8rem] text-muted-foreground">
+                        {textoDeAutor(c)}
+                        {c.editable === false ? " Solo lectura." : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[0.9rem] text-muted-foreground">
+                  ¿Las conservas en esta caja? Si las quitas, las tuyas se descartan; las de otra
+                  persona siguen guardadas para ella.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button variant="secondary" onClick={quitarRecuperadas}>
+                    No, quitarlas
+                  </Button>
+                  <Button variant="primary" autoFocus onClick={() => setRecuperadas([])}>
+                    Sí, conservarlas
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
         )}
         {descartando !== null && (
           <Dialog open onOpenChange={(v) => !v && setDescartando(null)}>
@@ -1430,6 +1566,9 @@ function Cobrar({
   lineas,
   clienteId,
   cartId,
+  cartVersion,
+  antesDeCobrar,
+  onCuentaYaCobrada,
   deposito,
   onCerrar,
   onVendida,
@@ -1438,9 +1577,15 @@ function Cobrar({
   cotizacion: CotizacionPos;
   lineas: { product_id: string; quantity: string }[];
   clienteId: string | null;
-  /** La cuenta abierta que este cobro CIERRA: el servidor la borra en la
-      misma transacción de la venta. */
+  /** La cuenta abierta que este cobro CIERRA: el servidor la marca vendida en la
+      misma transacción de la venta (ADR-0076). */
   cartId: string;
+  /** Las ediciones de la cuenta (ADR-0076): constancia en el acta del cobro. */
+  cartVersion: number;
+  /** Sube y espera lo pendiente de la cuenta antes del POST (ADR-0076, M-01). */
+  antesDeCobrar: () => Promise<void>;
+  /** El servidor dice que la cuenta ya es una venta: la caja la suelta. */
+  onCuentaYaCobrada: (mensaje: string) => void;
   deposito: string;
   onCerrar: () => void;
   onVendida: (v: Venta) => void;
@@ -1486,9 +1631,12 @@ function Cobrar({
   }
   // El paso de confirmación del FIADO: la consecuencia dicha antes de emitir.
   const [fiando, setFiando] = useState(false);
-  // La llave de idempotencia de la venta es el id de la CUENTA que cierra:
-  // cerrar y reabrir «Cobrar» tras una respuesta perdida reintenta con la
-  // MISMA llave (auditoría 2026-09-11).
+  // LA LLAVE ES POR INTENTO DE COBRO (ADR-0076, M-01), nunca el id de la cuenta: con el id, un
+  // segundo cobro de la misma cuenta devolvía la respuesta del primero (M-02) o chocaba 24 h
+  // (M-04). Se conserva ante un fallo de red —la respuesta perdida devuelve la MISMA venta— y se
+  // estrena tras un 4xx. Si el diálogo se cierra y reabre tras una respuesta perdida, la llave es
+  // nueva, y lo que impide la segunda venta es la cuenta: el servidor dice que ya se cobró.
+  const llave = useRef(crypto.randomUUID());
 
   const formas = useQuery({
     queryKey: ["formas-pago", empresa.id],
@@ -1645,32 +1793,46 @@ function Cobrar({
   }
 
   const vender = useMutation({
-    mutationFn: () =>
-      llamar<Venta>("/v1/pos/sales", {
-        method: "POST",
-        headers: { "Idempotency-Key": cartId },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          warehouse_id: deposito,
-          cart_id: cartId,
-          ...(serieVenta === undefined ? {} : { series: serieVenta }),
-          ...(clienteId === null ? {} : { customer_id: clienteId }),
-          lines: lineas,
-          payments: pagos.map((p) => ({
-            instrument: p.instrument,
-            currency: p.currency,
-            amount: limpio(p.amount),
-            ...(p.reference === undefined || p.reference.trim() === ""
-              ? {}
-              : { reference: p.reference.trim() }),
-            ...(p.account_id === undefined ? {} : { account_id: p.account_id }),
-          })),
+    mutationFn: async () => {
+      await antesDeCobrar();
+      return conLlaveDeIntento(llave, (k) =>
+        llamar<Venta>("/v1/pos/sales", {
+          method: "POST",
+          headers: { "Idempotency-Key": k },
+          body: JSON.stringify({
+            company_id: empresa.id,
+            warehouse_id: deposito,
+            cart_id: cartId,
+            // Dos cobros de la misma cuenta nunca son bytes iguales (ADR-0076).
+            cart_version: cartVersion,
+            attempt_id: k,
+            ...(serieVenta === undefined ? {} : { series: serieVenta }),
+            ...(clienteId === null ? {} : { customer_id: clienteId }),
+            lines: lineas,
+            payments: pagos.map((p) => ({
+              instrument: p.instrument,
+              currency: p.currency,
+              amount: limpio(p.amount),
+              ...(p.reference === undefined || p.reference.trim() === ""
+                ? {}
+                : { reference: p.reference.trim() }),
+              ...(p.account_id === undefined ? {} : { account_id: p.account_id }),
+            })),
+          }),
         }),
-      }),
+      );
+    },
     onSuccess: (v) => onVendida(v),
     // E-17: sin números de control el aviso va DENTRO del cobro, con su camino (enlace o a quién
     // pedírselo); un toast encima sería el segundo aviso (G-16).
     onError: (e) => {
+      // M-04: la cuenta ya cobrada no invita a «revisar y repetir»: se dice y se suelta.
+      // ADR-0076: el cobro anterior con esta llave pudo quedar hecho — se revisa, no se repite.
+      if (intentoAnteriorPudoQuedar(e)) return;
+      if (e instanceof LlamadaApiError && e.body.code === "POS_CART_SOLD") {
+        onCuentaYaCobrada(errorDePersona(e));
+        return;
+      }
       if (!sinControl(e)) toast.error("No se pudo cobrar", errorDePersona(e));
     },
   });
@@ -1866,6 +2028,13 @@ function Cobrar({
                 />
               )}
             </FormField>
+          )}
+          {vender.error !== null && intentoAnteriorPudoQuedar(vender.error) && (
+            <RevisaIntentoAnterior
+              error={vender.error}
+              a="/admin/ventas"
+              etiqueta="Ver las ventas"
+            />
           )}
           {vender.error !== null && sinControl(vender.error) && (
             <MensajeError error={vender.error} />

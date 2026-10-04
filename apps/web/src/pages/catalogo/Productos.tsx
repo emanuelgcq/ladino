@@ -22,7 +22,8 @@ import {
   DialogTitle,
 } from "../../ui/dialog.js";
 import { useToast } from "../../ui/toast.js";
-import { mostrarImporte } from "../../money.js";
+import { mostrarCantidad, mostrarImporte } from "../../money.js";
+import { esCero } from "../../components/decimal-compare.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { useConFacturas } from "../../app/modo-venta.js";
 import { ACEPTA_FOTOS, subirFotoProducto } from "../../components/foto.js";
@@ -397,6 +398,17 @@ function DetalleProducto({
   const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
   const [editando, setEditando] = useState(false);
+  // I-05 (ADR-0078 §7): inactivar no saca la mercancía del inventario. Si tiene existencia, la
+  // pantalla lo dice antes de guardar. Las cantidades vienen del servidor; aquí no se suma nada.
+  const existencias = useQuery({
+    queryKey: ["existencia-producto", empresa.id, producto.id],
+    enabled: editando && producto.kind === "good",
+    queryFn: () =>
+      llamar<{ items: { quantity: string; warehouse_name: string }[] }>(
+        `/v1/inventory/stock?product_id=${producto.id}&with_stock=true`,
+      ),
+  });
+  const conExistencia = (existencias.data?.items ?? []).filter((b) => !esCero(b.quantity));
   const [form, setForm] = useState({
     name: producto.name,
     status: producto.status,
@@ -681,7 +693,20 @@ function DetalleProducto({
                 />
               )}
             </FormField>
-            <FormField label="Estado">
+            <FormField
+              label="Estado"
+              {...(form.status === "inactive" &&
+              producto.status !== "inactive" &&
+              conExistencia.length > 0
+                ? {
+                    error: `Tiene existencia (${conExistencia
+                      .map((b) => `${mostrarCantidad(b.quantity)} en ${b.warehouse_name}`)
+                      .join(
+                        ", ",
+                      )}). Seguirá en el inventario con su existencia; no se vende hasta reactivarlo.`,
+                  }
+                : {})}
+            >
               {(a) => (
                 <SimpleSelect
                   id={a.id}

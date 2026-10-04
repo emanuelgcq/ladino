@@ -212,8 +212,17 @@ export const ListIgtfPerceptionsResponse = z
     items: z.array(IgtfPerceptionResponse),
     /** Cuantas hay EN TOTAL (paginado): distinto de las que vinieron. */
     total: z.number().int().nonnegative(),
-    /** Σ de lo PERCIBIDO (sin lo pendiente de reintegro), en funcional. */
+    /**
+     * El total del período, en funcional (platform.igtf_period_totals): lo percibido vigente MÁS
+     * lo percibido cuyo cobro se reversó DESPUÉS del fin de la quincena DE LA PERCEPCIÓN
+     * (20261003230000; no del `to` de la consulta) — ya se declaró y no se
+     * rebaja: se recupera por reintegro (PA SNAT/2022/000013 art. 4). Lo reversado dentro del
+     * período no cuenta.
+     */
     total_functional: z.string(),
+    /** De ese total, cuánto está pendiente de reintegro (reversado después del período). */
+    pending_refund_functional: z.string().optional(),
+    pending_refund_count: z.number().int().nonnegative().optional(),
     functional_currency: z.string(),
   })
   .strict();

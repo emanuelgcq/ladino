@@ -1,7 +1,7 @@
 import { err, ok, type Result } from "@ladino/core";
 import { diaNegocio } from "./dia-negocio.js";
 import type { UnitOfWork, TransactionSql, JSONValue } from "@ladino/db";
-import { Money, parseDecimal, type Decimal } from "@ladino/money";
+import { Money, isAtCents, parseDecimal, toCents, type Decimal } from "@ladino/money";
 import { generateReversalLines, validateEntryBalance, type EntryLine } from "@ladino/accounting";
 import type {
   CreateAccountRequest,
@@ -62,6 +62,9 @@ interface Contexto {
   readonly functionalCurrency: string;
 }
 
+/** ADR-0075 §7: «ningún importe del mayor con más de dos decimales». El mensaje de persona. */
+const MENSAJE_CENTIMO = "Los importes del asiento llevan como máximo dos decimales.";
+
 function traducir(e: unknown): AccountingError | null {
   const code = (e as { code?: string }).code;
   const message = (e as { message?: string }).message ?? "";
@@ -73,6 +76,8 @@ function traducir(e: unknown): AccountingError | null {
   // ADR-0069 §2: el período de cierre solo admite el cierre y los ajustes del contador.
   if (code === "LAD92") return { code: "VALIDATION_FAILED", message };
   if (code === "LAD62") return { code: "ACCOUNT_NOT_POSTABLE", message };
+  // ADR-0075 §7 (C5c): la base rechaza al postear una línea que no esté al céntimo.
+  if (code === "LAD71") return { code: "VALIDATION_FAILED", message: MENSAJE_CENTIMO };
   if (code === "LAD06") return { code: "APPEND_ONLY_VIOLATION", message };
   if (code === "23505") {
     return { code: "DUPLICATE", message: "Ya existe un registro con esos datos." };
@@ -449,6 +454,12 @@ export async function createManualJournalEntry(
     if (!debito.ok || !credito.ok) {
       return err({ code: "VALIDATION_FAILED", message: "Importe no interpretable." });
     }
+    // ADR-0075 §7 (C5c): el mayor va al céntimo y el asiento manual era la puerta abierta. Se
+    // rechaza aquí con el mensaje de persona; el invariante real es el trigger (LAD71), que
+    // rechaza al postear aunque este chequeo se quite.
+    if (!isAtCents(debito.value.amount) || !isAtCents(credito.value.amount)) {
+      return err({ code: "VALIDATION_FAILED", message: MENSAJE_CENTIMO });
+    }
     lineas.push({ accountId: l.account_id, debit: debito.value, credit: credito.value });
   }
 
@@ -605,11 +616,31 @@ export async function reverseJournalEntryForAnnulment(
   return reversar(uow, entryId, input, "sales.invoice.annul", { desdeDocumento: true });
 }
 
+/**
+ * LA REVERSA QUE HACE LA REVERSA DE UN COBRO (ADR-0075 §8, R-61). Mismo principio que la de la
+ * anulación (ADR-0068 §1): el paso interior lo autoriza la operación que lo contiene —
+ * `ar.payment.reverse` para un cobro, `ar.retention.correct` para el abono de una retención
+ * soportada—. Solo la llama `reversePayment`, que mueve a la vez la caja y el saldo del documento.
+ */
+export async function reverseJournalEntryForPaymentReversal(
+  uow: UnitOfWork,
+  entryId: string,
+  input: ReverseJournalEntryRequest,
+  permiso: "ar.payment.reverse" | "ar.retention.correct",
+): Promise<Result<JournalEntryResponse, AccountingError>> {
+  return reversar(uow, entryId, input, permiso, { desdeDocumento: true });
+}
+
 async function reversar(
   uow: UnitOfWork,
   entryId: string,
   input: ReverseJournalEntryRequest,
-  permiso: "accounting.entry.reverse" | "sales.invoice.annul" | "accounting.period.reopen",
+  permiso:
+    | "accounting.entry.reverse"
+    | "sales.invoice.annul"
+    | "accounting.period.reopen"
+    | "ar.payment.reverse"
+    | "ar.retention.correct",
   /**
    * `desdeDocumento`: la reversa la pide el caso de uso DEL DOCUMENTO (anular una venta),
    * que mueve kardex, saldo y asiento a la vez. Sin eso, solo se reversan asientos manuales.
@@ -655,9 +686,16 @@ async function reversar(
       functional_credit: string;
       analytical_dimensions: Record<string, string> | null;
       description: string | null;
+      original: string;
+      moneda: string;
+      tasa: string;
+      fuente: string;
+      hora: string;
     }[]
   >`select account_id, functional_debit::text as functional_debit,
-           functional_credit::text as functional_credit, analytical_dimensions, description
+           functional_credit::text as functional_credit, analytical_dimensions, description,
+           amount_transaction_currency::text as original, transaction_currency as moneda,
+           fx_rate::text as tasa, rate_source as fuente, rate_timestamp::text as hora
       from public.journal_lines where entry_id = ${entryId} order by line_number`;
 
   const entryLines: EntryLine[] = [];
@@ -672,6 +710,69 @@ async function reversar(
   const reversas = generateReversalLines(entryLines);
   if (!reversas.ok) {
     return err({ code: "VALIDATION_FAILED", message: reversas.error.message });
+  }
+
+  // C2 (ADR-0075 §7): LA REVERSA VA AL CÉNTIMO, como cualquier asiento nuevo. Si el original es
+  // anterior al corte y tiene fracción, cada línea espejo se redondea al céntimo y el residuo va
+  // a «Diferencias por redondeo» en el mismo contra-asiento. La regularización al corte ya se
+  // llevó la fracción del saldo: el espejo EXACTO lo dejaría en −fracción; el espejo al céntimo
+  // lo deja en cero. Con un original al céntimo (todo lo nuevo) esto es el espejo de siempre.
+  const ceroDec = parseDecimal("0");
+  if (!ceroDec.ok) return err({ code: "VALIDATION_FAILED", message: ceroDec.error.message });
+  const contraLineas: {
+    accountId: string;
+    debit: Money;
+    credit: Money;
+    orig: (typeof lineasOriginales)[number] | null;
+  }[] = [];
+  let residuo: Decimal = ceroDec.value;
+  for (const [i, l] of reversas.value.entries()) {
+    const d = Money.of(toCents(l.debit.amount).toFixed(2), ctx.value.functionalCurrency);
+    const c = Money.of(toCents(l.credit.amount).toFixed(2), ctx.value.functionalCurrency);
+    if (!d.ok || !c.ok) {
+      return err({ code: "VALIDATION_FAILED", message: "Importe original no interpretable." });
+    }
+    residuo = residuo.plus(d.value.amount).minus(c.value.amount);
+    // Una línea de menos de medio céntimo no es una línea: su importe entero es residuo.
+    if (d.value.amount.isZero() && c.value.amount.isZero()) continue;
+    contraLineas.push({
+      accountId: l.accountId,
+      debit: d.value,
+      credit: c.value,
+      orig: lineasOriginales[i]!,
+    });
+  }
+  if (!residuo.isZero()) {
+    const [red] = await sql<{ account_id: string }[]>`
+      select s.account_id from public.company_account_settings s
+       where s.company_id = ${input.company_id} and s.purpose = 'rounding_difference'
+         and s.effective_to is null
+       order by s.effective_from desc limit 1`;
+    if (!red) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          "Falta configurar la cuenta de: rounding_difference. La reversa de este asiento deja un residuo de redondeo que va a «Diferencias por redondeo».",
+      });
+    }
+    const importe = Money.of(residuo.abs().toFixed(2), ctx.value.functionalCurrency);
+    const cero = Money.of("0", ctx.value.functionalCurrency);
+    if (!importe.ok || !cero.ok) {
+      return err({ code: "VALIDATION_FAILED", message: "Residuo de redondeo no representable." });
+    }
+    contraLineas.push({
+      accountId: red.account_id,
+      debit: residuo.isNegative() ? importe.value : cero.value,
+      credit: residuo.isNegative() ? cero.value : importe.value,
+      orig: null,
+    });
+  }
+  if (contraLineas.length < 2) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Este asiento no tiene importes de al menos un céntimo: no hay nada que reversar al céntimo.",
+    });
   }
 
   const fecha = input.posting_date ?? diaNegocio(new Date());
@@ -695,10 +796,32 @@ async function reversar(
         returning ${sp.unsafe(ENTRY_COLUMNS)}`;
 
       let n = 0;
-      for (const [i, l] of reversas.value.entries()) {
+      for (const l of contraLineas) {
         n += 1;
-        const orig = lineasOriginales[i]!;
+        const orig = l.orig ?? {
+          moneda: ctx.value.functionalCurrency,
+          original: "0",
+          tasa: "1",
+          fuente: "identidad",
+          hora: "",
+          analytical_dimensions: null,
+          description: "Diferencias por redondeo (ADR-0075 §7)",
+        };
         const importe = l.debit.amount.isZero() ? l.credit : l.debit;
+        // E-11 (ADR-0075 §6): el contra-asiento deshace la línea EN SU MONEDA. Si la original
+        // guardó 5 USD a su tasa, la reversa saca 5 USD a esa misma tasa; escribirla en moneda
+        // funcional dejaría los dólares dentro de la subcuenta de la caja.
+        const enDivisa = orig.moneda !== ctx.value.functionalCurrency;
+        const debitoTx = enDivisa
+          ? l.debit.amount.isZero()
+            ? "0"
+            : orig.original
+          : l.debit.toAmountString();
+        const creditoTx = enDivisa
+          ? l.credit.amount.isZero()
+            ? "0"
+            : orig.original
+          : l.credit.toAmountString();
         await sp`
           insert into public.journal_lines
             (tenant_id, company_id, entry_id, line_number, account_id, debit_amount,
@@ -706,10 +829,14 @@ async function reversar(
              functional_amount, functional_currency, rate_source, rate_timestamp,
              functional_debit, functional_credit, analytical_dimensions, description)
           values (${ctx.value.tenantId}, ${input.company_id}, ${e!["id"] as string}, ${n},
-                  ${l.accountId}, ${l.debit.toAmountString()}, ${l.credit.toAmountString()},
-                  ${importe.toAmountString()}, ${ctx.value.functionalCurrency}, 1,
-                  ${importe.toAmountString()}, ${ctx.value.functionalCurrency}, 'identidad',
-                  now(), ${l.debit.toAmountString()}, ${l.credit.toAmountString()},
+                  ${l.accountId}, ${debitoTx}, ${creditoTx},
+                  ${enDivisa ? orig.original : importe.toAmountString()},
+                  ${enDivisa ? orig.moneda : ctx.value.functionalCurrency},
+                  ${enDivisa ? orig.tasa : "1"},
+                  ${importe.toAmountString()}, ${ctx.value.functionalCurrency},
+                  ${enDivisa ? orig.fuente : "identidad"},
+                  ${enDivisa ? orig.hora : sp`now()`}::timestamptz,
+                  ${l.debit.toAmountString()}, ${l.credit.toAmountString()},
                   ${orig.analytical_dimensions === null ? null : sp.json(orig.analytical_dimensions)},
                   ${orig.description})`;
       }
@@ -841,9 +968,21 @@ export async function closeFiscalPeriod(
   const ctx = await autorizar(sql, actor.userId, input.company_id, "accounting.period.close");
   if (!ctx.ok) return ctx;
 
-  const [periodo] = await sql<{ status: string; year: number; month: number }[]>`
-    select status, year, month from public.fiscal_periods
-     where id = ${periodId} and company_id = ${input.company_id}`;
+  // El período BLOQUEADO: dos cierres simultáneos no revalúan dos veces.
+  const [periodo] = await sql<
+    { status: string; year: number; month: number; kind: string; fin: string }[]
+  >`
+    select status, year, month, kind,
+           -- LA FECHA DE LA REVALUACIÓN (H7): el menor entre el fin del período y HOY, día de
+           -- Caracas — un período que todavía no terminó se mide a lo que se sabe hoy, no a una
+           -- tasa del día 31 que no existe. date contra date (CLAUDE.md §3); nunca antes
+           -- del primer día del período.
+           greatest(make_date(year, month, 1),
+                    least((make_date(year, month, 1) + interval '1 month - 1 day')::date,
+                          platform.caracas_day(now())))::text as fin
+      from public.fiscal_periods
+     where id = ${periodId} and company_id = ${input.company_id}
+       for update`;
   if (!periodo) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   if (periodo.status === "closed") {
     return err({ code: "VALIDATION_FAILED", message: "El período ya está cerrado." });
@@ -867,6 +1006,16 @@ export async function closeFiscalPeriod(
   }
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+
+  // LA REVALUACIÓN AL CIERRE (ADR-0075 §6; VEN-NIF PYME secc. 30). Antes de cerrar: después, el
+  // período ya no admite el asiento. Solo en un mes; el período de cierre del ejercicio no revalúa.
+  let revaluacion: RevaluacionAlCierre | null = null;
+  if (periodo.kind === "regular") {
+    const r = await revaluarAlCierre(uow, ctx.value, input.company_id, periodId, periodo.fin);
+    if (!r.ok) return r;
+    revaluacion = r.value;
+  }
+
   const [cerrado] = await sql<{ id: string; status: string }[]>`
     update public.fiscal_periods
        set status = 'closed', closed_at = now(), closed_by = ${actor.userId}
@@ -875,8 +1024,217 @@ export async function closeFiscalPeriod(
   await auditar(sql, ctx.value.tenantId, input.company_id, periodId, "accounting.period_closed", {
     year: periodo.year,
     month: periodo.month,
+    fx_revaluation: revaluacion,
   });
   return ok(cerrado!);
+}
+
+type RevaluacionAlCierre = {
+  readonly as_of: string;
+  readonly entry_id: string | null;
+  readonly entry_number: number | null;
+  readonly items: readonly {
+    readonly kind: string;
+    readonly label: string;
+    readonly currency: string;
+    readonly original_balance: string;
+    readonly rate: string | null;
+    readonly carried: string;
+    readonly target: string;
+    readonly adjustment: string;
+  }[];
+};
+
+/** Origen de los asientos de revaluación. Estable: lo leen `platform.fx_revaluation_items` y los tests. */
+export const EVENTO_REVALUACION = "fx.revaluation_at_close";
+
+/**
+ * EL ASIENTO DE REVALUACIÓN (ADR-0075 §6; E-11, F-04, J-04). Las cajas en divisa y las cuentas
+ * por cobrar y por pagar en divisa son partidas monetarias: al cierre se miden a la tasa BCV de
+ * ese día y la diferencia va a resultados (ganancia o pérdida en diferencial cambiario).
+ *
+ * Qué partidas y por cuánto lo dice `platform.fx_revaluation_items` — sin estado: el ajuste es
+ * «lo que debe llevar − lo que lleva», así que reabrir y volver a cerrar no duplica nada. Las
+ * líneas van en moneda FUNCIONAL: la revaluación cambia los bolívares de la partida, no sus
+ * dólares (el invariante `treasury_currency_gaps` no se mueve).
+ *
+ * Sin diferencias no hay asiento: un hecho que no ocurrió no se registra.
+ */
+async function revaluarAlCierre(
+  uow: UnitOfWork,
+  ctx: { tenantId: string; functionalCurrency: string },
+  companyId: string,
+  periodId: string,
+  fin: string,
+): Promise<Result<RevaluacionAlCierre, AccountingError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Cerrar exige un usuario real." });
+  }
+  type Partida = {
+    item_kind: string;
+    account_id: string;
+    label: string;
+    currency: string;
+    original_balance: string;
+    /** NULL cuando la cuenta no tiene saldo en divisa (solo deshace lo ya revaluado) o tiene varias. */
+    rate: string | null;
+    carried: string;
+    target: string;
+    adjustment: string;
+  };
+  let partidas: Partida[];
+  try {
+    // Con savepoint: un error de Postgres condena la transacción (CLAUDE.md §3).
+    partidas = await sql.savepoint(
+      async (sp) => sp<Partida[]>`
+        select item_kind, account_id, label, currency, original_balance::text as original_balance,
+               rate::text as rate, carried::text as carried, target::text as target,
+               round(adjustment, 2)::text as adjustment
+          from platform.fx_revaluation_items(${companyId}, ${fin}::date)`,
+    );
+  } catch (e) {
+    if (typeof e === "object" && e !== null && (e as { code?: string }).code === "LAD51") {
+      // H7: la tasa de cierre es la oficial vigente a la fecha y no más vieja que el margen de
+      // `platform.parameters` (`platform.closing_rate`). Fuera del margen el cierre PARA.
+      // `fx_revaluation_items` lanza LAD51 por DOS motivos: falta la tasa de CIERRE, o un cobro
+      // viejo en otra moneda no tiene la tasa de SU fecha para saber cuánto saldó (el saldo
+      // estricto, 20261003210200). Se dice cuál falta y de qué día.
+      const texto = e instanceof Error ? e.message : "";
+      const cobro = /vigente al (\d{4})-(\d{2})-(\d{2}) para valorar un cobro/.exec(texto);
+      if (cobro !== null) {
+        return err({
+          code: "VALIDATION_FAILED",
+          message: `Falta la tasa BCV del ${cobro[3]}/${cobro[2]}/${cobro[1]}: hay un cobro de ese día en otra moneda que no se puede valorar sin ella. Cárgala y vuelve a cerrar.`,
+        });
+      }
+      const [d, m, a] = [fin.slice(8, 10), fin.slice(5, 7), fin.slice(0, 4)];
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `Falta la tasa BCV del cierre (${d}/${m}/${a}). Cárgala y vuelve a cerrar.`,
+      });
+    }
+    throw e;
+  }
+  const items = partidas.map((p) => ({
+    kind: p.item_kind,
+    label: p.label,
+    currency: p.currency,
+    original_balance: p.original_balance,
+    rate: p.rate,
+    carried: p.carried,
+    target: p.target,
+    adjustment: p.adjustment,
+  }));
+  // H2: SE NETEA POR CUENTA antes de armar las líneas. `fx_revaluation_items` ya devuelve una
+  // fila por cuenta y solo si hay diferencia; aquí se vuelve a sumar por `account_id` para que
+  // dos partidas de la misma cuenta nunca produzcan ganancia y pérdida a la vez.
+  const porCuenta = new Map<string, { neto: Decimal; etiquetas: string[]; tasas: string[] }>();
+  for (const p of partidas) {
+    const a = parseDecimal(p.adjustment);
+    if (!a.ok) return err({ code: "VALIDATION_FAILED", message: a.error.message });
+    const previo = porCuenta.get(p.account_id);
+    if (previo === undefined) {
+      porCuenta.set(p.account_id, {
+        neto: a.value,
+        etiquetas: [p.label],
+        tasas: p.rate === null ? [] : [p.rate],
+      });
+    } else {
+      previo.neto = previo.neto.plus(a.value);
+      previo.etiquetas.push(p.label);
+      if (p.rate !== null) previo.tasas.push(p.rate);
+    }
+  }
+  const conAjuste = [...porCuenta.entries()]
+    .map(([account_id, v]) => ({
+      account_id,
+      neto: v.neto,
+      label: [...new Set(v.etiquetas)].join(" + "),
+      rate: [...new Set(v.tasas)].join(" / "),
+    }))
+    .filter((p) => !p.neto.isZero());
+  if (conAjuste.length === 0) {
+    return ok({ as_of: fin, entry_id: null, entry_number: null, items });
+  }
+
+  const papeles = await sql<{ purpose: string; account_id: string }[]>`
+    select distinct on (purpose) purpose, account_id
+      from public.company_account_settings
+     where company_id = ${companyId} and purpose in ('exchange_gain', 'exchange_loss')
+       and (effective_from at time zone 'America/Caracas')::date <= ${fin}::date
+       and (effective_to is null
+            or (effective_to at time zone 'America/Caracas')::date > ${fin}::date)
+     order by purpose, effective_from desc`;
+  const ganancia = papeles.find((p) => p.purpose === "exchange_gain")?.account_id;
+  const perdida = papeles.find((p) => p.purpose === "exchange_loss")?.account_id;
+
+  const lineas: { cuenta: string; debito: string; credito: string; descripcion: string }[] = [];
+  for (const p of conAjuste) {
+    const importe = p.neto.abs().toFixed(2);
+    const sube = p.neto.greaterThan(0);
+    const contra = sube ? ganancia : perdida;
+    if (contra === undefined) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `Falta configurar la cuenta de ${sube ? "ganancia" : "pérdida"} en diferencial cambiario: la revaluación de «${p.label}» al cierre no tiene dónde asentarse. Asígnala en el plan de cuentas y vuelve a cerrar.`,
+      });
+    }
+    const detalle = p.rate === "" ? p.label : `${p.label} · tasa de cierre ${p.rate}`;
+    lineas.push({
+      cuenta: p.account_id,
+      debito: sube ? importe : "0",
+      credito: sube ? "0" : importe,
+      descripcion: `Revaluación al cierre: ${detalle}`,
+    });
+    lineas.push({
+      cuenta: contra,
+      debito: sube ? "0" : importe,
+      credito: sube ? importe : "0",
+      descripcion: `${sube ? "Ganancia" : "Pérdida"} en diferencial cambiario: ${detalle}`,
+    });
+  }
+
+  const [e] = await sql<{ id: string }[]>`
+    insert into public.journal_entries
+      (tenant_id, company_id, period_id, posting_date, source_kind, source_id, source_event,
+       description, memo, rules_version)
+    values (${ctx.tenantId}, ${companyId}, ${periodId}, ${fin}::date, 'exchange_diff',
+            platform.uuidv7(), ${EVENTO_REVALUACION},
+            ${`Revaluación de partidas monetarias en divisa al cierre del ${fin}`},
+            'VEN-NIF PYME secc. 30: cajas y cuentas por cobrar y por pagar en divisa, a la tasa de cierre. No mueve dinero.',
+            ${RULES_VERSION})
+    returning id`;
+  const filas = lineas.map((l, i) => ({ n: i + 1, ...l }));
+  await sql`
+    insert into public.journal_lines
+      (tenant_id, company_id, entry_id, line_number, account_id, debit_amount, credit_amount,
+       amount_transaction_currency, transaction_currency, fx_rate, functional_amount,
+       functional_currency, rate_source, rate_timestamp, functional_debit, functional_credit,
+       description)
+    select ${ctx.tenantId}, ${companyId}, ${e!.id}, x.n, x.cuenta, x.debito, x.credito,
+           greatest(x.debito, x.credito), ${ctx.functionalCurrency}, 1,
+           greatest(x.debito, x.credito), ${ctx.functionalCurrency}, 'identidad', now(),
+           x.debito, x.credito, x.descripcion
+      from jsonb_to_recordset(${sql.json(filas)}::jsonb) as x(
+        n integer, cuenta uuid, debito numeric, credito numeric, descripcion text)
+     order by x.n`;
+  const [num] = await sql<{ n: string }[]>`
+    select platform.claim_entry_number(${companyId},
+           extract(year from ${fin}::date)::int)::text as n`;
+  const [posteado] = await sql<{ id: string; entry_number: number }[]>`
+    update public.journal_entries
+       set status = 'posted', posted_at = now(), posted_by = ${actor.userId},
+           entry_number = ${num!.n}::bigint
+     where id = ${e!.id}
+    returning id, entry_number::int as entry_number`;
+  await auditar(sql, ctx.tenantId, companyId, posteado!.id, "accounting.fx_revalued_at_close", {
+    as_of: fin,
+    period_id: periodId,
+    entry_number: posteado!.entry_number,
+    items: items,
+  });
+  return ok({ as_of: fin, entry_id: posteado!.id, entry_number: posteado!.entry_number, items });
 }
 
 /** Reabre un período. Exige permiso propio y motivo escrito, y deja traza. */
@@ -1053,8 +1411,18 @@ export async function executeYearEndClose(
   let neto: Decimal = cero.value;
   const lineas: { account_id: string; debit: string; credit: string }[] = [];
   for (const s of saldos) {
-    const saldo = parseDecimal(s.saldo);
-    if (!saldo.ok) return err({ code: "VALIDATION_FAILED", message: saldo.error.message });
+    const exacto = parseDecimal(s.saldo);
+    if (!exacto.ok) return err({ code: "VALIDATION_FAILED", message: exacto.error.message });
+    // S1 (ADR-0075 §7): EL CIERRE SE ARMA AL CÉNTIMO, como todo asiento. El saldo que se cierra
+    // está ACOTADO AL AÑO, y la regularización del céntimo corrige el saldo de toda la vida con
+    // un asiento fechado el día que corrió: si las fracciones viejas y la regularización caen en
+    // ejercicios distintos, el saldo del año trae fracción y el asiento moría en LAD71 sin salida
+    // por la API. Cada cuenta se cierra por su saldo al céntimo y el resultado es la suma de esos
+    // céntimos: el asiento cuadra por construcción, sin línea de redondeo. La fracción (menos de
+    // medio céntimo por cuenta) queda en el saldo del año y la compensa la regularización en el
+    // ejercicio en que corrió; el saldo de toda la vida de la cuenta sigue al céntimo.
+    const saldo = { value: toCents(exacto.value) };
+    if (saldo.value.isZero()) continue;
     neto = neto.plus(saldo.value);
     if (saldo.value.isNegative()) {
       lineas.push({

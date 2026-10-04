@@ -1,6 +1,6 @@
 import { err, ok, type Result } from "@ladino/core";
 import type { TransactionSql, JSONValue } from "@ladino/db";
-import { Money, parseDecimal, type Decimal } from "@ladino/money";
+import { Money, parseDecimal, toCents, type Decimal } from "@ladino/money";
 import { validateEntryBalance, type EntryLine } from "@ladino/accounting";
 import { RULES_VERSION } from "./create-company.js";
 
@@ -33,6 +33,20 @@ export type JournalGenerationError =
 const PAPEL_CAJA = "treasury_account";
 /** Y la caja de ORIGEN, para un hecho que mueve dinero entre dos (ADR-0062 §3). */
 const PAPEL_CAJA_ORIGEN = "treasury_account_from";
+/**
+ * Los papeles de la CARTERA (H6, ADR-0075 §6): la línea de cuentas por cobrar o por pagar de un
+ * documento en divisa guarda la moneda del documento, su importe original y la tasa del
+ * documento. El diferencial va en su propia línea, en moneda funcional.
+ */
+const PAPELES_CARTERA: ReadonlySet<string> = new Set(["ar_general", "ap_general"]);
+/** Fila interna de la consulta de papeles: el original de la cartera. No es un papel de plantilla. */
+const FILA_CARTERA = "__settlement_original";
+/**
+ * El papel del residuo de conversión (ADR-0075 §7): cada línea va al céntimo, half-up, y lo que
+ * el redondeo descuadra va a «Diferencias por redondeo». No es un papel de plantilla: lo añade
+ * este generador, y solo cuando hay residuo.
+ */
+export const PAPEL_REDONDEO = "rounding_difference";
 /** Motivo de cola cuando esa caja no tiene cuenta contable. Estable: lo buscan tests y pantalla. */
 export const MOTIVO_CAJA_SIN_MAPEO = "treasury_account_unmapped";
 
@@ -88,6 +102,13 @@ export interface GenerationInput {
   readonly functionalCurrency: string;
   readonly amounts: AmountContext;
   readonly conditions?: ConditionContext;
+  /**
+   * AF-M03 (ADR-0075 §4): la diferencia de este hecho NO es cambiaria — el cobro o el pago
+   * ocurrió a la MISMA tasa del documento, y lo que sobra o falta es el redondeo del IVA al
+   * céntimo de la divisa (E-05). Las líneas que la plantilla lleva a `exchange_gain` /
+   * `exchange_loss` por `exchange_difference` van entonces a «Diferencias por redondeo».
+   */
+  readonly differenceIsRounding?: boolean;
   /** Tabla y columna donde escribir el `journal_entry_id` (bidireccional). */
   readonly backlink?: { readonly table: string; readonly id: string };
 }
@@ -182,6 +203,7 @@ async function encolar(
     functional_currency: input.functionalCurrency,
     posting_date: input.postingDate,
     description: input.description,
+    ...(input.differenceIsRounding === true ? { difference_is_rounding: true } : {}),
     ...(input.conditions?.taxRecoverable === undefined
       ? {}
       : { tax_recoverable: input.conditions.taxRecoverable }),
@@ -265,6 +287,16 @@ export async function generateJournalFromDocument(
 
   const cond = input.conditions ?? {};
   const lineas: (EntryLine & { description: string | null })[] = [];
+  const originales: ({ moneda: string; importe: string; fuente: string; hora: string } | null)[] =
+    [];
+  /** El papel de cada línea, en paralelo a `lineas` (la de redondeo no tiene). */
+  const papelDeLinea: (string | null)[] = [];
+  // Lo que la plantilla pide SIN redondear: es lo que tiene que cuadrar (un descuadre aquí es
+  // un defecto de la plantilla). El residuo del céntimo se mide después, sobre las líneas.
+  const ceroExacto = parseDecimal("0");
+  if (!ceroExacto.ok) return err({ code: "VALIDATION_FAILED", message: ceroExacto.error.message });
+  let debeExacto: Decimal = ceroExacto.value;
+  let haberExacto: Decimal = ceroExacto.value;
   const papelesSinCuenta = new Set<string>();
 
   /**
@@ -281,7 +313,7 @@ export async function generateJournalFromDocument(
    * SOLO dentro del bucle y SOLO para las líneas que de verdad aplican, así
    * que el motivo del encolado no cambia ni gana papeles que no tocaban.
    */
-  const papeles = [...new Set(lineasPlantilla.map((l) => l.account_purpose))];
+  const papeles = [...new Set([...lineasPlantilla.map((l) => l.account_purpose), PAPEL_REDONDEO])];
   const pideCaja = papeles.includes(PAPEL_CAJA);
   const pideCajaOrigen = papeles.includes(PAPEL_CAJA_ORIGEN);
   /**
@@ -291,8 +323,24 @@ export async function generateJournalFromDocument(
    * resuelta por `platform.treasury_account_of`, la única definición. Viaja en
    * la MISMA consulta que los demás papeles: ni una espera de red más.
    */
-  const cuentasFilas = await sql<{ purpose: string; id: string | null; caja: string | null }[]>`
-    (select distinct on (purpose) purpose, account_id as id, null::text as caja
+  const cuentasFilas = await sql<
+    {
+      purpose: string;
+      id: string | null;
+      caja: string | null;
+      moneda: string | null;
+      original: string | null;
+      moneda_original: string | null;
+      fuente_tasa: string | null;
+      hora_tasa: string | null;
+      tasa_doc: string | null;
+      escala: number | null;
+    }[]
+  >`
+    (select distinct on (purpose) purpose, account_id as id, null::text as caja,
+            null::text as moneda, null::text as original, null::text as moneda_original,
+            null::text as fuente_tasa, null::text as hora_tasa,
+            null::text as tasa_doc, null::int as escala
        from public.company_account_settings
       where company_id = ${input.companyId} and purpose = any(${papeles}::text[])
         -- El mismo día DE CARACAS que la vigencia de la plantilla (arriba).
@@ -301,23 +349,64 @@ export async function generateJournalFromDocument(
              or (effective_to at time zone 'America/Caracas')::date > ${input.postingDate}::date)
       order by purpose, effective_from desc)
     union all
-    select ${PAPEL_CAJA}, ca.ledger_account_id, ca.name
+    select ${PAPEL_CAJA}, ca.ledger_account_id, ca.name, ca.currency,
+           o.amount::text, o.currency, o.rate_source, o.rate_timestamp::text, null, null
       from public.company_accounts ca
+      left join lateral platform.treasury_original_of(${input.companyId}, ${input.sourceKind},
+                                                      ${input.sourceId}::uuid) o on true
      where ${pideCaja}
        and ca.company_id = ${input.companyId}
        and ca.id = platform.treasury_account_of(${input.companyId}, ${input.sourceKind},
                                                 ${input.sourceId}::uuid)
     union all
-    select ${PAPEL_CAJA_ORIGEN}, ca.ledger_account_id, ca.name
+    select ${PAPEL_CAJA_ORIGEN}, ca.ledger_account_id, ca.name, ca.currency,
+           o.amount::text, o.currency, o.rate_source, o.rate_timestamp::text, null, null
       from public.company_accounts ca
+      left join lateral platform.treasury_original_of(${input.companyId}, ${input.sourceKind},
+                                                      ${input.sourceId}::uuid) o on true
      where ${pideCajaOrigen}
        and ca.company_id = ${input.companyId}
        and ca.id = platform.treasury_from_account_of(${input.companyId}, ${input.sourceKind},
-                                                     ${input.sourceId}::uuid)`;
+                                                     ${input.sourceId}::uuid)
+    union all
+    -- H6: el original de la CARTERA, en la misma consulta (ni una espera de red más).
+    select ${FILA_CARTERA}, null::uuid, null, s.currency, s.amount::text, s.currency,
+           s.rate_source, s.rate_timestamp::text, s.fx_rate::text, s.minor_units
+      from platform.settlement_original_of(${input.companyId}, ${input.sourceKind},
+                                           ${input.sourceId}::uuid) s
+     where ${papeles.some((p) => PAPELES_CARTERA.has(p))}`;
+  const cartera = cuentasFilas.find((c) => c.purpose === FILA_CARTERA) ?? null;
   const cuentaDe = new Map<string, string>();
+  /**
+   * E-11 (ADR-0075 §6; los siete campos de ADR-0020). La línea de una caja EN DIVISA guarda lo
+   * que de verdad se movió: su moneda, el importe original y la tasa que lo llevó a la moneda
+   * funcional. Sale del hecho (`platform.treasury_original_of`), nunca de dividir aquí: 5 USD
+   * son 5 USD, no 4.272,32 / 854,464. Solo aplica si la caja está en otra moneda que la
+   * funcional y el hecho se movió en la moneda de la caja.
+   */
+  const originalDe = new Map<
+    string,
+    { moneda: string; importe: string; fuente: string; hora: string }
+  >();
   let problemaCaja: string | null = null;
   for (const c of cuentasFilas) {
     if (c.id !== null) cuentaDe.set(c.purpose, c.id);
+    if (
+      c.id !== null &&
+      c.moneda !== null &&
+      c.moneda !== input.functionalCurrency &&
+      c.original !== null &&
+      c.moneda_original === c.moneda &&
+      c.fuente_tasa !== null &&
+      c.hora_tasa !== null
+    ) {
+      originalDe.set(c.purpose, {
+        moneda: c.moneda,
+        importe: c.original,
+        fuente: c.fuente_tasa,
+        hora: c.hora_tasa,
+      });
+    }
   }
   const revisarCaja = (papel: string): void => {
     const caja = cuentasFilas.find((c) => c.purpose === papel);
@@ -331,7 +420,33 @@ export async function generateJournalFromDocument(
   if (pideCajaOrigen && problemaCaja === null) revisarCaja(PAPEL_CAJA_ORIGEN);
 
   for (const l of lineasPlantilla) {
-    const bruto = (input.amounts as Record<string, string | undefined>)[l.amount_source];
+    /**
+     * `exchange_difference` AUSENTE vale 0 — y SOLO ese importe. No es una regla general de «lo
+     * que falte vale 0»: cualquier otro importe que la plantilla pida y el hecho no aporte sigue
+     * encolando. La plantilla `payment_made` exige el diferencial desde 20261003170000; un pago a
+     * proveedor registrado por la API anterior (o una fila `ap.payment_made` que ya esperaba en
+     * la cola con el contexto viejo) no lo trae, y sin esto no podría asentarse nunca. Un pago
+     * sin diferencial informado es un pago sin diferencial: sus líneas `if_positive` /
+     * `if_negative` no aplican y el asiento queda como antes de esa migración (R-74 §3).
+     */
+    /**
+     * Y su gemelo, el mismo formato viejo CON retención: aquel contexto traía `total` = el
+     * BRUTO y `net_amount` = lo que salió de la caja, y su plantilla cancelaba la cuenta por
+     * pagar por el NETO (la retención la descarga su comprobante). La plantilla de hoy lee
+     * `total` como «lo cancelado»: con el contexto viejo descuadraba por lo retenido. Un pago a
+     * proveedor SIN `exchange_difference` es de ese formato, y su línea de cuentas por pagar
+     * toma `net_amount`. Solo ese hecho, solo ese papel.
+     */
+    const amounts = input.amounts as Record<string, string | undefined>;
+    const fuente =
+      input.sourceKind === "payment_made" &&
+      amounts["exchange_difference"] === undefined &&
+      l.amount_source === "total" &&
+      l.account_purpose === "ap_general" &&
+      amounts["net_amount"] !== undefined
+        ? "net_amount"
+        : l.amount_source;
+    const bruto = amounts[fuente] ?? (fuente === "exchange_difference" ? "0" : undefined);
     if (bruto === undefined) {
       // La plantilla pide un importe que este documento no tiene. No es un
       // fallo del documento: es una plantilla mal configurada para él.
@@ -358,13 +473,24 @@ export async function generateJournalFromDocument(
     if (l.account_purpose === PAPEL_CAJA && problemaCaja !== null) {
       return encolar(sql, input, problemaCaja);
     }
-    const cuentaId = cuentaDe.get(l.account_purpose);
+    // AF-M03: a la tasa del documento, la «diferencia» es redondeo y va a su cuenta.
+    const esRedondeoDeCierre =
+      input.differenceIsRounding === true &&
+      l.amount_source === "exchange_difference" &&
+      (l.account_purpose === "exchange_gain" || l.account_purpose === "exchange_loss");
+    const papelEfectivo = esRedondeoDeCierre ? PAPEL_REDONDEO : l.account_purpose;
+    const cuentaId = cuentaDe.get(papelEfectivo);
     if (cuentaId === undefined) {
-      papelesSinCuenta.add(l.account_purpose);
+      papelesSinCuenta.add(papelEfectivo);
       continue;
     }
 
-    const money = Money.of(absoluto.toFixed(8), input.functionalCurrency);
+    if (l.side === "debit") debeExacto = debeExacto.plus(absoluto);
+    else haberExacto = haberExacto.plus(absoluto);
+    // ADR-0075 §7: el importe funcional de toda línea va al céntimo, half-up. UN solo sitio.
+    const alCentimo = toCents(absoluto);
+    if (alCentimo.isZero()) continue;
+    const money = Money.of(alCentimo.toFixed(2), input.functionalCurrency);
     if (!money.ok) return err({ code: "VALIDATION_FAILED", message: money.error.message });
     const cero = Money.of("0", input.functionalCurrency);
     if (!cero.ok) return err({ code: "VALIDATION_FAILED", message: cero.error.message });
@@ -372,8 +498,12 @@ export async function generateJournalFromDocument(
       accountId: cuentaId,
       debit: l.side === "debit" ? money.value : cero.value,
       credit: l.side === "credit" ? money.value : cero.value,
-      description: l.description,
+      description: esRedondeoDeCierre
+        ? "Diferencias por redondeo: a la tasa del documento no hay diferencial (ADR-0075 §4)"
+        : l.description,
     });
+    originales.push(originalDe.get(l.account_purpose) ?? null);
+    papelDeLinea.push(l.account_purpose);
   }
 
   if (papelesSinCuenta.size > 0) {
@@ -386,6 +516,40 @@ export async function generateJournalFromDocument(
       `Falta configurar la cuenta de: ${[...papelesSinCuenta].join(", ")}. El documento está emitido; el asiento se genera en cuanto la asignes.`,
     );
   }
+  // EL RESIDUO DEL CÉNTIMO. Si lo exacto cuadra, lo redondeado difiere a lo sumo medio céntimo
+  // por línea, y esa diferencia va a «Diferencias por redondeo» en el MISMO asiento. Si lo
+  // exacto no cuadra, no se tapa nada: sigue el ENTRY_UNBALANCED de abajo con la cifra real.
+  if (debeExacto.equals(haberExacto) && lineas.length > 0) {
+    let debe = debeExacto.minus(debeExacto);
+    let haber = debe;
+    for (const l of lineas) {
+      debe = debe.plus(l.debit.amount);
+      haber = haber.plus(l.credit.amount);
+    }
+    const residuo = debe.minus(haber);
+    if (!residuo.isZero()) {
+      const cuentaRedondeo = cuentaDe.get(PAPEL_REDONDEO);
+      if (cuentaRedondeo === undefined) {
+        return encolar(
+          sql,
+          input,
+          `Falta configurar la cuenta de: ${PAPEL_REDONDEO}. El asiento tiene un residuo de redondeo de ${residuo.abs().toFixed(2)} que va a «Diferencias por redondeo».`,
+        );
+      }
+      const importe = Money.of(residuo.abs().toFixed(2), input.functionalCurrency);
+      const cero = Money.of("0", input.functionalCurrency);
+      if (!importe.ok || !cero.ok) {
+        return err({ code: "VALIDATION_FAILED", message: "Residuo de redondeo no representable." });
+      }
+      lineas.push({
+        accountId: cuentaRedondeo,
+        debit: residuo.isNegative() ? importe.value : cero.value,
+        credit: residuo.isNegative() ? cero.value : importe.value,
+        description: "Diferencias por redondeo (ADR-0075 §7)",
+      });
+    }
+  }
+
   if (lineas.length < 2) {
     return encolar(
       sql,
@@ -429,15 +593,83 @@ export async function generateJournalFromDocument(
    * El `order by line_number` preserva el orden exacto, que es el que la
    * partida doble y los tests leen.
    */
+  const lineasDeCartera = papelDeLinea.filter((p) => p !== null && PAPELES_CARTERA.has(p)).length;
   const filasAsiento = lineas.map((l, i) => {
     const importe = l.debit.amount.isZero() ? l.credit : l.debit;
-    return {
+    const base = {
       line_number: i + 1,
       account_id: l.accountId,
-      debit_amount: l.debit.toAmountString(),
-      credit_amount: l.credit.toAmountString(),
+      functional_debit: l.debit.toAmountString(),
+      functional_credit: l.credit.toAmountString(),
       importe: importe.toAmountString(),
       description: l.description,
+    };
+    // La línea de una caja en divisa (E-11): débito y crédito van en la moneda de la
+    // transacción (ADR-0020), y la tasa es la que une el original con lo funcional.
+    const o = originales[i] ?? null;
+    const original = o === null ? null : parseDecimal(o.importe);
+    if (o !== null && original !== null && original.ok && original.value.greaterThan(0)) {
+      const tasa = importe.amount.dividedBy(original.value).toDecimalPlaces(8, 4);
+      if (tasa.greaterThan(0)) {
+        const orig = original.value.toFixed(8);
+        return {
+          ...base,
+          debit_amount: l.debit.amount.isZero() ? "0" : orig,
+          credit_amount: l.credit.amount.isZero() ? "0" : orig,
+          original: orig,
+          moneda: o.moneda,
+          tasa: tasa.toFixed(8),
+          fuente: o.fuente,
+          hora: o.hora,
+        };
+      }
+    }
+    /**
+     * H6 (ADR-0075 §6): la línea de CARTERA de un documento en divisa. Moneda y tasa, las del
+     * DOCUMENTO. El original es el que `platform.settlement_original_of` dice para ESTE hecho,
+     * DETERMINISTA: el total del documento, lo que el cobro o el pago saldó, el neto de retención
+     * de la factura de compra. Sin umbral ni «si se parece»: así la suma de los originales de la
+     * cartera de un documento saldado es cero exacto. Si el hecho no tiene original conocido (la
+     * función no devuelve importe), la línea va en moneda funcional. Nunca se mueve el importe
+     * funcional: es el que cuadra el asiento. Si la plantilla de una empresa pone DOS líneas de
+     * cartera en el mismo asiento, ninguna toma el original (no hay cómo repartirlo).
+     */
+    const papel = papelDeLinea[i] ?? null;
+    if (
+      papel !== null &&
+      PAPELES_CARTERA.has(papel) &&
+      lineasDeCartera === 1 &&
+      cartera !== null &&
+      cartera.moneda !== null &&
+      cartera.moneda !== input.functionalCurrency &&
+      cartera.tasa_doc !== null &&
+      cartera.original !== null
+    ) {
+      const tasaDoc = parseDecimal(cartera.tasa_doc);
+      const exacto = parseDecimal(cartera.original);
+      if (tasaDoc.ok && tasaDoc.value.greaterThan(0) && exacto.ok && exacto.value.greaterThan(0)) {
+        const orig = exacto.value.toFixed(8);
+        return {
+          ...base,
+          debit_amount: l.debit.amount.isZero() ? "0" : orig,
+          credit_amount: l.credit.amount.isZero() ? "0" : orig,
+          original: orig,
+          moneda: cartera.moneda,
+          tasa: tasaDoc.value.toFixed(8),
+          fuente: cartera.fuente_tasa ?? "documento",
+          hora: cartera.hora_tasa,
+        };
+      }
+    }
+    return {
+      ...base,
+      debit_amount: base.functional_debit,
+      credit_amount: base.functional_credit,
+      original: base.importe,
+      moneda: input.functionalCurrency,
+      tasa: "1",
+      fuente: "identidad",
+      hora: null,
     };
   });
   await sql`
@@ -448,12 +680,13 @@ export async function generateJournalFromDocument(
        description)
     select ${input.tenantId}, ${input.companyId}, ${asiento!.id}, x.line_number, x.account_id,
            x.debit_amount, x.credit_amount,
-           x.importe, ${input.functionalCurrency}, 1,
-           x.importe, ${input.functionalCurrency}, 'identidad', now(),
-           x.debit_amount, x.credit_amount, x.description
+           x.original, x.moneda, x.tasa,
+           x.importe, ${input.functionalCurrency}, x.fuente, coalesce(x.hora, now()),
+           x.functional_debit, x.functional_credit, x.description
       from jsonb_to_recordset(${sql.json(filasAsiento)}::jsonb) as x(
         line_number integer, account_id uuid, debit_amount numeric, credit_amount numeric,
-        importe numeric, description text)
+        functional_debit numeric, functional_credit numeric, original numeric, moneda text,
+        tasa numeric, fuente text, hora timestamptz, importe numeric, description text)
      order by x.line_number`;
 
   const [num] = await sql<{ n: string }[]>`

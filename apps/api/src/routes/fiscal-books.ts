@@ -1,7 +1,12 @@
 import type { Hono, MiddlewareHandler } from "hono";
 import { withTransaction, type Sql, type TransactionSql } from "@ladino/db";
 import { BookKind, ExportFiscalBookRequest, ExportSalesBookSummaryRequest } from "@ladino/schemas";
-import { readFiscalBook, exportFiscalBook, exportSalesBookSummary } from "@ladino/domain";
+import {
+  readFiscalBook,
+  exportFiscalBook,
+  exportSalesBookSummary,
+  exigeEmpresaConRif,
+} from "@ladino/domain";
 import { DominioError, ValidacionError } from "../middleware/errors.js";
 import { requireCompany } from "./products.js";
 
@@ -207,6 +212,9 @@ export function fiscalBooksRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareH
     const { actor } = c.get("ladino.auth");
     const libro = await withTransaction(sql, actor, async ({ sql: tx }) => {
       await exigeLectura(tx, actor, companyId);
+      // AF3-13: los libros son de quien tiene RIF; se dice después del permiso, no antes.
+      const conRif = await exigeEmpresaConRif(tx, companyId);
+      if (!conRif.ok) throw new DominioError(conRif.error);
       return readFiscalBook(tx, companyId, kind.data, from, to);
     });
     return c.json(libro, 200);
