@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { formatearDocumento } from "@ladino/schemas";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -61,7 +61,8 @@ import type {
 } from "../../lib.js";
 import { hoyLocal, fechaLocal } from "../../fechas.js";
 import { useConFacturas } from "../../app/modo-venta.js";
-import { ANULACION } from "../../components/capa-fiscal/textos.js";
+import { Cartera } from "../../components/Cartera.js";
+import { ANULACION, NC_PROVEEDOR } from "../../components/capa-fiscal/textos.js";
 import {
   ComprobantesRetencion,
   RetencionIvaCampos,
@@ -70,6 +71,7 @@ import {
   type EleccionRetencion,
 } from "../../components/RetencionIva.js";
 import { tasaLimpia } from "../../tasa.js";
+import { conLlaveDeIntento } from "../../llave-intento.js";
 
 /** «2026-08-19» → «agosto de 2026». Solo presentación: el mes lo decidió la API. */
 function mesDe(iso: string): string {
@@ -1135,6 +1137,16 @@ function CuentasPorPagar(): React.JSX.Element {
 
       {error !== null && <MensajeError error={error} />}
 
+      {/* H-11: sin elegir proveedor, la CARTERA: a quién se le debe, cuánto y cuándo vence. */}
+      {proveedor === null && (
+        <Cartera
+          tipo="payables"
+          alElegirFila={(f) => {
+            if (f["id"]) setProveedor({ id: f["id"], label: f["label"] ?? "" });
+          }}
+        />
+      )}
+
       {proveedor !== null && (
         <>
           {estado.isError ? (
@@ -1175,6 +1187,21 @@ function CuentasPorPagar(): React.JSX.Element {
                       })}
                     </span>
                   </p>
+                  {/* H-03: el saldo a favor va APARTE; lo que se debe no lo trae restado. Las
+                      cifras son las del servidor, en la moneda de cada factura. */}
+                  {(estado.data.credit_in_favor ?? []).length > 0 && (
+                    <div className="mt-2 text-[0.85rem]">
+                      <p className="text-muted-foreground">
+                        {NC_PROVEEDOR.aTuFavor}:{" "}
+                        <span className="font-mono text-foreground">
+                          {nominalPorMoneda(estado.data.credit_in_favor)}
+                        </span>
+                      </p>
+                      <p className="text-[0.8rem] text-faint-foreground">
+                        {NC_PROVEEDOR.aTuFavorAyuda}
+                      </p>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
               <Card className="lg:col-span-2">
@@ -1199,6 +1226,51 @@ function CuentasPorPagar(): React.JSX.Element {
                 </CardContent>
               </Card>
             </div>
+          )}
+
+          {/* H-03: las notas de crédito del proveedor, con lo que dice su papel. La que llegó
+              sin número de control queda a la vista como «documento incompleto». */}
+          {(estado.data?.credit_notes ?? []).length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>{NC_PROVEEDOR.listaTitulo}</CardTitle>
+              </CardHeader>
+              <CardContent className="px-0 pb-1">
+                <Table>
+                  <THead>
+                    <TR>
+                      <TH>Nota</TH>
+                      <TH>Control</TH>
+                      <TH>Fecha</TH>
+                      <TH className="text-right">Importe</TH>
+                      <TH />
+                    </TR>
+                  </THead>
+                  <TBody>
+                    {(estado.data?.credit_notes ?? []).map((n) => (
+                      <TR key={n.id}>
+                        <TD className="font-mono">{n.supplier_document_number}</TD>
+                        <TD className="font-mono">{n.supplier_control_number ?? "—"}</TD>
+                        <TD>{fechaLocal(n.note_date)}</TD>
+                        <TD className="text-right font-mono">
+                          {mostrarImporte({
+                            amount: n.total_amount,
+                            currency: n.transaction_currency,
+                          })}
+                        </TD>
+                        <TD className="text-[0.8rem] text-muted-foreground">
+                          {n.document_incomplete
+                            ? NC_PROVEEDOR.incompletaTitulo
+                            : n.is_fiscal
+                              ? ""
+                              : NC_PROVEEDOR.noFiscalEtiqueta}
+                        </TD>
+                      </TR>
+                    ))}
+                  </TBody>
+                </Table>
+              </CardContent>
+            </Card>
           )}
 
           <Card>
@@ -1978,10 +2050,37 @@ function RegistrarFacturaProveedor({
   );
 }
 
+/** Lo que responde `GET /v1/supplier-invoices/{id}/lines` (SupplierInvoiceLinesResponse). */
+interface LineasDeFactura {
+  is_expense: boolean;
+  fiscal_support: boolean;
+  has_retention: boolean;
+  lines: {
+    id: string;
+    description: string;
+    product_id: string | null;
+    quantity: string;
+    has_receipt: boolean;
+    tracks_lots: boolean;
+    returned_quantity: string;
+  }[];
+  /** Lotes con existencia de los productos por lotes cuya línea no viene de una recepción. */
+  lots?: {
+    product_id: string;
+    warehouse_id: string;
+    lot_id: string;
+    code: string;
+    expires_at: string | null;
+    expired: boolean;
+    quantity: string;
+  }[];
+}
+
 /**
- * NOTA DE CRÉDITO DEL PROVEEDOR (Nivel B): nos rebajó la deuda —devolvimos
- * mercancía o corrigió su factura— y el papel llega con sus números. Las
- * líneas se copian del papel; el sistema resuelve impuesto y saldo.
+ * NOTA DE CRÉDITO DEL PROVEEDOR (H-03, ADR-0083): el papel que el proveedor emite para
+ * rebajar o deshacer SU factura. Se copian sus números; las líneas son las de la factura que
+ * corrige, y el servidor resuelve el impuesto (con la alícuota de cada línea), el kardex y el
+ * saldo. La pantalla no calcula nada: pregunta qué pasó con la mercancía y transporta.
  */
 function NotaCreditoProveedor({
   factura,
@@ -1993,46 +2092,126 @@ function NotaCreditoProveedor({
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [nroNota, setNroNota] = useState("");
+  const [nroControl, setNroControl] = useState("");
   const [fecha, setFecha] = useState(hoyLocal());
   const [motivo, setMotivo] = useState("");
-  const [lineas, setLineas] = useState<
-    { clave: string; producto: EntityOption | null; quantity: string; unit_price: string }[]
-  >([{ clave: crypto.randomUUID(), producto: null, quantity: "", unit_price: "" }]);
+  const [clase, setClase] = useState("");
+  const [almacenId, setAlmacenId] = useState("");
+  /** Por línea de la factura: lo que la nota abona de ella. Vacío = la nota no la toca. */
+  const [abonos, setAbonos] = useState<Record<string, { quantity: string; unit_price: string }>>(
+    {},
+  );
+  /** Por línea de la factura: el lote que se devuelve (producto por lotes, sin recepción). */
+  const [lotes, setLotes] = useState<Record<string, string>>({});
   const [error, setError] = useState<unknown>(null);
   const [ocupado, setOcupado] = useState(false);
+  // Llave por INTENTO (ADR-0076, RESPUESTA §2.9): tras un 4xx estrena llave (el cuerpo cambió);
+  // tras un fallo de red la conserva, y el reintento no registra la nota dos veces.
+  const llave = useRef(crypto.randomUUID());
 
-  const validas = lineas.filter(
-    (l) => l.producto !== null && l.quantity.trim() !== "" && l.unit_price.trim() !== "",
-  );
+  const detalle = useQuery({
+    queryKey: ["factura-proveedor-lineas", empresa.id, factura.id],
+    queryFn: () => llamar<LineasDeFactura>(`/v1/supplier-invoices/${factura.id}/lines`),
+  });
+  const esGasto = detalle.data?.is_expense === true;
+  const lineas = detalle.data?.lines ?? [];
+  const abonoDe = (id: string): { quantity: string; unit_price: string } =>
+    abonos[id] ?? { quantity: "", unit_price: "" };
+  // Una línea de servicio no tiene cantidades: se abona un importe.
+  const elegidas = lineas
+    .map((l) => ({ linea: l, abono: abonoDe(l.id) }))
+    .filter(
+      ({ linea, abono }) =>
+        abono.unit_price.trim() !== "" &&
+        (linea.product_id === null || abono.quantity.trim() !== ""),
+    );
+  const pideDeposito =
+    !esGasto && clase === "devolucion" && elegidas.some(({ linea }) => !linea.has_receipt);
+  // Devolver un producto por lotes cuya línea no viene de una recepción exige decir el lote:
+  // se elige entre los que tienen existencia de ese producto en el depósito elegido (los
+  // vencidos incluidos y marcados). La lista la da el servidor; aquí solo se filtra por depósito.
+  const conLote =
+    !esGasto && clase === "devolucion"
+      ? elegidas.filter(({ linea }) => !linea.has_receipt && linea.tracks_lots)
+      : [];
+  const faltaElLote = conLote.length > 0;
+  const lotesDe = (productId: string | null): NonNullable<LineasDeFactura["lots"]> =>
+    (detalle.data?.lots ?? []).filter(
+      (l) => l.product_id === productId && l.warehouse_id === almacenId,
+    );
+  // El lote elegido vale mientras siga en la lista del depósito elegido.
+  const loteDe = (lineaId: string, productId: string | null): string =>
+    lotesDe(productId).some((l) => l.lot_id === lotes[lineaId]) ? (lotes[lineaId] ?? "") : "";
+  const almacenes = useQuery({
+    queryKey: ["almacenes", empresa.id],
+    enabled: pideDeposito,
+    queryFn: () =>
+      llamar<(Warehouse & { status?: string })[]>("/v1/warehouses").then((ws) =>
+        ws.filter((w) => w.status !== "inactive"),
+      ),
+  });
+
   // F-06: lo que el lector rechazó no se envía; el motivo va junto a su línea.
   const listo =
+    detalle.data !== undefined &&
     nroNota.trim() !== "" &&
     motivo.trim().length >= 3 &&
-    validas.length > 0 &&
-    validas.every((l) => cantidadValida(l.quantity) && importeValido(l.unit_price));
+    (esGasto || clase !== "") &&
+    (!pideDeposito || almacenId !== "") &&
+    conLote.every(({ linea }) => loteDe(linea.id, linea.product_id) !== "") &&
+    elegidas.length > 0 &&
+    elegidas.every(
+      ({ linea, abono }) =>
+        importeValido(abono.unit_price) &&
+        (linea.product_id === null || cantidadValida(abono.quantity)),
+    );
+
+  function cambiar(id: string, campo: "quantity" | "unit_price", valor: string): void {
+    setAbonos((prev) => ({ ...prev, [id]: { ...abonoDe(id), ...prev[id], [campo]: valor } }));
+  }
 
   async function registrar(): Promise<void> {
     setError(null);
     setOcupado(true);
     try {
-      const r = await llamar<{ accounting_date: string | null }>("/v1/supplier-credit-notes", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          supplier_invoice_id: factura.id,
-          supplier_document_number: nroNota.trim(),
-          note_date: fecha,
-          reason: motivo.trim(),
-          currency: factura.transaction_currency,
-          lines: validas.map((l) => ({
-            product_id: l.producto!.id,
-            quantity: cantidadLimpia(l.quantity),
-            unit_price: importeLimpio(l.unit_price),
-          })),
-        }),
+      const cuerpo = JSON.stringify({
+        company_id: empresa.id,
+        supplier_invoice_id: factura.id,
+        supplier_document_number: nroNota.trim(),
+        ...(nroControl.trim() === "" ? {} : { supplier_control_number: nroControl.trim() }),
+        note_date: fecha,
+        reason: motivo.trim(),
+        currency: factura.transaction_currency,
+        ...(esGasto ? {} : { kind: clase }),
+        ...(pideDeposito ? { warehouse_id: almacenId } : {}),
+        lines: elegidas.map(({ linea, abono }) => ({
+          supplier_invoice_line_id: linea.id,
+          quantity: linea.product_id === null ? "1" : cantidadLimpia(abono.quantity),
+          unit_price: importeLimpio(abono.unit_price),
+          ...(conLote.some((c) => c.linea.id === linea.id)
+            ? { lot_id: loteDe(linea.id, linea.product_id) }
+            : {}),
+        })),
       });
-      toast.success("Nota de crédito registrada", "La deuda con el proveedor bajó.");
+      const r = await conLlaveDeIntento(llave, (k) =>
+        llamar<{
+          accounting_date: string | null;
+          document_incomplete: boolean;
+          left_credit_in_favor: boolean;
+        }>("/v1/supplier-credit-notes", {
+          method: "POST",
+          headers: { "Idempotency-Key": k },
+          body: cuerpo,
+        }),
+      );
+      toast.success(
+        "Nota de crédito registrada",
+        // Lo dice el servidor: aquí no se calcula nada.
+        r.left_credit_in_favor ? NC_PROVEEDOR.quedoAFavor : NC_PROVEEDOR.bajoLaDeuda,
+      );
+      if (r.document_incomplete) {
+        toast.info(NC_PROVEEDOR.incompletaTitulo, NC_PROVEEDOR.incompleta);
+      }
       // K-04 (ADR-0069 §4): si su mes está cerrado, entró al período en curso con su fecha
       // original. Solo se enseña lo que dice la API.
       if (r.accounting_date !== null && r.accounting_date !== undefined) {
@@ -2052,104 +2231,178 @@ function NotaCreditoProveedor({
 
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="max-w-2xl">
         <DialogTitle>Nota de crédito sobre {factura.supplier_document_number}</DialogTitle>
-        <DialogDescription>
-          Copia los datos del papel del proveedor. Rebaja lo que se debe de ESA factura.
-        </DialogDescription>
+        <DialogDescription>{NC_PROVEEDOR.descripcion}</DialogDescription>
         <div className="mt-3 space-y-3">
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <FormField label="Nº de la nota" required>
               {(a) => (
                 <Input id={a.id} value={nroNota} onChange={(e) => setNroNota(e.target.value)} />
               )}
             </FormField>
-            <FormField label="Fecha" required>
+            <FormField label="Nº de control">
+              {(a) => (
+                <Input
+                  id={a.id}
+                  value={nroControl}
+                  onChange={(e) => setNroControl(e.target.value)}
+                />
+              )}
+            </FormField>
+            <FormField label="Fecha de la nota" required>
               {(a) => <DatePicker id={a.id} value={fecha} onChange={setFecha} />}
             </FormField>
           </div>
+          {detalle.data !== undefined &&
+            detalle.data.fiscal_support &&
+            nroControl.trim() === "" && (
+              <p className="text-[0.8rem] text-faint-foreground">{NC_PROVEEDOR.sinControl}</p>
+            )}
+          {detalle.data !== undefined && !detalle.data.fiscal_support && (
+            <p className="text-[0.8rem] text-faint-foreground">{NC_PROVEEDOR.noFiscal}</p>
+          )}
+          {detalle.data?.has_retention === true && (
+            <p className="text-[0.8rem] text-faint-foreground">{NC_PROVEEDOR.conRetencion}</p>
+          )}
+          {!esGasto && detalle.data !== undefined && (
+            <FormField label={NC_PROVEEDOR.preguntaClase} required>
+              {(a) => (
+                <SimpleSelect
+                  id={a.id}
+                  value={clase}
+                  onValueChange={setClase}
+                  options={[
+                    { value: "devolucion", label: NC_PROVEEDOR.devolucion },
+                    { value: "rebaja", label: NC_PROVEEDOR.rebaja },
+                  ]}
+                />
+              )}
+            </FormField>
+          )}
+          {!esGasto && clase !== "" && (
+            <p className="text-[0.8rem] text-faint-foreground">
+              {clase === "devolucion" ? NC_PROVEEDOR.ayudaDevolucion : NC_PROVEEDOR.ayudaRebaja}
+            </p>
+          )}
+          {faltaElLote && (
+            <p className="text-[0.8rem] text-faint-foreground">{NC_PROVEEDOR.faltaElLote}</p>
+          )}
+          {pideDeposito && (
+            <FormField label={NC_PROVEEDOR.deposito} required>
+              {(a) => (
+                <SimpleSelect
+                  id={a.id}
+                  value={almacenId}
+                  onValueChange={setAlmacenId}
+                  options={(almacenes.data ?? []).map((w) => ({ value: w.id, label: w.name }))}
+                />
+              )}
+            </FormField>
+          )}
+          {almacenId !== "" &&
+            conLote.map(({ linea }) =>
+              lotesDe(linea.product_id).length === 0 ? (
+                <p key={`lote-${linea.id}`} className="text-[0.8rem] text-faint-foreground">
+                  {linea.description}: {NC_PROVEEDOR.sinLotes}
+                </p>
+              ) : (
+                <FormField
+                  key={`lote-${linea.id}`}
+                  label={NC_PROVEEDOR.lote(linea.description)}
+                  required
+                  {...(lotesDe(linea.product_id).some(
+                    (l) => l.expired && l.lot_id === loteDe(linea.id, linea.product_id),
+                  )
+                    ? { hint: NC_PROVEEDOR.ayudaLoteVencido }
+                    : {})}
+                >
+                  {(a) => (
+                    <SimpleSelect
+                      id={a.id}
+                      value={loteDe(linea.id, linea.product_id)}
+                      onValueChange={(v) => setLotes((prev) => ({ ...prev, [linea.id]: v }))}
+                      options={lotesDe(linea.product_id).map((l) => ({
+                        value: l.lot_id,
+                        label: [
+                          l.code,
+                          l.expires_at === null ? "" : `vence ${fechaLocal(l.expires_at)}`,
+                          l.expired ? NC_PROVEEDOR.loteVencido : "",
+                          `hay ${mostrarCantidad(l.quantity)}`,
+                        ]
+                          .filter((t) => t !== "")
+                          .join(" · "),
+                      }))}
+                    />
+                  )}
+                </FormField>
+              ),
+            )}
           <FormField label="Motivo" required>
             {(a) => (
               <Input
                 id={a.id}
-                placeholder="Devolución de mercancía, corrección de precio…"
+                placeholder="Devolución de mercancía, corrección de precio, factura registrada por error…"
                 value={motivo}
                 onChange={(e) => setMotivo(e.target.value)}
               />
             )}
           </FormField>
           <div className="space-y-2">
-            {lineas.map((l, i) => (
-              <div key={l.clave} className="flex items-start gap-2">
-                <div className="min-w-0 flex-1">
-                  <EntityPicker
-                    placeholder="Producto…"
-                    value={l.producto}
-                    onChange={(v) =>
-                      setLineas((prev) => prev.map((x, j) => (j === i ? { ...x, producto: v } : x)))
-                    }
-                    buscar={async (q) => {
-                      const r = await llamar<{ items: Product[] }>(
-                        `/v1/products?search=${encodeURIComponent(q)}&per_page=8`,
-                      );
-                      return r.items.map((pr) => ({ id: pr.id, label: pr.name, detalle: pr.sku }));
-                    }}
+            {detalle.isPending && <Skeleton className="h-9 w-full" />}
+            {detalle.isError && <MensajeError error={detalle.error} />}
+            {lineas.map((l) => (
+              <div key={l.id} className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-[0.9rem]">
+                  {l.description}
+                  {l.product_id !== null && (
+                    <span className="text-faint-foreground">
+                      {" "}
+                      · facturado {mostrarCantidad(l.quantity)}
+                    </span>
+                  )}
+                </span>
+                {l.product_id !== null && (
+                  <Input
+                    aria-label={`Cantidad que abona la nota de ${l.description}`}
+                    placeholder="Cant."
+                    inputMode="decimal"
+                    className="w-20 text-right font-mono"
+                    value={abonoDe(l.id).quantity}
+                    onChange={(e) => cambiar(l.id, "quantity", e.target.value)}
                   />
-                </div>
+                )}
                 <Input
-                  aria-label={`Cantidad de la línea ${i + 1}`}
-                  placeholder="Cant."
-                  inputMode="decimal"
-                  className="w-20 text-right font-mono"
-                  value={l.quantity}
-                  onChange={(e) =>
-                    setLineas((prev) =>
-                      prev.map((x, j) => (j === i ? { ...x, quantity: e.target.value } : x)),
-                    )
+                  aria-label={
+                    l.product_id === null
+                      ? `Importe que abona la nota de ${l.description}`
+                      : `Precio unitario que abona la nota de ${l.description}`
                   }
-                />
-                <Input
-                  aria-label={`Precio unitario de la línea ${i + 1}`}
-                  placeholder="P. unit."
+                  placeholder={l.product_id === null ? "Importe" : "P. unit."}
                   inputMode="decimal"
-                  className="w-24 text-right font-mono"
-                  value={l.unit_price}
-                  onChange={(e) =>
-                    setLineas((prev) =>
-                      prev.map((x, j) => (j === i ? { ...x, unit_price: e.target.value } : x)),
-                    )
-                  }
+                  className="w-28 text-right font-mono"
+                  value={abonoDe(l.id).unit_price}
+                  onChange={(e) => cambiar(l.id, "unit_price", e.target.value)}
                 />
-                <Button
-                  variant="ghost"
-                  size="iconSm"
-                  aria-label="Quitar línea"
-                  disabled={lineas.length <= 1}
-                  onClick={() => setLineas((prev) => prev.filter((_, j) => j !== i))}
-                >
-                  <Trash2 />
-                </Button>
               </div>
             ))}
             {/* F-06: lo que no se pudo leer se dice, con la cifra a la que se refiere. */}
             {lineas.map((l) => (
-              <MotivoDeLectura key={`cantidad-${l.clave}`} motivo={motivoDeCantidad(l.quantity)} />
+              <MotivoDeLectura
+                key={`cantidad-${l.id}`}
+                motivo={motivoDeCantidad(abonoDe(l.id).quantity)}
+              />
             ))}
             {lineas.map((l) => (
-              <MotivoDeLectura key={`precio-${l.clave}`} motivo={motivoDeImporte(l.unit_price)} />
+              <MotivoDeLectura
+                key={`precio-${l.id}`}
+                motivo={motivoDeImporte(abonoDe(l.id).unit_price)}
+              />
             ))}
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() =>
-                setLineas((prev) => [
-                  ...prev,
-                  { clave: crypto.randomUUID(), producto: null, quantity: "", unit_price: "" },
-                ])
-              }
-            >
-              <Plus /> Otra línea
-            </Button>
+            <p className="text-[0.8rem] text-faint-foreground">
+              {NC_PROVEEDOR.ayudaLineas(factura.transaction_currency)}
+            </p>
+            <p className="text-[0.8rem] text-faint-foreground">{NC_PROVEEDOR.porError}</p>
           </div>
           {error !== null && <MensajeError error={error} />}
         </div>

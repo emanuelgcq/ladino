@@ -56,6 +56,9 @@ export {
   IssueStockRequest,
   ExitReason,
   RETIRO_REASONS,
+  USO_NO_GRAVADO_REASONS,
+  PERDIDA_REASONS,
+  StockExitPreviewResponse,
   CountStockRequest,
   CountStockResponse,
   AdjustStockRequest,
@@ -102,6 +105,7 @@ export {
   ConfirmOrderRequest,
   CreateInvoiceRequest,
   AnnulInvoiceRequest,
+  CorrectWithdrawalRequest,
   ReversePaymentRequest,
   PaymentReversalResponse,
   RegisterPaymentRequest,
@@ -165,6 +169,8 @@ export {
   RegisterSupplierInvoiceRequest,
   ApplyLandedCostRequest,
   RegisterSupplierCreditNoteRequest,
+  SupplierCreditNoteResponse,
+  SupplierInvoiceLinesResponse,
   RegisterSupplierPaymentRequest,
   SimplePurchaseRequest,
   SimplePurchaseResponse,
@@ -255,6 +261,13 @@ export {
   ListMoneyLandingGapsResponse,
 } from "./treasury.js";
 export {
+  ExpenseRecurrence,
+  RecurringExpenseResponse,
+  ListRecurringExpensesResponse,
+  SkipRecurringExpenseRequest,
+  StopRecurringExpenseRequest,
+} from "./recurring-expenses.js";
+export {
   NegocioResumenResponse,
   NegocioTasaResponse,
   TasaDelDia,
@@ -263,6 +276,33 @@ export {
   CompanySettingsResponse,
   UpdateCompanySettingsRequest,
 } from "./negocio.js";
+// La búsqueda de documentos por número de la paleta (P-06, ADR-0081).
+export {
+  SearchDocumentType,
+  SearchDocumentsQuery,
+  SearchDocumentItem,
+  SearchDocumentsResponse,
+} from "./search.js";
+// Los reportes y las carteras (P-07, F-13, H-11).
+export {
+  ReportFormat,
+  ReportColumnKind,
+  ReportColumn,
+  ReportSummaryLine,
+  ReportName,
+  ReportTable,
+  SalesReportGroup,
+  SalesReportQuery,
+  MarginReportGroup,
+  MarginReportQuery,
+  CashClosingsReportGroup,
+  CashClosingsReportQuery,
+  RangeReportQuery,
+  ReceivablesSort,
+  ReceivablesReportQuery,
+  PayablesSort,
+  PayablesReportQuery,
+} from "./reports.js";
 export {
   BookKind,
   TaxTreatment,

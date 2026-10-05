@@ -33,7 +33,62 @@ import { receiveStockFor } from "./inventory.js";
 export type ProductError =
   | CompanyScopeError
   | { code: "DUPLICATE"; message: string }
-  | { code: "VALIDATION_FAILED"; message: string };
+  | { code: "VALIDATION_FAILED"; message: string }
+  | { code: "RECIPE_INVALID"; message: string };
+
+const SIN_EXISTENCIA_PROPIA =
+  "Un compuesto no lleva existencia propia: no lleva lote ni vencimiento. Los llevan sus ingredientes.";
+
+/**
+ * I-04 y C-07: lo que la base rechaza al cambiar «es un compuesto» o «lleva lote y vencimiento»,
+ * dicho para la persona. La regla vive en el esquema (LAD44, LAD38 y `products_composed_chk`);
+ * aquí solo se traduce. Las tres decisiones son las más estrechas (RESPUESTA §2.16): no se
+ * convierte lo que ya tiene movimientos, y un compuesto vendido no deja de serlo.
+ */
+function banderasRechazadas(e: unknown): ProductError | null {
+  const pg = e as { code?: string; message?: string; constraint_name?: string };
+  const texto = pg.message ?? "";
+  if (pg.code === "LAD44") {
+    if (texto.includes("INGREDIENTE")) {
+      return {
+        code: "RECIPE_INVALID",
+        message:
+          "Este producto es ingrediente de un compuesto: no puede ser compuesto a la vez. Quítalo de esa receta primero.",
+      };
+    }
+    if (texto.includes("ya se vendió")) {
+      return {
+        code: "RECIPE_INVALID",
+        message:
+          "Este compuesto ya se vendió: no deja de ser compuesto, porque sus ventas dicen qué ingredientes sacaron. Si ya no lo vendes, páusalo.",
+      };
+    }
+    return {
+      code: "RECIPE_INVALID",
+      message:
+        "Este producto ya tiene movimientos de mercancía: no se puede volver compuesto, porque un compuesto no lleva existencia propia. Crea otro producto para el compuesto.",
+    };
+  }
+  if (pg.code === "LAD38") {
+    return {
+      code: "VALIDATION_FAILED",
+      message:
+        "Este producto ya tiene movimientos de mercancía: «lleva lote y vencimiento» no se cambia después, porque su existencia ya se lleva de una forma. Crea otro producto.",
+    };
+  }
+  if (pg.code === "LAD73") {
+    // C-07 (20261005130200): encender el vencimiento no deja lotes sin fecha.
+    return {
+      code: "VALIDATION_FAILED",
+      message:
+        "Este producto tiene lotes sin fecha de vencimiento: ponle su fecha a cada lote antes de encender «lleva lote y vencimiento».",
+    };
+  }
+  if (pg.code === "23514" && pg.constraint_name === "products_composed_chk") {
+    return { code: "VALIDATION_FAILED", message: SIN_EXISTENCIA_PROPIA };
+  }
+  return null;
+}
 
 const PRODUCT_COLUMNS = `id, tenant_id, company_id, sku, name, kind, status,
   unit_code, tax_category_code, category_id, barcode, image_path,
@@ -130,6 +185,26 @@ export async function createProduct(
   );
   if (!detalle.ok) return detalle;
 
+  // I-04 / C-07: las dos banderas de existencia, validadas antes de escribir.
+  const compuesto = input.is_composed === true;
+  const conLote = input.tracks_lots === true;
+  // Marcar «compuesto» exige poder escribir su receta (`product.recipe.manage`): quien solo tiene
+  // `product.manage` dejaría un producto que no se puede vender (un compuesto sin ingredientes) y
+  // que no puede completar. Vale también para el alta simple, que pasa por aquí.
+  if (compuesto) {
+    const receta = await companyScope(sql, actor.userId, input.company_id, "product.recipe.manage");
+    if (!receta.ok) return receta;
+  }
+  if (input.kind !== "good" && (compuesto || conLote)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Un servicio no tiene existencias: no es un compuesto ni lleva lote.",
+    });
+  }
+  if (compuesto && conLote) {
+    return err({ code: "VALIDATION_FAILED", message: SIN_EXISTENCIA_PROPIA });
+  }
+
   // 5. CALCULAR: sin dinero aquí. Versión de reglas para la auditoría.
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
@@ -140,11 +215,12 @@ export async function createProduct(
       const [creada] = await sp<ProductRow[]>`
         insert into public.products
           (tenant_id, company_id, sku, name, kind, unit_code, tax_category_code, category_id,
-           barcode, status, reduced_rate_literal_code)
+           barcode, status, reduced_rate_literal_code, is_composed, tracks_lots, tracks_expiry)
         values (${scope.value.tenantId}, ${input.company_id}, ${input.sku}, ${input.name},
                 ${input.kind}, ${input.unit_code}, ${cat.code},
                 ${input.category_id ?? null}, ${input.barcode ?? null},
-                ${input.status ?? "active"}, ${detalle.value.literal})
+                ${input.status ?? "active"}, ${detalle.value.literal},
+                ${compuesto}, ${conLote}, ${conLote})
         returning ${sp.unsafe(PRODUCT_COLUMNS)},
                   to_char(created_at at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at`;
       return creada!;
@@ -174,6 +250,8 @@ export async function createProduct(
               sku: fila.sku,
               kind: fila.kind,
               tax_category_code: fila.tax_category_code,
+              ...(compuesto ? { is_composed: true } : {}),
+              ...(conLote ? { tracks_lots: true, tracks_expiry: true } : {}),
               // Hallazgo 10: el literal del art. 64 o la justificación del suntuario, en el acta.
               ...(detalle.value.literal === null
                 ? {}
@@ -210,18 +288,53 @@ export async function updateProduct(
     input.name === undefined &&
     input.status === undefined &&
     input.category_id === undefined &&
-    input.barcode === undefined
+    input.barcode === undefined &&
+    input.is_composed === undefined &&
+    input.tracks_lots === undefined
   ) {
     return err({ code: "VALIDATION_FAILED", message: "Nada que actualizar." });
+  }
+
+  // CAMBIAR la marca de compuesto —ponerla, o quitarla, que borra la receta— exige poder escribir
+  // recetas (`product.recipe.manage`). Repetir la marca que el producto ya tiene no cambia nada y
+  // no lo pide: la edición de nombre o estado sigue siendo de `product.manage`.
+  if (input.is_composed !== undefined) {
+    const [actual] = await sql<{ is_composed: boolean }[]>`
+      select is_composed from public.products
+       where id = ${productId} and company_id = ${input.company_id}`;
+    if (actual !== undefined && actual.is_composed !== input.is_composed) {
+      const receta = await companyScope(
+        sql,
+        actor.userId,
+        input.company_id,
+        "product.recipe.manage",
+      );
+      if (!receta.ok) return receta;
+    }
   }
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
 
   let fila: ProductRow | undefined;
+  // Las líneas de receta que se van con la marca: el acta las guarda (el borrado no deja otro rastro).
+  let recetaBorrada: { child_product_id: string; quantity: string; unit_code: string }[] = [];
   try {
     fila = await sql.savepoint(async (sp) => {
+      // I-04: dejar de ser compuesto se lleva su receta en la misma operación (el esquema no deja
+      // quitar la marca con receta puesta). Si el compuesto ya se vendió, la base lo rechaza y el
+      // savepoint devuelve la receta a su sitio.
+      if (input.is_composed === false) {
+        recetaBorrada = await sp<
+          { child_product_id: string; quantity: string; unit_code: string }[]
+        >`delete from public.product_recipes
+           where company_id = ${input.company_id} and parent_product_id = ${productId}
+          returning child_product_id, quantity::text as quantity, unit_code`;
+      }
       const [actualizada] = await sp<ProductRow[]>`
         update public.products set
+          is_composed   = coalesce(${input.is_composed ?? null}::boolean, is_composed),
+          tracks_lots   = coalesce(${input.tracks_lots ?? null}::boolean, tracks_lots),
+          tracks_expiry = coalesce(${input.tracks_lots ?? null}::boolean, tracks_expiry),
           name        = coalesce(${input.name ?? null}, name),
           status      = coalesce(${input.status ?? null}, status),
           category_id = case when ${input.category_id === undefined}
@@ -236,6 +349,8 @@ export async function updateProduct(
   } catch (e) {
     const dup = duplicado(e);
     if (dup) return err(dup);
+    const banderas = banderasRechazadas(e);
+    if (banderas) return err(banderas);
     if ((e as { code?: string }).code === "23503") {
       return err({
         code: "VALIDATION_FAILED",
@@ -259,6 +374,13 @@ export async function updateProduct(
               status: input.status ?? null,
               category_id: input.category_id ?? null,
               barcode: input.barcode ?? null,
+              ...(input.is_composed === undefined ? {} : { is_composed: input.is_composed }),
+              ...(recetaBorrada.length === 0
+                ? {}
+                : { recipe_removed: recetaBorrada.map((r) => ({ ...r })) }),
+              ...(input.tracks_lots === undefined
+                ? {}
+                : { tracks_lots: input.tracks_lots, tracks_expiry: input.tracks_lots }),
             })})`;
   await sql`
     insert into public.outbox
@@ -494,6 +616,23 @@ export async function createProductSimple(
     });
   }
 
+  // I-04 / C-07: la existencia inicial del alta no sirve para un compuesto (no lleva la suya)
+  // ni para un producto con lote (su llegada pide el lote y la fecha).
+  if (input.initial_stock !== undefined && input.is_composed === true) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Un compuesto no lleva existencia propia: quita la existencia inicial. Lo que hay es lo de sus ingredientes.",
+    });
+  }
+  if (input.initial_stock !== undefined && input.tracks_lots === true) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Este producto lleva lote y vencimiento: quita la existencia inicial y regístrala en «Llegó mercancía», que pide el lote y la fecha en que vence.",
+    });
+  }
+
   const esServicio = input.is_service === true;
   if (esServicio && input.initial_stock !== undefined) {
     return err({
@@ -573,6 +712,8 @@ export async function createProductSimple(
         : { tax_category_justification: input.tax_category_justification }),
       ...(categoryId === undefined ? {} : { category_id: categoryId }),
       ...(input.barcode === undefined ? {} : { barcode: input.barcode }),
+      ...(input.is_composed === undefined ? {} : { is_composed: input.is_composed }),
+      ...(input.tracks_lots === undefined ? {} : { tracks_lots: input.tracks_lots }),
     });
     if (creado.ok) {
       producto = creado.value;

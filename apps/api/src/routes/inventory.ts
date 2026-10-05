@@ -16,7 +16,8 @@ import {
 import {
   receiveStock,
   totalDeEntrada,
-  issueStock,
+  issueStockWithExit,
+  previewStockExit,
   countStock,
   adjustStock,
   transferStock,
@@ -197,9 +198,23 @@ export function inventoryRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
     if (!parsed.success) throw new ValidacionError(parsed.error.issues);
     coherente(companyId, parsed.data.company_id);
     const { actor } = c.get("ladino.auth");
-    const r = await withTransaction(sql, actor, (uow) => issueStock(uow, parsed.data));
+    // ADR-0082: la salida con su consecuencia fiscal (el retiro gravado emite su factura).
+    const r = await withTransaction(sql, actor, (uow) => issueStockWithExit(uow, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);
+  });
+
+  // ADR-0082: lo que la salida VA a emitir, con sus cifras. Ensaya y deshace: no escribe nada, y
+  // por eso no lleva Idempotency-Key (como las demás vistas previas).
+  app.post("/v1/inventory/issues/preview", async (c) => {
+    const { companyId } = requireCompany(c);
+    const parsed = IssueStockRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) => previewStockExit(uow, parsed.data));
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 200);
   });
 
   // Ajuste: permiso propio (inventory.adjust) y motivo obligatorio en el esquema.

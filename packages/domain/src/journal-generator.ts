@@ -80,6 +80,11 @@ export interface AmountContext {
   readonly revaluation_to_variance?: string;
   /** J-02: lo que lleva de negativo a cero una caja en sobregiro al cerrarla. Se le debe al dueño. */
   readonly owner_contribution?: string;
+  /**
+   * Lo que sobra a favor: el sobrante de un cobro (F-10) o lo que la nota de crédito de un
+   * proveedor abona por encima de lo que se le debía (ADR-0083 §5). Ausente vale 0.
+   */
+  readonly credit_surplus?: string;
 }
 
 /** Las banderas que responden los predicados. Ocho preguntas, ni una más. */

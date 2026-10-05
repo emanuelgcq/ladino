@@ -114,9 +114,23 @@ N-06, N-08).
 
 ## 6. Buscar (Ctrl+K)
 
-La paleta (`palette.tsx`) busca clientes, productos y pantallas; las pantallas las filtra con el
-mismo filtro del menú —permiso, módulo activo y modo de venta (`palette.tsx:35`)—. No busca documentos por número ni acciones: eso está decidido (RESPUESTA
-§2.14, P-06) y pertenece a la ola 5; hasta entonces este documento no lo cuenta como hecho.
+La paleta (`palette.tsx`; qué ofrece lo decide `paleta-acciones.ts`, sin React) hace cuatro cosas
+(P-06, ADR-0081):
+
+- **Pantallas**: las entradas del menú, con el mismo filtro del menú —permiso, módulo activo y
+  modo de venta—. Se encuentran también sin tildes («llego mercancia»).
+- **Acciones** que viven dentro de una pantalla: «Nuevo cliente» (`customer.manage`; abre el
+  diálogo en `/clientes?accion=nuevo` o `/admin/clientes?accion=nuevo`) y «Cerrar caja»
+  (`cash.close`; `/dinero?accion=cerrar-caja`, que abre el cierre si hay una sola caja). Una
+  acción existe si el rol tiene el permiso del acto **y** abre la pantalla donde se hace.
+- **Clientes y productos**, con la búsqueda del servidor.
+- **Documentos por su número**: factura, recibo, notas, cotización y compra, con
+  `GET /v1/search/documents`. El servidor devuelve solo lo que el rol puede leer en la empresa de
+  la pestaña. Una venta abre su detalle (`/admin/ventas/:id`); una compra lleva a la lista de
+  facturas de proveedores. Lo que el rol no puede abrir no se pinta.
+
+Teclado: flechas, Enter, Escape. No anuncia nada que no exista: el pie del «Asistente de Ladino»
+se quitó (ADR-0081).
 
 ## 7. Caminos que cruzan el menú
 
@@ -141,7 +155,7 @@ sección está decidido por el dueño ni construido.**
    «Elige un cliente». P-05 resolvió «a quién cobro primero» con la lista ordenada por deuda; una
    vista de toda la cartera por tramos de antigüedad sigue sin existir.
 
-   **P-05 cerrado (2026-10-04, pendiente de commit).** La regla que faltaba existe: una venta
+   **P-05 cerrado (2026-10-04, 71c73ab).** La regla que faltaba existe: una venta
    fiada lleva su fecha de vencimiento, acordada al vender y congelada en el documento (migración
    `20261004210000`), y la lista ordena por lo vencido (§7). Decidido por criterio (RESPUESTA
    §2.16); las alternativas descartadas están en la fila P-05 del bloque «Estado» del informe del

@@ -188,3 +188,14 @@ ser FACTURA, con número de control y columna especial del Libro de Ventas, junt
 
 **Hasta entonces queda como está construida**, y los retiros no se liberan en producción
 (RISK_REGISTER R-70, PENDIENTES_ASESOR P-76).
+
+## Enmienda (ola 5, 2026-10-04): ADR-0082
+
+**La decisión 2 de la nota de aplicación («la Nota de retiro no consume número de control») queda
+sustituida por [ADR-0082](ADR-0082-el-retiro-de-inventario-se-factura.md):** el retiro gravado
+emite una FACTURA DE RETIRO con control del talonario (migraciones 20261005100000 a 100600). Las
+Notas de retiro ya emitidas no se tocan y siguen en el libro; `withdrawal_note_gaps()` lleva el
+corte en su enunciado. AF3-01, AF3-03 (con su cuenta por papel), AF3-04, AF3-05, AF3-06 (anulación
+del mismo día y, pasado el día, la nota de crédito total del retiro) y AF3-07 quedan aplicados;
+AF3-02b sigue rechazando el faltante sin evidencia (P-81). Los retiros **siguen sin liberarse en
+producción** hasta que el asesor responda P-76.

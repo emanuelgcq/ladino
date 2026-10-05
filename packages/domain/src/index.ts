@@ -64,6 +64,8 @@ export {
   type AdjustStockInput,
   revalueStock,
 } from "./inventory.js";
+// ADR-0082: la salida de inventario con su consecuencia fiscal (el retiro gravado se factura).
+export { issueStockWithExit, previewStockExit } from "./retiro-factura.js";
 export { consumeRecipe, type RecipeError } from "./recipes.js";
 // ADR-0066: la ÚNICA puerta por la que la mercancía entra al negocio.
 export {
@@ -88,6 +90,19 @@ export {
   type CustomerStatement,
   type CustomerOverdue,
 } from "./customer-statement.js";
+// Los reportes y las carteras (P-07, F-13, H-11): lecturas, sin autorizar.
+export {
+  salesReport,
+  marginReport,
+  ivaReport,
+  inventoryReport,
+  receivablesReport,
+  payablesReport,
+  cashClosingsReport,
+  igtfReport,
+  type ReportPaging,
+  type ReportRange,
+} from "./reports.js";
 export {
   createQuote,
   createOrder,
@@ -95,6 +110,7 @@ export {
   createInvoice,
   createReceipt,
   annulInvoice,
+  creditWithdrawalInvoice,
   annulmentStatus,
   refundCustomerCredit,
   registerPayment,
@@ -207,6 +223,13 @@ export {
   type TreasurySubaccountsRepair,
   type TreasuryError,
 } from "./treasury.js";
+export {
+  listRecurringExpenses,
+  registerExpenseWithRecurrence,
+  skipRecurringExpense,
+  stopRecurringExpense,
+  type RecurringExpenseError,
+} from "./recurring-expenses.js";
 export {
   readFiscalBook,
   exportFiscalBook,

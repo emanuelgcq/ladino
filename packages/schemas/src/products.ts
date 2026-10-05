@@ -50,6 +50,17 @@ export const CreateProductRequest = z
      * puede corregir (LAD33): quien quiera esa red la pide explícitamente.
      */
     status: z.enum(["draft", "active"]).optional(),
+    /**
+     * I-04: «es un compuesto». Se vende, pero no lleva existencia propia: venderlo descuenta los
+     * ingredientes de su receta (`PUT /v1/products/:id/recipe`). No admite lote ni vencimiento.
+     */
+    is_composed: z.boolean().optional(),
+    /**
+     * C-07: «lleva lote y vencimiento». UN interruptor: enciende las dos banderas del esquema
+     * (`tracks_lots` y `tracks_expiry`). La llegada pide entonces el lote y su fecha, y la venta
+     * toma primero lo que vence antes. No se cambia con movimientos registrados.
+     */
+    tracks_lots: z.boolean().optional(),
   })
   .strict();
 export type CreateProductRequest = z.infer<typeof CreateProductRequest>;
@@ -64,6 +75,17 @@ export const UpdateProductRequest = z
     status: z.enum(["draft", "active", "inactive"]).optional(),
     category_id: uuid.nullable().optional(),
     barcode: z.string().trim().min(1).max(64).nullable().optional(),
+    /**
+     * I-04: «es un compuesto». Se vende, pero no lleva existencia propia: venderlo descuenta los
+     * ingredientes de su receta (`PUT /v1/products/:id/recipe`). No admite lote ni vencimiento.
+     */
+    is_composed: z.boolean().optional(),
+    /**
+     * C-07: «lleva lote y vencimiento». UN interruptor: enciende las dos banderas del esquema
+     * (`tracks_lots` y `tracks_expiry`). La llegada pide entonces el lote y su fecha, y la venta
+     * toma primero lo que vence antes. No se cambia con movimientos registrados.
+     */
+    tracks_lots: z.boolean().optional(),
   })
   .strict();
 export type UpdateProductRequest = z.infer<typeof UpdateProductRequest>;
@@ -231,6 +253,17 @@ export const CreateProductSimpleRequest = z
       .regex(/^64(\.[0-9a-z]+)+$/)
       .optional(),
     tax_category_justification: z.string().trim().min(10).max(500).optional(),
+    /**
+     * I-04: «es un compuesto». Se vende, pero no lleva existencia propia: venderlo descuenta los
+     * ingredientes de su receta (`PUT /v1/products/:id/recipe`). No admite lote ni vencimiento.
+     */
+    is_composed: z.boolean().optional(),
+    /**
+     * C-07: «lleva lote y vencimiento». UN interruptor: enciende las dos banderas del esquema
+     * (`tracks_lots` y `tracks_expiry`). La llegada pide entonces el lote y su fecha, y la venta
+     * toma primero lo que vence antes. No se cambia con movimientos registrados.
+     */
+    tracks_lots: z.boolean().optional(),
   })
   .strict();
 export type CreateProductSimpleRequest = z.infer<typeof CreateProductSimpleRequest>;

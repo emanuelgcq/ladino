@@ -568,6 +568,86 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
 
   // ── Notas de crédito recibidas y pagos ────────────────────────────────────
 
+  /**
+   * H-03: lo que la pantalla de la nota de crédito necesita de la factura que corrige. Solo
+   * lee: la clase de la factura, si retuvo y sus líneas con la alícuota congelada.
+   */
+  app.get("/v1/supplier-invoices/:id/lines", async (c) => {
+    const { companyId } = requireCompany(c);
+    const { actor } = c.get("ladino.auth");
+    const id = idValido(c.req.param("id"));
+    const cuerpo = await withTransaction(sql, actor, async ({ sql: tx }) => {
+      // `expense.register` solo abre la factura de un GASTO: quien solo lleva gastos no lee las
+      // facturas de mercancía. La clase se mira antes SOLO para elegir el permiso.
+      const [clase] = await tx<{ gasto: boolean }[]>`
+        select expense_category is not null as gasto from public.supplier_invoices
+         where id = ${id} and company_id = ${companyId}`;
+      try {
+        await exigeLecturaDeCompras(tx, actor, companyId, [
+          "purchase.credit_note.register",
+          "purchase.invoice.register",
+          ...(clase?.gasto === true ? ["expense.register"] : []),
+        ]);
+      } catch (e) {
+        if (clase !== undefined && !clase.gasto && e instanceof DominioError) {
+          throw new DominioError({
+            code: "PERMISSION_REQUIRED",
+            message:
+              "Esta factura es de mercancía: con el permiso de registrar gastos solo se abren las facturas de un gasto.",
+          });
+        }
+        throw e;
+      }
+      const [f] = await tx<Record<string, unknown>[]>`
+        select i.id as supplier_invoice_id, i.transaction_currency,
+               i.expense_category is not null as is_expense, i.fiscal_support,
+               exists (select 1 from public.supplier_retentions r
+                        where r.supplier_invoice_id = i.id and r.status <> 'cancelled')
+                 as has_retention
+          from public.supplier_invoices i
+         where i.id = ${id} and i.company_id = ${companyId}`;
+      if (!f) return null;
+      const lines = await tx<Record<string, unknown>[]>`
+        select il.id, il.line_number, il.description, il.product_id,
+               il.quantity::text as quantity,
+               il.goods_receipt_line_id is not null as has_receipt,
+               coalesce((select p.tracks_lots from public.products p
+                          where p.id = il.product_id), false) as tracks_lots,
+               coalesce((select sum(cl.quantity)
+                           from public.supplier_credit_note_lines cl
+                           join public.supplier_credit_notes n
+                             on n.id = cl.supplier_credit_note_id
+                          where cl.supplier_invoice_line_id = il.id and n.status = 'posted'
+                            and n.correction_kind = 'devolucion'), 0)::text as returned_quantity
+          from public.supplier_invoice_lines il
+         where il.supplier_invoice_id = ${id} and il.company_id = ${companyId}
+         order by il.line_number`;
+      // H-03, tercera ronda: la devolución de un producto por lotes cuya línea no viene de una
+      // recepción pregunta el LOTE. Aquí van los lotes con existencia de esos productos, con su
+      // depósito y su vencimiento; los vencidos INCLUIDOS y marcados (devolverlos es el caso).
+      // «Vencido» con la misma granularidad que LAD46 (20261005130100): el día de Caracas.
+      const lots = await tx<Record<string, unknown>[]>`
+        select b.product_id, b.warehouse_id, l.id as lot_id, l.code,
+               l.expires_at::text as expires_at,
+               coalesce(l.expires_at < platform.caracas_day(now()), false) as expired,
+               b.quantity::text as quantity
+          from public.stock_balances b
+          join public.lots l on l.id = b.lot_id and l.company_id = b.company_id
+         where b.company_id = ${companyId} and b.quantity > 0
+           and b.product_id in (
+                 select il.product_id
+                   from public.supplier_invoice_lines il
+                   join public.products p on p.id = il.product_id and p.tracks_lots
+                  where il.supplier_invoice_id = ${id} and il.company_id = ${companyId}
+                    and il.goods_receipt_line_id is null)
+         order by b.product_id, l.expires_at nulls last, l.code, b.warehouse_id`;
+      return { ...f, lines, lots };
+    });
+    if (cuerpo === null)
+      throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+    return c.json(cuerpo, 200);
+  });
+
   app.post("/v1/supplier-credit-notes", idempotencia, async (c) => {
     const { companyId } = requireCompany(c);
     const parsed = RegisterSupplierCreditNoteRequest.safeParse(
@@ -830,8 +910,17 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
         -- sin tasa también da NULL, pero no se le debe nada: no hace al total NULL —antes sí, con
         -- el nominal vacío, mientras la antigüedad de esta misma respuesta no la contaba—. Su
         -- saldo a favor queda en su fila, en su moneda; sin tasa no resta del total.
+        -- H-03, tercera ronda (C2): LO QUE SE DEBE son solo los saldos POSITIVOS, como ap_aging y
+        -- el resumen del Inicio. Una factura con saldo negativo (su nota de crédito abonó de
+        -- más) no es deuda negativa: su saldo a favor va APARTE (credit_in_favor) y no se
+        -- descuenta solo. Antes se sumaba sin acotar y el total salía por debajo de la
+        -- antigüedad de esta misma respuesta. El filtro va en el sum(), no con greatest(): así el
+        -- NULL de «sin tasa» de una factura CON saldo sigue haciendo NULL el total.
         select (select case when bool_or(d.deuda is null and d.nominal > 0) then null
-                            else coalesce(sum(d.deuda), 0) end
+                            -- Sin ninguna con saldo, el cero conserva la escala de la moneda
+                            -- (sum(deuda * 0) = 0.00), como cuando se sumaba todo.
+                            else coalesce(sum(d.deuda) filter (where d.nominal > 0),
+                                          sum(d.deuda * 0), 0) end
                   from (select platform.supplier_debt_today(${companyId}, i.id) as deuda,
                                platform.supplier_invoice_balance(${companyId}, i.id) as nominal
                           from public.supplier_invoices i
@@ -840,6 +929,35 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
                coalesce((select sum(r.retained_amount) from public.supplier_retentions r
                           where r.company_id = ${companyId} and r.supplier_id = ${id}
                             and r.status <> 'cancelled'), 0)::text as retenido`;
+      // EL SALDO A FAVOR, APARTE. En la moneda de cada factura sale del AUXILIAR (lo que hoy
+      // dice supplier_invoice_balance); en bolívares, solo lo que el mayor declara: lo que las
+      // notas vigentes de este proveedor asentaron en la cuenta de saldos a favor.
+      const aFavor = await tx<{ currency: string; nominal: string }[]>`
+        select s.currency,
+               round(sum(-s.saldo), platform.currency_minor_units(s.currency))::text as nominal
+          from (select i.transaction_currency as currency,
+                       platform.supplier_invoice_balance(${companyId}, i.id) as saldo
+                  from public.supplier_invoices i
+                 where i.company_id = ${companyId} and i.supplier_id = ${id}
+                   and i.status in ('posted', 'paid')) s
+         where s.saldo < 0
+         group by s.currency
+         order by s.currency`;
+      const [aFavorBs] = await tx<{ v: string }[]>`
+        select round(coalesce(sum(n.credit_in_favor_functional), 0), 2)::text as v
+          from public.supplier_credit_notes n
+         where n.company_id = ${companyId} and n.supplier_id = ${id} and n.status = 'posted'`;
+      // Las notas de crédito del proveedor, con lo que dice su papel. `document_incomplete`:
+      // nota fiscal que llegó sin número de control, aunque traiga una referencia (PA 00071
+      // art. 23 → art. 13; 20261005110700).
+      const creditNotes = await tx<Record<string, unknown>[]>`
+        select n.id, n.supplier_invoice_id, n.supplier_document_number,
+               n.supplier_control_number, n.note_date::text as note_date,
+               n.transaction_currency, n.total_amount::text as total_amount,
+               n.correction_kind as kind, n.is_fiscal, n.document_incomplete
+          from public.supplier_credit_notes n
+         where n.company_id = ${companyId} and n.supplier_id = ${id} and n.status = 'posted'
+         order by n.note_date, n.id`;
       const [ref] = await tx<{ d: string }[]>`select current_date::text as d`;
       const pendiente = totales?.pendiente ?? null;
       const sinTasa = totales !== undefined && pendiente === null;
@@ -853,6 +971,9 @@ export function purchasesRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
           ? await nominalPorMonedaDeProveedor(tx, companyId, id, null)
           : [],
         total_retained: totales?.retenido ?? "0",
+        credit_in_favor: aFavor,
+        credit_in_favor_functional: aFavorBs?.v ?? "0.00",
+        credit_notes: creditNotes,
         aging: await antiguedadDeProveedor(tx, companyId, id, ref!.d),
       };
     });

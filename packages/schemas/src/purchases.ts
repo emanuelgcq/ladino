@@ -257,28 +257,86 @@ export const RegisterSupplierCreditNoteRequest = z
     company_id: uuid,
     supplier_invoice_id: uuid,
     supplier_document_number: z.string().trim().min(1).max(60),
+    /**
+     * H-03 (PA 00071 art. 23 → art. 13): la nota de un proveedor contribuyente lleva número de
+     * control. Si el papel llegó SIN él, se registra igual —reduce el crédito fiscal, que es la
+     * lectura conservadora— y queda marcada `document_incomplete`.
+     */
     supplier_control_number: z.string().trim().min(1).max(60).optional(),
     supplier_document_ref: z.string().trim().min(1).max(120).optional(),
     note_date: z.string().date(),
     reason: z.string().trim().min(3).max(500),
     currency,
+    /**
+     * H-03 (ADR-0083): qué es la nota para la MERCANCÍA. `devolucion` = la mercancía volvió al
+     * proveedor (sale del kardex a su costo); `rebaja` = el proveedor bajó el precio y la
+     * mercancía se queda (se revaloriza lo que siga en existencia; lo ya vendido va a variación
+     * de costo). Obligatorio si la factura es de mercancía; la de un gasto no lo lleva.
+     */
+    kind: z.enum(["devolucion", "rebaja"]).optional(),
+    /**
+     * El depósito del que sale (o donde está) la mercancía cuando la línea de la factura no
+     * viene de una recepción. Con recepción, manda el depósito de la recepción.
+     */
+    warehouse_id: uuid.optional(),
     lines: z
       .array(
         z
           .object({
+            /**
+             * La línea de la factura que se corrige. Con ella el servidor sabe el producto (o
+             * que es un servicio), el depósito y la alícuota: el IVA no se teclea.
+             */
             supplier_invoice_line_id: uuid.optional(),
-            product_id: uuid,
+            /** Sin `supplier_invoice_line_id`: el producto, si la factura lo trae una sola vez. */
+            product_id: uuid.optional(),
             description: z.string().trim().min(1).max(300).optional(),
             quantity,
             unit_price: amount,
+            /**
+             * El IVA lo calcula SIEMPRE el servidor con la alícuota de la línea de la factura.
+             * Si se envía, tiene que coincidir (un céntimo de holgura): si no, 422.
+             */
             tax_amount: amount.optional(),
+            /**
+             * Devolución de un producto que se lleva por lotes cuya línea no viene de una
+             * recepción: el lote del que sale. Puede estar vencido (no se elige por FEFO).
+             */
+            lot_id: uuid.optional(),
           })
-          .strict(),
+          .strict()
+          .refine((l) => l.supplier_invoice_line_id !== undefined || l.product_id !== undefined, {
+            message: "La línea necesita la línea de la factura que corrige, o su producto.",
+          }),
       )
       .min(1)
       .max(500),
   })
   .strict();
+
+/** Lo que responde `POST /v1/supplier-credit-notes`. */
+export const SupplierCreditNoteResponse = z.object({
+  id: uuid,
+  total_amount: z.string(),
+  /** Saldo de la factura después de la nota. Negativo = saldo a favor con el proveedor. */
+  balance: z.string(),
+  accounting_date: z.string().nullable(),
+  /** `false` si la factura no tiene soporte fiscal: la nota no va al libro de compras. */
+  is_fiscal: z.boolean(),
+  /** Nota fiscal que llegó sin número de control, AUNQUE traiga una referencia (art. 23 → art. 13). */
+  document_incomplete: z.boolean(),
+  /**
+   * La factura tiene retenciones practicadas y la nota NO las ajusta ni toca su comprobante
+   * (VALIDAR-SENIAT, P-103).
+   */
+  retention_untouched: z.boolean(),
+  /**
+   * La nota abonó más de lo que se debía de la factura: el exceso quedó como saldo a favor con
+   * el proveedor (un activo aparte; no se descuenta solo de otra factura).
+   */
+  left_credit_in_favor: z.boolean(),
+});
+export type SupplierCreditNoteResponse = z.infer<typeof SupplierCreditNoteResponse>;
 export type RegisterSupplierCreditNoteRequest = z.infer<typeof RegisterSupplierCreditNoteRequest>;
 
 export const RegisterSupplierPaymentRequest = z
@@ -662,6 +720,32 @@ export const SupplierStatementResponse = z
       z.object({ currency: z.string(), nominal: z.string() }).strict(),
     ),
     total_retained: z.string(),
+    /**
+     * H-03: el saldo A FAVOR con el proveedor (facturas cuya nota de crédito abonó más de lo que
+     * se debía), por moneda de la factura, según el auxiliar. NO está restado de
+     * `total_outstanding`: no se descuenta solo de otra factura.
+     */
+    credit_in_favor: z.array(z.object({ currency: z.string(), nominal: z.string() }).strict()),
+    /** Lo mismo en moneda funcional: lo que sus notas vigentes asentaron en la cuenta de saldos a favor. */
+    credit_in_favor_functional: z.string(),
+    /** Las notas de crédito vigentes del proveedor, con lo que dice su papel. */
+    credit_notes: z.array(
+      z
+        .object({
+          id: uuid,
+          supplier_invoice_id: uuid,
+          supplier_document_number: z.string(),
+          supplier_control_number: z.string().nullable(),
+          note_date: z.string(),
+          transaction_currency: z.string(),
+          total_amount: z.string(),
+          kind: z.enum(["devolucion", "rebaja"]).nullable(),
+          is_fiscal: z.boolean(),
+          /** Nota fiscal sin número de control, aunque traiga referencia (art. 23 → art. 13). */
+          document_incomplete: z.boolean(),
+        })
+        .strict(),
+    ),
     aging: ApAgingResponse,
   })
   .strict();
@@ -937,3 +1021,50 @@ export const SetRetentionVoucherModeRequest = z
   .object({ company_id: uuid, mode: z.enum(["per_operation", "per_fortnight"]) })
   .strict();
 export type SetRetentionVoucherModeRequest = z.infer<typeof SetRetentionVoucherModeRequest>;
+
+/**
+ * H-03: lo que la pantalla de la nota de crédito necesita saber de la factura que corrige.
+ * Todo lo decide el servidor: qué clase de factura es, si va al libro, si retuvo, y por línea
+ * la alícuota congelada y lo que ya se devolvió.
+ */
+export const SupplierInvoiceLinesResponse = z.object({
+  supplier_invoice_id: uuid,
+  transaction_currency: z.string(),
+  /** La factura es de un gasto (compra de servicio): su nota no pregunta por mercancía. */
+  is_expense: z.boolean(),
+  /** false = sin soporte fiscal: su nota no es fiscal y no va al libro de compras. */
+  fiscal_support: z.boolean(),
+  /** La factura tiene retenciones practicadas, que la nota no ajusta (P-103). */
+  has_retention: z.boolean(),
+  lines: z.array(
+    z.object({
+      id: uuid,
+      line_number: z.number().int(),
+      description: z.string(),
+      product_id: uuid.nullable(),
+      quantity: z.string(),
+      /** La línea viene de una recepción: el depósito (y el lote) se conocen y no se preguntan. */
+      has_receipt: z.boolean(),
+      /** El producto se lleva por lotes: una devolución sin recepción pregunta el lote. */
+      tracks_lots: z.boolean(),
+      returned_quantity: z.string(),
+    }),
+  ),
+  /**
+   * Los lotes CON EXISTENCIA de los productos por lotes cuyas líneas no vienen de una recepción:
+   * de ellos elige la persona el lote que devuelve (`lot_id` de la línea de la nota). Los
+   * vencidos van incluidos y marcados: devolverlos exige `inventory.expired`.
+   */
+  lots: z.array(
+    z.object({
+      product_id: uuid,
+      warehouse_id: uuid,
+      lot_id: uuid,
+      code: z.string(),
+      expires_at: z.string().nullable(),
+      expired: z.boolean(),
+      quantity: z.string(),
+    }),
+  ),
+});
+export type SupplierInvoiceLinesResponse = z.infer<typeof SupplierInvoiceLinesResponse>;

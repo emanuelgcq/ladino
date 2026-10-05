@@ -91,3 +91,11 @@ Revisión en contexto limpio sobre la 20261004205000. Tres cambios; la versión 
 Consecuencias negativas de la quinta pasada: (a) un asiento o documento heredado ya no puede recibir una versión de reglas por ninguna vía, tampoco a propósito: `domain-s0.5` es para siempre lo que dice de ellos; (b) la lista de estados finales vive ahora escrita en el trigger además de en el invariante: una tabla o un estado nuevo hay que añadirlo en los dos sitios; (c) el invariante sigue sin ver el borrador anterior al corte emitido después con una fecha de emisión también anterior al corte (ninguna columna guarda el instante del cambio de estado); (d) en una tabla estricta, al NACER, una fila sigue pudiendo traer cualquier versión de reglas registrada, no necesariamente la vigente de su empresa (no se tocó: es de la 205000, C1).
 
 Verificación: pgTAP 122 §12 (siete aserciones, con la variante rota de B1 y de B3) y `e2e-accounting-hooks` («la versión de reglas — ADR-0079»): el borrador posteado tras un cambio de regla lleva la versión nueva, y `rules_version_gaps` da cero sobre una empresa que emite ventas, registra facturas de proveedor y postea asientos.
+
+## Nota de la ola 5 (2026-10-04): la 1.4.0
+
+La migración 20261005160000 sube la versión semántica a **1.4.0**, una sola vez para toda la ola 5 (§8) y como ÚLTIMA migración de la ventana. Recoge lógica de reglas que ninguna migración de la ola subió: el retiro gravado emite factura y se corrige con su nota (ADR-0082, 20261005100000 a 100960) y la nota de crédito del proveedor mueve el kardex, es fiscal según su factura y su IVA lo calcula el servidor (ADR-0083, 20261005110000 a 110600). La definición del hash no cambia; se recalcula por el mismo patrón de la 1.3.0.
+
+No se confunde con `fiscal-books/1.4.0` (`packages/domain/src/fiscal-books.ts`), que versiona el FORMATO de los libros y vive en el código: son dos series distintas y ninguna lee a la otra.
+
+Verificación: ensayada en una transacción revertida sobre la base local, `rule_set_drift()` = 0, `rules_version_gaps()` = 0 en todas las empresas y la versión vigente pasa a `1.4.0+…`; el pgTAP 122 (104 aserciones) en verde. Ningún test fija «1.3.0» por literal.

@@ -59,11 +59,29 @@ const KIND_TITULO: Record<string, string> = {
   order: "PEDIDO",
   receipt: "RECIBO",
   receipt_return: "RECIBO DE DEVOLUCIÓN",
+  // ADR-0082 (RLIVA art. 31): la factura de retiro es una factura; su leyenda va en las notas.
+  withdrawal_invoice: "FACTURA",
+  withdrawal_credit_note: "NOTA DE CRÉDITO",
+};
+
+/** La leyenda de la factura de retiro y de su nota (ADR-0082). Texto fijo: no se compone. */
+// AF5-04: sin número de artículo en el papel. La PA 00071 no pide otra leyenda legal
+// (EMISION_FACTURAS.md) y la cita solo está leída en una reproducción no oficial.
+const LEYENDA_FACTURA_DE_RETIRO = "Factura por retiro de inventario.";
+const LEYENDA_NOTA_DE_RETIRO =
+  "Deja sin efecto el retiro de inventario de esa factura: la mercancía vuelve al inventario.";
+const MOTIVO_DE_RETIRO: Record<string, string> = {
+  consumo_propio: "consumo propio",
+  regalo: "regalo",
+  donacion: "donación",
+  muestra: "muestra",
 };
 
 /** Cómo se nombra la clase en la marca de cortesía. */
 const KIND_NOMBRE: Record<string, string> = {
   invoice: "La factura",
+  withdrawal_invoice: "La factura de retiro",
+  withdrawal_credit_note: "La nota de crédito",
   credit_note: "La nota de crédito",
   debit_note: "La nota de débito",
 };
@@ -188,7 +206,10 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
                d.source_document_id,
                -- El MOTIVO de la nota (art. 22): la NC directa y la ND lo guardan en notes;
                -- la NC de una devolución, en la devolución. Una nota sin él imprime «—».
-               case when d.kind in ('credit_note', 'debit_note')
+               -- ADR-0082: el motivo del retiro que la factura documenta, para su leyenda.
+               (select m.exit_reason from public.inventory_moves m
+                 where m.id = d.withdrawal_move_id) as retiro_motivo,
+               case when d.kind in ('credit_note', 'debit_note', 'withdrawal_credit_note')
                     then coalesce(nullif(btrim(d.notes), ''),
                                   (select r.reason from public.returns r
                                     where r.credit_note_id = d.id and r.company_id = d.company_id
@@ -353,10 +374,13 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
     const { doc, lineas, alicuotas, subtotalColumna, talonario, origen, igtf, credito } = datos;
     // El recibo y el recibo de devolución no son documentos fiscales (ADR-0050, ADR-0061).
     const esRecibo = doc["kind"] === "receipt" || doc["kind"] === "receipt_return";
-    const esNota = doc["kind"] === "credit_note" || doc["kind"] === "debit_note";
+    const esNota =
+      doc["kind"] === "credit_note" ||
+      doc["kind"] === "debit_note" ||
+      doc["kind"] === "withdrawal_credit_note";
     // Solo la factura, la NC y la ND salen sobre forma libre y llevan la marca de cortesía (H2):
     // la cotización y el pedido imprimen su PDF sin ella.
-    const esFiscal = doc["kind"] === "invoice" || esNota;
+    const esFiscal = doc["kind"] === "invoice" || doc["kind"] === "withdrawal_invoice" || esNota;
 
     // Un recibo NO FISCAL no tiene «copia» fiscal (A6): la leyenda «SIN DERECHO A
     // CRÉDITO FISCAL» de PA 00071 art. 13.13 es de la factura. La pantalla ya no
@@ -530,7 +554,7 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
             `por ${funcionalVestida} ${vestirImporte(String(origen["total_amount"]))}`,
         );
         pdf.text(
-          `Descripción del ajuste: ${doc["kind"] === "credit_note" ? "crédito" : "débito"} de ` +
+          `Descripción del ajuste: ${doc["kind"] === "debit_note" ? "débito" : "crédito"} de ` +
             `${funcionalVestida} ${vestirImporte(String(doc["total_amount"]))} sobre la factura ${numeroOrigen}`,
         );
       } else {
@@ -539,6 +563,19 @@ export function documentsPdfRoutes(app: Hono, sql: Sql, storage?: StorageConfig)
       // Una nota vieja sin motivo imprime «—», nunca un texto inventado.
       // A-2: el motivo, en filas partidas con la misma regla que cuenta el dominio.
       pdf.text(filasDelMotivo(doc["motivo"] ? String(doc["motivo"]) : null).join("\n"));
+      if (doc["kind"] === "withdrawal_credit_note") {
+        pdf.text(LEYENDA_NOTA_DE_RETIRO);
+      }
+    }
+    // ── La leyenda de la factura de retiro (RLIVA art. 31; ADR-0082) ──
+    if (doc["kind"] === "withdrawal_invoice") {
+      pdf.moveDown(0.5);
+      pdf.font("Helvetica").fontSize(10);
+      pdf.text(LEYENDA_FACTURA_DE_RETIRO);
+      pdf.text(
+        `Motivo del retiro: ${MOTIVO_DE_RETIRO[String(doc["retiro_motivo"])] ?? "—"}. ` +
+          "El adquirente es el propio emisor. No genera cuenta por cobrar.",
+      );
     }
     pdf.moveDown(0.8);
 

@@ -172,6 +172,22 @@ export async function createCustomer(
     });
   } catch (e) {
     const conocido = duplicado(e) ?? fkInvalido(e);
+    // ADR-0082: si el RIF choca con la ficha OCULTA de la propia empresa (el adquirente de sus
+    // facturas de retiro, que no sale en Clientes), «ya existe un cliente con ese RIF» mandaría
+    // a la persona a buscar algo que no puede ver. Se le dice lo que pasa.
+    if (conocido?.code === "DUPLICATE" && taxId !== null) {
+      const [propia] = await sql<{ id: string }[]>`
+        select cu.id from public.customers cu
+         where cu.company_id = ${input.company_id} and cu.own_company
+           and upper(regexp_replace(cu.tax_id, '[^a-zA-Z0-9]', '', 'g'))
+               = upper(regexp_replace(${taxId}, '[^a-zA-Z0-9]', '', 'g'))`;
+      if (propia) {
+        return err({
+          code: "VALIDATION_FAILED",
+          message: "Ese es el RIF de tu propio negocio: no se registra como cliente.",
+        });
+      }
+    }
     if (conocido) return err(conocido);
     throw e;
   }

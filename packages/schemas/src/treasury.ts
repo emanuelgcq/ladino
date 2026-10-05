@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { IvaRetentionFullReason, RetentionExclusionMark } from "./purchases.js";
+import { ExpenseRecurrence } from "./recurring-expenses.js";
 
 /**
  * Contratos de TESORERÍA (migraciones 29–31, Fase C).
@@ -188,6 +189,21 @@ export const RegisterExpenseRequest = z
     paid_at: z.string().datetime({ offset: true }).optional(),
     supplier_id: uuid.optional(),
     is_recurring: z.boolean().optional(),
+    /**
+     * H-07: cada cuánto se paga. Solo con `is_recurring: true`; sin él, cada mes (lo que la
+     * pantalla prometía). Crea el recordatorio de esta categoría si no hay uno vivo.
+     */
+    recurrence: ExpenseRecurrence.optional(),
+    /**
+     * H-07, «registrar ahora»: este gasto ATIENDE el período `recurring_due_on` del
+     * recordatorio. Van los dos o ninguno. Si ese período ya no es el que toca (segundo clic,
+     * otra pestaña), 409 y NO se registra el gasto.
+     */
+    recurring_expense_id: uuid.optional(),
+    recurring_due_on: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "día calendario YYYY-MM-DD")
+      .optional(),
     branch_id: uuid.optional(),
     /** Ruta en el bucket `receipts`, si ya se subió el comprobante. */
     attachment_path: z.string().trim().min(3).max(300).optional(),
@@ -251,6 +267,18 @@ export type TreasuryTransferResponse = z.infer<typeof TreasuryTransferResponse>;
 
 export const ExpenseResponse = z
   .object({
+    /**
+     * H-07 (F9): el gasto venía marcado «se repite» y su categoría YA tenía un recordatorio vivo.
+     * El gasto se registró; el recordatorio NO cambió: sigue con esta periodicidad y este próximo
+     * día. Ausente en cualquier otro caso.
+     */
+    recurrence_kept: z
+      .object({
+        periodicity: ExpenseRecurrence,
+        next_due_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      })
+      .strict()
+      .optional(),
     id: uuid,
     category: z.string(),
     description: z.string().nullable(),

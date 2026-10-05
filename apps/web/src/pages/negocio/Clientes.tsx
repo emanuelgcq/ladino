@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, Search, Users } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { useAccionPedida } from "../../app/accion-pedida.js";
 import { errorDePersona } from "../../lib.js";
 import { Button } from "../../ui/button.js";
 import { Card } from "../../ui/card.js";
@@ -64,6 +65,10 @@ export function ClientesNegocio(): React.JSX.Element {
   // Crear y corregir un contacto van bajo el MISMO permiso: quien no puede
   // editar la ficha tampoco ve «Agregar cliente» (auditoría 2026-09-11).
   const puedeGestionar = puede("customer.manage");
+  // P-06: «Nuevo cliente» de la paleta llega con `?accion=nuevo` y abre el mismo diálogo del botón.
+  useAccionPedida("nuevo", true, () => {
+    if (puedeGestionar) setAlta(true);
+  });
   // P-04: la deuda de cada cliente se pide solo con `ar.read`; sin él, el servidor da 403.
   const verDeuda = puede("ar.read");
 

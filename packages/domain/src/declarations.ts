@@ -409,7 +409,9 @@ export async function generateIvaPeriod(
       select exists (
         select 1 from public.documents d
          where d.company_id = ${input.company_id}
-           and d.kind in ('invoice', 'credit_note', 'debit_note')
+           -- ADR-0082: la factura de retiro y su nota de crédito son documentos del libro.
+           and d.kind in ('invoice', 'withdrawal_invoice', 'credit_note',
+                          'withdrawal_credit_note', 'debit_note')
            and d.status in ('issued', 'paid')
            and (d.issued_at at time zone 'America/Caracas')::date < ${input.period_from}::date
       ) or exists (

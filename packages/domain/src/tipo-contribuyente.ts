@@ -76,7 +76,9 @@ export async function emitidosDesde(
   const [fila] = await sql<{ n: number }[]>`
     select count(*)::int as n from public.documents
      where company_id = ${companyId}
-       and kind in ('invoice', 'credit_note', 'debit_note')
+       -- ADR-0082: la factura de retiro y su nota congelan el tipo de contribuyente como las demás.
+       and kind in ('invoice', 'withdrawal_invoice', 'credit_note', 'withdrawal_credit_note',
+                    'debit_note')
        and issued_at is not null and status <> 'draft'
        and platform.caracas_day(issued_at) >= ${dia}::date`;
   return fila?.n ?? 0;

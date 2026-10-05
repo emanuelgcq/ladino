@@ -48,7 +48,18 @@ import type {
 } from "@ladino/schemas";
 import { RULES_VERSION, sembrarProductoIgtf } from "./create-company.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
-import { issueStockBatchForSale, receiveStockFor, reponerSalidasDeDocumento } from "./inventory.js";
+import {
+  issueStockBatchForSale,
+  receiveStockFor,
+  reingresarRetiro,
+  reponerSalidasDeDocumento,
+} from "./inventory.js";
+import {
+  explotarCompuestos,
+  movimientosPorLinea,
+  registrarSalidasDeCompuestos,
+  reingresarCompuesto,
+} from "./compuestos.js";
 import { exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 import { reverseJournalEntryForAnnulment } from "./accounting.js";
@@ -900,6 +911,8 @@ function traducir(e: unknown): SalesError | null {
   }
   if (code === "LAD06") return { code: "APPEND_ONLY_VIOLATION", message };
   if (code === "LAD67") return { code: "VALIDATION_FAILED", message };
+  // Las guardas de la factura de retiro y de su nota (20261005100800): su mensaje es de persona.
+  if (code === "LAD72") return { code: "VALIDATION_FAILED", message };
   if (code === "LAD39") return { code: "NEGATIVE_STOCK", message };
   if (code === "23505") {
     return { code: "DUPLICATE", message: "Ya existe un documento con ese número en esa serie." };
@@ -955,6 +968,13 @@ interface LineaCalculada {
   readonly unitPriceList: Money;
   readonly taxRuleId: string | null;
   readonly costSnapshot: string | null;
+  /**
+   * I-04: la línea es de un producto COMPUESTO. No lleva existencia propia (`esInventariable` es
+   * falso), pero venderla saca sus ingredientes (`compuestos.ts`). `productName` es el nombre del
+   * catálogo, para decir de qué compuesto es el ingrediente que falta.
+   */
+  readonly esCompuesto?: boolean;
+  readonly productName?: string;
   /**
    * ADR-0044 §1: la categoría tributaria del producto AL EMITIR. Se congela en
    * la línea porque el libro de ventas separa exento, exonerado y no sujeto en
@@ -1017,6 +1037,13 @@ async function calcularLineas(
     fecha: string;
     functionalCurrency: string;
     conImpuesto: boolean;
+    /**
+     * ADR-0082: en la factura de retiro el adquirente es la propia empresa, y su tipo de
+     * contribuyente es el de la HISTORIA a la fecha (AF3-07), no el de una ficha de cliente.
+     */
+    adquirenteTipo?: string;
+    /** ADR-0078 §7: inactivo es «no se vende»; la mercancía sí se retira. Solo el retiro lo pide. */
+    aunInactivos?: boolean;
   },
 ): Promise<
   Result<
@@ -1024,8 +1051,8 @@ async function calcularLineas(
     SalesError
   >
 > {
-  const [lista] = await sql<{ currency_code: string }[]>`
-    select currency_code from public.price_lists
+  const [lista] = await sql<{ currency_code: string; name: string }[]>`
+    select currency_code, name from public.price_lists
      where id = ${input.priceListId} and company_id = ${input.companyId} and status = 'active'`;
   if (!lista) {
     return err({
@@ -1066,7 +1093,10 @@ async function calcularLineas(
   if (!fxRate.ok) return err({ code: "VALIDATION_FAILED", message: fxRate.error.message });
   const tasaDecimal = fxRate.value;
 
-  const [contraparte] = await sql<{ taxpayer_type_code: string }[]>`
+  const [contraparte] =
+    input.adquirenteTipo !== undefined
+      ? [{ taxpayer_type_code: input.adquirenteTipo }]
+      : await sql<{ taxpayer_type_code: string }[]>`
     select taxpayer_type_code from public.customers
      where id = ${input.customerId} and company_id = ${input.companyId}`;
   if (!contraparte) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
@@ -1085,7 +1115,8 @@ async function calcularLineas(
     { id: string; name: string; tax_category_code: string; kind: string; is_composed: boolean }[]
   >`select id, name, tax_category_code, kind, is_composed from public.products
      where id = any(${productIds}::uuid[]) and company_id = ${input.companyId}
-       and status = 'active' and system_code is null`;
+       and (status = 'active' or ${input.aunInactivos === true}::boolean)
+       and system_code is null`;
   const productos = new Map(productosFilas.map((p) => [p.id, p]));
   if (productos.size !== productIds.length) {
     return err({
@@ -1161,9 +1192,15 @@ async function calcularLineas(
       roundingPolicy: PRECIO_POLICY,
     });
     if (!resuelto.ok) {
+      // C-06: un producto sin precio en la lista que aplica NO se vende por ella, y no cae en
+      // silencio a la de mostrador (cobraría otro precio sin que nadie lo eligiera). Se dice
+      // cuál producto y cuál lista, que es lo que la persona necesita para arreglarlo.
+      const sinPrecio = resuelto.error.code === "NO_PRICE_FOR_PRODUCT";
       return err({
-        code: resuelto.error.code === "NO_PRICE_FOR_PRODUCT" ? "VALIDATION_FAILED" : "MONEY_ERROR",
-        message: resuelto.error.message,
+        code: sinPrecio ? "VALIDATION_FAILED" : "MONEY_ERROR",
+        message: sinPrecio
+          ? `«${producto.name}» no tiene precio en la lista «${lista.name}». Ponle su precio en esa lista o vende con otra.`
+          : resuelto.error.message,
       } as SalesError);
     }
 
@@ -1211,6 +1248,8 @@ async function calcularLineas(
       taxCategory: producto.tax_category_code,
       operationType: contraparte.taxpayer_type_code === "no_domiciliado" ? null : "interna",
       esInventariable: producto.kind === "good" && !producto.is_composed,
+      esCompuesto: producto.kind === "good" && producto.is_composed,
+      productName: producto.name,
     });
   }
   return ok({
@@ -1235,11 +1274,25 @@ async function resolverLista(
   bloqueo: "rechazar" | "de_contado" = "rechazar",
 ): Promise<Result<string, SalesError>> {
   const [cliente] = await sql<
-    { default_price_list_id: string | null; status: string; is_system: boolean }[]
+    {
+      default_price_list_id: string | null;
+      status: string;
+      is_system: boolean;
+      own_company: boolean;
+    }[]
   >`
-    select default_price_list_id, status, is_system from public.customers
+    select default_price_list_id, status, is_system, own_company from public.customers
      where id = ${customerId} and company_id = ${companyId}`;
   if (!cliente) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  // ADR-0082: la ficha de la propia empresa existe solo como adquirente de sus facturas de
+  // retiro. No es un cliente: no se le vende ni se le fía.
+  if (cliente.own_company) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Esta ficha es la del propio negocio (el adquirente de sus facturas de retiro): no se le vende. Elige al cliente de la venta.",
+    });
+  }
   if (cliente.status === "blocked" && bloqueo === "rechazar") {
     return err({
       code: "VALIDATION_FAILED",
@@ -1290,6 +1343,24 @@ async function resolverLista(
         message:
           "Cambiar la lista de precios de una venta exige el permiso sales.price_list.override.",
       });
+    }
+    // C-06: el ajuste «Vendo al mayor» gobierna LA CAJA (`quotePos` y `quickSale`, las dos
+    // puertas que entran con `de_contado`), y no solo su pantalla: con el ajuste apagado, la
+    // caja no cobra con otra lista que la que toca, tampoco a quien tiene el permiso. El permiso
+    // va PRIMERO (quien no lo tiene recibe su 403 de siempre). La factura de administración
+    // (`rechazar`) y la lista asignada al cliente no pasan por aquí: quedan como estaban. Una
+    // lectura más, solo cuando la caja pide otra lista: el cobro normal no la paga.
+    if (bloqueo === "de_contado" && defaultEfectiva !== null) {
+      const [ajuste] = await sql<{ al_mayor: boolean }[]>`
+        select coalesce((select cs.sells_wholesale from public.company_settings cs
+                          where cs.company_id = ${companyId}), false) as al_mayor`;
+      if (ajuste?.al_mayor !== true) {
+        return err({
+          code: "VALIDATION_FAILED",
+          message:
+            "Tu negocio no tiene activado vender al mayor. Actívalo en Configuración para cobrar con otra lista.",
+        });
+      }
     }
   }
   return ok(pedida);
@@ -1345,6 +1416,13 @@ async function insertarDocumento(
     notes: string | null;
     /** P-05: el vencimiento acordado al vender (`AAAA-MM-DD`). Solo la venta lo trae. */
     dueDate?: string | null;
+    /** ADR-0082: la factura de retiro congela como adquirente a la PROPIA empresa. */
+    adquirente?: {
+      name: string;
+      tax_id: string | null;
+      address: string | null;
+      taxpayer_type: string;
+    };
   },
 ): Promise<Result<DocumentResponse, SalesError>> {
   const totales = calculateTotals(d.lineas.map((l) => l.calc));
@@ -1398,11 +1476,18 @@ async function insertarDocumento(
   // factura que corrigen — su identificación CONGELADA (lo vivo solo si el origen es anterior a la
   // migración 33). Así, una factura vieja al «Consumidor final» tiene su nota.
   const esNotaConOrigen =
-    (d.kind === "credit_note" || d.kind === "debit_note") && d.sourceDocumentId !== null;
-  const [contraparte] = esNotaConOrigen
-    ? await sql<
-        { name: string; tax_id: string | null; address: string | null; taxpayer_type: string }[]
-      >`
+    (d.kind === "credit_note" ||
+      d.kind === "debit_note" ||
+      // ADR-0082: la nota de crédito de un retiro identifica al adquirente como su factura.
+      d.kind === "withdrawal_credit_note") &&
+    d.sourceDocumentId !== null;
+  const [contraparte] =
+    d.adquirente !== undefined
+      ? [d.adquirente]
+      : esNotaConOrigen
+        ? await sql<
+            { name: string; tax_id: string | null; address: string | null; taxpayer_type: string }[]
+          >`
         select coalesce(o.customer_name_snapshot, cu.legal_name) as name,
                coalesce(o.customer_tax_id_snapshot,
                         upper(regexp_replace(cu.tax_id, '[^a-zA-Z0-9]', '', 'g'))) as tax_id,
@@ -1412,9 +1497,9 @@ async function insertarDocumento(
           join public.customers cu on cu.id = o.customer_id
          where o.id = ${d.sourceDocumentId} and o.company_id = ${d.companyId}
            and o.customer_id = ${d.customerId}`
-    : await sql<
-        { name: string; tax_id: string | null; address: string | null; taxpayer_type: string }[]
-      >`
+        : await sql<
+            { name: string; tax_id: string | null; address: string | null; taxpayer_type: string }[]
+          >`
     select legal_name as name,
            upper(regexp_replace(tax_id, '[^a-zA-Z0-9]', '', 'g')) as tax_id,
            fiscal_address as address,
@@ -1729,12 +1814,18 @@ export async function confirmOrder(
      where c.id = ${input.company_id}`;
   const ttl = cfg?.ttl ?? 30;
 
-  const lineas = await sql<{ product_id: string; quantity: string }[]>`
-    select product_id, quantity::text as quantity from public.document_lines
-     where document_id = ${documentId} order by line_number`;
+  // I-04 (ADR-0084, tercera ronda): la línea de un COMPUESTO no reserva. Un compuesto no lleva
+  // existencia propia —su disponible es siempre 0 y el pedido no se podía confirmar nunca—; la de
+  // sus ingredientes se comprueba al FACTURAR, con la receta de ese momento.
+  const lineas = await sql<{ product_id: string; quantity: string; is_composed: boolean }[]>`
+    select dl.product_id, dl.quantity::text as quantity, coalesce(p.is_composed, false) as is_composed
+      from public.document_lines dl
+      left join public.products p on p.id = dl.product_id
+     where dl.document_id = ${documentId} order by dl.line_number`;
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
   for (const l of lineas) {
+    if (l.is_composed) continue;
     // El disponible descuenta lo YA reservado por otros pedidos: reservar dos
     // veces la misma unidad es exactamente lo que esta tabla evita. Y la
     // posición se BLOQUEA antes de leerla: dos pedidos distintos sobre el mismo
@@ -1977,29 +2068,89 @@ async function emitirVenta(
     // en su lote, así que aquí no se vuelve a preguntar por cada una: es el
     // mismo criterio de antes (bien, no compuesto) leído del dato que ya está.
     const conKardex = calculadas.value.lineas.filter((l) => l.esInventariable);
-    if (conKardex.length > 0) {
+    // I-04: la línea de un COMPUESTO no saca el compuesto (no lleva existencia): saca sus
+    // ingredientes, con la receta de este momento. Van en la MISMA salida en lote que las líneas
+    // sueltas —un solo bloqueo en orden determinista—, detrás de ellas.
+    const componentes = await explotarCompuestos(
+      sql,
+      input.company_id,
+      calculadas.value.lineas.flatMap((l, i) =>
+        l.esCompuesto === true
+          ? [
+              {
+                lineNumber: i + 1,
+                productId: l.productId,
+                nombre: l.productName ?? l.description,
+                quantity: l.calc.quantity,
+              },
+            ]
+          : [],
+      ),
+    );
+    if (!componentes.ok) return err(componentes.error);
+    if (conKardex.length > 0 || componentes.value.length > 0) {
+      const pedidas = [
+        ...conKardex.map((l) => ({
+          product_id: l.productId,
+          quantity: l.calc.quantity.toFixed(),
+        })),
+        ...componentes.value.map((c) => ({ product_id: c.childProductId, quantity: c.quantity })),
+      ];
       // La salida la autoriza LA VENTA (`sales.invoice.issue` + alcance del almacén), no
       // `inventory.move`: el cajero vende sin poder mover mercancía suelta (ADR-0068, N-01).
       const mov = await issueStockBatchForSale(uow, {
         company_id: input.company_id,
         warehouse_id: input.warehouse_id,
-        lines: conKardex.map((l) => ({
-          product_id: l.productId,
-          quantity: l.calc.quantity.toFixed(),
-        })),
+        lines: pedidas,
         sourceDocumentId: doc.value.id,
       });
       if (!mov.ok) {
         // Un permiso que falta es un 403, no un «dato inválido»: con el 422 la caja le decía al
         // dueño que sus datos estaban mal cuando lo que faltaba era el alcance sobre el
         // depósito (QA de pantalla 2026-09-15, h. 46).
+        if (mov.error.code === "NEGATIVE_STOCK") {
+          // I-04: si lo que falta es ingrediente de un compuesto de esta venta, se dice de cuál.
+          const faltante = mov.error.productId;
+          const de = [
+            ...new Set(
+              componentes.value
+                .filter((c) => c.childProductId === faltante)
+                .map((c) => `«${c.parentName}»`),
+            ),
+          ];
+          return err({
+            code: "NEGATIVE_STOCK",
+            message:
+              de.length === 0
+                ? mov.error.message
+                : `${mov.error.message} Es ingrediente de ${de.join(" y ")}: sin él no se puede vender.`,
+          });
+        }
         return err(
-          mov.error.code === "NEGATIVE_STOCK"
-            ? { code: "NEGATIVE_STOCK", message: mov.error.message }
-            : mov.error.code === "PERMISSION_REQUIRED"
-              ? { code: "PERMISSION_REQUIRED", message: mov.error.message }
-              : { code: "VALIDATION_FAILED", message: mov.error.message },
+          mov.error.code === "PERMISSION_REQUIRED"
+            ? { code: "PERMISSION_REQUIRED", message: mov.error.message }
+            : { code: "VALIDATION_FAILED", message: mov.error.message },
         );
+      }
+
+      // I-04: qué movimiento produjo cada línea de compuesto, escrito en la misma transacción.
+      if (componentes.value.length > 0) {
+        const porLinea = movimientosPorLinea(pedidas, mov.value);
+        if (porLinea === null) {
+          return err({
+            code: "VALIDATION_FAILED",
+            message:
+              "No se pudo ligar cada ingrediente con su línea de venta: la venta no se registra.",
+          });
+        }
+        const rastro = await registrarSalidasDeCompuestos(sql, {
+          tenantId: ctx.value.tenantId,
+          companyId: input.company_id,
+          documentId: doc.value.id,
+          componentes: componentes.value,
+          movimientos: porLinea.slice(conKardex.length),
+        });
+        if (!rastro.ok) return err(rastro.error);
       }
 
       /**
@@ -2432,8 +2583,13 @@ export async function annulmentStatus(
                                 where pr.payment_id = p.id)) as cobros
       from public.documents d
      where d.id = ${documentId} and d.company_id = ${companyId}`;
-  if (!doc || (doc.kind !== "invoice" && doc.kind !== "receipt")) return null;
-  const nombre = doc.kind === "receipt" ? "recibo" : "factura";
+  if (
+    !doc ||
+    (doc.kind !== "invoice" && doc.kind !== "receipt" && doc.kind !== "withdrawal_invoice")
+  ) {
+    return null;
+  }
+  const nombre = nombreDeAnulable(doc.kind);
   const no = (reason: AnnulmentBlocker) => ({
     allowed: false,
     reason,
@@ -2443,11 +2599,361 @@ export async function annulmentStatus(
     return no("has_payments");
   }
   if (doc.status !== "issued") return null;
-  if (doc.kind === "invoice") {
+  if (doc.kind === "invoice" || doc.kind === "withdrawal_invoice") {
     const papel = await bloqueoDePapel(sql, companyId, documentId);
     if (papel !== null) return no(papel);
   }
   return { allowed: true, reason: null, message: null };
+}
+
+function nombreDeAnulable(kind: string): string {
+  if (kind === "receipt") return "recibo";
+  return kind === "withdrawal_invoice" ? "factura de retiro" : "factura";
+}
+
+/** Lo que `issueStock` le pasa a la emisión de la factura de retiro (ADR-0082). */
+export interface FacturaDeRetiroInput {
+  readonly companyId: string;
+  readonly warehouseId: string;
+  readonly productId: string;
+  readonly quantity: string;
+  /** El id que llevará la salida del kardex: la factura lo guarda y la salida entra después. */
+  readonly moveId: string;
+  /** El motivo en palabras, para la leyenda del papel. */
+  readonly motivo: string;
+  /** El instante del hecho (el del movimiento): fecha de emisión, tasa, precio y régimen. */
+  readonly fecha: string;
+}
+
+/**
+ * LA FACTURA DE RETIRO (ADR-0082; RLIVA art. 31). El retiro de inventario —consumo propio, regalo,
+ * donación, muestra— es un hecho imponible (LIVA art. 4.3) y se FACTURA: mismo camino que la
+ * venta (`insertarDocumento`, correlativo de la serie de facturas, número de control del
+ * talonario, `assert_document_issuance`), con tres diferencias que son la decisión:
+ *   · el adquirente es la PROPIA empresa: su razón social y su RIF congelados, y su tipo de
+ *     contribuyente leído de la historia a la fecha (AF3-07), nunca «ordinario por omisión»;
+ *   · la base es el precio de venta de la lista principal (RLIVA art. 43; AF3-05): sin precio, o
+ *     con precio cero, no se retira. El piso de mercado es VALIDAR-TRIBUTARIO P-75;
+ *   · NO nace cuenta por cobrar: su kind (`withdrawal_invoice`) no está en ninguna lectura de
+ *     cartera, no pasa por la puerta del fiado y la base rechaza cobrarla. Su asiento es el de la
+ *     salida del kardex, que escribe `issueStock`.
+ * Se emite ANTES de mover el kardex (el mismo orden de candados que la venta: talonario →
+ * existencia). La autoriza el retiro (`inventory.move`), no `sales.invoice.issue`: es la
+ * consecuencia fiscal de sacar la mercancía, no una venta que alguien decide hacer.
+ */
+export async function emitirFacturaDeRetiro(
+  uow: UnitOfWork,
+  input: FacturaDeRetiroInput,
+): Promise<Result<DocumentResponse, SalesError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Emitir exige un usuario real." });
+  }
+  const ctx = await autorizar(sql, actor.userId, input.companyId, "inventory.move", input.fecha);
+  if (!ctx.ok) return ctx;
+  if (ctx.value.regimeVersionId === "" || !ctx.value.allowedKinds.includes("invoice")) {
+    return err({
+      code: "REGIME_KIND_NOT_ALLOWED",
+      message:
+        "El régimen fiscal de la empresa a esa fecha no emite facturas: el retiro no puede facturarse.",
+    });
+  }
+  const tipo = await exigeTipoParaFacturar(sql, actor.userId, input.companyId, input.fecha);
+  if (!tipo.ok) return tipo;
+
+  const [emp] = await sql<
+    {
+      name: string;
+      tax_id: string | null;
+      rif: string | null;
+      address: string | null;
+      lista: string | null;
+      precio: string | null;
+    }[]
+  >`
+    select c.legal_name as name,
+           upper(regexp_replace(c.tax_id, '[^a-zA-Z0-9]', '', 'g')) as tax_id,
+           c.tax_id as rif, c.fiscal_address as address,
+           cs.default_price_list_id as lista,
+           case when cs.default_price_list_id is null then null
+                else platform.price_at(cs.default_price_list_id, ${input.productId},
+                                       ${input.fecha}::timestamptz)::text
+           end as precio
+      from public.companies c
+      left join public.company_settings cs on cs.company_id = c.id
+     where c.id = ${input.companyId}`;
+  if (!emp || emp.tax_id === null || emp.tax_id === "") {
+    return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  }
+  const precio = emp.precio === null ? null : parseDecimal(emp.precio);
+  if (emp.lista === null || precio === null || !precio.ok) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "El retiro se valora al precio de venta (RLIVA art. 43) y este producto no tiene precio en tu lista de precios principal. Ponle precio y vuelve a registrar la salida.",
+    });
+  }
+  // AF3-05 (RLIVA art. 43): la base del retiro es el precio de venta, nunca cero.
+  if (!precio.value.greaterThan(0)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "El retiro se factura al precio de venta y este producto tiene precio cero en tu lista de precios principal. Ponle su precio de venta y vuelve a registrar la salida.",
+    });
+  }
+
+  // El adquirente necesita una ficha (el documento la referencia): la que ya tenga el RIF de la
+  // empresa, o una nueva con sus datos. Lo que el papel dice sale del CONGELADO de abajo, no de
+  // esta ficha.
+  // UNA ficha, aunque dos primeros retiros lleguen a la vez: el candado es por empresa y vive
+  // hasta el fin de la transacción; el segundo espera y ENCUENTRA la del primero. Va antes que el
+  // talonario y que la existencia, como el candado del fiado en la venta (mismo orden).
+  await sql`select pg_advisory_xact_lock(hashtextextended(${`ladino-adquirente-propio|${input.companyId}`}, 0))`;
+  let [yo] = await sql<{ id: string }[]>`
+    select id from public.customers
+     where company_id = ${input.companyId}
+       and (own_company
+            or upper(regexp_replace(tax_id, '[^a-zA-Z0-9]', '', 'g')) = ${emp.tax_id})
+     order by own_company desc
+     limit 1`;
+  if (yo === undefined) {
+    const letra = emp.tax_id.charAt(0);
+    const persona =
+      letra === "V" || letra === "E" || letra === "P"
+        ? "natural"
+        : letra === "G"
+          ? "gobierno"
+          : "juridica";
+    [yo] = await sql<{ id: string }[]>`
+      insert into public.customers
+        (tenant_id, company_id, tax_id, legal_name, person_type_code, taxpayer_type_code,
+         fiscal_address, status, own_company)
+      -- No es un cliente (20261005100600): nace marcada como la ficha de la PROPIA empresa —no
+      -- sale en la lista ni en el buscador de clientes, y resolverLista no le vende— e inactiva.
+      values (${ctx.value.tenantId}, ${input.companyId}, ${emp.rif}, ${emp.name}, ${persona},
+              ${tipo.value}, ${emp.address}, 'inactive', true)
+      returning id`;
+  }
+
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  const calculadas = await calcularLineas(sql, {
+    companyId: input.companyId,
+    customerId: yo!.id,
+    priceListId: emp.lista,
+    warehouseId: input.warehouseId,
+    lines: [{ product_id: input.productId, quantity: input.quantity }],
+    fecha: input.fecha,
+    functionalCurrency: ctx.value.functionalCurrency,
+    conImpuesto: true,
+    adquirenteTipo: tipo.value,
+    aunInactivos: true,
+  });
+  if (!calculadas.ok) return calculadas;
+
+  const conControl = ctx.value.numberingMode === "range";
+  const serieDada = conControl
+    ? await serieDelTalonario(sql, input.companyId, "invoice", null, null)
+    : ok("A");
+  if (!serieDada.ok) return serieDada;
+  const serie = serieDada.value;
+  try {
+    const doc = await sql.savepoint(async (sp) => {
+      const creado = await insertarDocumento(sp, ctx.value, {
+        companyId: input.companyId,
+        kind: "withdrawal_invoice",
+        series: serie,
+        customerId: yo!.id,
+        vendorId: null,
+        branchId: null,
+        priceListId: emp.lista!,
+        sourceDocumentId: null,
+        lineas: calculadas.value.lineas,
+        fxRate: calculadas.value.fxRate,
+        rateSource: calculadas.value.rateSource,
+        transactionCurrency: calculadas.value.transactionCurrency,
+        notes: `Factura por retiro de inventario (${input.motivo}). Adquirente: la propia empresa. No genera cuenta por cobrar.`,
+        adquirente: {
+          name: emp.name,
+          tax_id: emp.tax_id,
+          address: emp.address,
+          taxpayer_type: tipo.value,
+        },
+      });
+      if (!creado.ok) return creado;
+      // El correlativo es el de la serie de FACTURAS, y el control sale de su talonario
+      // (ADR-0071): la factura de retiro es una factura más de ese papel.
+      const [num] = await sp<{ n: string }[]>`
+        select platform.claim_document_number(${input.companyId}, 'invoice', ${serie})::text as n`;
+      let control: string | null = null;
+      let identificador: string | null = null;
+      if (conControl) {
+        const [c] = await sp<{ n: string; i: string }[]>`
+          select control_number::text as n, control_identifier as i
+            from platform.claim_fiscal_control(${input.companyId}, 'invoice', ${serie})`;
+        control = c!.n;
+        identificador = c!.i;
+      }
+      const [emitido] = await sp<DocumentResponse[]>`
+        update public.documents
+           set status = 'issued', issued_at = ${input.fecha},
+               document_number = ${num!.n}::bigint,
+               control_number = ${control}::bigint,
+               control_identifier = ${identificador},
+               regime_version_id = ${ctx.value.regimeVersionId},
+               rules_version = ${RULES_VERSION},
+               withdrawal_move_id = ${input.moveId}
+         where id = ${creado.value.id}
+        returning ${sp.unsafe(DOC_COLUMNS)}`;
+      return ok(emitido!);
+    });
+    if (!doc.ok) return doc;
+    await auditar(sql, ctx.value.tenantId, doc.value, "fiscal.invoice.issued", {
+      warehouse_id: input.warehouseId,
+      line_count: 1,
+      withdrawal_move_id: input.moveId,
+      withdrawal_reason: input.motivo,
+    });
+    return ok(doc.value);
+  } catch (e) {
+    const conocido = traducir(e);
+    if (conocido) return err(conocido);
+    throw e;
+  }
+}
+
+/**
+ * LA NOTA DE CRÉDITO DE UN RETIRO (ADR-0082, AF3-06; PA 00071 arts. 22 y 23). Un retiro facturado
+ * por error que ya no se puede anular (pasó el día, cerró la caja, se declaró el período) se
+ * corrige con SU nota de crédito, que deja sin efecto el retiro ENTERO:
+ *   · es total: las mismas líneas, cantidades, precios y alícuotas congeladas de su factura (una
+ *     parte no se corrige: se deja sin efecto el retiro y se registra de nuevo);
+ *   · se emite como toda nota de crédito (`createInvoiceLike`: `insertarDocumento`, correlativo de
+ *     la serie de notas de crédito, control del talonario, `assert_document_issuance`), a la tasa
+ *     de su factura, con el MISMO adquirente congelado (la propia empresa);
+ *   · NO toca cartera ni crea saldo a favor: su kind no está en ninguna lectura de deuda ni de
+ *     venta, y la base rechaza cobrarla, devolverla o darle un saldo a favor;
+ *   · la mercancía vuelve al kardex al costo con que salió y su asiento es el contra-asiento del
+ *     retiro (`reingresarRetiro`).
+ * Permisos: el de corregir un documento emitido (`sales.invoice.annul`, el mismo de la anulación
+ * del mismo día) Y el de mover mercancía (`inventory.move`) sobre el depósito del retiro.
+ * Clave natural: una factura de retiro, una nota (índice único).
+ */
+export async function creditWithdrawalInvoice(
+  uow: UnitOfWork,
+  documentId: string,
+  input: { readonly company_id: string; readonly reason: string },
+): Promise<Result<DocumentResponse, SalesError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({ code: "PERMISSION_REQUIRED", message: "Corregir exige un usuario real." });
+  }
+  // UN instante, el de la base: fecha de la nota, del reingreso y de su asiento (el libro y el
+  // mayor se comparan por día).
+  const [inst] = await sql<{ t: string }[]>`
+    select to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as t`;
+  const fecha = inst!.t;
+  const ctx = await autorizar(sql, actor.userId, input.company_id, "sales.invoice.annul", fecha);
+  if (!ctx.ok) return ctx;
+
+  const [doc] = await sql<
+    {
+      status: string;
+      kind: string;
+      customer_id: string;
+      price_list_id: string | null;
+      series: string;
+      document_number: string | null;
+    }[]
+  >`
+    select status, kind, customer_id, price_list_id, series,
+           document_number::text as document_number
+      from public.documents
+     where id = ${documentId} and company_id = ${input.company_id}
+     for update`;
+  if (!doc) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (doc.kind !== "withdrawal_invoice") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Solo una factura de retiro se corrige así. Una venta se corrige con su nota de crédito o su devolución.",
+    });
+  }
+  if (doc.status !== "issued") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Esta factura de retiro está anulada: no hay retiro que corregir.",
+    });
+  }
+  const [previa] = await sql<{ series: string; n: string | null }[]>`
+    select series, document_number::text as n from public.documents
+     where company_id = ${input.company_id} and source_document_id = ${documentId}
+       and kind = 'withdrawal_credit_note' and status = 'issued'`;
+  if (previa !== undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `Este retiro ya se corrigió con la nota de crédito ${serieYNumero(previa.series, previa.n ?? "")}.`,
+    });
+  }
+  const lineas = await sql<
+    { id: string; product_id: string; quantity: string; unit_price_transaction: string }[]
+  >`
+    select id, product_id, quantity::text as quantity,
+           unit_price_transaction::text as unit_price_transaction
+      from public.document_lines
+     where document_id = ${documentId} and company_id = ${input.company_id}
+     order by line_number`;
+
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  let nc: Result<DocumentResponse, SalesError>;
+  try {
+    nc = await sql.savepoint((sp) =>
+      createInvoiceLike({ ...uow, sql: sp }, ctx.value, {
+        companyId: input.company_id,
+        customerId: doc.customer_id,
+        priceListId: doc.price_list_id,
+        sourceDocumentId: documentId,
+        kind: "withdrawal_credit_note",
+        lineas: lineas.map((l) => ({
+          product_id: l.product_id,
+          quantity: l.quantity,
+          unit_price_transaction: l.unit_price_transaction,
+          source_line_id: l.id,
+        })),
+        fecha,
+        notes: input.reason,
+      }),
+    );
+  } catch (e) {
+    const conocido = traducir(e);
+    if (conocido) return err(conocido);
+    throw e;
+  }
+  if (!nc.ok) return nc;
+
+  const numeroNota = serieYNumero(nc.value.series, nc.value.document_number ?? "");
+  const numeroFactura = serieYNumero(doc.series, doc.document_number ?? "");
+  const reingreso = await reingresarRetiro(uow, {
+    companyId: input.company_id,
+    facturaId: documentId,
+    notaId: nc.value.id,
+    impuesto: nc.value.tax_amount,
+    descripcion: `Nota de crédito ${numeroNota}: deja sin efecto el retiro de la factura ${numeroFactura} — ${input.reason}`,
+  });
+  if (!reingreso.ok) {
+    return err(
+      reingreso.error.code === "PERMISSION_REQUIRED"
+        ? { code: "PERMISSION_REQUIRED", message: reingreso.error.message }
+        : reingreso.error.code === "NOT_FOUND"
+          ? { code: "NOT_FOUND", message: reingreso.error.message }
+          : { code: "VALIDATION_FAILED", message: reingreso.error.message },
+    );
+  }
+  await auditar(sql, ctx.value.tenantId, nc.value, "fiscal.credit_note.issued", {
+    reason: input.reason,
+    withdrawal_invoice_id: documentId,
+    withdrawal_reentry_move_id: reingreso.value.id,
+  });
+  return ok(nc.value);
 }
 
 /** Anula una factura emitida. El correlativo SE CONSERVA (ADR-0037). */
@@ -2471,19 +2977,35 @@ export async function annulInvoice(
 
   // El documento BLOQUEADO: un cobro concurrente no puede colarse entre la
   // comprobación de «sin cobros» y la anulación (ADR-0061 §1).
-  const [doc] = await sql<{ status: string; kind: string }[]>`
-    select status, kind from public.documents
+  const [doc] = await sql<{ status: string; kind: string; withdrawal_move_id: string | null }[]>`
+    select status, kind, withdrawal_move_id from public.documents
      where id = ${documentId} and company_id = ${input.company_id}
      for update`;
   if (!doc) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-  if (doc.kind !== "invoice" && doc.kind !== "receipt") {
+  // ADR-0082: la factura de retiro es papel fiscal como la factura; la anula la misma regla.
+  const esFactura = doc.kind === "invoice" || doc.kind === "withdrawal_invoice";
+  if (!esFactura && doc.kind !== "receipt") {
     return err({
       code: "VALIDATION_FAILED",
       message:
         "Solo se anula una factura o un recibo. Una nota no se anula: se corrige con la nota contraria.",
     });
   }
-  const nombre = doc.kind === "receipt" ? "recibo" : "factura";
+  const nombre = nombreDeAnulable(doc.kind);
+  // ADR-0082: una factura de retiro ya corregida con su nota de crédito no se anula (se
+  // corregiría dos veces). La base también lo rechaza.
+  if (doc.kind === "withdrawal_invoice") {
+    const [corregida] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.documents
+       where company_id = ${input.company_id} and source_document_id = ${documentId}
+         and kind = 'withdrawal_credit_note' and status = 'issued'`;
+    if ((corregida?.n ?? 0) > 0) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "Esta factura de retiro ya se corrigió con su nota de crédito: no se anula.",
+      });
+    }
+  }
 
   // UNA VENTA COBRADA NO SE ANULA: SE DEVUELVE (ADR-0061 §8). El cobro es un
   // hecho de caja que ocurrió; anular fingiría que el dinero nunca entró. El
@@ -2507,13 +3029,28 @@ export async function annulInvoice(
       message: `Solo se anula un ${nombre} emitido; este está en ${doc.status}.`,
     });
   }
+  // UNA VENTA CON DEVOLUCIÓN CONFIRMADA NO SE ANULA (ola 5, I-04; destapado por el caso «anular
+  // después de una devolución parcial»). La anulación repone TODAS las salidas del documento y
+  // reversa su asiento entero: sobre una venta de la que ya volvió parte, la mercancía devuelta
+  // entraba dos veces (y `annulled_stock_gaps` no lo veía: los reingresos de la devolución cuelgan
+  // de la devolución, no de la venta). Lo que falta por deshacer se devuelve.
+  const [devoluciones] = await sql<{ n: number }[]>`
+    select count(*)::int as n from public.returns r
+     where r.company_id = ${input.company_id} and r.source_document_id = ${documentId}
+       and r.status = 'confirmed'`;
+  if ((devoluciones?.n ?? 0) > 0) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `Este ${nombre} ya tiene una devolución registrada y no se anula: la mercancía devuelta entraría dos veces. Lo que falte por deshacer regístralo con otra devolución.`,
+    });
+  }
 
   // G-10 (PA 00071 arts. 22 y 36): una FACTURA se anula solo si el papel no salió del negocio y
   // la operación no ocurrió —mismo día de Caracas, antes del cierre de su caja, período sin
   // declarar—, y la persona confirma que tiene el original y las copias. Lo demás es nota de
   // crédito. La regla pregunta por SUS condiciones: no mira si hubo cobros reversados (P-91). El
   // recibo no es papel fiscal y conserva la regla de ADR-0061 §1.
-  if (doc.kind === "invoice") {
+  if (esFactura) {
     const papel =
       (await bloqueoDePapel(sql, input.company_id, documentId)) ??
       (input.originals_in_hand === true ? null : ("originals_not_confirmed" as const));
@@ -2539,9 +3076,7 @@ export async function annulInvoice(
       anulada!,
       doc.kind === "receipt" ? "sales.receipt.annulled" : "fiscal.invoice.annulled",
       // G-10: el acta guarda que la persona respondió por el original y las copias (art. 36).
-      doc.kind === "invoice"
-        ? { reason: input.reason, originals_in_hand: true }
-        : { reason: input.reason },
+      esFactura ? { reason: input.reason, originals_in_hand: true } : { reason: input.reason },
     );
 
     /**
@@ -2615,6 +3150,36 @@ export async function annulInvoice(
          where company_id = ${input.company_id} and source_id = ${documentId}
            and source_kind in ('sales_invoice', 'sales_receipt')
            and status = 'pending'`;
+    }
+    // ADR-0082 · LA FACTURA DE RETIRO: su asiento es el de su salida del kardex (gasto por retiro
+    // + débito fiscal contra inventario). Anularla lo REVERSA entero —la mercancía ya volvió
+    // arriba, al valor con que salió—; si el hecho seguía en la cola, se descarta.
+    if (doc.kind === "withdrawal_invoice" && doc.withdrawal_move_id !== null) {
+      const [asientoRetiro] = await sql<{ id: string }[]>`
+        select id from public.journal_entries
+         where company_id = ${input.company_id} and source_kind = 'inventory_move'
+           and source_event = 'stock.withdrawn' and source_id = ${doc.withdrawal_move_id}
+           and status = 'posted'`;
+      if (asientoRetiro !== undefined) {
+        const reverso = await reverseJournalEntryForAnnulment(uow, asientoRetiro.id, {
+          company_id: input.company_id,
+          reason: `Anulación de la factura de retiro: ${input.reason}`,
+        });
+        if (!reverso.ok) {
+          return err(
+            reverso.error.code === "PERMISSION_REQUIRED"
+              ? { code: "PERMISSION_REQUIRED", message: reverso.error.message }
+              : { code: "VALIDATION_FAILED", message: reverso.error.message },
+          );
+        }
+      } else {
+        await sql`
+          update public.journal_generation_queue
+             set status = 'discarded', processed_at = now()
+           where company_id = ${input.company_id} and source_id = ${doc.withdrawal_move_id}
+             and source_kind = 'inventory_move' and source_event = 'stock.withdrawn'
+             and status = 'pending'`;
+      }
     }
     // El costo de ventas que seguía en la cola se descarta con la venta: nunca
     // llegó al mayor, y la reposición tampoco lo toca.
@@ -2707,6 +3272,15 @@ export async function registerPayment(
   // `for update`: dos cobros simultáneos del mismo total pasaban ambos el
   // tope (auditoría 2026-09-11, A-26). El segundo espera y ve el saldo real.
   if (!doc) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  // ADR-0082: una factura de retiro no tiene cuenta por cobrar (el adquirente es la propia
+  // empresa). La base también lo rechaza (trigger payments_05_no_withdrawal_invoice).
+  if (doc.kind === "withdrawal_invoice" || doc.kind === "withdrawal_credit_note") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Una factura de retiro no se cobra: el adquirente es tu propio negocio y no hay nada que cobrar.",
+    });
+  }
   if (doc.status !== "issued") {
     return err({
       code: "VALIDATION_FAILED",
@@ -4441,11 +5015,38 @@ export async function confirmReturn(
     return err({ code: "VALIDATION_FAILED", message: "La devolución ya no está en borrador." });
   }
 
+  // EL ORIGEN, BLOQUEADO Y VIVO (ola 5, tercera ronda). `createReturn` ya exige una venta emitida
+  // al crear el borrador; entre el borrador y la confirmación la venta puede ANULARSE, y la
+  // anulación repone todo lo que salió: confirmar después reingresaba otra vez (la mercancía
+  // dentro dos veces). El `for update` es el mismo candado que toma `annulInvoice` sobre el mismo
+  // documento, y es el primero que toman las dos: anular y confirmar a la vez se serializan, y la
+  // segunda ve lo que hizo la primera.
   const [origen] = await sql<
-    { customer_id: string; price_list_id: string | null; kind: string; series: string }[]
+    {
+      customer_id: string;
+      price_list_id: string | null;
+      kind: string;
+      series: string;
+      status: string;
+    }[]
   >`
-    select customer_id, price_list_id, kind, series from public.documents
-     where id = ${dev.source_document_id}`;
+    select customer_id, price_list_id, kind, series, status from public.documents
+     where id = ${dev.source_document_id} and company_id = ${companyId}
+     for update`;
+  if (origen === undefined) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  if (origen.status === "annulled") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Esa venta se anuló: la devolución ya no se puede confirmar. La mercancía ya volvió al anularla.",
+    });
+  }
+  if (!["issued", "paid"].includes(origen.status)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "Solo se confirma una devolución contra una factura o un recibo emitidos.",
+    });
+  }
   const lineas = await sql<
     {
       source_line_id: string;
@@ -4488,8 +5089,8 @@ export async function confirmReturn(
   // H2 (ADR-0071): el MISMO orden de bloqueo que la venta — talonario antes que existencias. La
   // venta toma el talonario y después descarga el kardex; si aquí se reingresara primero y se
   // pidiera el control después, una venta y una devolución simultáneas se esperarían en cruz.
-  if (origen!.kind !== "receipt" && ctx.value.numberingMode === "range") {
-    await bloquearTalonario(sql, companyId, "credit_note", origen!.series);
+  if (origen.kind !== "receipt" && ctx.value.numberingMode === "range") {
+    await bloquearTalonario(sql, companyId, "credit_note", origen.series);
   }
 
   // 1. Reingreso al COSTO ORIGINAL. `receiveStock` recibe el costo TOTAL, así
@@ -4502,6 +5103,29 @@ export async function confirmReturn(
   //    y sin lote: un producto con lotes no se podía devolver.
   let reingresado = parseDecimal("0");
   for (const l of lineas) {
+    // I-04: la línea de un COMPUESTO devuelve sus ingredientes, en proporción y al costo con que
+    // salieron (`compuestos.ts`). `null` = no es de un compuesto: sigue el camino de siempre.
+    const pedidaCompuesto = parseDecimal(l.quantity);
+    if (!pedidaCompuesto.ok) {
+      return err({ code: "VALIDATION_FAILED", message: pedidaCompuesto.error.message });
+    }
+    const deCompuesto = await reingresarCompuesto(uow, {
+      tenantId: ctx.value.tenantId,
+      companyId,
+      functionalCurrency: ctx.value.functionalCurrency,
+      returnId,
+      sourceDocumentId: dev.source_document_id,
+      sourceLineId: l.source_line_id,
+      warehouseId: dev.warehouse_id,
+      pedida: pedidaCompuesto.value,
+    });
+    if (!deCompuesto.ok) return err(deCompuesto.error);
+    if (deCompuesto.value !== null) {
+      if (reingresado.ok) {
+        reingresado = { ok: true, value: reingresado.value.plus(deCompuesto.value) };
+      }
+      continue;
+    }
     const tramos = await sql<
       {
         lot_id: string | null;
@@ -4516,6 +5140,9 @@ export async function confirmReturn(
           from public.inventory_moves m
          where m.company_id = ${companyId} and m.source_document_id = ${dev.source_document_id}
            and m.product_id = ${l.product_id} and m.kind = 'salida'
+           -- I-04: lo que salió como ingrediente de un compuesto de la misma venta es de OTRA
+           -- línea; no cuenta como salida de esta.
+           and not exists (select 1 from public.sale_line_components c where c.move_id = m.id)
          group by m.lot_id
       ),
       vueltas as (
@@ -4524,6 +5151,7 @@ export async function confirmReturn(
           join public.returns r on r.id = m.source_document_id
          where m.company_id = ${companyId} and r.source_document_id = ${dev.source_document_id}
            and r.status = 'confirmed' and m.product_id = ${l.product_id} and m.kind = 'entrada'
+           and not exists (select 1 from public.sale_line_components c where c.move_id = m.id)
          group by m.lot_id
       )
       select s.lot_id, s.salio::text, s.valor::text,
@@ -4621,12 +5249,12 @@ export async function confirmReturn(
     nc = await sql.savepoint((sp) =>
       createInvoiceLike({ ...uow, sql: sp }, ctx.value, {
         companyId,
-        customerId: origen!.customer_id,
-        priceListId: origen!.price_list_id,
+        customerId: origen.customer_id,
+        priceListId: origen.price_list_id,
         sourceDocumentId: dev.source_document_id,
         // Un recibo se corrige con RECIBO DE DEVOLUCIÓN, no con nota de crédito:
         // la nota entraría al libro de ventas de una empresa que no factura.
-        kind: origen!.kind === "receipt" ? "receipt_return" : "credit_note",
+        kind: origen.kind === "receipt" ? "receipt_return" : "credit_note",
         lineas,
         fecha,
         // El motivo de la devolución, guardado en la nota: el PDF lo imprime y el tope de la forma
@@ -4647,7 +5275,7 @@ export async function confirmReturn(
       (tenant_id, company_id, customer_id, source_document_id, amount, currency, fx_rate,
        rate_source, functional_amount)
     -- G-05 (ADR-0075 §4): en la moneda de la nota, con su tasa (la del documento que corrige).
-    select ${ctx.value.tenantId}, ${companyId}, ${origen!.customer_id}, d.id,
+    select ${ctx.value.tenantId}, ${companyId}, ${origen.customer_id}, d.id,
            coalesce(d.amount_transaction_currency, d.total_amount), d.transaction_currency,
            d.fx_rate, d.rate_source, d.total_amount
       from public.documents d
@@ -4862,7 +5490,12 @@ async function createInvoiceLike(
     priceListId: string | null;
     sourceDocumentId: string;
     /** ADR-0051: el mismo camino emite la NC y la ND — cambia solo el kind. ADR-0061: y el recibo de devolución. */
-    kind: "credit_note" | "debit_note" | "receipt_return";
+    /**
+     * `withdrawal_credit_note` (ADR-0082): la nota de crédito de una factura de retiro. Se emite
+     * como una nota de crédito —mismo régimen, misma serie y talonario, mismo correlativo— y se
+     * guarda con su kind propio, que ninguna lectura de venta ni de cartera enumera.
+     */
+    kind: "credit_note" | "debit_note" | "receipt_return" | "withdrawal_credit_note";
     /**
      * `source_line_id` (hallazgo 3): la línea de la factura que la nota acredita. Con ella, la NC
      * revierte el débito de ESA línea — su tasa, su categoría, su regla y su descripción
@@ -4902,7 +5535,9 @@ async function createInvoiceLike(
   // M-12: un recibo se devuelve con recibo de devolución aunque la empresa ya facture (el régimen
   // de facturas no lo lista entre lo que VENDE). Que el origen sea un recibo lo decide quien llama
   // y lo defiende el esquema (LAD84 y el gate de emisión, migración 20261004110000).
-  if (d.kind !== "receipt_return" && !ctx.allowedKinds.includes(d.kind)) {
+  // La clase con la que NUMERA y con la que el régimen la permite.
+  const clase = d.kind === "withdrawal_credit_note" ? "credit_note" : d.kind;
+  if (d.kind !== "receipt_return" && !ctx.allowedKinds.includes(clase)) {
     return err({
       code: "REGIME_KIND_NOT_ALLOWED",
       message: "El régimen fiscal vigente no permite emitir esta nota.",
@@ -5010,7 +5645,7 @@ async function createInvoiceLike(
     // concepto nuevo, o un ajuste global sin línea, va a la condición de hoy (P-58).
     const acreditaLinea =
       l.source_line_id !== undefined &&
-      (d.kind === "credit_note" || (d.kind === "debit_note" && rateBasis === "origin"));
+      (clase === "credit_note" || (d.kind === "debit_note" && rateBasis === "origin"));
     const [deLaFactura] = acreditaLinea
       ? await sql<
           {
@@ -5098,7 +5733,7 @@ async function createInvoiceLike(
   // devolución no tiene control y conserva su «D».
   const serieDada =
     d.kind !== "receipt_return" && ctx.numberingMode === "range"
-      ? await serieDelTalonario(sql, d.companyId, d.kind, null, origen.series)
+      ? await serieDelTalonario(sql, d.companyId, clase, null, origen.series)
       : ok(d.kind === "receipt_return" ? "D" : "A");
   if (!serieDada.ok) return serieDada;
   const serie = serieDada.value;
@@ -5120,13 +5755,13 @@ async function createInvoiceLike(
   if (!creado.ok) return creado;
 
   const [num] = await sql<{ n: string }[]>`
-    select platform.claim_document_number(${d.companyId}, ${d.kind}, ${serie})::text as n`;
+    select platform.claim_document_number(${d.companyId}, ${clase}, ${serie})::text as n`;
   let control: string | null = null;
   let identificador: string | null = null;
   if (ctx.numberingMode === "range" && d.kind !== "receipt_return") {
     const [c] = await sql<{ n: string; i: string }[]>`
       select control_number::text as n, control_identifier as i
-        from platform.claim_fiscal_control(${d.companyId}, ${d.kind}, ${serie})`;
+        from platform.claim_fiscal_control(${d.companyId}, ${clase}, ${serie})`;
     control = c!.n;
     identificador = c!.i;
   }

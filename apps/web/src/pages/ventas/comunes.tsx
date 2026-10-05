@@ -139,6 +139,8 @@ export const KIND_LABEL: Record<string, string> = {
   invoice: "Factura",
   receipt: "Recibo",
   receipt_return: "Recibo de devolución",
+  withdrawal_invoice: "Factura de retiro",
+  withdrawal_credit_note: "Nota de crédito de retiro",
   credit_note: "Nota de crédito",
   debit_note: "Nota de débito",
   quote: "Cotización",

@@ -647,6 +647,9 @@ create temp table _antes_truncate_019 as
          (select count(*) from public.inventory_withdrawal_notes) as notas;
 grant select, update, delete, truncate on public.inventory_moves to service_role;
 grant truncate on public.inventory_withdrawal_notes to service_role;
+-- Desde ADR-0084 el rastro de la venta de un compuesto también referencia al movimiento (FK):
+-- el CASCADE lo alcanza, y sin este privilegio el TRUNCATE moriría con 42501 antes del trigger.
+grant truncate on public.sale_line_components to service_role;
 set local role service_role;
 select throws_ok(
   $$ update public.inventory_moves set quantity = 999

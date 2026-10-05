@@ -403,4 +403,362 @@ c.caso(
   },
 );
 
+// ── Ola 5 · P-06 (ADR-0081): la paleta encuentra documentos por su número, según el rol ──
+c.caso(
+  "P-06",
+  "buscar «A-2», «LM-5501» y «R-5»: el dueño los encuentra; el cajero no la compra; el almacén, nada",
+  async () => {
+    const buscar = async (quien, empresa, q) => {
+      const r = await pedir(
+        quien,
+        empresa,
+        "GET",
+        `/v1/search/documents?q=${encodeURIComponent(q)}`,
+      );
+      afirmar(r.status === 200, `«${q}» como ${quien} dio ${r.status}: ${r.texto.slice(0, 200)}`);
+      afirmar(
+        Object.keys(r.json).join() === "items",
+        `la respuesta lleva algo más que la lista (¿un total?): ${Object.keys(r.json).join()}`,
+      );
+      return r.json.items;
+    };
+    const dueno = PERSONAS.duenoE2E3;
+
+    // Una factura por su número. Lo exacto va primero: en E2 hay DOS «A-2» (la factura y una
+    // nota de crédito, cada tipo con su correlativo), y las dos encabezan antes que «A-2x».
+    const exacta = await buscar(dueno, "E2", "A-2");
+    afirmar(
+      exacta.some((i) => i.type === "invoice" && i.number === "A-2"),
+      `«A-2» no encuentra la factura A-2: ${JSON.stringify(exacta)}`,
+    );
+    const primerParcial = exacta.findIndex((i) => i.number !== "A-2");
+    afirmar(
+      exacta[0]?.number === "A-2" &&
+        (primerParcial === -1 || exacta.slice(primerParcial).every((i) => i.number !== "A-2")),
+      `lo exacto no va primero: ${exacta.map((i) => i.number).join(", ")}`,
+    );
+    const conCeros = await buscar(dueno, "E2", "A-00000005");
+    afirmar(
+      conCeros.some((i) => i.type === "invoice" && i.number === "A-5"),
+      "«A-00000005» no encuentra la factura A-5",
+    );
+    // «a-1», en minúsculas, es también el principio de A-10…A-16: sale más de uno, sin importes.
+    const parte = await buscar(dueno, "E2", "a-1");
+    afirmar(parte.length > 1, `«a-1» (una parte, en minúsculas) dio ${parte.length}`);
+    afirmar(
+      parte.every((i) => Object.keys(i).sort().join() === "date,id,number,party_name,status,type"),
+      "un resultado lleva campos de más (¿un importe?)",
+    );
+    // Las notas se encuentran igual que las facturas.
+    const notas = await buscar(dueno, "E2", "A-1");
+    afirmar(
+      notas.some((i) => i.type === "credit_note" && i.number === "A-1") &&
+        notas.some((i) => i.type === "debit_note" && i.number === "A-1"),
+      `«A-1» no trae las notas A-1: ${notas.map((i) => `${i.type} ${i.number}`).join(", ")}`,
+    );
+    // El recibo de E1, que el informe buscó y no encontró.
+    const recibo = await buscar(PERSONAS.duenaE1, "E1", "R-5");
+    afirmar(
+      recibo.some((i) => i.type === "receipt" && i.number === "R-5"),
+      "«R-5» no encuentra el recibo de E1",
+    );
+
+    // La compra, por el número del proveedor: entera y una parte.
+    for (const q of ["LM-5501", "5501"]) {
+      const compra = await buscar(dueno, "E2", q);
+      afirmar(
+        compra.some((i) => i.type === "purchase" && i.number === "LM-5501"),
+        `«${q}» no encuentra la compra LM-5501`,
+      );
+    }
+
+    // El cajero encuentra la venta y NO la compra; el almacenista, ninguna de las dos.
+    const cajeroVenta = await buscar(PERSONAS.cajero, "E2", "A-2");
+    afirmar(
+      cajeroVenta.some((i) => i.number === "A-2"),
+      "el cajero no encuentra la factura A-2",
+    );
+    const cajeroCompra = await buscar(PERSONAS.cajero, "E2", "LM-5501");
+    afirmar(cajeroCompra.length === 0, `el cajero encontró ${cajeroCompra.length} compra(s)`);
+    for (const q of ["A-2", "LM-5501"]) {
+      const almacen = await buscar(PERSONAS.almacenista, "E2", q);
+      afirmar(almacen.length === 0, `el almacenista encontró ${almacen.length} con «${q}»`);
+    }
+
+    // Acotada a la empresa de la pestaña: quien es dueño de E2 y E3 no ve en E2 lo de E3.
+    const enE3 = await buscar(dueno, "E3", "F-89002");
+    afirmar(
+      enE3.some((i) => i.type === "purchase" && i.number === "F-89002"),
+      "«F-89002» no se encuentra en E3, que es donde está",
+    );
+    const enE2 = await buscar(dueno, "E2", "F-89002");
+    afirmar(enE2.length === 0, `la compra de E3 apareció buscando en E2 (${enE2.length})`);
+
+    const corto = await pedir(dueno, "E2", "GET", "/v1/search/documents?q=A");
+    afirmar(corto.status === 422, `una sola letra dio ${corto.status}`);
+
+    // La pantalla: ni «Próximamente» ni asistente, y los documentos se piden al servidor.
+    const fsP = await import("node:fs");
+    const fuenteP = (ruta) =>
+      fsP.readFileSync(new URL(`../../../apps/web/src/app/${ruta}`, import.meta.url), "utf8");
+    const paleta = fuenteP("palette.tsx");
+    afirmar(!/Próximamente/i.test(paleta), "la paleta sigue diciendo «Próximamente»");
+    afirmar(!/Asistente/i.test(paleta), "la paleta sigue anunciando el asistente");
+    afirmar(
+      paleta.includes("/v1/search/documents"),
+      "la paleta no busca documentos en el servidor",
+    );
+    const acciones = fuenteP("paleta-acciones.ts");
+    afirmar(
+      acciones.includes('"Cerrar caja"') && acciones.includes('"Nuevo cliente"'),
+      "la paleta no ofrece «Cerrar caja» y «Nuevo cliente»",
+    );
+  },
+);
+
+// P-07 (ola 5): los reportes son consultas del servidor y cada uno cuadra con SU FUENTE.
+c.caso(
+  "P-07",
+  "ventas ↔ libro de ventas, margen ↔ ventas, inventario ↔ kardex, IVA e IGTF ↔ lo ya calculado, cierres ↔ sus filas",
+  async () => {
+    const dueno = PERSONAS.duenoE2E3;
+    const DESDE = "2026-01-01";
+    const [{ hoy }] = await sql`select platform.caracas_day(now())::text as hoy`;
+    const rango = `from=${DESDE}&to=${hoy}`;
+    for (const e of ["E2", "E3"]) {
+      const empresa = EMPRESAS[e];
+      const rep = async (ruta) => {
+        const r = await pedir(dueno, e, "GET", `/v1/reports/${ruta}`);
+        afirmar(r.status === 200, `${e} · ${ruta} dio ${r.status}: ${r.texto.slice(0, 200)}`);
+        return r.json;
+      };
+      const linea = (t, k) => t.summary.find((s) => s.key === k)?.value;
+
+      // (1) Ventas con factura NO es el libro de ventas: el libro lleva además los retiros de
+      // inventario (facturas de retiro, sus notas y las notas de retiro viejas) y las notas de
+      // débito por IGTF. La conciliación se hace contra el libro ENTERO, sin filtrarlo con la
+      // regla del reporte: ventas con factura + retiros del libro = total del libro (la nota de
+      // débito por IGTF va en el libro con total de venta cero y lo percibido en su columna).
+      const ventas = await rep(`sales?${rango}`);
+      const [libro] = await sql`
+        select round(coalesce(sum(total_amount), 0), 2)::text as total,
+               round(coalesce(sum(total_amount) filter (where kind like 'withdrawal%'), 0), 2)::text
+                 as retiros,
+               round(coalesce(sum(igtf_percibido), 0), 2)::text as igtf,
+               ${linea(ventas, "fiscal_total")}::numeric
+                 + coalesce(sum(total_amount) filter (where kind like 'withdrawal%'), 0)
+                 = coalesce(sum(total_amount), 0) as cuadra
+          from platform.sales_book(${empresa}, ${DESDE}::date, ${hoy}::date)`;
+      afirmar(
+        libro.cuadra === true,
+        `${e}: ventas con factura ${linea(ventas, "fiscal_total")} + retiros ${libro.retiros} ≠ libro ${libro.total}`,
+      );
+      // Con cifras distintas de cero donde el escenario las tenga: E3 percibió IGTF con nota. El
+      // escenario RESTAURADO no trae retiros en el libro (el bloque I ensaya el retiro con la
+      // vista previa para no gastar el papel de E2), así que aquí no se exigen: si los hay, que
+      // el reporte no los cuente. Con retiros de verdad (factura de retiro y su nota dentro del
+      // rango) lo asevera `apps/api/test/e2e-reportes-fiscales.test.ts`.
+      if (Number(libro.retiros) !== 0) {
+        afirmar(
+          linea(ventas, "fiscal_total") !== libro.total,
+          `${e}: «ventas con factura» coincide con el libro: está contando los retiros`,
+        );
+      }
+      if (e === "E3") {
+        afirmar(Number(libro.igtf) > 0, "E3: el escenario ya no tiene IGTF en el libro");
+      }
+      afirmar(
+        ventas.summary.find((x) => x.key === "fiscal_total").label === "Ventas con factura",
+        `${e}: la línea sigue diciendo que es lo que entra al libro`,
+      );
+      afirmar(Number(ventas.row_count) > 0, `${e}: el reporte de ventas no trae días`);
+      // Los días suman el total, y cada agrupación por documento llega al mismo total.
+      const [dias] = await sql`
+        select (select sum(x::numeric) from unnest(${ventas.rows.map((x) => x.total)}::text[]) as x)
+                 = ${ventas.totals.total}::numeric as cuadra`;
+      afirmar(dias.cuadra === true, `${e}: los días no suman ${ventas.totals.total}`);
+      for (const g of ["month", "customer", "seller"]) {
+        const t = await rep(`sales?${rango}&group=${g}`);
+        afirmar(
+          t.totals.total === ventas.totals.total,
+          `${e}: por ${g} da ${t.totals.total}, por día ${ventas.totals.total}`,
+        );
+      }
+      const porProducto = await rep(`sales?${rango}&group=product`);
+      afirmar(porProducto.rows.length > 0, `${e}: sin productos vendidos`);
+      const porPago = await rep(`sales?${rango}&group=payment_method`);
+      const [cobros] = await sql`
+        select round(coalesce(sum(p.functional_amount), 0), 2)::text as t
+          from public.payments p join public.documents d on d.id = p.document_id
+         where p.company_id = ${empresa}
+           and d.kind = any(${["invoice", "receipt", "debit_note"]}::text[])
+           and platform.caracas_day(p.paid_at) between ${DESDE}::date and ${hoy}::date
+           and not exists (select 1 from public.payment_reversals pr where pr.payment_id = p.id)`;
+      afirmar(
+        porPago.totals.collected === cobros.t,
+        `${e}: cobrado ${porPago.totals.collected} ≠ cobros ${cobros.t}`,
+      );
+
+      // (2) Margen: su venta más la venta sin costo ES la base de lo vendido por producto; y el
+      // diferencial es la misma cifra de su reporte de siempre.
+      const margen = await rep(`margin?${rango}`);
+      const [m] = await sql`
+        select ${margen.totals.sales}::numeric + ${margen.totals.sales_without_cost}::numeric
+                 = ${porProducto.totals.base}::numeric as cuadra,
+               ${margen.totals.sales}::numeric - ${margen.totals.cost}::numeric
+                 = ${margen.totals.margin}::numeric as resta`;
+      afirmar(
+        m.cuadra === true,
+        `${e}: margen ${margen.totals.sales} + ${margen.totals.sales_without_cost} ≠ base ${porProducto.totals.base}`,
+      );
+      afirmar(m.resta === true, `${e}: venta − costo ≠ margen (${JSON.stringify(margen.totals)})`);
+      const dif = await pedir(dueno, e, "GET", `/v1/reports/exchange-difference?${rango}`);
+      const [d] = await sql`select round(${dif.json.neto}::numeric, 2)::text as n`;
+      afirmar(
+        linea(margen, "exchange_realized") === d.n,
+        `${e}: diferencial ${linea(margen, "exchange_realized")} ≠ ${d.n}`,
+      );
+      const rev = margen.summary.find((s) => s.key === "exchange_revaluation");
+      afirmar(rev.value === null && rev.reason === "sin_dato", `${e}: la revaluación se inventó`);
+
+      // (3) IVA: cada período es su última corrida guardada, sin recalcular.
+      const iva = await rep(`iva?${rango}`);
+      const guardados = await sql`
+        select distinct on (period_from, period_to) period_from::text as desde,
+               round(cuota_a_pagar, 2)::text as pagar, round(debitos, 2)::text as debitos
+          from public.iva_period_results
+         where company_id = ${empresa} and period_to >= ${DESDE}::date
+           and period_from <= ${hoy}::date
+         order by period_from, period_to, created_at desc`;
+      afirmar(
+        iva.rows.length === guardados.length,
+        `${e}: IVA ${iva.rows.length} ≠ ${guardados.length}`,
+      );
+      for (const g of guardados) {
+        const fila = iva.rows.find((x) => x.period_from === g.desde);
+        afirmar(
+          fila?.payable === g.pagar && fila?.debits === g.debitos,
+          `${e}: el período ${g.desde} no es el guardado`,
+        );
+      }
+
+      // (4) Inventario valorizado: el total ES la suma de los saldos, y cuadra con el kardex
+      // que el invariante compara con el mayor.
+      const inv = await rep(`inventory?${rango}`);
+      const [k] = await sql`
+        select (select round(coalesce(sum(value), 0), 2)::text from public.stock_balances
+                 where company_id = ${empresa}) as saldos,
+               (select round(kardex, 2)::text from platform.inventory_ledger_gap(${empresa}))
+                 as kardex`;
+      afirmar(
+        inv.totals.value === k.saldos,
+        `${e}: valorizado ${inv.totals.value} ≠ saldos ${k.saldos}`,
+      );
+      afirmar(
+        inv.totals.value === k.kardex,
+        `${e}: valorizado ${inv.totals.value} ≠ kardex ${k.kardex}`,
+      );
+
+      // (6) Cierres de caja: cada cierre del rango, y la diferencia asentada.
+      const cierres = await rep(`cash-closings?${rango}`);
+      const [cc] = await sql`
+        select count(*)::text as n, round(coalesce(sum(functional_amount), 0), 2)::text as dif
+          from public.cash_closings
+         where company_id = ${empresa}
+           and closing_date between ${DESDE}::date and ${hoy}::date`;
+      afirmar(String(cierres.row_count) === cc.n, `${e}: ${cierres.row_count} cierres ≠ ${cc.n}`);
+      afirmar(
+        cierres.totals.difference_functional === cc.dif,
+        `${e}: diferencia ${cierres.totals.difference_functional} ≠ ${cc.dif}`,
+      );
+      const porCajero = await rep(`cash-closings?${rango}&group=cashier`);
+      afirmar(
+        porCajero.totals.difference_functional === cc.dif,
+        `${e}: por cajero ${porCajero.totals.difference_functional} ≠ ${cc.dif}`,
+      );
+
+      // (7) IGTF: cada quincena es la cifra de la función única.
+      const igtf = await rep(`igtf?${rango}`);
+      afirmar(igtf.rows.length >= 2, `${e}: IGTF sin quincenas`);
+      for (const q of igtf.rows) {
+        const [f] = await sql`
+          select round(total_functional, 2)::text as t
+            from platform.igtf_period_totals(${empresa}, ${q.period_from}::date,
+                                             ${q.period_to}::date)`;
+        afirmar(q.perceived === f.t, `${e}: quincena ${q.period_from}: ${q.perceived} ≠ ${f.t}`);
+      }
+    }
+
+    // Quién ve qué (RESPUESTA §2.8): el cajero no ve el dinero del negocio; el contador, IVA e
+    // IGTF; el almacenista, existencias sin valor.
+    for (const ruta of [
+      `sales?${rango}`,
+      `margin?${rango}`,
+      `cash-closings?${rango}`,
+      `iva?${rango}`,
+    ]) {
+      const r = await pedir(PERSONAS.cajero, "E2", "GET", `/v1/reports/${ruta}`);
+      afirmar(r.status === 403, `el cajero abrió ${ruta} (${r.status})`);
+    }
+    for (const ruta of [`iva?${rango}`, `igtf?${rango}`, `sales?${rango}`]) {
+      const r = await pedir(PERSONAS.contador, "E2", "GET", `/v1/reports/${ruta}`);
+      afirmar(r.status === 200, `el contador no abre ${ruta} (${r.status})`);
+    }
+    const almacen = await pedir(
+      PERSONAS.almacenista,
+      "E2",
+      "GET",
+      `/v1/reports/inventory?${rango}`,
+    );
+    afirmar(almacen.status === 200, `el almacenista no abre el inventario (${almacen.status})`);
+    afirmar(
+      almacen.json.rows.length > 0 && almacen.json.rows.every((x) => x.value === null),
+      "el almacenista recibió el valor del inventario",
+    );
+    afirmar(
+      !almacen.json.columns.some((x) => x.key === "value") &&
+        almacen.json.summary.every((s) => s.value === null),
+      "el almacenista recibió cifras de dinero en el resumen",
+    );
+    const ventasAlmacen = await pedir(
+      PERSONAS.almacenista,
+      "E2",
+      "GET",
+      `/v1/reports/sales?${rango}`,
+    );
+    afirmar(ventasAlmacen.status === 403, `el almacenista abrió ventas (${ventasAlmacen.status})`);
+
+    // La descarga la hace el servidor: CSV con «;», coma decimal y sin punto en las cifras.
+    const csv = await pedir(
+      dueno,
+      "E2",
+      "GET",
+      `/v1/reports/sales?${rango}&group=month&format=csv`,
+    );
+    afirmar(csv.status === 200, `el CSV dio ${csv.status}`);
+    const lineas = csv.texto.replace(/^﻿/, "").trim().split("\r\n");
+    afirmar(lineas[0] === "Mes;Documentos;Sin impuesto;Impuesto;Total", `títulos: ${lineas[0]}`);
+    afirmar(lineas.at(-1).startsWith("Total;"), `sin renglón de total: ${lineas.at(-1)}`);
+    afirmar(
+      lineas.slice(1).every((l) => /^[^;]+;\d+;-?\d+,\d{2};-?\d+,\d{2};-?\d+,\d{2}$/.test(l)),
+      `el CSV no va en formato de Venezuela: ${lineas[1]}`,
+    );
+
+    // La pantalla no ofrece ningún reporte que el servidor no sirva.
+    const fsR = await import("node:fs");
+    const catalogo = fsR.readFileSync(
+      new URL("../../../apps/web/src/pages/reportes/reporte.ts", import.meta.url),
+      "utf8",
+    );
+    const claves = [...catalogo.matchAll(/clave: "([a-z-]+)",\n\s+titulo:/g)].map((x) => x[1]);
+    afirmar(claves.length === 8, `el catálogo de la web trae ${claves.length} reportes`);
+    for (const k of claves) {
+      // Las carteras son «a hoy»: no llevan rango (y un parámetro de más es 422).
+      const aHoy = k === "receivables" || k === "payables";
+      const r = await pedir(dueno, "E2", "GET", `/v1/reports/${k}${aHoy ? "" : `?${rango}`}`);
+      afirmar(r.status === 200, `la web ofrece «${k}» y el servidor responde ${r.status}`);
+    }
+  },
+);
+
 export default c.correr;

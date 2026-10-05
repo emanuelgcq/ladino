@@ -1468,7 +1468,10 @@ describe("revisión final · un diferencial REAL no va a redondeo, y la marca vi
       supplier_control_number: `00-NCFZ11${RUN}`,
       note_date: HOY,
       currency: "USD",
-      reason: "Devolución parcial",
+      // H-03 (ola 5): la pantalla pregunta qué es la nota. Lo que este caso mide es la TASA de
+      // la nota, no el kardex: una rebaja de precio, que no necesita mercancía en el depósito.
+      reason: "Rebaja parcial de precio",
+      kind: "rebaja",
       lines: [{ product_id: HARINA, quantity: "1", unit_price: "5", tax_amount: "0.80000000" }],
     });
     expect(nota.status, await nota.clone().text()).toBe(201);
@@ -1483,6 +1486,256 @@ describe("revisión final · un diferencial REAL no va a redondeo, y la marca vi
     expect(Number(lineas[0]!.importe)).toBeLessThan(264.3);
     expect(lineas[0]!.importe).toBe(await difDe(cierre.id));
     expect(await abierto("ap", inv)).toBe("0.00000000");
+  });
+
+  it("H-03 · factura en USD a MEDIO PAGAR y una nota a OTRA tasa que la cierra: no hay saldo a favor; la diferencia de cambio va al diferencial y la cuenta por pagar queda en cero", async () => {
+    await fondear();
+    // 2 × 10 + 16 % = 23,20 USD a 854,4637. Se pagan 17,40: quedan 5,80 USD (4.955,89 Bs en el mayor).
+    const inv = await compra("FZ-97", [{ product_id: HARINA, quantity: "2", unit_price: "10" }]);
+    expect((await pagarUsd(inv, "17.40000000")).estado).toBe("posted");
+    // La nota abona exactamente esos 5,80 USD, pero entra a 900: 5.220,00 Bs. Lo que pasa de
+    // 4.955,89 NO es dinero a favor con el proveedor (en dólares no se le abonó de más): es
+    // diferencia de cambio.
+    await tasa("900.00000000");
+    const nota = await pedir("POST", "/v1/supplier-credit-notes", {
+      company_id: COMPANY,
+      supplier_invoice_id: inv,
+      supplier_document_number: `NC-FZ-97-${RUN}`,
+      supplier_control_number: `00-NCFZ97${RUN}`,
+      note_date: HOY,
+      currency: "USD",
+      reason: "Rebaja que cierra la factura",
+      kind: "rebaja",
+      lines: [{ product_id: HARINA, quantity: "1", unit_price: "5" }],
+    });
+    expect(nota.status, await nota.clone().text()).toBe(201);
+    const n = (await nota.json()) as { id: string; balance: string; left_credit_in_favor: boolean };
+    expect(n.balance).toBe("0.00000000");
+    expect(n.left_credit_in_favor).toBe(false);
+    const [fila] = await sql<{ favor: string }[]>`
+      select credit_in_favor_functional::text as favor
+        from public.supplier_credit_notes where id = ${n.id}`;
+    expect(Number(fila!.favor)).toBe(0);
+    // 5,80 USD × (900 − 854,4637) ≈ 264,11 Bs de pérdida cambiaria, en el asiento de la nota.
+    const lineas = await resultadoDe(n.id);
+    expect(lineas.map((l) => l.papel)).toEqual(["exchange_loss"]);
+    expect(Number(lineas[0]!.importe)).toBeGreaterThan(264);
+    expect(Number(lineas[0]!.importe)).toBeLessThan(264.3);
+    expect(await abierto("ap", inv)).toBe("0.00000000");
+    const [gap] = await sql<{ n: number }[]>`
+      select count(*)::int as n from platform.supplier_credit_ledger_gap(${COMPANY})`;
+    expect(gap!.n).toBe(0);
+  });
+
+  it("H-03 · tercera ronda: la factura en USD que una nota CERRÓ sigue `posted` y settled_ledger_gaps la mira; y la nota que EXCEDE en divisa a otra tasa deja la cuenta por pagar en cero, el exceso en saldos a favor y el diferencial donde toca", async () => {
+    // (a) La factura del caso anterior: la cerró una nota, no un pago. Sigue `posted`, su saldo
+    // es cero y cumple lo que la rama nueva de settled_ledger_gaps mira: 0 filas, mirándola.
+    const [cerrada] = await sql<{ id: string; status: string; saldo: string; mirada: boolean }[]>`
+      select i.id, i.status,
+             platform.supplier_invoice_balance(${COMPANY}, i.id)::text as saldo,
+             (select max(n.created_at) from public.supplier_credit_notes n
+               where n.supplier_invoice_id = i.id and n.status = 'posted')
+               >= (select c.since from platform.invariant_cutoffs c
+                    where c.invariant = 'settled_by_supplier_credit_note') as mirada
+        from public.supplier_invoices i
+       where i.company_id = ${COMPANY} and i.supplier_document_number = ${`FZ-97-${RUN}`}`;
+    expect([cerrada!.status, Number(cerrada!.saldo), cerrada!.mirada]).toEqual(["posted", 0, true]);
+    expect(await sql`select * from platform.settled_ledger_gaps(${COMPANY})`).toEqual([]);
+
+    // (b) 23,20 USD a 854,4637; se pagan 17,40: quedan 5,80 USD (4.955,89 Bs en el mayor). La
+    // nota abona 11,60 USD a 900: 5,80 cierran la deuda y 5,80 son saldo a favor (5.220,00 Bs).
+    await fondear();
+    const inv = await compra("FZ-96", [{ product_id: HARINA, quantity: "2", unit_price: "10" }]);
+    expect((await pagarUsd(inv, "17.40000000")).estado).toBe("posted");
+    await tasa("900.00000000");
+    const nota = await pedir("POST", "/v1/supplier-credit-notes", {
+      company_id: COMPANY,
+      supplier_invoice_id: inv,
+      supplier_document_number: `NC-FZ-96-${RUN}`,
+      supplier_control_number: `00-NCFZ96${RUN}`,
+      note_date: HOY,
+      currency: "USD",
+      reason: "Rebaja mayor que lo que se debía",
+      kind: "rebaja",
+      lines: [{ product_id: HARINA, quantity: "2", unit_price: "5" }],
+    });
+    expect(nota.status, await nota.clone().text()).toBe(201);
+    const n = (await nota.json()) as { id: string; balance: string; left_credit_in_favor: boolean };
+    expect(n.balance).toBe("-5.80000000");
+    expect(n.left_credit_in_favor).toBe(true);
+    const [fila] = await sql<{ bs: string; usd: string; estado: string }[]>`
+      select n.credit_in_favor_functional::text as bs, n.credit_in_favor_transaction::text as usd,
+             (select status from public.supplier_invoices where id = ${inv}) as estado
+        from public.supplier_credit_notes n where n.id = ${n.id}`;
+    expect([Number(fila!.bs), Number(fila!.usd), fila!.estado]).toEqual([5220, 5.8, "posted"]);
+    // Lo que cierra la deuda (5,80 USD) entró a 900 y pesaba 4.955,89: ≈ 264,11 Bs de pérdida.
+    const lineas = await resultadoDe(n.id);
+    expect(lineas.map((l) => l.papel)).toEqual(["exchange_loss"]);
+    expect(Number(lineas[0]!.importe)).toBeGreaterThan(264);
+    expect(Number(lineas[0]!.importe)).toBeLessThan(264.3);
+    expect(await abierto("ap", inv)).toBe("0.00000000");
+    const [gaps] = await sql<Record<string, number>[]>`
+      select (select count(*)::int from platform.settled_ledger_gaps(${COMPANY})) as saldados,
+             (select count(*)::int from platform.supplier_credit_ledger_gap(${COMPANY})) as a_favor,
+             (select count(*)::int
+                from platform.supplier_credit_subledger_gaps(${COMPANY})) as auxiliar`;
+    expect(gaps).toEqual({ saldados: 0, a_favor: 0, auxiliar: 0 });
+  });
+
+  /**
+   * H-03 · CUARTA RONDA. La nota en divisa que CIERRA una factura cuando el mayor no se puede leer
+   * (la factura, un pago o la propia nota esperan en la cola contable). Antes se asentaba —o se
+   * encolaba— con diferencial 0, y al procesar la cola quedaba un residuo permanente en cuentas
+   * por pagar. Ahora hace lo que el pago que cierra: sin mayor, cancela a las tasas de registro.
+   */
+  const plantillasCompras = async (
+    cuales: readonly (readonly [string, string])[],
+    activa: boolean,
+  ): Promise<void> => {
+    await sql.begin(async (tx) => {
+      await tx`select set_config('ladino.actor_id', ${DUENO}, true)`;
+      for (const [kind, evento] of cuales) {
+        const filas = await tx`
+          update public.journal_templates set is_active = ${activa}
+           where company_id = ${COMPANY} and source_kind = ${kind} and source_event = ${evento}
+          returning id`;
+        expect(filas.length).toBeGreaterThan(0);
+      }
+    });
+  };
+  const P_FACTURA = ["purchase_invoice", "ap.invoice_posted"] as const;
+  const P_PAGO = ["payment_made", "ap.payment_made"] as const;
+  const P_NOTA = ["purchase_credit_note", "ap.credit_note_received"] as const;
+  async function rebajaUsd(
+    inv: string,
+    numero: string,
+    cantidad: string,
+    precio: string,
+  ): Promise<{ id: string; balance: string }> {
+    const r = await pedir("POST", "/v1/supplier-credit-notes", {
+      company_id: COMPANY,
+      supplier_invoice_id: inv,
+      supplier_document_number: `NC-${numero}-${RUN}`,
+      supplier_control_number: `00-NC${numero.replace(/\W/g, "")}${RUN}`,
+      note_date: HOY,
+      currency: "USD",
+      reason: "Rebaja con el mayor sin leer (cuarta ronda)",
+      kind: "rebaja",
+      lines: [{ product_id: HARINA, quantity: cantidad, unit_price: precio }],
+    });
+    expect(r.status, await r.clone().text()).toBe(201);
+    return (await r.json()) as { id: string; balance: string };
+  }
+  const enCola = async (sourceId: string): Promise<number> =>
+    (
+      await sql<{ n: number }[]>`
+        select count(*)::int as n from public.journal_generation_queue
+         where company_id = ${COMPANY} and source_id = ${sourceId} and status = 'pending'
+           and source_kind in ('purchase_invoice', 'payment_made', 'purchase_credit_note')`
+    )[0]!.n;
+  /** Tras procesar la cola: la cuenta por pagar en 0,00 y el diferencial, en su cuenta. */
+  async function procesadaYEnCero(inv: string, notaId: string, perdida: number): Promise<void> {
+    const r = await pedir("POST", "/v1/accounting/pending/process", { limit: 500 });
+    expect(r.status, await r.clone().text()).toBe(200);
+    expect(await enCola(inv)).toBe(0);
+    expect(await enCola(notaId)).toBe(0);
+    const lineas = await resultadoDe(notaId);
+    expect(lineas.map((l) => l.papel)).toEqual(["exchange_loss"]);
+    expect(Number(lineas[0]!.importe)).toBeCloseTo(perdida, 1);
+    expect(await abierto("ap", inv)).toBe("0.00000000");
+    expect(
+      await sql`select side, document_id, residual::text as residual
+                  from platform.settled_ledger_gaps(${COMPANY})`,
+    ).toEqual([]);
+  }
+
+  it("H-03 · cuarta ronda (a): la FACTURA en la cola y la nota POSTEADA a otra tasa que la cierra: la nota reconoce el diferencial con las tasas de registro, y al procesar la cola la cuenta por pagar queda en 0,00", async () => {
+    await plantillasCompras([P_FACTURA], false);
+    let inv: string;
+    try {
+      // 2 × 10 + 16 % = 23,20 USD a 854,4637 = 19.823,56 Bs, que esperan en la cola.
+      inv = await compra("FZ-81", [{ product_id: HARINA, quantity: "2", unit_price: "10" }]);
+    } finally {
+      await plantillasCompras([P_FACTURA], true);
+    }
+    expect(await enCola(inv)).toBe(1);
+    expect(await abierto("ap", inv)).toBeNull();
+    // La nota abona los 23,20 USD a 900 = 20.880,00 Bs: 1.056,44 de pérdida cambiaria.
+    await tasa("900.00000000");
+    const n = await rebajaUsd(inv, "FZ-81", "2", "10");
+    expect(n.balance).toBe("0.00000000");
+    expect(await enCola(n.id)).toBe(0);
+    await procesadaYEnCero(inv, n.id, 1056.44);
+  });
+
+  it("H-03 · cuarta ronda (b): la factura Y la nota en la cola: la nota se encola con su diferencial y, al procesarse las dos, la cuenta por pagar queda en 0,00", async () => {
+    await plantillasCompras([P_FACTURA, P_NOTA], false);
+    let inv: string;
+    let n: { id: string; balance: string };
+    try {
+      inv = await compra("FZ-82", [{ product_id: HARINA, quantity: "2", unit_price: "10" }]);
+      await tasa("900.00000000");
+      n = await rebajaUsd(inv, "FZ-82", "2", "10");
+    } finally {
+      await plantillasCompras([P_FACTURA, P_NOTA], true);
+    }
+    expect(n.balance).toBe("0.00000000");
+    expect([await enCola(inv), await enCola(n.id)]).toEqual([1, 1]);
+    // Lo que distingue este camino: el diferencial viaja en el CONTEXTO de la fila encolada.
+    const [ctxNota] = await sql<{ dif: string }[]>`
+      select context ->> 'exchange_difference' as dif from public.journal_generation_queue
+       where company_id = ${COMPANY} and source_id = ${n.id}
+         and source_kind = 'purchase_credit_note'`;
+    expect(Number(ctxNota!.dif)).toBeCloseTo(1056.44, 1);
+    await procesadaYEnCero(inv, n.id, 1056.44);
+  });
+
+  it("H-03 · cuarta ronda (c): un PAGO parcial en la cola en medio: la nota a otra tasa que cierra reconoce el diferencial de lo que quedaba, y la cuenta por pagar queda en 0,00", async () => {
+    await fondear();
+    // 23,20 USD a 854,4637. Se pagan 17,40 (el pago espera en la cola): quedan 5,80 USD.
+    const inv = await compra("FZ-83", [{ product_id: HARINA, quantity: "2", unit_price: "10" }]);
+    await plantillasCompras([P_PAGO], false);
+    let pago: { id: string; estado: string };
+    try {
+      pago = await pagarUsd(inv, "17.40000000");
+    } finally {
+      await plantillasCompras([P_PAGO], true);
+    }
+    expect(pago.estado).toBe("posted");
+    expect(await enCola(pago.id)).toBe(1);
+    expect(await abierto("ap", inv)).toBeNull();
+    // 5,80 USD a 900 = 5.220,00 contra los 4.955,89 que pesaban: ≈ 264,11 de pérdida.
+    await tasa("900.00000000");
+    const n = await rebajaUsd(inv, "FZ-83", "1", "5");
+    expect(n.balance).toBe("0.00000000");
+    await procesadaYEnCero(inv, n.id, 264.11);
+  });
+
+  it("H-03 · cuarta ronda (d): la nota que EXCEDE con TODO en la cola: el saldo a favor sale del auxiliar, el diferencial de lo que cerró va a su cuenta y los tres invariantes quedan en cero", async () => {
+    await fondear();
+    await plantillasCompras([P_FACTURA, P_PAGO, P_NOTA], false);
+    let inv: string;
+    let n: { id: string; balance: string };
+    try {
+      inv = await compra("FZ-84", [{ product_id: HARINA, quantity: "2", unit_price: "10" }]);
+      expect((await pagarUsd(inv, "17.40000000")).estado).toBe("posted");
+      // 11,60 USD a 900: 5,80 cierran lo que se debía y 5,80 son saldo a favor (5.220,00 Bs).
+      await tasa("900.00000000");
+      n = await rebajaUsd(inv, "FZ-84", "2", "5");
+    } finally {
+      await plantillasCompras([P_FACTURA, P_PAGO, P_NOTA], true);
+    }
+    expect(n.balance).toBe("-5.80000000");
+    const [fila] = await sql<{ bs: string; usd: string }[]>`
+      select credit_in_favor_functional::text as bs, credit_in_favor_transaction::text as usd
+        from public.supplier_credit_notes where id = ${n.id}`;
+    expect([Number(fila!.bs), Number(fila!.usd)]).toEqual([5220, 5.8]);
+    await procesadaYEnCero(inv, n.id, 264.11);
+    const [gaps] = await sql<Record<string, number>[]>`
+      select (select count(*)::int from platform.supplier_credit_ledger_gap(${COMPANY})) as a_favor,
+             (select count(*)::int
+                from platform.supplier_credit_subledger_gaps(${COMPANY})) as auxiliar`;
+    expect({ ...gaps }).toEqual({ a_favor: 0, auxiliar: 0 });
   });
 
   it("compras · el caso limpio: misma tasa y sin notas, el céntimo del cierre va a redondeo y no hay línea de diferencial", async () => {

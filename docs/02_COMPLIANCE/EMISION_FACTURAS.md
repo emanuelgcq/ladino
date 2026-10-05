@@ -92,7 +92,7 @@ La factura válida es la impresa sobre la **forma libre**, con el control preimp
 - **Recibo de devolución** de una empresa sin RIF: «Recibo de devolución · Documento no fiscal: no es factura ni nota de crédito y no otorga derecho a crédito fiscal»; sin RIF, sin IVA, sin cita de providencia y sin copia fiscal (A-06, G-03; el asesor afina la redacción en P-16).
 - **El PDF es una copia de cortesía.** El PDF que se descarga o comparte lo dice: «Copia de cortesía · La factura válida es la impresa en forma libre con control N° …».
 - **La factura digital solo existe por la PA 102** (PA SNAT/2024/000102), emitida a través de una imprenta digital autorizada. El PDF de Ladino **no** es factura digital: es el archivo de impresión sobre la forma libre y una copia de cortesía marcada como tal. El adaptador de imprenta digital está pendiente, fuera de esta entrega.
-- **Leyendas legales.** Las copias impresas llevan «SIN DERECHO A CRÉDITO FISCAL» (13.13), y ninguna otra leyenda legal: ni homologación ni PA 121, derogada por la PA SNAT/2026/00084 (A-11). La checklist entera se prueba en `apps/api/test/e2e-checklist-factura.test.ts`.
+- **Leyendas legales.** Las copias impresas llevan «SIN DERECHO A CRÉDITO FISCAL» (13.13), y ninguna otra leyenda legal: ni homologación ni PA 121, derogada por la PA SNAT/2026/00084 (A-11). La factura de retiro imprime además un texto descriptivo propio (§3-quater), que no es leyenda exigida por norma. La checklist entera se prueba en `apps/api/test/e2e-checklist-factura.test.ts`.
 
 ## 3-ter. El talonario de la imprenta (ADR-0071, migración 20260928160000)
 
@@ -151,6 +151,37 @@ No se emite en el cobro de la propia venta (la caja: el IGTF va en la factura) n
 absorbe el IGTF. Contrato: `RegisterPaymentResponse.igtf_debit_note` (aditivo). VALIDAR-TRIBUTARIO
 P-40. Riesgo: R-66.
 
+## 3-quater. La factura de retiro y su nota de crédito (ADR-0082, 2026-10-04)
+
+RLIVA art. 31 (reproducción no oficial): el retiro de inventario se factura y se registra en la
+columna especial del Libro de Ventas. **VALIDAR-SENIAT P-76.**
+
+- **Qué la emite:** una salida con motivo consumo propio, regalo, donación o muestra, en una
+  empresa que factura. Uso en el negocio, activo fijo y construcción o reparación de un inmueble
+  del negocio no emiten documento (LIVA art. 4 num. 3 in fine, P-82) y piden una nota de destino;
+  merma, rotura, vencido y faltante con evidencia, tampoco (P-77, P-81).
+- **Quién:** quien tiene permiso de mover inventario **y** de emitir facturas (AF5-02): el retiro
+  gravado emite un documento fiscal y gasta un número de control.
+- **Qué es:** una FACTURA (`withdrawal_invoice`) con el correlativo de la serie de facturas y el
+  siguiente control del talonario, fechada el día en que se registra (AF5-08; RLIVA art. 57).
+  Adquirente: la propia empresa, con su razón social, RIF y tipo de contribuyente congelados.
+  Base: precio de la lista principal a la fecha (RLIVA art. 43; piso de mercado en P-75). Sin
+  precio o con precio cero, no se retira.
+- **Lo que no hace:** no genera cuenta por cobrar, no se cobra, no se devuelve, no deja saldo a
+  favor.
+- **Producto exento:** se factura igual, sin IVA y con «(E)» (lectura literal del art. 31; P-78).
+- **Libro de ventas:** renglón de factura con el RIF de la empresa como adquirente. **La «columna
+  especial» no está construida** (P-76).
+- **Corrección:** el mismo día, anulación con la regla del papel (ADR-0061). Después, una NOTA DE
+  CRÉDITO total (`withdrawal_credit_note`): correlativo de notas de crédito, control del
+  talonario, cita la factura (PA 00071 arts. 22-23), devuelve la mercancía al inventario y resta
+  el débito en el período en que se emite (LIVA art. 36).
+- **Texto impreso:** «Factura por retiro de inventario», el motivo y «El adquirente es el propio
+  emisor. No genera cuenta por cobrar». Es texto adicional admitido por el art. 35 de la PA 00071,
+  no una leyenda exigida, y no cita ningún artículo en el papel (AF5-04); si esos renglones
+  cuentan para el tope del art. 33 es P-101.
+- **Empresa sin RIF:** no emite nada; solo la salida de kardex y el gasto.
+
 ## 4. Los requisitos de la PA 102 y su estado
 
 | Requisito (PA 102) | Estado en Ladino |
@@ -160,7 +191,7 @@ P-40. Riesgo: R-66.
 | Formato del control, art. 30 (dos dígitos + hasta ocho, desde 00-1) | **Construido** — `CONTROL_NUMBER_RE` en `packages/fiscal`, probado |
 | Talonarios de contingencia con la palabra «contingencia» | **Construido** — migración 35: `contingency_ranges` (LAD69 exige la palabra en la serie), `registerContingencyInvoice` registra a posteriori con los números del papel, entrando a libros y contabilidad como cualquier documento |
 | Conservación 10 años | **Construido de facto** — documentos inmutables y append-only (regla 1, LAD06/LAD68); la política de retención explícita queda anotada en `FISCAL_DOCUMENTS_SPEC.md` |
-| Entrega por medio digital | **Solo aplica a la vía PA 102, no construida.** En forma libre, el PDF es copia de cortesía (§3-bis). La pantalla «Venta lista» ofrece, para una factura, «Imprimir en la forma libre» (el mismo diálogo del detalle, con «Próximo control») y el «PDF de cortesía»; el recibo, su PDF. **No hay botón de WhatsApp**: se quitó a propósito en `8756c91` y no se repone (E-06). |
+| Entrega por medio digital | **Solo aplica a la vía PA 102, no construida.** En forma libre, el PDF es copia de cortesía (§3-bis). La pantalla «Venta lista» ofrece, para una factura, «Imprimir en la forma libre» (el mismo diálogo del detalle, con «Próximo control») y el «PDF de cortesía», que se abre y se descarga; el recibo, su PDF. Además, «Compartir»: la hoja de compartir del navegador (`navigator.share`) con ese mismo PDF como archivo, **solo donde el navegador comparte archivos**; donde no, el botón no se pinta y queda el PDF. **No hay botón de WhatsApp**: se quitó a propósito en `8756c91` y no se repone (E-06, ADR-0081). Compartir la copia de cortesía no es la entrega fiscal de la factura: en forma libre, la factura es el papel de la imprenta. |
 | Elegir imprenta digital autorizada | **Dependencia externa** — decisión del operador con la lista vigente en la mano (VALIDAR-SENIAT) |
 
 ## 5. VALIDAR-SENIAT abiertos de emisión

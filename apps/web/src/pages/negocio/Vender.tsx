@@ -8,6 +8,7 @@ import {
   Minus,
   Plus,
   Printer,
+  Share2,
   Search,
   ShoppingCart,
   Trash2,
@@ -29,12 +30,13 @@ import {
   IncluyeIgtf,
   SUFIJO_CON_IGTF,
 } from "../../components/capa-fiscal/Igtf.js";
-import { errorDePersona, LlamadaApiError } from "../../lib.js";
+import { errorDePersona, LlamadaApiError, type PriceList } from "../../lib.js";
 import { conLlaveDeIntento, intentoAnteriorPudoQuedar } from "../../llave-intento.js";
 import { RevisaIntentoAnterior } from "../../components/RevisaIntentoAnterior.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { talonariosConPapel, type Talonario } from "../setup/Talonario.js";
-import { abrirPdf as abrirPdfApi } from "../../pdf.js";
+import { abrirPdf as abrirPdfApi, bajarPdf } from "../../pdf.js";
+import { compartirPdf, puedeCompartirPdf } from "../../compartir.js";
 import { filasDeDescripcion } from "@ladino/schemas";
 import { ImprimirFormaLibre } from "../../components/ImprimirFormaLibre.js";
 import {
@@ -117,6 +119,8 @@ interface ProductoFila {
   price_currency?: string | null;
   price_equivalent_amount?: string | null;
   price_equivalent_currency?: string | null;
+  /** La lista por la que se cotizó la tarjeta (la resuelve el servidor). */
+  price_list_id?: string | null;
   stock_quantity?: string | null;
 }
 interface ClienteFila {
@@ -418,9 +422,16 @@ function VenderDeEmpresa(): React.JSX.Element {
   // E-07: la cuadrícula cotiza por la lista del CLIENTE de la cuenta activa — la misma que
   // aplicará el carrito. Sin cliente, el precio de mostrador (y la cuadrícula lo dice).
   const clienteDePrecios = activa.cliente?.id ?? null;
-  const deCliente = clienteDePrecios === null ? "" : `&customer_id=${clienteDePrecios}`;
+  // C-06: la lista que la persona eligió para ESTA cuenta (solo con «Vendo al mayor» encendido y
+  // con el permiso; el servidor lo vuelve a exigir al cotizar y al cobrar). Sin elegir, null: la
+  // del cliente o la de mostrador, que resuelve el servidor.
+  const [listaPorCuenta, setListaPorCuenta] = useState<Record<string, string>>({});
+  const listaElegida = listaPorCuenta[activa.id] ?? null;
+  const deCliente =
+    (clienteDePrecios === null ? "" : `&customer_id=${clienteDePrecios}`) +
+    (listaElegida === null ? "" : `&price_list_id=${listaElegida}`);
   const productos = useQuery({
-    queryKey: ["pos-productos", empresa.id, q, clienteDePrecios],
+    queryKey: ["pos-productos", empresa.id, q, clienteDePrecios, listaElegida],
     queryFn: () =>
       llamar<{ items: ProductoFila[] }>(
         `/v1/products?only_active=1&with_price=1&with_stock=1&per_page=60${deCliente}${q === "" ? "" : `&search=${encodeURIComponent(q)}`}`,
@@ -439,7 +450,17 @@ function VenderDeEmpresa(): React.JSX.Element {
         allow_unidentified_sales: boolean;
         default_warehouse_id: string | null;
         rows_per_free_form: number;
+        sells_wholesale?: boolean;
       }>("/v1/company-settings"),
+  });
+  // C-06: con «Vendo al mayor» APAGADO no se pide nada de esto ni se pinta un control más.
+  const alMayor = ajustes.data?.sells_wholesale === true;
+  const puedeCambiarLista = puede("sales.price_list.override");
+  const listasDePrecio = useQuery({
+    queryKey: ["listas-de-precio", empresa.id],
+    enabled: alMayor,
+    staleTime: 5 * 60_000,
+    queryFn: () => llamar<PriceList[]>("/v1/price-lists").catch(() => [] as PriceList[]),
   });
   // Quien da recibos (la regla de app/rif.ts): el POS es el MISMO; cambia el documento, y
   // desaparece todo lo de impuestos.
@@ -476,6 +497,7 @@ function VenderDeEmpresa(): React.JSX.Element {
       activa.id,
       activa.cliente?.id ?? "mostrador",
       lineasDebounced,
+      listaElegida,
     ],
     enabled: lineasDebounced.length > 0,
     // El «mientras llega» solo vale dentro de la MISMA ficha: los totales de
@@ -485,9 +507,18 @@ function VenderDeEmpresa(): React.JSX.Element {
       cotizarPos(llamar, {
         company_id: empresa.id,
         ...(activa.cliente === null ? {} : { customer_id: activa.cliente.id }),
+        ...(listaElegida === null ? {} : { price_list_id: listaElegida }),
         lines: lineasDebounced,
       }),
   });
+  // C-06: la lista que APLICA la dice el servidor (la cotización, o las tarjetas si el carrito
+  // está vacío); aquí solo se le pone nombre.
+  const listaQueAplica =
+    cotizacion.data?.price_list_id ??
+    productos.data?.items.find((p) => p.price_list_id != null)?.price_list_id ??
+    null;
+  const listasActivas = (listasDePrecio.data ?? []).filter((l) => l.status === "active");
+  const nombreDeLista = listasActivas.find((l) => l.id === listaQueAplica)?.name ?? null;
 
   /** Anota uno. Devuelve el motivo si no se pudo (null = anotado). */
   function agregar(p: ProductoFila, avisar = true): string | null {
@@ -775,7 +806,36 @@ function VenderDeEmpresa(): React.JSX.Element {
             {activa.cliente === null
               ? "Precio de mostrador"
               : `Precios de ${activa.cliente.legal_name}`}
+            {alMayor && nombreDeLista !== null ? ` · lista «${nombreDeLista}»` : ""}
           </p>
+          {/* C-06: cambiar la lista de ESTA venta. Solo con «Vendo al mayor» y con el permiso;
+              el servidor lo exige otra vez al cotizar y al cobrar. */}
+          {alMayor && puedeCambiarLista && listasActivas.length > 1 && (
+            <div className="flex shrink-0 items-center gap-2" data-testid="pos-lista">
+              <span className="text-[0.8rem] text-muted-foreground">Vender con la lista</span>
+              <SimpleSelect
+                ariaLabel="Lista de precios de esta venta"
+                className="h-8 w-44"
+                value={listaElegida ?? listaQueAplica}
+                onValueChange={(v) => setListaPorCuenta((m) => ({ ...m, [activa.id]: v }))}
+                options={listasActivas.map((l) => ({ value: l.id, label: l.name }))}
+              />
+              {listaElegida !== null && (
+                <button
+                  type="button"
+                  className="text-[0.8rem] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                  onClick={() =>
+                    setListaPorCuenta((m) => {
+                      const { [activa.id]: _quitada, ...resto } = m;
+                      return resto;
+                    })
+                  }
+                >
+                  Volver a la del cliente
+                </button>
+              )}
+            </div>
+          )}
           {/* E-13: la caja no vende sin existencia; ofrece la puerta de la mercancía. */}
           {agotado !== null && (
             <div
@@ -1135,6 +1195,7 @@ function VenderDeEmpresa(): React.JSX.Element {
             cotizacion={cotizacion.data}
             lineas={lineas}
             clienteId={activa.cliente?.id ?? null}
+            listaId={listaElegida}
             cartId={activa.id}
             cartVersion={activa.version ?? 0}
             antesDeCobrar={() => sincronizador.esperar(activa.id)}
@@ -1655,6 +1716,7 @@ function Cobrar({
   cotizacion,
   lineas,
   clienteId,
+  listaId,
   cartId,
   cartVersion,
   antesDeCobrar,
@@ -1667,6 +1729,8 @@ function Cobrar({
   cotizacion: CotizacionPos;
   lineas: { product_id: string; quantity: string }[];
   clienteId: string | null;
+  /** C-06: la lista elegida para esta venta, o null (la del cliente o la de mostrador). */
+  listaId: string | null;
   /** La cuenta abierta que este cobro CIERRA: el servidor la marca vendida en la
       misma transacción de la venta (ADR-0076). */
   cartId: string;
@@ -1924,6 +1988,7 @@ function Cobrar({
             attempt_id: k,
             ...(serieVenta === undefined ? {} : { series: serieVenta }),
             ...(clienteId === null ? {} : { customer_id: clienteId }),
+            ...(listaId === null ? {} : { price_list_id: listaId }),
             // P-05: solo al fiar, y solo si el servidor dijo que la pide.
             ...(fiando && pideVencimiento && vence !== "" ? { due_date: vence } : {}),
             lines: lineas,
@@ -2338,6 +2403,10 @@ function VentaLista({
   // H14 (decidido por criterio, §2.1): una FACTURA ofrece también imprimirse sobre la forma libre,
   // con el mismo diálogo del detalle; el recibo no (no es fiscal). WhatsApp no se repone (E-06).
   const [imprimiendo, setImprimiendo] = useState(false);
+  // E-06 (ADR-0081): «Compartir» es la hoja de compartir del NAVEGADOR con el mismo PDF que abre
+  // el botón de al lado. Donde el navegador no comparte archivos, el botón no se pinta.
+  const [puedeCompartir] = useState(() => puedeCompartirPdf());
+  const [compartiendo, setCompartiendo] = useState(false);
   const formaLibre =
     venta.document.kind === "invoice" && typeof venta.document.control_display === "string";
   // Sin número asignado no se inventa un «00000000»: se dice.
@@ -2355,6 +2424,22 @@ function VentaLista({
     void abrirPdfApi(`/v1/documents/${venta.document.id}/pdf`, empresa.id, (m) =>
       toast.error("No se pudo abrir el PDF", m),
     );
+  }
+
+  async function compartir(): Promise<void> {
+    setCompartiendo(true);
+    try {
+      const pdf = await bajarPdf(`/v1/documents/${venta.document.id}/pdf`, empresa.id);
+      const resultado =
+        pdf === null
+          ? "no_se_pudo"
+          : await compartirPdf(pdf, `${esRecibo ? "recibo" : "factura"}-${numero}.pdf`);
+      if (resultado === "no_se_pudo") {
+        toast.error("No se pudo compartir", "Abre el PDF y envíalo desde ahí.");
+      }
+    } finally {
+      setCompartiendo(false);
+    }
   }
 
   return (
@@ -2417,6 +2502,16 @@ function VentaLista({
               </>
             )}
           </Button>
+          {puedeCompartir && (
+            <Button
+              variant="secondary"
+              className="w-full"
+              disabled={compartiendo}
+              onClick={() => void compartir()}
+            >
+              <Share2 /> {compartiendo ? "Preparando…" : "Compartir"}
+            </Button>
+          )}
           <Button variant="primary" size="lg" className="h-12 w-full" onClick={onNueva} autoFocus>
             Nueva venta
           </Button>

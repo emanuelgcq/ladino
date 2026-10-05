@@ -8,6 +8,14 @@
 begin;
 select plan(7);
 
+-- ENTRADA del fixture (20261005100000, ADR-0082): este fichero prueba la Nota de retiro (serie NR),
+-- que desde el corte `withdrawal_invoice` ya no cubre un retiro —lo cubre su FACTURA de retiro
+-- (pgTAP 134)—. Aquí el corte se lleva al futuro dentro de la transacción de prueba, para que los
+-- retiros del fixture sean ANTERIORES al corte: el enunciado (2) de withdrawal_note_gaps, que es
+-- el que sigue vigilando las notas ya emitidas. Ninguna aserción cambia.
+update platform.invariant_cutoffs set since = now() + interval '1 day'
+ where invariant = 'withdrawal_invoice';
+
 insert into auth.users (id) values ('aaaa0103-0000-4000-8000-0000000000aa');
 select set_config('ladino.actor_id', 'aaaa0103-0000-4000-8000-0000000000aa', true);
 select set_config('ladino.rules_version', 'pgtap-103', true);

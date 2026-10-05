@@ -19,6 +19,7 @@ import { ETIQUETA_OBLIGACION } from "../../components/capa-fiscal/vencimientos.j
 import { useModoDeVenta } from "../../app/modo-venta.js";
 import { hoyLocal, diaLocalMas } from "../../fechas.js";
 import { tasaLimpia } from "../../tasa.js";
+import { cuandoToca, useGastosQueSeRepiten } from "../../components/GastosQueTocan.js";
 
 /**
  * INICIO (Fase C, PARTE 12): cómo va el negocio, de un vistazo. El número
@@ -98,6 +99,9 @@ export function Inicio(): React.JSX.Element {
         "/v1/fiscal-declarations/deadlines",
       ).catch(() => ({ items: [] })),
   });
+  // H-07: los gastos que se repiten y ya tocan. Solo los pide quien ve los gastos; si la
+  // lectura falla, no hay aviso (como los vencimientos de arriba).
+  const { tocan: gastosQueTocan } = useGastosQueSeRepiten();
   const r = resumen.data ?? null;
   const moneda = r?.functional_currency ?? "VES";
 
@@ -114,6 +118,18 @@ export function Inicio(): React.JSX.Element {
           ? `${ETIQUETA_OBLIGACION[v.obligation] ?? v.obligation} venció el ${v.due_date}.`
           : `${ETIQUETA_OBLIGACION[v.obligation] ?? v.obligation} vence el ${v.due_date}.`,
       a: v.obligation === "igtf" ? "/admin/igtf" : "/admin/declaraciones",
+    });
+  }
+  if (gastosQueTocan.length === 1) {
+    const g = gastosQueTocan[0]!;
+    recordatorios.push({
+      texto: `Toca pagar ${g.category}: ${cuandoToca(g)}. Regístralo con los datos de la última vez.`,
+      a: "/compras?ver=gastos",
+    });
+  } else if (gastosQueTocan.length > 1) {
+    recordatorios.push({
+      texto: `Toca pagar ${gastosQueTocan.length} gastos que se repiten. Regístralos con los datos de la última vez.`,
+      a: "/compras?ver=gastos",
     });
   }
   if (r !== null) {

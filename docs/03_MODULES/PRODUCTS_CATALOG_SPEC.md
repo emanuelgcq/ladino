@@ -25,6 +25,17 @@ Modelar bienes/servicios con atributos operativos, inventario y tributación.
 - Categoría tributaria separada del IVA hard-coded.
 - Combo/receta puede consumir componentes.
 
+### Los dos interruptores de existencia (I-04, C-07 · ADR-0084)
+Solo para bienes; se ponen en el alta, el alta simple y la edición. Son excluyentes.
+
+| Interruptor | Qué hace | Qué NO se puede cambiar después |
+|---|---|---|
+| «Se arma con otros productos» (`is_composed`) | no lleva existencia: venderlo descuenta los ingredientes de su receta (`PUT /v1/products/:id/recipe`). Sin ingredientes no se vende. Marcarlo o quitarlo exige `product.recipe.manage` además de `product.manage` | un producto con movimientos no se vuelve compuesto; uno que es ingrediente tampoco; **un compuesto que ya se vendió no deja de serlo** (LAD44). Quitar la marca a uno sin vender borra su receta, y el acta (`product.updated`) guarda las líneas borradas (`recipe_removed`) |
+| «Lleva lote y vencimiento» (`tracks_lots` + `tracks_expiry`, juntos) | cada entrada pide el código del lote y la fecha en que vence; la venta toma primero lo que vence antes | **con movimientos registrados no se enciende ni se apaga** (LAD38); encenderlo con lotes sin fecha tampoco (LAD73). No admite existencia inicial en el alta simple: entra por «Llegó mercancía» |
+
+En las pantallas de la persona (`pages/negocio`) se lee «Se vence» y «código del paquete»; en
+Administración, «Lleva lote y vencimiento».
+
 ## Estados / transiciones
 draft → active → inactive.
 

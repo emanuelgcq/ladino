@@ -1253,3 +1253,177 @@ describe("H-09 · un gasto con factura fiscal es una compra de servicio", () => 
     }
   });
 });
+
+/**
+ * H-03 · AF4-02 (ola 5, ADR-0083 §4): LA FACTURA DE UN GASTO SE CORRIGE CON LA NOTA DE CRÉDITO
+ * DEL PROVEEDOR. Hasta aquí no tenía corrección (ADR-0080, «Negativas»): la nota exigía un
+ * producto por línea. Ahora la línea de la nota corrige una línea de SERVICIO: sin kardex,
+ * revierte el gasto y el crédito fiscal, entra al libro de compras en negativo y, como la
+ * factura ya estaba pagada, deja el importe como saldo a favor con el proveedor.
+ *
+ * La retención practicada y su comprobante NO se tocan (VALIDAR-SENIAT, P-103): la respuesta lo
+ * dice (`retention_untouched`).
+ */
+describe("H-03 · un gasto con factura mal registrado se corrige con la nota de crédito del proveedor", () => {
+  let FACTURA = "";
+  let NOTA = "";
+  let LINEAS: { id: string }[] = [];
+  const cuerpo = () => ({
+    company_id: COMPANY,
+    supplier_invoice_id: FACTURA,
+    supplier_document_number: `NC-LUZ-${RUN}`,
+    supplier_control_number: `00-NCLUZ-${RUN}`,
+    note_date: HOY,
+    currency: "VES",
+    reason: "La factura de la luz se registró por error",
+    // Lo que manda la pantalla: la línea de la factura y su importe. Ni producto ni IVA.
+    lines: [
+      { supplier_invoice_line_id: LINEAS[0]!.id, quantity: "1", unit_price: "1000" },
+      { supplier_invoice_line_id: LINEAS[1]!.id, quantity: "1", unit_price: "200" },
+    ],
+  });
+
+  it("el gasto mal registrado: 1 000 gravados + 200 exentos, retenido y pagado", async () => {
+    const r = await pedir("POST", "/v1/expenses", gastoConFactura(`LUZ-${RUN}-NC`));
+    expect(r.status, await r.clone().text()).toBe(201);
+    FACTURA = ((await r.json()) as { supplier_invoice_id: string }).supplier_invoice_id;
+    LINEAS = await sql<{ id: string }[]>`
+      select id from public.supplier_invoice_lines
+       where supplier_invoice_id = ${FACTURA} order by line_number`;
+    expect(LINEAS.length).toBe(2);
+  });
+
+  it("quien no lleva gastos no la corrige (403) y una «devolución» de un servicio se rechaza (422)", async () => {
+    const negada = await pedir("POST", "/v1/supplier-credit-notes", cuerpo(), CAJERO);
+    expect(negada.status).toBe(403);
+    const devolucion = await pedir("POST", "/v1/supplier-credit-notes", {
+      ...cuerpo(),
+      kind: "devolucion",
+    });
+    expect(devolucion.status).toBe(422);
+    expect(((await devolucion.json()) as { message: string }).message).toContain(
+      "no tiene mercancía que devolver",
+    );
+    const [n] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.supplier_credit_notes
+       where supplier_invoice_id = ${FACTURA}`;
+    expect(n!.n).toBe(0);
+  });
+
+  it("la nota la registra quien SOLO lleva gastos: revierte gasto y crédito fiscal, sin kardex, y deja saldo a favor", async () => {
+    const [creditosAntes] = await sql<{ c: string }[]>`
+      select creditos::text as c
+        from platform.recompute_iva_period(${COMPANY}, ${HOY}::date, ${HOY}::date, 0)`;
+    const r = await pedir("POST", "/v1/supplier-credit-notes", cuerpo(), GASTOS);
+    expect(r.status, await r.clone().text()).toBe(201);
+    const n = (await r.json()) as Record<string, unknown>;
+    NOTA = n["id"] as string;
+    // 1 000 al 16 % (la alícuota de SU línea de factura) + 200 exentos.
+    expect(n["total_amount"]).toBe("1360.00000000");
+    expect(n["is_fiscal"]).toBe(true);
+    expect(n["document_incomplete"]).toBe(false);
+    expect(n["retention_untouched"]).toBe(true);
+    // La factura estaba pagada (1 240 al proveedor + 120 retenidos): la nota entera queda a favor.
+    expect(n["balance"]).toBe("-1360.00000000");
+
+    const [fila] = await sql<
+      { clase: string | null; favor: string; lineas_sin_producto: number }[]
+    >`
+      select n.correction_kind as clase, n.credit_in_favor_functional::text as favor,
+             (select count(*)::int from public.supplier_credit_note_lines l
+               where l.supplier_credit_note_id = n.id and l.product_id is null)
+               as lineas_sin_producto
+        from public.supplier_credit_notes n where n.id = ${NOTA}`;
+    expect(fila).toEqual({ clase: null, favor: "1360.00000000", lineas_sin_producto: 2 });
+
+    // Sin kardex: un servicio no pasó por el almacén.
+    const [mov] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.inventory_moves where source_document_id = ${NOTA}`;
+    expect(mov!.n).toBe(0);
+
+    // El asiento, por PAPEL: revierte gasto (1 200) y crédito fiscal (160) contra el proveedor.
+    const asiento = await sql<{ papel: string; debe: string; haber: string }[]>`
+      select s.purpose as papel, sum(l.functional_debit)::text as debe,
+             sum(l.functional_credit)::text as haber
+        from public.journal_entries e
+        join public.journal_lines l on l.entry_id = e.id
+        join lateral (select min(x.purpose) as purpose from public.company_account_settings x
+                       where x.company_id = l.company_id and x.account_id = l.account_id
+                         and x.purpose in ('ap_general', 'operating_expense',
+                                           'iva_credit_fiscal', 'inventory_general',
+                                           'supplier_credit_receivable')) s
+          on s.purpose is not null
+       where e.company_id = ${COMPANY} and e.source_id = ${NOTA} and e.status = 'posted'
+         and e.source_kind = 'purchase_credit_note'
+         and e.source_event = 'ap.expense_credit_note_received'
+       group by s.purpose order by s.purpose`;
+    expect(asiento.map((a) => [a.papel, Number(a.debe), Number(a.haber)])).toEqual([
+      // La cuenta por pagar entra y sale por lo mismo: la factura ya estaba pagada y no debía
+      // nada. El abono entero es saldo a favor con el proveedor, en SU cuenta (ADR-0083 §5).
+      ["ap_general", 1360, 1360],
+      ["iva_credit_fiscal", 0, 160],
+      ["operating_expense", 0, 1200],
+      ["supplier_credit_receivable", 1360, 0],
+    ]);
+
+    // El libro de compras la lleva en negativo, con su base gravada y su exento.
+    const [libro] = await sql<Record<string, string>[]>`
+      select base_gravada::text as gravada, base_exenta::text as exenta,
+             iva_credito::text as iva, total_amount::text as total
+        from platform.purchases_book(${COMPANY}, ${HOY}::date, ${HOY}::date)
+       where supplier_document_number = ${`NC-LUZ-${RUN}`}`;
+    expect(Number(libro!["gravada"])).toBe(-1000);
+    expect(Number(libro!["exenta"])).toBe(-200);
+    expect(Number(libro!["iva"])).toBe(-160);
+    expect(Number(libro!["total"])).toBe(-1360);
+    // Y la declaración resta ese crédito (LIVA art. 37).
+    const [creditos] = await sql<{ c: string }[]>`
+      select creditos::text as c
+        from platform.recompute_iva_period(${COMPANY}, ${HOY}::date, ${HOY}::date, 0)`;
+    expect(Number(creditos!.c) - Number(creditosAntes!.c)).toBe(-160);
+
+    // El evento, con su nombre propio (como el de su factura, ADR-0080 §4).
+    const [evento] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.outbox
+       where company_id = ${COMPANY} and aggregate_id = ${NOTA}
+         and event_type = 'ap.expense_credit_note_received'`;
+    expect(evento!.n).toBe(1);
+  });
+
+  it("una segunda nota sobre la misma factura pasa del total y se rechaza (422)", async () => {
+    const r = await pedir("POST", "/v1/supplier-credit-notes", {
+      ...cuerpo(),
+      supplier_document_number: `NC-LUZ-${RUN}-2`,
+      lines: [{ supplier_invoice_line_id: LINEAS[1]!.id, quantity: "1", unit_price: "1" }],
+    });
+    expect(r.status).toBe(422);
+    expect(((await r.json()) as { message: string }).message).toContain(
+      "pasa del total de la factura",
+    );
+  });
+
+  it("los invariantes cruzados siguen en cero con la nota dentro", async () => {
+    const [n] = await sql<Record<string, number>[]>`
+      select (select count(*)::int from platform.accounting_coverage_gaps(${COMPANY})) as cobertura,
+             (select count(*)::int from platform.retention_voucher_gaps(${COMPANY})) as comprobantes,
+             (select count(*)::int from platform.inventory_coverage_gaps(${COMPANY})) as kardex,
+             (select count(*)::int from platform.settled_ledger_gaps(${COMPANY})) as saldados,
+             (select count(*)::int from platform.cent_gaps(${COMPANY})) as centimo,
+             (select count(*)::int from platform.supplier_credit_ledger_gap(${COMPANY})) as a_favor,
+             (select count(*)::int
+                from platform.book_ledger_reconciliation(${COMPANY}, ${HOY}::date, ${HOY}::date) b
+               where not b.cuadra) as libro`;
+    expect(n).toEqual({
+      cobertura: 0,
+      comprobantes: 0,
+      kardex: 0,
+      saldados: 0,
+      centimo: 0,
+      a_favor: 0,
+      libro: 0,
+    });
+    const [brecha] = await sql<{ d: string }[]>`
+      select diferencia::text as d from platform.inventory_ledger_gap(${COMPANY})`;
+    expect(Number(brecha!.d)).toBe(0);
+  });
+});

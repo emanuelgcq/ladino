@@ -30,6 +30,8 @@ import { ACEPTA_FOTOS, fotoSoltada, subirFotoProducto } from "../../components/f
 import { AltaSimple } from "../negocio/Productos.js";
 import { errorDePersona } from "../../lib.js";
 import { BotonEscanear } from "../../components/EscanerCodigo.js";
+import { IngredientesDeCompuesto } from "../../components/IngredientesDeCompuesto.js";
+import { Switch } from "../../ui/switch.js";
 import type { Product, PriceList, PriceItem, TaxCategory } from "../../lib.js";
 import { sufijoDeArchivo } from "../../app/rif.js";
 
@@ -226,6 +228,35 @@ function DetalleProducto({
     barcode: producto.barcode ?? "",
   });
   const sinRif = !useConFacturas();
+  // I-04 y C-07: «se arma con otros productos» y «lleva lote y vencimiento» se cambian aquí, de
+  // una en una y al momento. El servidor decide si se puede (no con mercancía ya movida, no un
+  // compuesto ya vendido) y su mensaje es el que se enseña.
+  const [banderas, setBanderas] = useState({
+    compuesto: producto.is_composed,
+    lote: producto.tracks_lots ?? false,
+  });
+  const [cambiandoBandera, setCambiandoBandera] = useState(false);
+  const [dejandoDeArmarse, setDejandoDeArmarse] = useState(false);
+  async function cambiarBandera(cambio: {
+    is_composed?: boolean;
+    tracks_lots?: boolean;
+  }): Promise<void> {
+    setCambiandoBandera(true);
+    try {
+      const r = await llamar<Product>(`/v1/products/${producto.id}`, {
+        method: "PATCH",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ company_id: empresa.id, ...cambio }),
+      });
+      setBanderas({ compuesto: r.is_composed, lote: r.tracks_lots ?? false });
+      void qc.invalidateQueries({ queryKey: ["productos", empresa.id] });
+      toast.success("Producto actualizado");
+    } catch (e) {
+      toast.error("No se pudo cambiar", errorDePersona(e));
+    } finally {
+      setCambiandoBandera(false);
+    }
+  }
   const [clasif, setClasif] = useState(producto.tax_category_code);
   // Hallazgo 10: la justificación del suntuario, si se reclasifica como adicional.
   const [justificacion, setJustificacion] = useState("");
@@ -463,6 +494,62 @@ function DetalleProducto({
                 </Button>
               </div>
             )}
+            {producto.kind === "good" && (
+              <div className="space-y-3 rounded-md border border-border bg-surface-muted/40 p-3">
+                {/* Marcar o quitar «se arma» exige poder escribir sus ingredientes
+                    (`product.recipe.manage`, lo decide el servidor). A quien no puede solo se le
+                    enseña si el producto YA se arma, apagado: no se le ofrece dejarlo a medias. */}
+                <label
+                  className={
+                    puede("product.recipe.manage") || banderas.compuesto
+                      ? "flex items-center justify-between gap-2"
+                      : "hidden"
+                  }
+                >
+                  <span className="text-[0.85rem] font-medium">
+                    Se arma con otros productos
+                    <span className="block text-[0.8rem] font-normal text-muted-foreground">
+                      No se cuenta en el inventario: al venderlo se descuentan sus ingredientes.
+                    </span>
+                  </span>
+                  <Switch
+                    checked={banderas.compuesto}
+                    disabled={
+                      !puede("product.manage") ||
+                      !puede("product.recipe.manage") ||
+                      cambiandoBandera ||
+                      banderas.lote
+                    }
+                    onCheckedChange={(v) => {
+                      if (v) void cambiarBandera({ is_composed: true });
+                      else setDejandoDeArmarse(true);
+                    }}
+                    aria-label="Se arma con otros productos"
+                  />
+                </label>
+                {banderas.compuesto && (
+                  <IngredientesDeCompuesto
+                    productoId={producto.id}
+                    puedeEditar={puede("product.recipe.manage")}
+                  />
+                )}
+                <label className="flex items-center justify-between gap-2">
+                  <span className="text-[0.85rem] font-medium">
+                    Lleva lote y vencimiento
+                    <span className="block text-[0.8rem] font-normal text-muted-foreground">
+                      Cada llegada pide el código del lote y la fecha en que vence, y se vende
+                      primero lo que vence antes. No se cambia cuando ya entró mercancía.
+                    </span>
+                  </span>
+                  <Switch
+                    checked={banderas.lote}
+                    disabled={!puede("product.manage") || cambiandoBandera || banderas.compuesto}
+                    onCheckedChange={(v) => void cambiarBandera({ tracks_lots: v })}
+                    aria-label="Lleva lote y vencimiento"
+                  />
+                </label>
+              </div>
+            )}
             {sinRif ? null : puede("product.tax_category.set") ? (
               <div className="rounded-md border border-border bg-surface-muted/40 p-3">
                 <p className="text-[0.85rem] font-medium">
@@ -605,6 +692,17 @@ function DetalleProducto({
             </>
           )}
         </DialogFooter>
+
+        <ConfirmDialog
+          open={dejandoDeArmarse}
+          onOpenChange={setDejandoDeArmarse}
+          title="Dejar de armarlo con otros productos"
+          confirmLabel="Quitar los ingredientes"
+          onConfirm={() => cambiarBandera({ is_composed: false })}
+        >
+          Se borra su lista de ingredientes y el producto vuelve a contarse en el inventario. Si ya
+          se vendió no se puede: sus ventas dicen qué ingredientes sacaron.
+        </ConfirmDialog>
 
         <ConfirmDialog
           open={confirmandoClasif}

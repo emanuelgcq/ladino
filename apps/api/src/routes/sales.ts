@@ -7,6 +7,7 @@ import {
   ConfirmOrderRequest,
   CreateInvoiceRequest,
   AnnulInvoiceRequest,
+  CorrectWithdrawalRequest,
   ReversePaymentRequest,
   RegisterPaymentRequest,
   PosQuoteRequest,
@@ -28,6 +29,7 @@ import {
   confirmOrder,
   createInvoice,
   annulInvoice,
+  creditWithdrawalInvoice,
   annulmentStatus,
   registerPayment,
   reversePayment,
@@ -297,6 +299,21 @@ export function salesRoutes(
     const r = await withTransaction(sql, actor, (uow) => annulInvoice(uow, id, parsed.data));
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 200);
+  });
+
+  // ADR-0082 (AF3-06): la nota de crédito que deja sin efecto un retiro facturado por error.
+  app.post("/v1/invoices/:id/withdrawal-credit-note", idempotencia, async (c) => {
+    const { companyId } = requireCompany(c);
+    const id = idValido(c.req.param("id"));
+    const parsed = CorrectWithdrawalRequest.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) throw new ValidacionError(parsed.error.issues);
+    coherente(companyId, parsed.data.company_id);
+    const { actor } = c.get("ladino.auth");
+    const r = await withTransaction(sql, actor, (uow) =>
+      creditWithdrawalInvoice(uow, id, parsed.data),
+    );
+    if (!r.ok) throw new DominioError(r.error);
+    return c.json(r.value, 201);
   });
 
   // ── Cobros ────────────────────────────────────────────────────────────────

@@ -143,6 +143,9 @@ const VALOR_LEGIBLE: Record<string, Record<string, string>> = {
     debit_note: "Nota de débito",
     receipt: "Recibo",
     withdrawal_note: "Nota de retiro",
+    // ADR-0082: desde 20261005100000 el retiro se factura; las notas ya emitidas siguen aquí.
+    withdrawal_invoice: "Factura de retiro",
+    withdrawal_credit_note: "Nota de crédito de retiro",
   },
   status: {
     issued: "Emitida",

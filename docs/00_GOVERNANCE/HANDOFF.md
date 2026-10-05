@@ -1,3 +1,143 @@
+# Handoff — 2026-10-05 (37ª entrega) — Ola 5: lo no construido
+
+Hallazgos cerrados (11 filas del Estado) y una familia que venía de la auditoría fiscal:
+
+- **La paleta y lo que se deja de prometer (ADR-0081):** P-06, B-01, E-06. Búsqueda de documentos por número en el servidor (`GET /v1/search/documents`), acciones por permiso, «Compartir» con la hoja del sistema; fuera «Próximamente» y el «Asistente».
+- **Reportes y carteras:** P-07 (ventas, margen, IVA del período, inventario valorizado y rotación, cuentas por cobrar y por pagar, cierres de caja, IGTF; con rango, descarga a Excel y CSV desde el servidor), F-13 («Quién me debe» sin elegir cliente) y H-11 («Qué debo»).
+- **La nota de crédito de un proveedor (ADR-0083):** H-03, con la del gasto con factura (AF4-02). Devolución o rebaja; mueve el kardex; el saldo a favor con el proveedor va a su propia cuenta.
+- **El retiro de inventario se factura (ADR-0082; AF3-01 a AF3-07):** el retiro gravado emite una factura a nombre de la propia empresa, con control del talonario, y se corrige con su nota de crédito total.
+- **Recetas y lotes (ADR-0084):** I-04 (producto compuesto: vender el compuesto descuenta sus ingredientes) y C-07 (lote y vencimiento por producto).
+- **Gasto recurrente y venta al mayor:** H-07 y C-06.
+
+**Cadena de cada familia:** reparador → revisor en contexto limpio → arreglos → re-revisión (paleta: una pasada; reportes: tres rondas y dos revisiones; nota de crédito de proveedor: cuatro rondas y cuatro revisiones; retiro: cuatro rondas y dos revisiones; recetas y lotes: tres rondas y dos revisiones; gasto recurrente y mayor: tres rondas y una revisión) → auditor fiscal de la ola (AF5-01 a AF5-18) → gate y recorrido. La sesión se cortó una vez por límite de uso; los agentes se reanudaron sobre el árbol.
+
+**Quedan abiertas 43 filas:** las bajas (ola 6).
+
+## Lo que la norma impuso sobre lo decidido (RESPUESTA §0: manda la norma)
+
+- **El retiro exige FACTURA, no una nota interna** (RLIVA art. 31, reproducción no oficial; AF3-01): la «Nota de retiro» de §2.13 de la respuesta se rehízo como factura con número de control (ADR-0082). Las Notas ya emitidas siguen en el libro como se emitieron; el corte está en datos.
+- **Hay norma sobre la retención de IVA cuando llega una nota de crédito y no estaba en los docs** (PA SNAT/2025/000054 art. 11 «Ajustes de precios», leída en reproducción no oficial el 2026-10-04; AF5-01): si el ajuste disminuye el impuesto, el agente devuelve al proveedor lo retenido de más AÚN NO ENTERADO; si ya se enteró, lo descuenta el proveedor. Ladino no toca la retención en ninguno de los dos casos: coincide con la norma solo cuando ya se enteró. **No se construye la devolución hasta el asesor** (P-103 reescrita); la pantalla cita el artículo y manda al contador.
+- **El papel de la factura de retiro no cita ningún artículo** (AF5-04): el art. 13 de la PA 00071 no pide leyenda para el retiro; se imprime texto descriptivo (art. 35).
+- **«Incorporado a un inmueble» es «construcción o reparación de un inmueble del negocio»** (LIVA art. 4 num. 3 in fine; AF5-07): cambió el rótulo.
+
+## Decisiones por criterio (§2.16), con su alternativa
+
+| Qué | Decidido | Alternativa descartada |
+|---|---|---|
+| Retiro, el documento | `kind` propio (`withdrawal_invoice`, `withdrawal_credit_note`) con el correlativo y el control de facturas y notas de crédito | una marca sobre `invoice` / `credit_note` (el olvido habría sido silencioso en cartera y ventas del día) |
+| Retiro, el adquirente | una ficha de cliente de la propia empresa, marcada `own_company`, que no sale en listas ni se le vende | `customer_id` nulo |
+| Retiro, quién (AF5-02) | el retiro GRAVADO exige además `sales.invoice.issue`: emite un documento fiscal y gasta un control | un interruptor por empresa apagado por omisión (lo decide el dueño) |
+| Retiro, la fecha (AF5-08) | la factura se fecha el día en que se registra; un `occurred_at` de otro día se rechaza | fecha libre (rompe la continuidad número/fecha, RLIVA art. 57) |
+| Retiro, la corrección | nota de crédito TOTAL, con asiento nuevo el día de la nota (no reversa el del retiro) | parcial; reversar el asiento original |
+| Retiro, producto exento | se factura sin IVA, con «(E)» (lectura literal del art. 31; P-78) | no emitir |
+| Motivos no gravados (AF5-07) | uso en el negocio → gasto de operación; activo fijo y construcción o reparación de un inmueble → cuenta provisional 1.2.01; los tres exigen nota de destino | sin soporte; todo a la cuenta de retiros |
+| La FK de la factura a su salida | suelta: la guardan un trigger de restricción diferido y el invariante en los dos sentidos | FK no diferible escribiendo la salida antes que la factura (invierte el orden de candados talonario → existencia) |
+| Versión de reglas | UNA subida para la ola (1.4.0), en la última migración | una por familia |
+| NC de proveedor, el exceso | a una cuenta propia de activo (papel `supplier_credit_receivable`, 1.1.09 provisional); `settled_ledger_gaps` conserva su enunciado | saldo negativo en cuentas por pagar con un «salvo» en el invariante |
+| NC que cierra la factura | la factura sigue `posted` y `settled_ledger_gaps` pasa a mirarla | pasarla a `paid` |
+| NC que cierra, sin mayor legible | el diferencial se calcula como el del pago (tasas de registro) | recalcularlo al reprocesar la cola |
+| NC sobre factura retenida | se registra y no toca la retención (P-103) | rechazarla (deja el crédito fiscal sobredeclarado) |
+| NC, su IVA | lo calcula el servidor con la alícuota congelada de la línea; un IVA tecleado distinto se rechaza (P-106) | aceptar el del papel |
+| NC en divisa | a la tasa oficial del día de la nota (P-107: no se decide otra) | la de la factura; los Bs del papel |
+| NC, «documento incompleto» | fiscal sin número de control, traiga o no referencia (letra de la respuesta; P-108) | que una referencia exima |
+| NC, fechas (AF5-11) | fecha futura o anterior a su factura se rechazan | aceptarlas |
+| Devolución al proveedor | nunca deja existencia negativa; sale al costo promedio de hoy y la diferencia va a variación (P-105) | heredar «vender sin existencia»; salir al costo facturado |
+| «Qué debo» | suma solo lo que se debe; el saldo a favor se enseña aparte y no se descuenta solo | restarlo del total |
+| Lotes de la devolución | quien registra la nota ve los lotes del producto en el depósito (para elegir el que devuelve) sin pedir permiso de inventario | exigir además lectura de inventario |
+| Compuesto, su costo | lo guardan las filas de `sale_line_components`; los LECTORES (margen, «lo que gané») las suman | `cost_snapshot = Σ/cantidad` en la línea (no es exacto al céntimo y exige tocar una línea emitida) |
+| Compuesto, quién | marcar un producto como compuesto exige `product.recipe.manage` (dueño y administrativo) | dárselo al encargado (mueve un rol de sistema: decisión del dueño) |
+| Compuesto | un ingrediente no es otro compuesto; un compuesto vendido no deja de serlo | un nivel de anidamiento; borrar la receta |
+| Pedido con un compuesto | la línea del compuesto no reserva; la existencia de sus ingredientes se comprueba al facturar, y la pantalla lo dice | reservar ingredientes × receta (mete en las reservas productos que no están en el pedido y se desalinea si la receta cambia) |
+| Devolución en borrador de una venta ya anulada | no se confirma (422); anular y confirmar a la vez se serializan sobre el mismo documento | dejarla confirmar (la mercancía entraba dos veces) |
+| Lote y vencimiento | un interruptor enciende las dos cosas; no se cambia con movimientos; el lote de un producto que vence nace con fecha (guarda de esquema) | pasar la existencia a un lote «sin lote» |
+| «Se vence» | en el alta sencilla el interruptor dice «Se vence» (el glosario prohíbe «lote» ahí); en Administración, «Lleva lote y vencimiento» | cambiar el glosario |
+| Anular con devolución | una venta con devolución confirmada no se anula (defecto anterior a la ola: la anulación reponía también lo que la devolución ya había reingresado, y `annulled_stock_gaps` no lo veía) | reponer solo lo que falta |
+| Consumo suelto de receta | se queda, con aviso en la confirmación | rechazarlo para compuestos que se venden |
+| «Vendo al mayor» | el ajuste se exige en el servidor en la CAJA; la factura de administración y la lista del cliente, como estaban | exigirlo en toda venta (cambiaba lo desplegado y tres aserciones); no exigirlo |
+| Gasto recurrente | semanal, quincenal (día del primer pago y 15 días después), mensual, anual; fin de mes vuelve al 31; avisa el día que toca; «Omitir» y «Ya no se paga» con confirmación | quincena de calendario; arrastrar el 28; N días de anticipación |
+| «Alertas» de H-07 | el aviso vive en Inicio y en Compras → Gastos (no existe una pantalla general de Alertas) | crear una |
+| Pagar por adelantado | la API admite registrar el período siguiente antes de que toque | rechazarlo |
+| Reportes, permisos | los de lectura que ya gobernaban cada cifra; descargar exige además `report.export`; cierres de caja, solo `treasury.read` | un permiso por reporte |
+| Reportes, Excel | las cifras van como TEXTO (regla 7: ningún importe pasa por `number`); el CSV sí suma | celdas numéricas (excepción a la regla 7: la decide el dueño) |
+| Reportes, ventas | no cuentan facturas de retiro ni notas de débito por IGTF (están en el libro, no son ventas); la devolución resta el día en que vuelve la mercancía | contarlas; restar en el período de la venta |
+| Enlaces del Inicio | «Te deben…» y «Ver qué debo» aterrizan donde ya aterrizaban, con la cartera arriba | moverlos (cambiaba tres comprobaciones existentes) |
+| Paleta | quien abre Ventas por el menú encuentra ventas en la búsqueda; sin permiso, lista vacía (no 403) | 403 |
+
+## Aserciones existentes cambiadas (clase autorizada, §5.2.4)
+
+| Fichero:línea | Antes | Después | Por qué |
+|---|---|---|---|
+| `apps/api/test/e2e-salidas-inventario.test.ts:348` | `withdrawal_note_number` = 1 | `null`, y la factura de retiro n.º 1 con control 1 | afirmaba la Nota NR: la norma manda factura (AF3-01) |
+| `…:349-358` | fila de `inventory_withdrawal_notes` (nota 1, base 200, IVA 32) | fila de `documents` con las mismas cifras | ídem |
+| `…:370-377` | renglón del libro `withdrawal_note`, RIF con guiones | `withdrawal_invoice`, RIF normalizado, control y asiento | ídem |
+| `…:401-402` | nota n.º 2 | documento n.º 2, control 2 | ídem |
+| `supabase/tests/026_journal_generator_test.sql:154-173` | lista de hechos admitidos | + `ap.expense_credit_note_received`, `stock.used_in_business`, `stock.capitalized`, `stock.withdrawal_returned` | hechos reales nuevos; el esperado (0) no cambia |
+
+Entradas de fixture (ninguna cifra esperada cambia): `kind` / `warehouse_id` / motivo en las notas de crédito de `e2e-inventario-en-el-mayor` («S2», con su título), `e2e-purchases` (dos) y `e2e-moneda-diferencial` (una): «los E2E de compras de H-03» que §5.2.4 nombra; `supabase/tests/020_inventory_extensions_test.sql:274-282` fecha con el día de Caracas en vez de `current_date` (fallaba entre las 20:00 y las 24:00); `supabase/tests/103_*:9` lleva el corte del retiro al futuro dentro de su transacción; en `e2e-salidas-inventario`: talonario serie A, permisos del rol, vigencias del precio y del plan. Y dos preparaciones de pgTAP existentes que la ola dejó cortas y el gate limpio destapó: `supabase/tests/019_inventory_test.sql:650` concede además `truncate` sobre `sale_line_components` a `service_role` dentro de su transacción (el `TRUNCATE … CASCADE` de `inventory_moves` alcanza la tabla nueva y moría con 42501 antes de llegar al trigger; lo esperado, LAD06, no cambia: es el mismo ajuste que la ola 3 hizo con la Nota de retiro); `supabase/tests/088_taxpayer_type_guards_issuance_test.sql:61`, el recorte de su variante rota casa con la lista de tipos que haya (de `invoice` a `debit_note`), porque `assert_document_issuance` ahora nombra también la factura de retiro y su nota (lo esperado, que sin la comprobación la factura entra, no cambia).
+
+## Invariantes nuevos o con enunciado nuevo (31 en el recorrido)
+
+`withdrawal_note_gaps` (enunciado nuevo, en los dos sentidos), `settled_ledger_gaps` (mira también la factura que una nota dejó en cero), `supplier_credit_ledger_gap`, `supplier_credit_subledger_gaps`, `composite_sale_gaps`. Están en `CLAUDE.md` §3.
+
+## Preguntas al asesor nuevas o cambiadas
+
+Nuevas: P-103 (retención y nota de crédito; reescrita con el art. 11), P-104 (período de la retención en el reporte), P-105 (cuenta del saldo a favor con proveedores y costo de la devolución), P-106 (nota con IVA distinto), P-107 (tasa de la nota en divisa), P-108 (nota por máquina fiscal sin control). Reescritas: P-76 (la factura de retiro) y P-82 (motivos no gravados). Ampliadas: P-78, P-102. Estado regulatorio: tres filas nuevas; todas las fuentes de la ola son reproducciones no oficiales (cotejo con la Gaceta pendiente).
+
+## Despliegue (para la sección 7)
+
+- **TODA la ola 5 va JUSTO DESPUÉS del `git pull`, en orden de timestamp, en la misma ventana que las olas 3 y 4.** Migraciones `20261005100000` a `20261005160000`: 28.
+  - Retiro: `100000` a `100970`, las trece juntas (la `100000` sola rompe cobros y devoluciones; la `100960` suelta la FK que la `100950` había tocado).
+  - Nota de crédito de proveedor: `110000` a `110900`, las diez juntas.
+  - Recetas y lotes: `130000`, `130100`, `130200`.
+  - Gasto recurrente: `140000` (su reversión son CUATRO `drop function`, no tres como dice su cabecera; la spec es `TREASURY_BANKING_SPEC.md`).
+  - Versión de reglas 1.4.0: `160000`, la última.
+- **Antes de la ventana, en producción (solo lectura):**
+  - notas de crédito de proveedor existentes: 0 el 2026-10-04 (con 0, ni la guarda LAD82 de la `110200` ni su índice único ni el CHECK de la `110700` pueden fallar); las consultas están en la cabecera de la `110500`;
+  - lotes sin fecha de productos que vencen: la `130200` se niega a aplicarse si hay alguno (consulta en su cabecera);
+  - `platform.composite_sale_gaps` en 0 (un producto marcado compuesto por SQL y ya vendido daría fila para siempre);
+  - la `130100` parchea `platform.apply_inventory_move` leyendo su definición viva (el fichero no enseña el cuerpo): en el ensayo en seco, comparar `pg_get_functiondef` antes y después (una sola expresión cambia; `SECURITY DEFINER`, `search_path` y propietario iguales).
+- **Lo que nota quien usa Ladino al desplegar:**
+  - un retiro por consumo propio, regalo, donación o muestra emite una factura y gasta un número de control; lo registra quien puede mover inventario Y facturar (el almacenista solo ya no);
+  - «uso en el negocio», «activo fijo» y «construcción o reparación de un inmueble» piden decir adónde fue;
+  - la nota de crédito de un proveedor pide decir si es devolución o rebaja, y la devolución saca la mercancía del inventario;
+  - «Qué debo» ya no resta un saldo a favor con el proveedor: lo enseña aparte;
+  - una venta con una devolución confirmada ya no se anula;
+  - marcar un producto como compuesto exige el permiso de recetas (el encargado no lo tiene);
+  - el cambio de lista de precios en la caja exige además que «Vendo al mayor» esté encendido.
+
+## Lo que queda abierto
+
+- **Ola 6 (43 bajas) y lo añadido por las revisiones de esta ola:**
+  - «declarado» no cuenta como «cerrado» para el libro de compras (`platform.accounting_date_for`; AF5-11);
+  - el reprocesador de la cola contable no conoce todos los orígenes ni está atado al tipo de sus importes (`journal-backfill.ts`);
+  - `book_ledger_reconciliation` llama «en cola» a todo renglón sin asiento, haya o no fila de cola;
+  - «lo que gané» del Inicio cuenta la nota de débito por IGTF como venta y resta la devolución de una línea suelta sin costo;
+  - `annulled_stock_gaps` no mira los reingresos de las devoluciones; la devolución en borrador confirmada después de anular;
+  - `GET /v1/documents` sigue sin permiso de lectura (la búsqueda de la paleta nació con el suyo);
+  - los E2E calculan «hoy» una vez: una corrida que cruza la medianoche de Caracas falla sin defecto de producto; varios E2E de HEAD borran la tabla global de tasas.
+- **Hallazgo nuevo, fuera de alcance:** los pedidos no tienen ruta para facturarse ni para cancelarse (`POST /v1/orders` y `/v1/orders/:id/confirm` son las únicas), y nada libera una reserva de existencia: solo deja de contar si caduca (no verificado). Construirlo es alcance nuevo.
+- **Decisiones del dueño:**
+  - un interruptor por empresa para los retiros gravados (hoy: permiso de facturar);
+  - celdas numéricas en el Excel de los reportes (excepción a la regla 7);
+  - dar `product.recipe.manage` al encargado;
+  - aplicar o reembolsar el saldo a favor con un proveedor (hoy solo se anota y se enseña);
+  - construir la devolución al proveedor de la retención no enterada (P-103);
+  - una pantalla general de Alertas.
+- **No verificado:** ninguna pantalla nueva de la ola se abrió en un navegador (typecheck, lint, tests y lectura de fuente); `pnpm test:concurrency` no se corrió (no se tocó el outbox; la carrera de numeración factura + retiro en la misma serie sí tiene E2E); el orden de candados de la rebaja de una nota de crédito no tiene test de concurrencia; la puerta de la anulación de una factura de retiro de otro día se prueba por su regla, no por HTTP.
+
+## Migraciones (28)
+
+20261005100000 a 100970 (el retiro se factura: trece) · 110000 a 110900 (nota de crédito de proveedor: diez) · 130000, 130100, 130200 (recetas y lotes) · 140000 (gasto recurrente) · 160000 (versión de reglas 1.4.0, la última).
+
+## Gate y recorrido
+
+- **Gate (`scripts/gate-verdict.sh`, una corrida desde `db:reset`):** VERDE · vitest 1882 en 19 paquetes (base 1693) · pgTAP 2848 en 133 ficheros (base 2627 en 125) · `openapi:check` y `release:manifest:check` OK. Fue la tercera corrida: la primera cayó en lint (seis aserciones de tipo sobrantes en `sales.ts`) y la segunda, con todo vitest en verde, en las dos preparaciones de pgTAP de la tabla de arriba. Línea base guardada.
+- **Con la máquina quieta pasaron enteros** los E2E que durante la ola dieron timeouts de 5 s o cifras a otra tasa con varios agentes sobre la misma base (`e2e-sales`, `e2e-moneda-diferencial`, `e2e-cobros-cuarta-pasada`, `e2e-gasto-con-factura`, `e2e-corregir-venta`): era carga y la tabla global de tasas, no los triggers nuevos.
+- **Recorrido (`RECORRIDO_FECHA=2026-09-24`):** `pnpm recorrido A` (restaura el escenario) y B a P: los 16 en VERDE, 31 invariantes en 0 en E1, E2 y E3. El caso P-07 exigía que E2 tuviera retiros en el libro, y eso solo era cierto por datos que habían dejado corridas anteriores (el bloque I ya ensaya el retiro con la vista previa): ahora los exige solo si existen; con retiros de verdad lo asevera `e2e-reportes-fiscales`. Ese fichero (`scripts/recorrido/verificar/P.mjs`) es lo único que cambió después del gate.
+
+
+---
+
 # Handoff — 2026-10-04 (36ª entrega) — Ola 4: todo lo que quedaba, bloque por bloque (altas y medias)
 
 Hallazgos cerrados (51 filas del Estado):

@@ -160,6 +160,9 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
           from public.customers cu
           ${deudaJoin}
          where cu.company_id = ${companyId} ${filtro}
+           -- ADR-0082: la ficha de la propia empresa (adquirente de sus facturas de retiro) no es
+           -- un cliente: no sale en la lista ni en ningún buscador.
+           and not cu.own_company
            ${sinSistema ? tx`and not cu.is_system` : tx``}
          order by ${ordenSql}
          limit ${porPagina} offset ${(pagina - 1) * porPagina}`;
@@ -196,6 +199,7 @@ export function customersRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHan
       ({ sql: tx }) => tx<Record<string, unknown>[]>`
         select ${tx.unsafe(COLUMNS_CU)} from public.customers cu
          where cu.company_id = ${companyId} and cu.tax_id is not null
+           and not cu.own_company
            and upper(regexp_replace(cu.tax_id, '[^a-zA-Z0-9]', '', 'g')) = ${normalizado}`,
     );
     if (!fila) throw new DominioError({ code: "NOT_FOUND", message: "Recurso no encontrado." });

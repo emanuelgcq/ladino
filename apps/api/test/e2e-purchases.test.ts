@@ -829,6 +829,10 @@ describe("compras de extremo a extremo", () => {
       note_date: HOY,
       reason: "Mercancía devuelta por defecto de fábrica",
       currency: "VES",
+      // H-03 (ola 5): la pantalla pregunta qué es la nota y, como la línea de esta factura no
+      // viene de una recepción, de qué depósito sale la mercancía. El fixture manda lo mismo.
+      kind: "devolucion",
+      warehouse_id: W1,
       lines: [{ product_id: PROD_A, quantity: "1", unit_price: "4000", tax_amount: "640" }],
     });
     expect(nc.status).toBe(201);
@@ -1090,7 +1094,10 @@ describe("compras de extremo a extremo", () => {
       supplier_control_number: `00-NCC${RUN}`,
       note_date: HOY,
       currency: "VES",
-      reason: "Devolución de mercancía defectuosa",
+      // H-03 (ola 5): la factura es DIRECTA (sin recepción): no hay depósito del que devolver.
+      // Lo que este caso mide es el asiento, el libro y el crédito fiscal: una rebaja de precio.
+      reason: "Rebaja por mercancía defectuosa",
+      kind: "rebaja",
       lines: [
         {
           product_id: PROD_A,

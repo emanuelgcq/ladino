@@ -22,9 +22,12 @@ import { fiscalBooksRoutes } from "./routes/fiscal-books.js";
 import { fiscalDeclarationsRoutes } from "./routes/fiscal-declarations.js";
 import { igtfRoutes } from "./routes/igtf.js";
 import { treasuryRoutes } from "./routes/treasury.js";
+import { recurringExpenseRoutes } from "./routes/recurring-expenses.js";
 import { documentsPdfRoutes } from "./routes/documents-pdf.js";
 import { receiptsPdfRoutes } from "./routes/receipts-pdf.js";
 import { negocioRoutes } from "./routes/negocio.js";
+import { searchRoutes } from "./routes/search.js";
+import { reportsRoutes } from "./routes/reports.js";
 import { fiscalSetupRoutes } from "./routes/fiscal-setup.js";
 import { contingencyRoutes } from "./routes/contingency.js";
 import type { StorageConfig } from "./config.js";
@@ -133,6 +136,9 @@ export function buildApp(cfg: AppConfig): Hono {
         "X-Ladino-Client",
       ],
       allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+      // P-07: la descarga de un reporte lleva su nombre de archivo en esta cabecera, y el
+      // navegador no se la enseña a la web de otro origen si no se expone.
+      exposeHeaders: ["Content-Disposition"],
       maxAge: 600,
     }),
   );
@@ -209,10 +215,16 @@ export function buildApp(cfg: AppConfig): Hono {
   igtfRoutes(app, cfg.sql, idempotencia);
   inventoryExtensionsRoutes(app, cfg.sql, idempotencia);
   treasuryRoutes(app, cfg.sql, idempotencia, cfg.storage);
+  // H-07: los gastos que se repiten (aviso, omitir, dejar de avisar).
+  recurringExpenseRoutes(app, cfg.sql, idempotencia);
   documentsPdfRoutes(app, cfg.sql, cfg.storage);
   // Ola 4 (F-10, G-15): los comprobantes NO fiscales del cobro y del reembolso de saldo a favor.
   receiptsPdfRoutes(app, cfg.sql);
   negocioRoutes(app, cfg.sql, idempotencia);
+  // P-06: la búsqueda de documentos por número de la paleta (solo lectura, con su permiso).
+  searchRoutes(app, cfg.sql);
+  // P-07, F-13, H-11: los reportes y las carteras (solo lectura, cada uno con su permiso).
+  reportsRoutes(app, cfg.sql);
   fiscalSetupRoutes(app, cfg.sql, idempotencia);
   contingencyRoutes(app, cfg.sql, idempotencia);
 

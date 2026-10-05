@@ -922,4 +922,32 @@ c.caso(
   },
 );
 
+// ── Ola 5 · E-06 (ADR-0081): «Compartir» es la hoja del navegador; WhatsApp no se repone ──
+c.caso(
+  "E-06",
+  "«Venta lista» comparte el PDF solo donde el navegador puede, y la documentación lo dice así",
+  async () => {
+    const fs = await import("node:fs");
+    const leer = (ruta) => fs.readFileSync(new URL(`../../../${ruta}`, import.meta.url), "utf8");
+    const vender = leer("apps/web/src/pages/negocio/Vender.tsx");
+    afirmar(
+      /\{puedeCompartir && \(/.test(vender) && vender.includes("compartirPdf("),
+      "«Venta lista» no ofrece «Compartir» condicionado a lo que el navegador puede",
+    );
+    afirmar(!/wa\.me|api\.whatsapp|whatsapp:\/\//i.test(vender), "la caja enlaza a WhatsApp");
+    const compartir = leer("apps/web/src/compartir.ts");
+    afirmar(
+      /canShare\(\{ files:/.test(compartir) && /\.share\(\{ files:/.test(compartir),
+      "compartir.ts no comparte el PDF como archivo por la hoja del navegador",
+    );
+    const doc = leer("docs/02_COMPLIANCE/EMISION_FACTURAS.md");
+    const fila = doc.split("\n").find((l) => l.startsWith("| Entrega por medio digital"));
+    afirmar(fila, "EMISION_FACTURAS.md no tiene la fila «Entrega por medio digital»");
+    afirmar(!/WhatsApp desde el POS/.test(doc), "la documentación da WhatsApp por construido");
+    afirmar(/«Compartir»/.test(fila), "la fila no nombra «Compartir»");
+    afirmar(/hoja de compartir/.test(fila), "la fila no dice que es la hoja del navegador");
+    afirmar(/no se repone/.test(fila), "la fila no dice que el botón de WhatsApp no se repone");
+  },
+);
+
 export default c.correr;

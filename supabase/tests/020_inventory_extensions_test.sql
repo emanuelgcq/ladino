@@ -271,13 +271,15 @@ alter table public.inventory_moves enable trigger inventory_moves_10_apply;
 insert into public.lots (id, tenant_id, company_id, product_id, code, expires_at) values
   ('aaaa0020-0000-4000-8000-00000000aa01', 'aaaa0020-0000-4000-8000-00000000000a',
    'aaaa0020-0000-4000-8000-0000000000a2', 'aaaa0020-0000-4000-8000-0000000000d4',
-   'Q-VIEJO', current_date - 2),
+   -- El día es el de CARACAS (migración 20261005130100): con `current_date` (UTC) este fixture
+   -- quedaba un día adelantado entre las 20:00 y las 24:00 de Venezuela.
+   'Q-VIEJO', (now() at time zone 'America/Caracas')::date - 2),
   ('aaaa0020-0000-4000-8000-00000000aa02', 'aaaa0020-0000-4000-8000-00000000000a',
    'aaaa0020-0000-4000-8000-0000000000a2', 'aaaa0020-0000-4000-8000-0000000000d4',
-   'Q-PRONTO', current_date + 5),
+   'Q-PRONTO', (now() at time zone 'America/Caracas')::date + 5),
   ('aaaa0020-0000-4000-8000-00000000aa03', 'aaaa0020-0000-4000-8000-00000000000a',
    'aaaa0020-0000-4000-8000-0000000000a2', 'aaaa0020-0000-4000-8000-0000000000d4',
-   'Q-LEJOS', current_date + 90);
+   'Q-LEJOS', (now() at time zone 'America/Caracas')::date + 90);
 
 select set_config('ladino.actor_id', 'aaaa0020-0000-4000-8000-0000000000a1', true);
 set local role ladino_api;

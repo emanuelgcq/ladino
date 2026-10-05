@@ -43,3 +43,20 @@ export async function abrirPdf(
     onError("No hay conexión con el servidor. Revisa tu internet y vuelve a intentar.");
   }
 }
+
+/**
+ * El PDF como archivo en memoria, para la hoja de compartir del navegador (E-06). `null` si la
+ * API no lo dio o no hay conexión: quien llama lo dice con voz de persona.
+ */
+export async function bajarPdf(ruta: string, companyId: string): Promise<Blob | null> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token ?? "";
+    const r = await fetch(`${API_URL}${ruta}`, {
+      headers: { Authorization: `Bearer ${token}`, "X-Company-Id": companyId },
+    });
+    return r.ok ? await r.blob() : null;
+  } catch {
+    return null;
+  }
+}

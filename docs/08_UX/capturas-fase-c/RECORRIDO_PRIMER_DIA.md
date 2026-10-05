@@ -57,7 +57,9 @@ cuando el servidor confirma cada uno:
 
 1. **Tus productos** — «¿Qué vendes?». Puede dar de alta un producto con foto y precio
    (1 clic al botón + el formulario de una pantalla), traerlos todos desde Excel, o
-   **saltarse el paso**: también se puede vender describiendo la venta.
+   **dejar el paso para después** y seguir con los otros. Para vender hace falta al menos un
+   producto: la tarjeta final lo dice y ofrece cargarlos (B-01, ADR-0081; antes se prometía
+   una venta «descrita» que no existe).
 2. **Tu dinero** — «¿Dónde guardas tu dinero?». La caja del local, el banco, el Zelle.
    **Este paso no se puede saltar**: cada cobro cae en una cuenta. Crear la primera:
    «Agregar cuenta» → nombre → «Crear cuenta» (2 clics + un nombre).

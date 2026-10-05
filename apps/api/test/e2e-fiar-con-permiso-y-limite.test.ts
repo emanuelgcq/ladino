@@ -800,6 +800,249 @@ describe(
       expect(ajeno.status).toBe(404);
     });
 
+    it("C-06 · «Vendo al mayor» lo enciende el dueño (el cajero, 403), y encenderlo o apagarlo no crea ni duplica listas: la «mayor» nace con la empresa", async () => {
+      const listas = async (): Promise<string[]> => {
+        const filas = await sql<{ name: string }[]>`
+          select name from public.price_lists where company_id = ${COMPANY} order by name`;
+        return filas.map((f) => f.name);
+      };
+      const antes = await listas();
+      expect(antes).toContain("mayor");
+      const leer = async (): Promise<boolean> =>
+        (
+          (await (await pedir("GET", "/v1/company-settings", FUNDADOR)).json()) as {
+            sells_wholesale: boolean;
+          }
+        ).sells_wholesale;
+      expect(await leer()).toBe(false);
+
+      const [lista] = await sql<{ id: string }[]>`
+        select id from public.price_lists where company_id = ${COMPANY} and name = 'mayor e2e'`;
+      const conLista = async (cliente: string): Promise<number> => {
+        const [n] = await sql<{ n: number }[]>`
+          select count(*)::int as n from public.documents
+           where company_id = ${COMPANY} and customer_id = ${cliente}
+             and price_list_id = ${lista!.id}`;
+        return n!.n;
+      };
+      // La lista ASIGNADA AL CLIENTE sigue aplicando con el ajuste apagado, como en HEAD: el
+      // mayorista de E-07 se cobra por la suya, de contado, sin permiso alguno.
+      const [mayorista] = await sql<{ id: string }[]>`
+        select id from public.customers
+         where company_id = ${COMPANY} and default_price_list_id = ${lista!.id}`;
+      const ventaMayorista = await pedir("POST", "/v1/pos/sales", CAJERO, {
+        company_id: COMPANY,
+        warehouse_id: DEPOSITO,
+        customer_id: mayorista!.id,
+        lines: [{ product_id: PRODUCTO, quantity: "1" }],
+        payments: [{ instrument: "efectivo_usd", currency: "USD", amount: "4.64" }],
+      });
+      expect(ventaMayorista.status).toBe(201);
+      expect(await conLista(mayorista!.id)).toBe(1);
+
+      // CON EL AJUSTE APAGADO LA CAJA no cobra con otra lista, ni a quien tiene el permiso: el
+      // ajuste no es solo de la pantalla. Ni al cotizar ni al cobrar.
+      const APAGADO = "no tiene activado vender al mayor";
+      const cotApagado = await pedir("POST", "/v1/pos/quote", ADMINISTRATIVO, {
+        company_id: COMPANY,
+        customer_id: CLIENTE,
+        price_list_id: lista!.id,
+        lines: [{ product_id: PRODUCTO, quantity: "1" }],
+      });
+      expect(cotApagado.status).toBe(422);
+      expect(((await cotApagado.json()) as Fallo).message).toContain(APAGADO);
+      const ventaApagado = await pedir("POST", "/v1/pos/sales", ADMINISTRATIVO, {
+        company_id: COMPANY,
+        warehouse_id: DEPOSITO,
+        customer_id: CLIENTE,
+        price_list_id: lista!.id,
+        lines: [{ product_id: PRODUCTO, quantity: "1" }],
+        payments: [{ instrument: "efectivo_usd", currency: "USD", amount: "4.64" }],
+      });
+      expect(ventaApagado.status).toBe(422);
+      expect(((await ventaApagado.json()) as Fallo).message).toContain(APAGADO);
+      expect(await conLista(CLIENTE)).toBe(0);
+      // EL PERMISO VA PRIMERO: el cajero, que no lo tiene, recibe su 403 de siempre y no el
+      // rechazo del ajuste.
+      const cajeroApagado = await pedir("POST", "/v1/pos/quote", CAJERO, {
+        company_id: COMPANY,
+        customer_id: CLIENTE,
+        price_list_id: lista!.id,
+        lines: [{ product_id: PRODUCTO, quantity: "1" }],
+      });
+      expect(cajeroApagado.status).toBe(403);
+      expect(((await cajeroApagado.json()) as Fallo).message).toContain(
+        "sales.price_list.override",
+      );
+      // LA FACTURA DE ADMINISTRACIÓN no depende del ajuste (como en HEAD): con el permiso y el
+      // ajuste apagado, se emite con otra lista.
+      const altaAdmin = await pedir("POST", "/v1/customers", FUNDADOR, {
+        company_id: COMPANY,
+        tax_id: `V${String(Date.now() + 61).slice(-8)}`,
+        legal_name: `Cliente de otra lista ${RUN}`,
+        person_type_code: "natural",
+      });
+      expect(altaAdmin.status).toBe(201);
+      const clienteAdmin = ((await altaAdmin.json()) as { id: string }).id;
+      expect(
+        (
+          await pedir("PUT", `/v1/customers/${clienteAdmin}/credit-limit`, ADMINISTRATIVO, {
+            company_id: COMPANY,
+            credit_limit_usd: "50",
+          })
+        ).status,
+      ).toBe(200);
+      const facturaAdmin = await pedir("POST", "/v1/invoices", FUNDADOR, {
+        company_id: COMPANY,
+        customer_id: clienteAdmin,
+        warehouse_id: DEPOSITO,
+        price_list_id: lista!.id,
+        lines: [{ product_id: PRODUCTO, quantity: "1" }],
+      });
+      expect(facturaAdmin.status).toBe(201);
+      expect(await conLista(clienteAdmin)).toBe(1);
+
+      const cajero = await pedir("PUT", "/v1/company-settings", CAJERO, { sells_wholesale: true });
+      expect(cajero.status).toBe(403);
+      expect(await leer()).toBe(false);
+      const encendido = await pedir("PUT", "/v1/company-settings", FUNDADOR, {
+        sells_wholesale: true,
+      });
+      expect(encendido.status).toBe(200);
+      expect(await leer()).toBe(true);
+      expect(await listas()).toEqual(antes);
+    });
+
+    it("C-06 · cambiar la lista de una venta exige `sales.price_list.override` EN EL SERVIDOR: el cajero recibe 403 con su mensaje y no vende; quien puede, vende al precio de esa lista y el documento la guarda", async () => {
+      const [lista] = await sql<{ id: string }[]>`
+        select id from public.price_lists where company_id = ${COMPANY} and name = 'mayor e2e'`;
+      const cuerpo = (extra: Record<string, unknown>) => ({
+        company_id: COMPANY,
+        warehouse_id: DEPOSITO,
+        customer_id: CLIENTE,
+        lines: [{ product_id: PRODUCTO, quantity: "1" }],
+        ...extra,
+      });
+      const conLista = async (): Promise<number> => {
+        const [n] = await sql<{ n: number }[]>`
+          select count(*)::int as n from public.documents
+           where company_id = ${COMPANY} and customer_id = ${CLIENTE}
+             and price_list_id = ${lista!.id}`;
+        return n!.n;
+      };
+      expect(await conLista()).toBe(0);
+
+      // El cajero (sin el permiso) ni cotiza ni vende con otra lista.
+      const cotCajero = await pedir("POST", "/v1/pos/quote", CAJERO, {
+        company_id: COMPANY,
+        customer_id: CLIENTE,
+        price_list_id: lista!.id,
+        lines: [{ product_id: PRODUCTO, quantity: "1" }],
+      });
+      expect(cotCajero.status).toBe(403);
+      const ventaCajero = await pedir(
+        "POST",
+        "/v1/pos/sales",
+        CAJERO,
+        cuerpo({
+          price_list_id: lista!.id,
+          payments: [{ instrument: "efectivo_usd", currency: "USD", amount: "4.64" }],
+        }),
+      );
+      expect(ventaCajero.status).toBe(403);
+      const fallo = (await ventaCajero.json()) as Fallo & { person_message: string };
+      expect(fallo.code).toBe("PERMISSION_REQUIRED");
+      // El mensaje de ESTE permiso, no el genérico: dos caminos dan 403.
+      expect(fallo.message).toContain("sales.price_list.override");
+      expect(fallo.person_message).toContain("cambiar la lista de precios de una venta");
+      expect(await conLista()).toBe(0);
+
+      // Quien puede (administrativo): cotiza a 4 y vende a 4.
+      const cot = await pedir("POST", "/v1/pos/quote", ADMINISTRATIVO, {
+        company_id: COMPANY,
+        customer_id: CLIENTE,
+        price_list_id: lista!.id,
+        lines: [{ product_id: PRODUCTO, quantity: "1" }],
+      });
+      expect(cot.status).toBe(200);
+      const q = (await cot.json()) as {
+        price_list_id: string;
+        total: string;
+        lines: { unit_price: string }[];
+      };
+      expect(q.price_list_id).toBe(lista!.id);
+      expect(q.lines[0]!.unit_price).toBe("4.00000000");
+      expect(q.total).toBe("4.64000000");
+      const venta = await pedir(
+        "POST",
+        "/v1/pos/sales",
+        ADMINISTRATIVO,
+        cuerpo({
+          price_list_id: lista!.id,
+          payments: [{ instrument: "efectivo_usd", currency: "USD", amount: q.total }],
+        }),
+      );
+      expect(venta.status).toBe(201);
+      expect(await conLista()).toBe(1);
+      // El documento guarda la lista que aplicó, en la cabecera y en cada línea.
+      const [doc] = await sql<{ lineas: number; con_lista: number }[]>`
+        select count(*)::int as lineas,
+               count(*) filter (where l.price_list_applied_id = ${lista!.id})::int as con_lista
+          from public.documents d
+          join public.document_lines l on l.document_id = d.id
+         where d.company_id = ${COMPANY} and d.customer_id = ${CLIENTE}
+           and d.price_list_id = ${lista!.id}`;
+      expect(doc).toEqual({ lineas: 1, con_lista: 1 });
+
+      // Pedir la MISMA lista que ya aplicaría no es cambiarla: el cajero no necesita permiso.
+      const sinPedir = await pedir("POST", "/v1/pos/quote", CAJERO, {
+        company_id: COMPANY,
+        customer_id: CLIENTE,
+        lines: [{ product_id: PRODUCTO, quantity: "1" }],
+      });
+      const laQueAplica = ((await sinPedir.json()) as { price_list_id: string }).price_list_id;
+      expect(laQueAplica).not.toBe(lista!.id);
+      const misma = await pedir("POST", "/v1/pos/quote", CAJERO, {
+        company_id: COMPANY,
+        customer_id: CLIENTE,
+        price_list_id: laQueAplica,
+        lines: [{ product_id: PRODUCTO, quantity: "1" }],
+      });
+      expect(misma.status).toBe(200);
+    });
+
+    it("C-06 · un producto sin precio en la lista que aplica no se vende por ella, y el mensaje dice cuál producto y cuál lista", async () => {
+      const [lista] = await sql<{ id: string }[]>`
+        select id from public.price_lists where company_id = ${COMPANY} and name = 'mayor e2e'`;
+      const p = await pedir("POST", "/v1/products/simple", FUNDADOR, {
+        company_id: COMPANY,
+        name: `Solo al detal ${RUN}`,
+        price: { amount: "9", currency: "USD" },
+      });
+      expect(p.status).toBe(201);
+      const soloDetal = ((await p.json()) as { product: { id: string } }).product.id;
+      const cot = await pedir("POST", "/v1/pos/quote", ADMINISTRATIVO, {
+        company_id: COMPANY,
+        customer_id: CLIENTE,
+        price_list_id: lista!.id,
+        lines: [{ product_id: soloDetal, quantity: "1" }],
+      });
+      expect(cot.status).toBe(422);
+      const fallo = (await cot.json()) as Fallo;
+      expect(fallo.message).toContain(
+        `«Solo al detal ${RUN}» no tiene precio en la lista «mayor e2e»`,
+      );
+      // Por la lista de mostrador sí se cotiza: no cayó a ella en silencio, se eligió.
+      const mostrador = await pedir("POST", "/v1/pos/quote", ADMINISTRATIVO, {
+        company_id: COMPANY,
+        customer_id: CLIENTE,
+        lines: [{ product_id: soloDetal, quantity: "1" }],
+      });
+      expect(mostrador.status).toBe(200);
+      const m = (await mostrador.json()) as { lines: { unit_price: string }[] };
+      expect(m.lines[0]!.unit_price).toBe("9.00000000");
+    });
+
     it("E-13 · el ajuste «vender sin existencia» ya no se lee ni se ofrece", async () => {
       const r = await pedir("GET", "/v1/company-settings", FUNDADOR);
       expect(r.status).toBe(200);

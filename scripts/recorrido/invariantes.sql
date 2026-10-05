@@ -8,9 +8,15 @@ select 'stock_reconciliation (filas con diferencia)', count(*)::text
  where materialized_quantity <> recomputed_quantity or materialized_value <> recomputed_value;
 select 'accounting_coverage_gaps', count(*)::text from platform.accounting_coverage_gaps(:'cid');
 select 'inventory_coverage_gaps', count(*)::text from platform.inventory_coverage_gaps(:'cid');
--- ADR-0078 (20261003110100): retiro ⇒ Nota de retiro si la empresa facturaba, y nota ⇒ su IVA en el asiento.
+-- ADR-0082 (20261005100000 a 100900): retiro gravado desde el corte ⇒ factura de retiro con su IVA en el asiento,
+-- sin cartera y a nombre de la propia empresa (antes del corte, su Nota de retiro); corregido con su nota de
+-- crédito, netea en cero; toda factura de retiro documenta una salida que existe, es de la empresa y la señala
+-- (20261005100970); y si falta la fila del corte, lo dice (falta_el_corte).
 select 'withdrawal_note_gaps', count(*)::text from platform.withdrawal_note_gaps(:'cid');
 select 'annulled_stock_gaps', count(*)::text from platform.annulled_stock_gaps(:'cid');
+-- I-04 (20261005130000): venta de compuesto ⇒ sus ingredientes salieron del kardex, en la proporción de la
+-- receta de ese momento; cada fila coincide con su movimiento; de ninguna salida volvió más de lo que salió.
+select 'composite_sale_gaps', count(*)::text from platform.composite_sale_gaps(:'cid');
 select 'inventory_ledger_gap (diferencia)', coalesce((select diferencia::text from platform.inventory_ledger_gap(:'cid')), '(sin fila)');
 select 'trial_balance hoy (sum debe - sum haber)',
        coalesce(sum(period_debit) - sum(period_credit), 0)::text
@@ -82,6 +88,10 @@ select 'fiscal_amount_gaps (documentos fiscales cuyo IVA en Bs no sale de su bas
 -- juzga accounting_coverage_gaps.
 select 'settled_ledger_gaps (saldados con residuo en CxC o CxP del mayor)', count(*)::text
   from platform.settled_ledger_gaps(:'cid');
+-- ADR-0083 §5 (H-03, 20261005110200): el saldo a favor que declaran las notas de crédito de proveedor
+-- vigentes = el saldo del mayor en la cuenta de saldos a favor con proveedores, más la cola.
+select 'supplier_credit_ledger_gap (saldo a favor con proveedores: declarado vs mayor)', count(*)::text
+  from platform.supplier_credit_ledger_gap(:'cid');
 -- ADR-0079 (B-06): desde el corte (platform.invariant_cutoffs, contra `created_at`), en TODA tabla que lleva
 -- `rules_version` —documentos, asientos, actas, facturas de proveedor, retenciones, comprobantes, notas de
 -- retiro, historia del tipo de contribuyente, cuentas— toda versión escrita está REGISTRADA en
@@ -129,3 +139,9 @@ select 'annulment_paper_gaps (facturas anuladas fuera de la regla del papel)', c
 -- (`unborn`: uno retirado que resucitó). Sin lista de exclusiones: un asiento manual sobre la cuenta da fila.
 select 'customer_credit_ledger_gap (saldos a favor vivos ≠ pasivo de saldos a favor del mayor)', count(*)::text
   from platform.customer_credit_ledger_gap(:'cid');
+-- ADR-0083 §5, tercera ronda (H-03, 20261005110600): la pata «auxiliar ↔ declarado». Por factura de proveedor
+-- cuyas notas vigentes son todas posteriores al corte (platform.invariant_cutoffs), lo que el auxiliar dice que
+-- está a favor (greatest(-supplier_invoice_balance, 0), en la moneda de la factura) = Σ de lo que sus notas
+-- declararon (credit_in_favor_transaction). Un pago posterior, una reversa o un saldo a favor mal calculado dan fila.
+select 'supplier_credit_subledger_gaps (saldo a favor con proveedores: auxiliar vs declarado por las notas)', count(*)::text
+  from platform.supplier_credit_subledger_gaps(:'cid');

@@ -371,4 +371,170 @@ c.caso(
   },
 );
 
+// C-06 (ola 5): vender al mayor. El precio lo resuelve el SERVIDOR (lista de la venta → lista
+// del cliente → lista de mostrador) y cambiar la lista de una venta exige
+// `sales.price_list.override` en el servidor. No escribe nada: solo cotiza.
+c.caso(
+  "C-06",
+  "el ajuste «Vendo al mayor» lo gobierna el dueño; la caja cotiza por la lista de mostrador y cambiarla exige el permiso en el servidor (el cajero, 403 con su mensaje)",
+  async () => {
+    const ajustes = await pedir(PERSONAS.duenoE2E3, "E2", "GET", "/v1/company-settings");
+    afirmar(
+      ajustes.status === 200 && typeof ajustes.json.sells_wholesale === "boolean",
+      `los ajustes no traen «vendo al mayor»: ${ajustes.status} ${ajustes.texto.slice(0, 200)}`,
+    );
+    // El cajero no lo cambia (se le manda el MISMO valor: aunque pasara, no cambiaría nada).
+    const cajeroAjusta = await pedir(PERSONAS.cajero, "E2", "PUT", "/v1/company-settings", {
+      sells_wholesale: ajustes.json.sells_wholesale,
+    });
+    afirmar(cajeroAjusta.status === 403, `el cajero cambió los ajustes: ${cajeroAjusta.status}`);
+
+    const [mostrador] = await sql`
+      select l.id, l.name from public.price_lists l
+       where l.company_id = ${EMPRESAS.E2} and l.status = 'active'
+       order by (l.id = (select cs.default_price_list_id from public.company_settings cs
+                          where cs.company_id = ${EMPRESAS.E2})) desc,
+                (l.name = 'detal') desc, (l.name like 'detal%') desc, l.created_at
+       limit 1`;
+    const [otra] = await sql`
+      select l.id, l.name from public.price_lists l
+       where l.company_id = ${EMPRESAS.E2} and l.status = 'active' and l.id <> ${mostrador.id}
+       order by (l.name like 'mayor%') desc, l.created_at limit 1`;
+    afirmar(otra, "E2 no tiene una segunda lista activa: el escenario no es el del recorrido");
+    const [producto] = await sql`
+      select p.id, p.name from public.products p
+       where p.company_id = ${EMPRESAS.E2} and p.status = 'active' and p.system_code is null
+         and platform.price_at(${mostrador.id}, p.id, now()) is not null
+       order by p.created_at limit 1`;
+    afirmar(producto, "E2 no tiene un producto con precio de mostrador");
+    const cotizar = (quien, extra) =>
+      pedir(quien, "E2", "POST", "/v1/pos/quote", {
+        company_id: EMPRESAS.E2,
+        lines: [{ product_id: producto.id, quantity: "1" }],
+        ...extra,
+      });
+
+    const sinPedir = await cotizar(PERSONAS.cajero, {});
+    afirmar(
+      sinPedir.status === 200 && sinPedir.json.price_list_id === mostrador.id,
+      `sin cliente ni lista, la caja debía cotizar por «${mostrador.name}»: ${sinPedir.status} ${sinPedir.texto.slice(0, 200)}`,
+    );
+    const cajero = await cotizar(PERSONAS.cajero, { price_list_id: otra.id });
+    afirmar(
+      cajero.status === 403 && cajero.json.code === "PERMISSION_REQUIRED",
+      `el cajero cotizó con otra lista: ${cajero.status} ${cajero.texto.slice(0, 200)}`,
+    );
+    afirmar(
+      String(cajero.json.person_message ?? "").includes("cambiar la lista de precios de una venta"),
+      `el 403 no dice qué no puede hacer: ${cajero.texto.slice(0, 300)}`,
+    );
+    // Pedir la misma que ya aplica no es cambiarla.
+    const misma = await cotizar(PERSONAS.cajero, { price_list_id: mostrador.id });
+    afirmar(misma.status === 200, `pedir la lista que ya aplica dio ${misma.status}`);
+
+    // Quien puede: o cotiza por esa lista, o el producto no tiene precio en ella y se le DICE
+    // (no cae en silencio a la de mostrador).
+    const dueno = await cotizar(PERSONAS.duenoE2E3, { price_list_id: otra.id });
+    if (dueno.status === 200) {
+      afirmar(
+        dueno.json.price_list_id === otra.id,
+        `el dueño pidió «${otra.name}» y se cotizó por ${dueno.json.price_list_id}`,
+      );
+    } else {
+      afirmar(
+        dueno.status === 422 &&
+          dueno.json.message.includes(`no tiene precio en la lista «${otra.name}»`) &&
+          dueno.json.message.includes(producto.name),
+        `sin precio en «${otra.name}» debía decirlo con el producto: ${dueno.status} ${dueno.texto.slice(0, 300)}`,
+      );
+    }
+  },
+);
+
+// ── Ola 5 · C-07: el interruptor «lleva lote y vencimiento» existe y la llegada lo pide ──
+// No escribe existencia: crea UN producto sin movimientos y solo intenta llegadas que se rechazan.
+c.caso(
+  "C-07",
+  "E3 · un producto nace con lote y vencimiento, la llegada los pide con su nombre, y sin movimientos se apaga y se enciende",
+  async () => {
+    // EL PRODUCTO DE ESTA COMPROBACIÓN ES SIEMPRE EL MISMO (código fijo): con `--sin-restaurar`
+    // no se acumula uno nuevo en cada corrida. Nunca tiene movimientos (sus llegadas se rechazan).
+    const nombre = "Yogur del recorrido";
+    const [existente] = await sql`
+      select id, tracks_lots from public.products
+       where company_id = ${EMPRESAS.E3} and sku = 'REC-C07-YOGUR'`;
+    let id = existente?.id ?? null;
+    if (id === null) {
+      const alta = await pedir(PERSONAS.duenoE2E3, "E3", "POST", "/v1/products/simple", {
+        company_id: EMPRESAS.E3,
+        sku: "REC-C07-YOGUR",
+        name: nombre,
+        price: { amount: "2", currency: "USD" },
+        tracks_lots: true,
+      });
+      afirmar(alta.status === 201, `alta con lote y vencimiento: ${alta.status} ${alta.texto}`);
+      id = alta.json.product.id;
+    } else if (existente.tracks_lots !== true) {
+      // Una corrida anterior murió con el interruptor apagado: se deja como recién creado.
+      const r = await pedir(PERSONAS.duenoE2E3, "E3", "PATCH", `/v1/products/${id}`, {
+        company_id: EMPRESAS.E3,
+        tracks_lots: true,
+      });
+      afirmar(r.status === 200, `reencender el interruptor del producto reutilizado: ${r.status}`);
+    }
+    const ficha = await pedir(PERSONAS.duenoE2E3, "E3", "GET", `/v1/products/${id}`);
+    afirmar(
+      ficha.status === 200 && ficha.json.tracks_lots === true && ficha.json.tracks_expiry === true,
+      `el producto no quedó con lote Y vencimiento: ${ficha.texto.slice(0, 300)}`,
+    );
+
+    const [deposito] = await sql`
+      select id from public.warehouses
+       where company_id = ${EMPRESAS.E3} and status = 'active' order by created_at limit 1`;
+    afirmar(deposito, "E3 no tiene un depósito activo");
+    const llegar = (extra) =>
+      pedir(PERSONAS.duenoE2E3, "E3", "POST", "/v1/inventory/receipts", {
+        origin: "aporte",
+        company_id: EMPRESAS.E3,
+        warehouse_id: deposito.id,
+        product_id: id,
+        quantity: "3",
+        amount: "30",
+        currency: "VES",
+        ...extra,
+      });
+    const sinLote = await llegar({});
+    afirmar(
+      sinLote.status === 422 &&
+        sinLote.json.message.includes(nombre) &&
+        sinLote.json.message.includes("lleva lote y vencimiento"),
+      `la llegada sin lote debía pedirlo con el nombre del producto: ${sinLote.status} ${sinLote.texto.slice(0, 300)}`,
+    );
+    const sinFecha = await llegar({ lot_code: `REC-${Date.now().toString(36)}` });
+    afirmar(
+      sinFecha.status === 422 && sinFecha.json.message.includes("la fecha en que vence"),
+      `la llegada con lote y sin fecha debía pedir la fecha: ${sinFecha.status} ${sinFecha.texto.slice(0, 300)}`,
+    );
+    const [escrito] = await sql`
+      select (select count(*)::int from public.inventory_moves where product_id = ${id}) as movs,
+             (select count(*)::int from public.lots where product_id = ${id}) as lotes`;
+    afirmar(
+      escrito.movs === 0 && escrito.lotes === 0,
+      `una llegada rechazada dejó algo escrito: ${JSON.stringify(escrito)}`,
+    );
+
+    // Sin movimientos, el interruptor es reversible (con ellos no: lo prueba el E2E).
+    for (const valor of [false, true]) {
+      const r = await pedir(PERSONAS.duenoE2E3, "E3", "PATCH", `/v1/products/${id}`, {
+        company_id: EMPRESAS.E3,
+        tracks_lots: valor,
+      });
+      afirmar(
+        r.status === 200 && r.json.tracks_lots === valor && r.json.tracks_expiry === valor,
+        `cambiar el interruptor a ${valor} sin movimientos: ${r.status} ${r.texto.slice(0, 300)}`,
+      );
+    }
+  },
+);
+
 export default c.correr;

@@ -18,8 +18,7 @@ import {
   listPaymentMethods,
   createPaymentMethod,
   updatePaymentMethod,
-  registerExpense,
-  registerInvoicedExpense,
+  registerExpenseWithRecurrence,
   previewInvoicedExpense,
   transferBetweenAccounts,
   closeCashRegister,
@@ -256,11 +255,11 @@ export function treasuryRoutes(
     coherente(companyId, parsed.data.company_id);
     const { actor } = c.get("ladino.auth");
     // H-09: con factura fiscal el gasto es una compra de servicio y va por compras (libro,
-    // crédito fiscal, retención); sin ella, el gasto llano de siempre.
+    // crédito fiscal, retención); sin ella, el gasto llano de siempre. H-07: la misma puerta
+    // atiende el período de un gasto que se repite, o crea su recordatorio (el caso de uso
+    // elige la rama; sin esos campos es el gasto de siempre).
     const r = await withTransaction(sql, actor, (uow) =>
-      parsed.data.invoice === undefined
-        ? registerExpense(uow, parsed.data)
-        : registerInvoicedExpense(uow, parsed.data),
+      registerExpenseWithRecurrence(uow, parsed.data),
     );
     if (!r.ok) throw new DominioError(r.error);
     return c.json(r.value, 201);

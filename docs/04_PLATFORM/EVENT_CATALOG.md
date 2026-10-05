@@ -56,12 +56,15 @@ es un hecho: no hay caso de uso que lo emita y el nombre queda apartado, no impl
 
 ## Inventory
 - stock.received
+- stock.withdrawal_returned
 - stock.shipped
 - stock.transferred
 - stock.adjusted
 - stock.counted
 - stock.shrinkage
 - stock.withdrawn
+- stock.used_in_business
+- stock.capitalized
 
 **Implementados en S0.6 (módulo de inventario, ADR-0034), `schema_version` 1.** Los emiten los
 casos de uso de `packages/domain/src/inventory.ts` con `aggregate_type = 'inventory_move'`, y el
@@ -79,7 +82,10 @@ payload común de arriba:
 |---|---|---|
 | `stock.shipped` | el costo de una venta (`sales_cost`) | `{reference, exit_reason: null}` |
 | `stock.shrinkage` | `issueStock` con motivo merma, rotura, vencido o faltante | `{reference, exit_reason}` |
-| `stock.withdrawn` | `issueStock` con motivo consumo propio, regalo, donación o muestra | `{reference, exit_reason}`; la Nota de retiro va aparte en el acta `inventory.withdrawal_note.issued` |
+| `stock.used_in_business` | `issueStock` con motivo uso en el negocio (salida no gravada, ADR-0082; hecho contable: gasto de operación contra inventario) | `{reference, exit_reason}` |
+| `stock.capitalized` | `issueStock` con motivo activo fijo o incorporado a un inmueble del negocio (salida no gravada, ADR-0082; hecho contable: activo fijo contra inventario) | `{reference, exit_reason}` |
+| `stock.withdrawal_returned` | `creditWithdrawalInvoice` → `reingresarRetiro`: la mercancía de un retiro corregido con su nota de crédito vuelve al kardex (ADR-0082). Nombre PROPIO desde 20261005100900 (antes `stock.received`): su hecho contable `inventory_move / stock.withdrawal_returned` es el contra-asiento del retiro y no puede compartir plantilla con una entrada cualquiera. La nota publica aparte `fiscal.credit_note.issued` con `withdrawal_invoice_id` y `withdrawal_reentry_move_id` | `{reference}` |
+| `stock.withdrawn` | `issueStock` con motivo consumo propio, regalo, donación o muestra (retiro gravado, ADR-0082). ~~o uso en el negocio, activo fijo o incorporado a un inmueble~~ (desde 20261005100400 tienen sus dos eventos, arriba) | `{reference, exit_reason, withdrawal_invoice_id?}`; desde 20261005100000 el retiro gravado de una empresa que factura emite su FACTURA de retiro, que publica aparte `fiscal.invoice.issued` con `withdrawal_move_id` y `withdrawal_reason`. El acta `inventory.withdrawal_note.issued` ya no se escribe (queda en las notas anteriores) |
 | `stock.counted` | `countStock` cuando la diferencia mueve existencia (faltante o sobrante) | `{reason}`, que empieza por «Conteo:» |
 | `stock.adjusted` | `adjustStock`, el ajuste suelto | `{reason}` |
 
@@ -193,6 +199,14 @@ contable correspondiente en el preset `ve_basico`. El vocabulario lo asevera el 
   publica EN VEZ de `ap.invoice_posted`, nunca además: un consumidor que quiera todas las
   facturas de proveedor escucha los dos. Su asiento (`purchase_invoice / ap.expense_invoice_posted`)
   debita gasto y no «mercancía recibida por facturar».
+- `ap.expense_credit_note_received` — se registró la nota de crédito del proveedor sobre la
+  factura de un GASTO (H-03, migración 20261005110000, ADR-0083). Es el hecho de
+  `ap.credit_note_received` para una factura con `expense_category`: mismo agregado
+  (`supplier_credit_note`) y mismo payload, auditoría y outbox. Se publica EN VEZ de
+  `ap.credit_note_received`, nunca además. Su asiento
+  (`purchase_credit_note / ap.expense_credit_note_received`) revierte gasto y crédito fiscal, no
+  inventario. Desde la misma entrega, el payload de los dos eventos lleva `kind`
+  (devolucion | rebaja | null), `is_fiscal`, `document_incomplete` y `retention_untouched`.
 - `ap.retention_excluded` — una empresa agente marcó una exclusión del art. 3 de la PA
   SNAT/2025/000054 al registrar la factura; payload `exclusion_code` y `reason` (auditoría y outbox,
   agregado `supplier_invoice`).
@@ -289,3 +303,16 @@ anticipado: la política de qué se audita está diferida con dueño y disparado
 > `company.tax_id_established` en `audit_events` —lo escribe el trigger de M4, y es la red del
 > esquema que garantiza que la identidad fiscal inicial queda registrada aunque no haya caso de uso
 > (una carga directa, un script de operación). Hechos distintos, destinos distintos.
+
+## El gasto que se repite (H-07, migración 20261005140000) — actas en `audit_events`, `aggregate_type = recurring_expense`
+
+SOLO auditoría: ninguno va al outbox (nadie los consume; el aviso se calcula al leer).
+
+| Evento | Quién lo escribe | Payload |
+|---|---|---|
+| `recurring_expense.created` | `registerExpenseWithRecurrence`, al registrar un gasto con `is_recurring` cuya categoría no tiene recordatorio vivo | `{category, periodicity, anchor_date, expense_id, supplier_invoice_id}` |
+| `recurring_expense.registered` | `registerExpenseWithRecurrence`, «registrar ahora» | `{due_on, expense_id, supplier_invoice_id}` |
+| `recurring_expense.skipped` | `skipRecurringExpense` | `{due_on}` |
+| `recurring_expense.stopped` | `stopRecurringExpense` (solo la primera vez) | `{}` |
+
+El gasto en sí sigue dejando sus eventos de siempre (`treasury.expense.registered` o `ap.expense_invoice_posted`).

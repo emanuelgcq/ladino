@@ -75,6 +75,8 @@ import {
   ConfirmOrderRequest,
   CreateInvoiceRequest,
   AnnulInvoiceRequest,
+  CorrectWithdrawalRequest,
+  StockExitPreviewResponse,
   ReversePaymentRequest,
   PaymentReversalResponse,
   RegisterPaymentRequest,
@@ -122,6 +124,8 @@ import {
   ApplyLandedCostRequest,
   LandedCostResponse,
   RegisterSupplierCreditNoteRequest,
+  SupplierCreditNoteResponse,
+  SupplierInvoiceLinesResponse,
   RegisterSupplierPaymentRequest,
   SupplierPaymentResponse,
   SimplePurchaseRequest,
@@ -192,6 +196,15 @@ import {
   NegocioResumenResponse,
   NegocioTasaResponse,
   ConvertResponse,
+  SearchDocumentsQuery,
+  ReportTable,
+  SalesReportQuery,
+  MarginReportQuery,
+  RangeReportQuery,
+  ReceivablesReportQuery,
+  PayablesReportQuery,
+  CashClosingsReportQuery,
+  SearchDocumentsResponse,
   CompanySettingsResponse,
   UpdateCompanySettingsRequest,
   FiscalSetupResponse,
@@ -214,6 +227,10 @@ import {
   ListPaymentMethodsResponse,
   RegisterExpenseRequest,
   ExpenseResponse,
+  ListRecurringExpensesResponse,
+  RecurringExpenseResponse,
+  SkipRecurringExpenseRequest,
+  StopRecurringExpenseRequest,
   ExpensePreviewResponse,
   ListExpensesResponse,
   CloseCashRegisterRequest,
@@ -1406,11 +1423,35 @@ export function buildOpenApiDocument(): object {
     "El costo lo calcula el promedio ponderado móvil; el cliente no lo envía. El motivo es " +
       "obligatorio y de lista cerrada (ADR-0078): merma, rotura, vencido y faltante van a " +
       "«Pérdidas por mermas y faltantes»; consumo propio, regalo, donación y muestra son retiro " +
-      "(LIVA art. 4.3) y, en una empresa que factura, emiten Nota de retiro con débito fiscal al " +
-      "valor de mercado (withdrawal_note_number).",
+      "(LIVA art. 4.3) y, en una empresa que factura, emiten una FACTURA de retiro con control " +
+      "del talonario (RLIVA art. 31, ADR-0082: withdrawal_invoice; no genera cuenta por cobrar); " +
+      "uso en el negocio, activo fijo e incorporado a un inmueble salen sin débito y sin documento.",
     despachar,
     movimiento,
   );
+  registry.registerPath({
+    method: "post",
+    path: "/v1/inventory/issues/preview",
+    summary: "Vista previa de una salida: qué va a emitir, con sus cifras (permiso inventory.move)",
+    description:
+      "ADR-0082. El servidor ENSAYA la salida entera y la deshace: no mueve el kardex ni gasta " +
+      "correlativo ni número de control. Responde si se emitirá una factura de retiro (serie, " +
+      "base, IVA y total en la moneda funcional) o nada (motivo no gravado, pérdida justificada o " +
+      "empresa que no factura). El número no se promete: se asigna al emitir. Un rechazo sale " +
+      "aquí igual que saldría al confirmar. Sin Idempotency-Key: no escribe.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: companyHeader,
+      body: { content: { "application/json": { schema: despachar } } },
+    },
+    responses: {
+      200: okJson(
+        registry.register("StockExitPreviewResponse", StockExitPreviewResponse),
+        "Lo que la salida emitiría.",
+      ),
+      ...erroresComunes,
+    },
+  });
   mueveStock(
     "/v1/inventory/adjustments",
     "Ajuste de existencias (permiso inventory.adjust, SEGREGADO de inventory.move)",
@@ -1813,6 +1854,32 @@ export function buildOpenApiDocument(): object {
   });
   registry.registerPath({
     method: "post",
+    path: "/v1/invoices/{id}/withdrawal-credit-note",
+    summary:
+      "Nota de crédito de una factura de retiro (permisos sales.invoice.annul e inventory.move)",
+    description:
+      "ADR-0082 (PA 00071 arts. 22 y 23). Deja sin efecto el retiro ENTERO cuando ya no se puede " +
+      "anular: emite una nota de crédito (kind withdrawal_credit_note) con el correlativo y el " +
+      "control de las notas de crédito, a nombre de la propia empresa y por los mismos importes " +
+      "que la factura; la mercancía vuelve al kardex al costo con que salió y el asiento es el " +
+      "contra-asiento del retiro. No toca cartera ni crea saldo a favor. Una por factura: la " +
+      "segunda → 422. Resta en el libro de ventas y en la declaración del período en que se emite.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      params: idParam,
+      headers: idemHeader,
+      body: {
+        content: {
+          "application/json": {
+            schema: registry.register("CorrectWithdrawalRequest", CorrectWithdrawalRequest),
+          },
+        },
+      },
+    },
+    responses: { 201: okJson(documento, "Nota de crédito emitida."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
     path: "/v1/payments",
     summary: "Registrar cobro (permiso sales.payment.register)",
     description:
@@ -1895,6 +1962,121 @@ export function buildOpenApiDocument(): object {
     request: { headers: companyHeader },
     responses: { 200: okJson(tasaNegocio, "La tasa del día, o null."), ...erroresComunes },
   });
+  const busquedaDocumentos = registry.register("SearchDocumentsResponse", SearchDocumentsResponse);
+  registry.registerPath({
+    method: "get",
+    path: "/v1/search/documents",
+    summary: "Buscar documentos por su número (la paleta, Ctrl+K)",
+    description:
+      "Facturas, recibos, notas de crédito y de débito y cotizaciones por serie y número " +
+      "(«A-12» o «A-00000012», completo o una parte), y compras por el número, el control o la " +
+      "referencia del proveedor. Acotada a la empresa de X-Company-Id y a lo que el rol puede " +
+      "leer: las ventas exigen ar.read o un permiso de operación de ventas (sales.invoice.issue, " +
+      "sales.quote.manage, sales.order.manage, sales.return.manage, sales.payment.register); las " +
+      "compras, ap.read, purchase.invoice.register o purchase.payment.register. Lo que el rol no " +
+      "puede leer no aparece ni se cuenta: la respuesta no lleva total y, sin ningún permiso, la " +
+      "lista viene vacía. Sin importes. `q` con menos de 2 caracteres es 422.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, query: SearchDocumentsQuery },
+    responses: {
+      200: okJson(busquedaDocumentos, "Coincidencia exacta primero; después, lo más reciente."),
+      ...erroresComunes,
+    },
+  });
+  // P-07, F-13, H-11: los reportes y las carteras. Una sola forma de respuesta para todos.
+  const tablaDeReporte = registry.register("ReportTable", ReportTable);
+  const DESCARGA =
+    " Con `format=csv` o `format=xlsx` responde el ARCHIVO (no JSON), con todas las filas y " +
+    "formato de Venezuela (coma decimal, fechas día/mes/año, CSV con «;» y BOM); descargar " +
+    "exige además report.export. Los importes son texto decimal redondeado al servir; `null` " +
+    "no es cero (falta la tasa de hoy, o el rol no ve esa cifra) y trae su motivo. Todo rango " +
+    "es de días de Caracas, extremos incluidos.";
+  const reportes: {
+    path: string;
+    summary: string;
+    description: string;
+    query: z.ZodTypeAny;
+  }[] = [
+    {
+      path: "/v1/reports/sales",
+      summary:
+        "Reporte de ventas del rango (por día, mes, producto, cliente, forma de pago o vendedor)",
+      description:
+        "Venta = facturas, recibos y notas de débito emitidos, menos notas de crédito y " +
+        "devoluciones. Por forma de pago se sirve lo COBRADO en el rango. Exige treasury.read " +
+        "o accounting.read.",
+      query: SalesReportQuery,
+    },
+    {
+      path: "/v1/reports/margin",
+      summary: "Reporte de margen: ventas menos costo, por producto o período",
+      description:
+        "Con el diferencial cambiario realizado como línea del resumen; la revaluación va en " +
+        "null (sin_dato). Exige treasury.read o accounting.read.",
+      query: MarginReportQuery,
+    },
+    {
+      path: "/v1/reports/iva",
+      summary: "IVA del período: lo ya calculado en la declaración",
+      description:
+        "La última corrida de cada período de iva_period_results que toca el rango; no " +
+        "recalcula. Exige fiscal_book.read.",
+      query: RangeReportQuery,
+    },
+    {
+      path: "/v1/reports/inventory",
+      summary: "Inventario valorizado (a hoy) y rotación (en el rango)",
+      description:
+        "Exige warehouse.read, inventory.move, inventory.adjust, accounting.read o " +
+        "treasury.read. El VALOR solo viaja con accounting.read o treasury.read; sin él va en " +
+        "null con sin_permiso.",
+      query: RangeReportQuery,
+    },
+    {
+      path: "/v1/reports/receivables",
+      summary: "«Quién me debe»: la cartera de clientes, con totales y tramos",
+      description:
+        "Una fila por cliente que debe: nominal por moneda, deuda a la tasa de hoy, vencido y " +
+        "tramos de antigüedad (platform.ar_aging, customer_overdue_today). Exige ar.read.",
+      query: ReceivablesReportQuery,
+    },
+    {
+      path: "/v1/reports/payables",
+      summary: "«Qué debo»: la cartera de proveedores, con monto y vencimiento",
+      description:
+        "Una fila por proveedor al que se le debe (platform.ap_aging, supplier_debt_today). " +
+        "Exige ap.read.",
+      query: PayablesReportQuery,
+    },
+    {
+      path: "/v1/reports/cash-closings",
+      summary: "Cierres de caja con sus diferencias, por cierre o por cajero",
+      description: "Exige treasury.read o cash_register.read.",
+      query: CashClosingsReportQuery,
+    },
+    {
+      path: "/v1/reports/igtf",
+      summary: "IGTF percibido, por quincena",
+      description:
+        "Cada quincena que toca el rango, entera, con platform.igtf_period_totals. Exige " +
+        "fiscal_book.read.",
+      query: RangeReportQuery,
+    },
+  ];
+  for (const r of reportes) {
+    registry.registerPath({
+      method: "get",
+      path: r.path,
+      summary: r.summary,
+      description: r.description + DESCARGA,
+      security: [{ bearerAuth: [] }],
+      request: { headers: companyHeader, query: r.query as z.AnyZodObject },
+      responses: {
+        200: okJson(tablaDeReporte, "La tabla del reporte: columnas, filas, totales y resumen."),
+        ...erroresComunes,
+      },
+    });
+  }
   const convertir = registry.register("ConvertResponse", ConvertResponse);
   registry.registerPath({
     method: "get",
@@ -2673,6 +2855,14 @@ export function buildOpenApiDocument(): object {
     "RegisterSupplierCreditNoteRequest",
     RegisterSupplierCreditNoteRequest,
   );
+  const notaRecibidaResp = registry.register(
+    "SupplierCreditNoteResponse",
+    SupplierCreditNoteResponse,
+  );
+  const lineasDeFactura = registry.register(
+    "SupplierInvoiceLinesResponse",
+    SupplierInvoiceLinesResponse,
+  );
   const pagoProveedor = registry.register(
     "RegisterSupplierPaymentRequest",
     RegisterSupplierPaymentRequest,
@@ -3074,20 +3264,37 @@ export function buildOpenApiDocument(): object {
     },
   });
   registry.registerPath({
+    method: "get",
+    path: "/v1/supplier-invoices/{id}/lines",
+    summary:
+      "Las líneas de una factura de proveedor, para corregirla con una nota de crédito (ap.read, purchase.credit_note.register o purchase.invoice.register; expense.register SOLO si la factura es de un gasto). No trae precios ni alícuotas",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader, params: z.object({ id: z.string().uuid() }) },
+    responses: {
+      200: okJson(lineasDeFactura, "La clase de la factura y sus líneas."),
+      ...erroresComunes,
+    },
+  });
+  registry.registerPath({
     method: "post",
     path: "/v1/supplier-credit-notes",
-    summary: "Registrar nota de crédito recibida (permiso purchase.credit_note.register)",
-    description: "Reduce el saldo de la factura que abona. No hay abono sin factura que abonar.",
+    summary:
+      "Registrar nota de crédito recibida (purchase.credit_note.register; expense.register si la factura es de un gasto)",
+    description:
+      "Reduce el saldo de la factura que abona. En una factura de mercancía, `kind` dice si la mercancía volvió " +
+      "(`devolucion`: sale del kardex a su costo) o si solo bajó el precio (`rebaja`: se " +
+      "revaloriza lo que quede). El IVA de cada línea sale de la alícuota de la línea de factura " +
+      "que corrige; un `tax_amount` enviado que difiera más de un céntimo se rechaza. Sin número " +
+      "de control se registra igual y queda `document_incomplete`. Lo que pase de lo que se debía " +
+      "va a la cuenta de saldos a favor con proveedores (`left_credit_in_favor`), no a cuentas por " +
+      "pagar. No ajusta la retención practicada ni su comprobante (`retention_untouched`).",
     security: [{ bearerAuth: [] }],
     request: {
       headers: idemHeader,
       body: { content: { "application/json": { schema: notaRecibida } } },
     },
     responses: {
-      201: okJson(
-        z.object({ id: z.string().uuid(), total_amount: z.string(), balance: z.string() }),
-        "Nota registrada y saldo recalculado.",
-      ),
+      201: okJson(notaRecibidaResp, "Nota registrada y saldo recalculado."),
       ...erroresComunes,
     },
   });
@@ -4389,6 +4596,61 @@ export function buildOpenApiDocument(): object {
       query: z.object({ from: z.string().optional(), to: z.string().optional() }),
     },
     responses: { 200: okJson(gastos, "Los gastos."), ...erroresComunes },
+  });
+  // H-07: el gasto que se repite. «Registrar ahora» es POST /v1/expenses con
+  // `recurring_expense_id` y `recurring_due_on`: la misma puerta que un gasto a mano.
+  const gastosRecurrentes = registry.register(
+    "ListRecurringExpensesResponse",
+    ListRecurringExpensesResponse,
+  );
+  const gastoRecurrente = registry.register("RecurringExpenseResponse", RecurringExpenseResponse);
+  const omitirGasto = registry.register("SkipRecurringExpenseRequest", SkipRecurringExpenseRequest);
+  const dejarGasto = registry.register("StopRecurringExpenseRequest", StopRecurringExpenseRequest);
+  registry.registerPath({
+    method: "get",
+    path: "/v1/recurring-expenses",
+    summary: "Los gastos que se repiten y cuáles tocan (permiso expense.read)",
+    description:
+      "Los recordatorios vivos de la empresa. `is_due` lo decide el servidor al leer: el día " +
+      "calendario de Caracas contra `next_due_on`, día contra día. No hay tarea programada. " +
+      "«Registrar ahora» es `POST /v1/expenses` con `recurring_expense_id` y `recurring_due_on`.",
+    security: [{ bearerAuth: [] }],
+    request: { headers: companyHeader },
+    responses: { 200: okJson(gastosRecurrentes, "Los recordatorios."), ...erroresComunes },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/recurring-expenses/{id}/skip",
+    summary: "Omitir esta vez un gasto que se repite (permiso expense.register)",
+    description:
+      "El período `due_on` queda atendido sin gasto y el aviso pasa al siguiente. Si `due_on` " +
+      "ya no es el período que toca, 409 CONFLICT y no cambia nada.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: z.object({ id: z.string().uuid() }),
+      body: { content: { "application/json": { schema: omitirGasto } } },
+    },
+    responses: {
+      200: okJson(gastoRecurrente, "El recordatorio, con su próximo día."),
+      ...erroresComunes,
+      409: errorRef("El período ya se atendió, o el recordatorio ya no se paga."),
+    },
+  });
+  registry.registerPath({
+    method: "post",
+    path: "/v1/recurring-expenses/{id}/stop",
+    summary: "Dejar de avisar de un gasto que ya no se paga (permiso expense.register)",
+    description:
+      "El recordatorio deja de avisar. Los gastos ya registrados no se tocan. Repetirlo no es " +
+      "un error.",
+    security: [{ bearerAuth: [] }],
+    request: {
+      headers: idemHeader,
+      params: z.object({ id: z.string().uuid() }),
+      body: { content: { "application/json": { schema: dejarGasto } } },
+    },
+    responses: { 200: okJson(gastoRecurrente, "El recordatorio, detenido."), ...erroresComunes },
   });
   registry.registerPath({
     method: "post",

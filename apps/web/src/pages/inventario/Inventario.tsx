@@ -29,6 +29,27 @@ import { useToast } from "../../ui/toast.js";
 import { mostrarCantidad, mostrarImporte } from "../../money.js";
 import { MensajeError } from "../ventas/comunes.js";
 import { errorDePersona, LlamadaApiError } from "../../lib.js";
+import {
+  avisoFacturaDeRetiro,
+  avisoPrevioDeFacturaDeRetiro,
+  CONSECUENCIA_SALIDA,
+  CONSUMO_SUELTO_DE_RECETA,
+  DESTINO_DE_LA_SALIDA,
+  RETIRO_EMITIDO,
+  SALIDA_NO_EMITE,
+  SALIDA_QUE_EMITE,
+} from "../../components/capa-fiscal/textos.js";
+
+/** `POST /v1/inventory/issues/preview`: lo que la salida va a emitir, con las cifras del servidor. */
+interface VistaPreviaDeSalida {
+  emits: "withdrawal_invoice" | "nothing";
+  why: "retiro" | "no_gravado" | "perdida" | "sin_rif";
+  series: string | null;
+  subtotal_amount: string | null;
+  tax_amount: string | null;
+  total_amount: string | null;
+  currency: string | null;
+}
 import type {
   ExpiringLot,
   InventoryMove,
@@ -63,7 +84,16 @@ type Operacion = "salida" | "conteo" | "ajuste" | "transferencia";
  * EL MOTIVO DE LA SALIDA, lista cerrada (ADR-0078 §2, I-01): lo que la base guarda y lo que decide
  * adónde va en el mayor. La pantalla solo lo nombra; la cuenta y el débito los decide el servidor.
  */
-const MOTIVOS_SALIDA: { value: string; label: string; retiro: boolean }[] = [
+const MOTIVOS_SALIDA: { value: string; label: string; retiro: boolean; noGravado?: boolean }[] = [
+  // ADR-0082 (AF3-03): salidas que no son un retiro gravado.
+  { value: "uso_en_negocio", label: "Uso en el negocio", retiro: false, noGravado: true },
+  { value: "activo_fijo", label: "Pasa a activo fijo", retiro: false, noGravado: true },
+  {
+    value: "incorporado_inmueble",
+    label: "Construcción o reparación de un inmueble del negocio",
+    retiro: false,
+    noGravado: true,
+  },
   { value: "merma", label: "Merma", retiro: false },
   { value: "rotura", label: "Rotura", retiro: false },
   { value: "vencido", label: "Vencido", retiro: false },
@@ -115,8 +145,7 @@ const OPERACION: Record<
     articulo: "la",
     icono: <ArrowUpFromLine />,
     permiso: "inventory.move",
-    consecuencia:
-      "Sale al costo promedio vigente, que calcula el servidor. Merma, rotura, vencido y faltante van a «Pérdidas por mermas y faltantes»; consumo propio, regalo, donación y muestra son un retiro: si facturas, llevan IVA sobre el precio de venta y una Nota de retiro numerada.",
+    consecuencia: CONSECUENCIA_SALIDA,
   },
   conteo: {
     etiqueta: "Conteo",
@@ -526,8 +555,11 @@ function Movimiento({
   almacenes: Warehouse[];
   onCerrar: (hecho: boolean) => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
+  const navigate = useNavigate();
+  /** El retiro que acaba de emitir su factura: se dice y se ofrece abrirla (ADR-0082). */
+  const [retiroEmitido, setRetiroEmitido] = useState<{ id: string; texto: string } | null>(null);
   const [producto, setProducto] = useState<EntityOption | null>(null);
   const [form, setForm] = useState({
     warehouse_id: "",
@@ -556,6 +588,8 @@ function Movimiento({
     .filter((b) => b.lot_id !== null)
     .map((b) => ({ value: b.lot_id ?? "", label: b.lot_code ?? "lote" }));
   const [error, setError] = useState<unknown>(null);
+  /** Lo que la salida va a emitir, DICHO POR EL SERVIDOR (ADR-0082): la pantalla no calcula. */
+  const [previaSalida, setPreviaSalida] = useState<VistaPreviaDeSalida | null>(null);
   /** La diferencia del conteo, CALCULADA POR EL SERVIDOR (I-07): la pantalla no resta. */
   const [diferencia, setDiferencia] = useState<{
     system_quantity: string;
@@ -571,9 +605,14 @@ function Movimiento({
       : operacion === "conteo"
         ? /^\d{1,16}(\.\d{1,8})?$/.test(form.quantity)
         : /^\d{1,16}(\.\d{1,8})?$/.test(form.quantity) && /[1-9]/.test(form.quantity);
-  const motivoRetiro = MOTIVOS_SALIDA.find((m) => m.value === form.reason)?.retiro === true;
+  const motivoElegido = MOTIVOS_SALIDA.find((m) => m.value === form.reason);
+  const motivoRetiro = motivoElegido?.retiro === true;
+  const motivoNoGravado = motivoElegido?.noGravado === true;
   const motivoPerdida =
-    operacion === "salida" && NOMBRE_MOTIVO[form.reason] !== undefined && !motivoRetiro;
+    operacion === "salida" &&
+    NOMBRE_MOTIVO[form.reason] !== undefined &&
+    !motivoRetiro &&
+    !motivoNoGravado;
   // El faltante de un conteo va a pérdidas y lleva la misma evidencia que la salida «faltante»
   // (RLIVA art. 14). El signo lo dice el servidor en la vista previa: la pantalla no resta.
   const faltanteDeConteo =
@@ -586,11 +625,41 @@ function Movimiento({
     (operacion === "transferencia" ||
       (operacion === "salida"
         ? NOMBRE_MOTIVO[form.reason] !== undefined &&
-          (!motivoPerdida || form.evidence.trim().length >= 3)
+          // La evidencia de una pérdida y el destino de una salida sin IVA (AF5-07). Si dice
+          // lo suficiente lo juzga el servidor, con su mensaje.
+          (!(motivoPerdida || motivoNoGravado) || form.evidence.trim().length >= 3)
         : form.reason.trim().length >= 3)) &&
     (operacion !== "conteo" || opcionesLote.length === 0 || form.lot_id !== "") &&
     (operacion !== "transferencia" ||
       (form.to_warehouse_id !== "" && form.to_warehouse_id !== form.warehouse_id));
+
+  /**
+   * ADR-0082: la salida pregunta al SERVIDOR qué va a emitir antes de confirmar. El servidor
+   * ensaya la salida entera y la deshace (no gasta número ni control); la pantalla solo pinta lo
+   * que responde. Un rechazo (sin precio, sin existencia, sin papel) sale aquí, antes de confirmar.
+   */
+  async function previsualizarSalida(): Promise<void> {
+    setError(null);
+    setPreviaSalida(null);
+    try {
+      const r = await llamar<VistaPreviaDeSalida>("/v1/inventory/issues/preview", {
+        method: "POST",
+        body: JSON.stringify({
+          company_id: empresa.id,
+          product_id: producto?.id ?? "",
+          warehouse_id: form.warehouse_id,
+          quantity: form.quantity,
+          reason: form.reason,
+          ...(motivoPerdida || motivoNoGravado ? { evidence: form.evidence.trim() } : {}),
+          ...(form.reference.trim() === "" ? {} : { reference: form.reference.trim() }),
+        }),
+      });
+      setPreviaSalida(r);
+      setConfirmando(true);
+    } catch (e) {
+      setError(e);
+    }
+  }
 
   /** El conteo pregunta al servidor la diferencia antes de registrarla. */
   async function calcularDiferencia(): Promise<void> {
@@ -630,7 +699,15 @@ function Movimiento({
     };
     try {
       if (operacion === "salida") {
-        await llamar("/v1/inventory/issues", {
+        const salida = await llamar<{
+          withdrawal_invoice?: {
+            id: string;
+            number: string;
+            control_number: string | null;
+            tax_amount: string;
+            currency: string;
+          } | null;
+        }>("/v1/inventory/issues", {
           method: "POST",
           headers: { "Idempotency-Key": crypto.randomUUID() },
           body: JSON.stringify({
@@ -638,9 +715,25 @@ function Movimiento({
             warehouse_id: form.warehouse_id,
             quantity: form.quantity,
             reason: form.reason,
-            ...(motivoPerdida ? { evidence: form.evidence.trim() } : {}),
+            ...(motivoPerdida || motivoNoGravado ? { evidence: form.evidence.trim() } : {}),
           }),
         });
+        // ADR-0082: si la salida emitió su factura de retiro, se dice con su número y su IVA
+        // (las cifras son las del servidor; aquí solo se les da formato) y se ofrece ABRIRLA: es
+        // un documento fiscal que hay que imprimir, y un aviso que se va solo no lleva a él.
+        const emitida = salida.withdrawal_invoice ?? null;
+        if (emitida !== null) {
+          setConfirmando(false);
+          setRetiroEmitido({
+            id: emitida.id,
+            texto: avisoFacturaDeRetiro(
+              emitida.number,
+              emitida.control_number,
+              mostrarImporte({ amount: emitida.tax_amount, currency: emitida.currency }),
+            ),
+          });
+          return;
+        }
       } else if (operacion === "conteo") {
         let r: { delta: string; move: unknown };
         try {
@@ -723,6 +816,31 @@ function Movimiento({
     .filter((w) => w.status !== "inactive")
     .map((w) => ({ value: w.id, label: w.name }));
   const nombreDeposito = (id: string): string => almacenes.find((w) => w.id === id)?.name ?? "";
+
+  if (retiroEmitido !== null) {
+    return (
+      <Dialog open onOpenChange={(v) => !v && onCerrar(true)}>
+        <DialogContent className="max-w-xl">
+          <DialogTitle>{RETIRO_EMITIDO.titulo}</DialogTitle>
+          <DialogDescription>{retiroEmitido.texto}</DialogDescription>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => onCerrar(true)}>
+              {RETIRO_EMITIDO.cerrar}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                onCerrar(true);
+                void navigate(`/admin/ventas/${retiroEmitido.id}`);
+              }}
+            >
+              {RETIRO_EMITIDO.ver}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar(false)}>
@@ -809,11 +927,18 @@ function Movimiento({
               required
               className="sm:col-span-2"
               error={campos["reason"]}
-              {...(motivoRetiro
-                ? {
-                    hint: "Es un retiro (LIVA art. 4.3): si facturas, lleva IVA sobre el precio de venta y una Nota de retiro numerada.",
-                  }
-                : {})}
+              // ADR-0082: antes de confirmar, la salida dice qué va a emitir (o que no emite nada).
+              {...(motivoElegido === undefined
+                ? {}
+                : {
+                    hint: motivoRetiro
+                      ? puede("sales.invoice.issue")
+                        ? SALIDA_QUE_EMITE.retiro
+                        : SALIDA_QUE_EMITE.retiroSinPermiso
+                      : motivoNoGravado
+                        ? SALIDA_QUE_EMITE.noGravado
+                        : SALIDA_QUE_EMITE.perdida,
+                  })}
             >
               {(a) => (
                 <SimpleSelect
@@ -826,16 +951,18 @@ function Movimiento({
               )}
             </FormField>
           )}
-          {(motivoPerdida || faltanteDeConteo) && (
+          {(motivoPerdida || motivoNoGravado || faltanteDeConteo) && (
             <FormField
-              label="Evidencia"
+              label={motivoNoGravado ? DESTINO_DE_LA_SALIDA.etiqueta : "Evidencia"}
               required
               className="sm:col-span-2"
               error={campos["evidence"]}
               hint={
-                faltanteDeConteo
-                  ? "El conteo da un faltante: va a pérdidas. Referencia del acta, la foto o el informe que respalda la pérdida (RLIVA art. 14)."
-                  : "Referencia del acta, la foto o el informe que respalda la pérdida (RLIVA art. 14)."
+                motivoNoGravado
+                  ? DESTINO_DE_LA_SALIDA.ayuda
+                  : faltanteDeConteo
+                    ? "El conteo da un faltante: va a pérdidas. Referencia del acta, la foto o el informe que respalda la pérdida (RLIVA art. 14)."
+                    : "Referencia del acta, la foto o el informe que respalda la pérdida (RLIVA art. 14)."
               }
             >
               {(a) => (
@@ -904,7 +1031,11 @@ function Movimiento({
             variant="primary"
             disabled={!listo}
             onClick={() =>
-              operacion === "conteo" ? void calcularDiferencia() : setConfirmando(true)
+              operacion === "conteo"
+                ? void calcularDiferencia()
+                : operacion === "salida"
+                  ? void previsualizarSalida()
+                  : setConfirmando(true)
             }
           >
             {operacion === "conteo"
@@ -945,7 +1076,22 @@ function Movimiento({
           {operacion === "transferencia"
             ? ` · de ${nombreDeposito(form.warehouse_id)} a ${nombreDeposito(form.to_warehouse_id)}`
             : ` · ${nombreDeposito(form.warehouse_id)}`}
-          . {def.consecuencia}
+          .{" "}
+          {operacion === "salida" && previaSalida !== null
+            ? previaSalida.emits === "withdrawal_invoice"
+              ? avisoPrevioDeFacturaDeRetiro(
+                  previaSalida.series ?? "",
+                  mostrarImporte({
+                    amount: previaSalida.subtotal_amount ?? "0",
+                    currency: previaSalida.currency ?? "VES",
+                  }),
+                  mostrarImporte({
+                    amount: previaSalida.tax_amount ?? "0",
+                    currency: previaSalida.currency ?? "VES",
+                  }),
+                )
+              : SALIDA_NO_EMITE[previaSalida.why]
+            : def.consecuencia}
         </ConfirmDialog>
       </DialogContent>
     </Dialog>
@@ -1427,6 +1573,7 @@ function Recetas({
         >
           {mostrarCantidad(unidades)} × {compuesto?.label}. Se genera una salida POR INGREDIENTE,
           ninguna se puede editar ni borrar después; el compuesto no se descuenta a sí mismo.
+          <span className="mt-2 block font-medium">{CONSUMO_SUELTO_DE_RECETA}</span>
         </ConfirmDialog>
       </CardContent>
     </Card>

@@ -163,9 +163,10 @@ export function Empezar(): React.JSX.Element {
     { titulo: conRif ? "Tus facturas" : "Tus recibos", listo: fiscalListo, saltable: false },
   ];
   const todoListo = pasos.every((p) => p.listo);
-  // La puerta de salida abre cuando lo OBLIGATORIO está listo: productos es
-  // saltable a propósito (se puede vender describiendo la venta), y a pantalla
-  // completa un último paso «listo» sin botón de salida es una pared.
+  // La puerta de salida abre cuando lo OBLIGATORIO está listo: productos se puede dejar para
+  // después, y a pantalla completa un último paso «listo» sin botón de salida es una pared.
+  // Pero sin productos no se vende (toda línea de venta lleva un producto): la tarjeta final lo
+  // dice y ofrece cargarlos, en vez de prometer una venta «descrita» que no existe (B-01, ADR-0081).
   const listoParaVender = pasos.every((p) => p.listo || p.saltable);
 
   // P10 del registro premium: /empezar habla el MISMO idioma visual — pantalla
@@ -299,16 +300,26 @@ export function Empezar(): React.JSX.Element {
           <Card className="mt-6 border-success-soft-foreground/40">
             <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
               <div>
-                <p className="font-medium">¡Listo! Tu negocio ya puede vender.</p>
+                <p className="font-medium">
+                  {todoListo
+                    ? "¡Listo! Tu negocio ya puede vender."
+                    : "Ya casi: te falta un producto."}
+                </p>
                 <p className="text-[0.9rem] text-muted-foreground">
                   {todoListo
                     ? "Lo demás se va ajustando sobre la marcha."
-                    : "Puedes vender describiendo la venta y cargar tus productos después."}
+                    : "Lo demás está listo. Para vender necesitas al menos un producto con su precio."}
                 </p>
               </div>
-              <Button variant="primary" size="lg" onClick={() => void navigate("/vender")}>
-                <Store /> Ir a vender
-              </Button>
+              {todoListo ? (
+                <Button variant="primary" size="lg" onClick={() => void navigate("/vender")}>
+                  <Store /> Ir a vender
+                </Button>
+              ) : (
+                <Button variant="primary" size="lg" onClick={() => setPaso(0)}>
+                  <Plus /> Cargar mis productos
+                </Button>
+              )}
             </CardContent>
           </Card>
         )}
@@ -339,7 +350,7 @@ function PasoProductos({
           <p className="mt-1 text-[0.9rem] text-muted-foreground">
             {hayProductos
               ? `Ya tienes ${total} producto${total === 1 ? "" : "s"}. Puedes agregar más o seguir.`
-              : "Agrega tus productos con foto y precio, o tráelos todos de una vez desde Excel. Si prefieres, hazlo después: también se puede vender describiendo la venta."}
+              : "Agrega tus productos con foto y precio, o tráelos todos de una vez desde Excel. Si prefieres, sigue con los otros pasos y vuelve después: para vender necesitas al menos uno."}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

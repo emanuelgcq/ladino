@@ -34,13 +34,18 @@ export function Configuracion(): React.JSX.Element {
   const ajustes = useQuery({
     queryKey: ["ajustes", empresa.id],
     queryFn: () =>
-      llamar<{ allow_unidentified_sales: boolean; print_control_number: boolean }>(
-        "/v1/company-settings",
-      ),
+      llamar<{
+        allow_unidentified_sales: boolean;
+        print_control_number: boolean;
+        sells_wholesale: boolean;
+      }>("/v1/company-settings"),
   });
   const cambiar = useMutation({
     mutationFn: (
-      cambio: { allow_unidentified_sales: boolean } | { print_control_number: boolean },
+      cambio:
+        | { allow_unidentified_sales: boolean }
+        | { print_control_number: boolean }
+        | { sells_wholesale: boolean },
     ) =>
       llamar("/v1/company-settings", {
         method: "PUT",
@@ -160,6 +165,33 @@ export function Configuracion(): React.JSX.Element {
               <Skeleton className="h-5 w-9 shrink-0 rounded-full" aria-label="Cargando" />
             )}
           </div>
+          {/* C-06: el interruptor que no existía. Solo lo cambia quien gobierna los ajustes
+              (el servidor lo exige); apagado, la caja no enseña ni un control más. */}
+          {ajustes.data !== undefined && (
+            <div className="mt-4 flex items-center justify-between gap-4 border-t border-border pt-4">
+              <div>
+                <Label htmlFor="cfg-al-mayor">Vendo al mayor</Label>
+                <CardDescription>
+                  Activa en la caja la lista de precios al mayor y el cambio de lista en una venta.
+                  La factura que se hace desde administración no depende de este ajuste.
+                </CardDescription>
+                <CardDescription>
+                  Encendido, cada producto puede llevar su «Precio al mayor» (va a la lista
+                  «mayor»), a cada cliente se le puede asignar su lista en su ficha, y la caja dice
+                  con qué lista está cobrando. Cambiar la lista de una venta lo hace solo quien
+                  tiene ese permiso. Un producto sin precio en la lista que aplica no se vende por
+                  ella: la caja lo dice. Apagado, se vende como siempre.
+                </CardDescription>
+              </div>
+              <Switch
+                id="cfg-al-mayor"
+                checked={ajustes.data.sells_wholesale}
+                disabled={cambiar.isPending || !puede("company.settings.manage")}
+                onCheckedChange={(v: boolean) => cambiar.mutate({ sells_wholesale: v })}
+                aria-label="Vendo al mayor"
+              />
+            </div>
+          )}
         </CardContent>
       </Card>
 

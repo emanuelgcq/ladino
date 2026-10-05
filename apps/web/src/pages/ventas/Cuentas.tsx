@@ -9,6 +9,7 @@ import { PageHeader } from "../../components/PageHeader.js";
 import { DualMoney } from "../../components/DualMoney.js";
 import { FiscalStatusBadge } from "../../components/FiscalStatusBadge.js";
 import { EmptyState } from "../../components/EmptyState.js";
+import { Cartera } from "../../components/Cartera.js";
 import { EntityPicker, type EntityOption } from "../../components/forms.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card.js";
 import { Skeleton } from "../../ui/card.js";
@@ -152,10 +153,12 @@ export function Cuentas(): React.JSX.Element {
       </div>
 
       {cliente === null ? (
-        <EmptyState
-          icon={Banknote}
-          title="Elige un cliente"
-          description="Su estado de cuenta aparece aquí: saldo pendiente, aging y documentos."
+        // F-13: sin elegir a nadie, la CARTERA: todos los que deben, con totales y tramos. El
+        // nombre de cada fila lleva a su estado de cuenta. `?orden=vencido` llega ya ordenada.
+        <Cartera
+          tipo="receivables"
+          ordenInicial={params.get("orden") === "vencido" ? "overdue_desc" : null}
+          enlaceDeFila={(f) => (f["id"] ? `/admin/cuentas?cliente=${f["id"]}` : null)}
         />
       ) : statement.isError || aging.isError ? (
         // Un fallo no es un esqueleto eterno: se dice en voz de persona y se

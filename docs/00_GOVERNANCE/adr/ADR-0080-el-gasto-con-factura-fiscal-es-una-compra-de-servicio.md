@@ -65,3 +65,6 @@ Restricciones: las reglas fiscales de una compra (libro, crédito o costo según
 - `supabase/tests/026_journal_generator_test.sql`: el evento del preset es el del outbox.
 - `pnpm recorrido H`: el caso H-09 sobre el escenario del recorrido.
 - Revisión: cuando el asesor responda P-94 a P-96.
+
+## Nota de la ola 5 (2026-10-04) · la factura de un gasto ya tiene corrección (H-03, ADR-0083)
+La deuda de «Negativas» («un gasto con factura mal registrado no tiene corrección hoy») queda cerrada en lo que es la nota de crédito **del proveedor**: `POST /v1/supplier-credit-notes` admite la línea sin producto contra una línea de servicio de la factura de un gasto, con `expense.register`, su plantilla (`purchase_credit_note / ap.expense_credit_note_received`) y su evento. Revierte gasto y crédito fiscal y entra al libro de compras en negativo. Como la factura de un gasto nace pagada, el importe queda como saldo a favor con el proveedor (saldo negativo de la factura). Siguen abiertos: el ajuste propio del libro (P-102), la retención ya practicada y su comprobante, que la nota no toca (P-103), y que no existe anulación (decidido: no se construye). Verificación: `apps/api/test/e2e-gasto-con-factura.test.ts`, bloque «H-03».

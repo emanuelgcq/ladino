@@ -48,6 +48,10 @@ const TABLA_DE: Record<string, string> = {
   sales_debit_note: "documents",
   sales_receipt: "documents",
   purchase_invoice: "supplier_invoices",
+  // H-03: la nota de crédito del proveedor encolada también recupera su enlace. Sin él quedaba
+  // con su asiento posteado y `journal_entry_id` nulo: `accounting_coverage_gaps` la daba
+  // «missing» para siempre.
+  purchase_credit_note: "supplier_credit_notes",
   goods_receipt: "goods_receipts",
   landed_cost: "landed_costs",
   landed_cost_variance: "landed_costs",
@@ -90,6 +94,10 @@ function importesDe(ctx: Record<string, unknown>): AmountContext {
     "revaluation_to_variance",
     // J-02: el cierre de una caja en sobregiro. Sin esta clave, encolado perdería lo del dueño.
     "owner_contribution",
+    // H-03 (ADR-0083 §5): el saldo a favor de la nota de crédito de un proveedor. Sin esta
+    // clave, la nota encolada (empresa sin la cuenta de saldos a favor) se asentaba al
+    // reprocesarse SIN sus dos líneas: el exceso quedaba en cuentas por pagar en negativo.
+    "credit_surplus",
   ] as const;
   const salida: AmountContext = {};
   for (const k of claves) {

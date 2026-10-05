@@ -48,7 +48,12 @@ import { clasificacionPorPrefijo } from "./customers.js";
 import { registrarDigitoDudoso, validarRif, type DocumentoLeido } from "./documento-identidad.js";
 import { companyScope, type CompanyScopeError } from "./company-scope.js";
 import { tipoVigente } from "./tipo-contribuyente.js";
-import { receiveStockFor, revalueStock, revalorizar } from "./inventory.js";
+import {
+  issueStockBatchForSupplierReturn,
+  receiveStockFor,
+  revalueStock,
+  revalorizar,
+} from "./inventory.js";
 import { comprobanteAjeno, exigeSaldo, resolverCuentaEfectivo } from "./treasury.js";
 import { generateJournalFromDocument } from "./journal-generator.js";
 import { emitirComprobanteDeRetencion } from "./retention-vouchers.js";
@@ -130,6 +135,14 @@ function traducir(e: unknown): PurchaseError | null {
       code: "VALIDATION_FAILED",
       message:
         "Cada línea de una factura de mercancía lleva su producto. Una línea sin producto solo va en un gasto con factura fiscal.",
+    };
+  }
+  // H-03 (migración 20261005110000): la línea de nota sin producto que no corrige un servicio.
+  if (code === "LADH3") {
+    return {
+      code: "VALIDATION_FAILED",
+      message:
+        "Una línea de la nota sin producto solo corrige una línea de servicio de su propia factura.",
     };
   }
   if (code === "23505") {
@@ -2280,6 +2293,26 @@ export async function applyLandedCost(
   });
 }
 
+/**
+ * LO QUE UNA FACTURA DE PROVEEDOR TODAVÍA CARGA EN CUENTAS POR PAGAR, CALCULADO DESDE SUS FILAS
+ * (moneda funcional): el respaldo de `platform.settlement_ledger_open` cuando el mayor no se
+ * puede leer porque la factura o algo de lo que la salda espera en la cola contable. Cada pieza
+ * a SU tasa de registro: la factura por lo que cargó (menos lo retenido), cada pago por lo que
+ * canceló (`functional_amount − exchange_difference`) y cada nota vigente por lo que bajó.
+ *
+ * Un solo cálculo para los dos que cierran una factura —el pago (`registerSupplierPayment`) y la
+ * nota de crédito (`registerSupplierCreditNote`)—: es un fragmento SQL sobre el alias `i` de
+ * `public.supplier_invoices`. Si cambia aquí, cambia para los dos.
+ */
+const cuentaPorPagarCalculada = (sql: TransactionSql) => sql`
+  (round(i.functional_amount, 2) - coalesce(i.retention_total, 0)
+   - coalesce((select sum(p.functional_amount - p.exchange_difference)
+                 from public.supplier_payments p
+                where p.supplier_invoice_id = i.id), 0)
+   - coalesce((select sum(n.functional_amount)
+                 from public.supplier_credit_notes n
+                where n.supplier_invoice_id = i.id and n.status = 'posted'), 0))`;
+
 // ── Nota de crédito recibida ────────────────────────────────────────────────
 
 export async function registerSupplierCreditNote(
@@ -2287,7 +2320,16 @@ export async function registerSupplierCreditNote(
   input: RegisterSupplierCreditNoteRequest,
 ): Promise<
   Result<
-    { id: string; total_amount: string; balance: string; accounting_date: string | null },
+    {
+      id: string;
+      total_amount: string;
+      balance: string;
+      accounting_date: string | null;
+      is_fiscal: boolean;
+      document_incomplete: boolean;
+      retention_untouched: boolean;
+      left_credit_in_favor: boolean;
+    },
     PurchaseError
   >
 > {
@@ -2295,14 +2337,67 @@ export async function registerSupplierCreditNote(
   if (actor.kind !== "user") {
     return err({ code: "PERMISSION_REQUIRED", message: "Registrar exige un usuario real." });
   }
-  const ctx = await autorizar(sql, actor.userId, input.company_id, "purchase.credit_note.register");
+  // La nota de la factura de un GASTO la autoriza `expense.register`, el permiso de la operación
+  // que registró esa factura (ADR-0080 §5; RESPUESTA §2.8): quien lleva los gastos corrige los
+  // suyos sin permisos de compras. La de mercancía, `purchase.credit_note.register`. La clase de
+  // la factura se mira antes de autorizar SOLO para elegir el permiso; nada sale sin él.
+  const [clase] = await sql<{ gasto: boolean }[]>`
+    select expense_category is not null as gasto from public.supplier_invoices
+     where id = ${input.supplier_invoice_id} and company_id = ${input.company_id}`;
+  const ctx = await autorizar(
+    sql,
+    actor.userId,
+    input.company_id,
+    clase?.gasto === true ? "expense.register" : "purchase.credit_note.register",
+  );
   if (!ctx.ok) return ctx;
 
+  // La factura se BLOQUEA: dos notas a la vez sobre la misma factura medirían el mismo tope.
   const [factura] = await sql<
-    { supplier_id: string; status: string; tax_is_recoverable: boolean }[]
+    {
+      supplier_id: string;
+      status: string;
+      tax_is_recoverable: boolean;
+      fiscal_support: boolean;
+      expense_category: string | null;
+      transaction_currency: string;
+      total_amount: string;
+      ya_abonado: string;
+      retenida: boolean;
+      saldo: string | null;
+      mayor: string | null;
+      calculado: string | null;
+      fx_rate: string;
+      nota_futura: boolean;
+      nota_anterior: boolean;
+    }[]
   >`
-    select supplier_id, status, tax_is_recoverable from public.supplier_invoices
-     where id = ${input.supplier_invoice_id} and company_id = ${input.company_id}`;
+    select i.supplier_id, i.status, i.tax_is_recoverable, i.fiscal_support, i.expense_category,
+           -- AF5-11: las dos fechas, date contra date; «hoy» es el día de Caracas.
+           ${input.note_date}::date > platform.caracas_day(now()) as nota_futura,
+           ${input.note_date}::date < i.invoice_date as nota_anterior,
+           i.transaction_currency, i.total_amount::text as total_amount,
+           coalesce((select sum(n.total_amount) from public.supplier_credit_notes n
+                      where n.supplier_invoice_id = i.id and n.status = 'posted'), 0)::text
+             as ya_abonado,
+           exists (select 1 from public.supplier_retentions r
+                    where r.supplier_invoice_id = i.id and r.status <> 'cancelled') as retenida,
+           -- Lo que todavía se le debe de la factura según el AUXILIAR, en su moneda. De aquí
+           -- sale cuánto de la nota es saldo a favor. NO se lee del mayor a propósito: lo que
+           -- el mayor dice lo comprueba después supplier_credit_ledger_gap, y un invariante
+           -- que lee la misma cifra que lo alimenta nace verde por construcción.
+           platform.supplier_invoice_balance(i.company_id, i.id)::text as saldo,
+           -- Lo que el mayor le carga hoy en cuentas por pagar. SOLO para el diferencial de la
+           -- nota que CIERRA la factura (como el pago que cierra, ADR-0075 §4); el saldo a favor
+           -- no se calcula con esto.
+           platform.settlement_ledger_open(i.company_id, 'ap', i.id)::text as mayor,
+           -- Cuarta ronda: el respaldo cuando el mayor no se puede leer (alguna pieza espera en
+           -- la cola contable). El MISMO cálculo que usa el pago que cierra.
+           ${cuentaPorPagarCalculada(sql)}::text as calculado,
+           i.fx_rate::text as fx_rate
+      from public.supplier_invoices i
+     where i.id = ${input.supplier_invoice_id} and i.company_id = ${input.company_id}
+       for update of i`;
   if (!factura) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
   if (!["posted", "paid"].includes(factura.status)) {
     return err({
@@ -2310,11 +2405,117 @@ export async function registerSupplierCreditNote(
       message: "Solo se abona contra una factura asentada.",
     });
   }
-  if (input.supplier_control_number === undefined && input.supplier_document_ref === undefined) {
+  if (input.currency !== factura.transaction_currency) {
     return err({
       code: "VALIDATION_FAILED",
-      message: "La nota de crédito necesita número de control o referencia del documento origen.",
+      message: `La nota de crédito va en la moneda de su factura (${factura.transaction_currency}).`,
     });
+  }
+  // AF5-11: una nota fechada en el futuro caería en un período futuro, y una anterior a su
+  // factura corrige un documento que todavía no existía.
+  if (factura.nota_futura) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "La nota no puede tener fecha futura: escribe la fecha que trae el papel.",
+    });
+  }
+  if (factura.nota_anterior) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: "La nota no puede ser anterior a la factura que corrige: revisa la fecha del papel.",
+    });
+  }
+  // H-03 (ADR-0083): la factura de un GASTO (compra de servicio, ADR-0080) no pasó por el
+  // almacén; la de mercancía tiene que decir si la mercancía VOLVIÓ o si solo bajó el precio.
+  const esGasto = factura.expense_category !== null;
+  if (!esGasto && input.kind === undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "Di qué es la nota: una devolución de mercancía al proveedor o una rebaja de precio sin devolución.",
+    });
+  }
+  if (esGasto && input.kind === "devolucion") {
+    return err({
+      code: "VALIDATION_FAILED",
+      message:
+        "La factura de un gasto no tiene mercancía que devolver: la nota corrige su importe.",
+    });
+  }
+  // H-03 (RESPUESTA §3): la nota sigue a su factura. Sin soporte fiscal (ADR-0066 §2) no es una
+  // nota fiscal y no va al libro; con soporte, el número de control se pide (PA 00071 art. 23 →
+  // art. 13) pero su falta NO impide registrarla: reduce el crédito y queda «incompleta».
+  const esFiscal = factura.fiscal_support;
+  // AF5-14: SIN número de control ⇒ incompleta. Una referencia cualquiera no exime (la letra
+  // del dueño: «si viene sin control… queda marcada»); el esquema lo repite (20261005110700).
+  const incompleta = esFiscal && input.supplier_control_number === undefined;
+
+  const lineasFactura = await sql<
+    {
+      id: string;
+      product_id: string | null;
+      description: string;
+      quantity: string;
+      tasa_iva: string;
+      warehouse_id: string | null;
+      lot_id: string | null;
+      devuelto: string;
+      tracks_lots: boolean;
+    }[]
+  >`
+    select il.id, il.product_id, il.description, il.quantity::text as quantity,
+           il.tax_rate_snapshot::text as tasa_iva, gr.warehouse_id, rl.lot_id,
+           coalesce((select sum(cl.quantity)
+                       from public.supplier_credit_note_lines cl
+                       join public.supplier_credit_notes n on n.id = cl.supplier_credit_note_id
+                      where cl.supplier_invoice_line_id = il.id and n.status = 'posted'
+                        and n.correction_kind = 'devolucion'), 0)::text as devuelto,
+           coalesce((select p.tracks_lots from public.products p where p.id = il.product_id),
+                    false) as tracks_lots
+      from public.supplier_invoice_lines il
+      left join public.goods_receipt_lines rl on rl.id = il.goods_receipt_line_id
+      left join public.goods_receipts gr on gr.id = rl.goods_receipt_id
+     where il.supplier_invoice_id = ${input.supplier_invoice_id}
+       and il.company_id = ${input.company_id}
+     order by il.line_number`;
+  /** Cada línea de la nota, con la línea de la factura que corrige. */
+  const resueltas: (typeof lineasFactura)[number][] = [];
+  for (const l of input.lines) {
+    const candidatas =
+      l.supplier_invoice_line_id !== undefined
+        ? lineasFactura.filter((f) => f.id === l.supplier_invoice_line_id)
+        : lineasFactura.filter((f) => f.product_id !== null && f.product_id === l.product_id);
+    if (candidatas.length === 0) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: "Una línea de la nota no corresponde a ninguna línea de esa factura.",
+      });
+    }
+    if (candidatas.length > 1) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          "La factura trae ese producto en más de una línea: indica cuál corrige la nota (supplier_invoice_line_id).",
+      });
+    }
+    const linea = candidatas[0]!;
+    if (l.product_id !== undefined && linea.product_id !== l.product_id) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          "El producto de la línea de la nota no es el de la línea de la factura que corrige.",
+      });
+    }
+    // Una línea de la factura se abona UNA vez por nota: dos líneas de la nota sobre la misma
+    // pasarían cada una el tope de lo facturado (3 + 3 sobre 4). El esquema lo repite con un
+    // índice único.
+    if (resueltas.some((r) => r.id === linea.id)) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message: `La nota abona «${linea.description}» más de una vez: junta esa línea en una sola.`,
+      });
+    }
+    resueltas.push(linea);
   }
 
   const tasa = await tasaA(
@@ -2335,20 +2536,22 @@ export async function registerSupplierCreditNote(
     select platform.accounting_date_for(${input.company_id}, ${input.note_date}::date)::text as d`;
   const fechaContableNota = fechaNota!.d;
   try {
-    const nota = await sql.savepoint(async (sp) => {
+    const registrada = await sql.savepoint(async (sp) => {
       const [n] = await sp<{ id: string }[]>`
         insert into public.supplier_credit_notes
           (tenant_id, company_id, supplier_id, supplier_invoice_id, supplier_document_number,
            supplier_control_number, supplier_document_ref, note_date, status, posted_at, reason,
            transaction_currency, functional_currency, fx_rate, rate_source, rate_timestamp,
-           rounding_policy_id, accounting_date)
+           rounding_policy_id, accounting_date, correction_kind, is_fiscal,
+           document_incomplete)
         values (${ctx.value.tenantId}, ${input.company_id}, ${factura.supplier_id},
                 ${input.supplier_invoice_id}, ${input.supplier_document_number},
                 ${input.supplier_control_number ?? null}, ${input.supplier_document_ref ?? null},
                 ${input.note_date}::date, 'draft', null, ${input.reason}, ${input.currency},
                 ${ctx.value.functionalCurrency}, ${tasa.value.rate.toFixed()},
                 ${tasa.value.source}, now(), ${POLICY.id},
-                ${fechaContableNota === input.note_date ? null : fechaContableNota}::date)
+                ${fechaContableNota === input.note_date ? null : fechaContableNota}::date,
+                ${esGasto ? null : (input.kind ?? null)}, ${esFiscal}, ${incompleta})
         returning id`;
 
       const sub = parseDecimal("0");
@@ -2358,16 +2561,52 @@ export async function registerSupplierCreditNote(
       let impuesto = imp.value;
       let k = 0;
       for (const l of input.lines) {
+        const origen = resueltas[k]!;
         k += 1;
         const cantidad = parseDecimal(l.quantity);
         const precio = Money.of(l.unit_price, input.currency);
-        const impLinea = Money.of(l.tax_amount ?? "0", input.currency);
-        if (!cantidad.ok || !precio.ok || !impLinea.ok) throw new Error("importe no interpretable");
+        const tasaIva = parseDecimal(origen.tasa_iva);
+        if (!cantidad.ok || !precio.ok || !tasaIva.ok) throw new Error("importe no interpretable");
         const base = Money.of(
           precio.value.multiply(cantidad.value).amount.toDecimalPlaces(8, 4).toFixed(8),
           input.currency,
         );
         if (!base.ok) throw new Error("base fuera de rango");
+        // H-03: el IVA de la línea NO se teclea. Sale de la alícuota CONGELADA en la línea de la
+        // factura que se corrige; antes, la pantalla no lo mandaba y la nota tenía IVA 0 (no
+        // revertía el crédito fiscal). Si el cliente lo manda (el papel lo trae), se respeta.
+        // Sin soporte fiscal la factura no discriminó IVA: la nota tampoco.
+        const ivaCalculado = esFiscal ? toCents(base.value.amount.times(tasaIva.value)) : sub.value;
+        if (l.tax_amount !== undefined) {
+          const enviado = parseDecimal(l.tax_amount);
+          if (!enviado.ok) throw new Error("importe no interpretable");
+          if (!esFiscal && !enviado.value.isZero()) {
+            throw new Error(
+              "Esta compra se registró sin factura fiscal: su nota de crédito no lleva IVA.",
+            );
+          }
+          // El IVA de la nota lo calcula el SERVIDOR. Lo que mande el cliente solo se admite si
+          // coincide (un céntimo de holgura por el redondeo del papel): nunca manda sobre la
+          // alícuota congelada de la línea, tampoco en una línea exenta.
+          const dif = enviado.value.minus(ivaCalculado);
+          if ((dif.isNegative() ? dif.negated() : dif).greaterThan("0.01")) {
+            throw new Error(
+              `El IVA de «${origen.description}» no cuadra: con la alícuota de su factura son ${ivaCalculado.toFixed(2)} y la nota trae ${enviado.value.toFixed(2)}. Revisa la base o el papel del proveedor.`,
+            );
+          }
+        }
+        const impLinea = Money.of(ivaCalculado.toFixed(8), input.currency);
+        if (!impLinea.ok) throw new Error("importe no interpretable");
+        if (!esGasto && input.kind === "devolucion") {
+          const facturado = parseDecimal(origen.quantity);
+          const devuelto = parseDecimal(origen.devuelto);
+          if (!facturado.ok || !devuelto.ok) throw new Error("importe no interpretable");
+          if (devuelto.value.plus(cantidad.value).greaterThan(facturado.value)) {
+            throw new Error(
+              `No se puede devolver más de lo facturado: «${origen.description}» trae ${facturado.value.toFixed()} y ya se devolvieron ${devuelto.value.toFixed()}.`,
+            );
+          }
+        }
         const total = base.value.amount.plus(impLinea.value.amount);
         subtotal = subtotal.plus(base.value.amount);
         impuesto = impuesto.plus(impLinea.value.amount);
@@ -2382,8 +2621,6 @@ export async function registerSupplierCreditNote(
           tasa.value.rate,
           ctx.value.functionalCurrency,
         );
-        const [producto] = await sp<{ name: string }[]>`
-          select name from public.products where id = ${l.product_id}`;
         await sp`
           insert into public.supplier_credit_note_lines
             (tenant_id, company_id, supplier_credit_note_id, line_number,
@@ -2393,8 +2630,8 @@ export async function registerSupplierCreditNote(
              functional_amount, functional_currency, rate_source, rate_timestamp,
              rounding_policy_id)
           values (${ctx.value.tenantId}, ${input.company_id}, ${n!.id}, ${k},
-                  ${l.supplier_invoice_line_id ?? null}, ${l.product_id},
-                  ${l.description ?? producto?.name ?? "línea"}, ${l.quantity},
+                  ${origen.id}, ${origen.product_id},
+                  ${l.description ?? origen.description}, ${l.quantity},
                   ${precio.value.toAmountString()}, ${impLinea.value.toAmountString()},
                   ${base.value.toAmountString()}, ${total.toFixed(8)},
                   ${base.value.toAmountString()}, ${input.currency},
@@ -2402,16 +2639,70 @@ export async function registerSupplierCreditNote(
                   ${totalFunc.ok ? totalFunc.value.toAmountString() : total.toFixed(8)},
                   ${ctx.value.functionalCurrency}, ${tasa.value.source}, now(), ${POLICY.id})`;
       }
+      // EL TOPE: lo abonado a una factura no pasa de su total. Una nota mayor que su factura no
+      // corrige esa factura: es otro documento.
+      const totalFactura = parseDecimal(factura.total_amount);
+      const yaAbonado = parseDecimal(factura.ya_abonado);
+      if (!totalFactura.ok || !yaAbonado.ok) throw new Error("importe no interpretable");
+      if (yaAbonado.value.plus(subtotal).plus(impuesto).greaterThan(totalFactura.value)) {
+        throw new Error(
+          `La nota (${subtotal.plus(impuesto).toFixed(2)}) más lo ya abonado (${yaAbonado.value.toFixed(2)}) pasa del total de la factura (${totalFactura.value.toFixed(2)} ${input.currency}).`,
+        );
+      }
+      // EL SALDO A FAVOR (ADR-0083 §5): lo que la nota abona POR ENCIMA de lo que el mayor todavía
+      // le debía al proveedor por esta factura. Sobre una factura ya pagada es la nota entera. Se
+      // guarda al registrar y se asienta en SU cuenta (`supplier_credit_receivable`, un activo):
+      // la cuenta por pagar de la factura baja solo por lo que se debía y queda en cero.
+      const saldoAntes = parseDecimal(factura.saldo ?? "0");
+      const debia = saldoAntes.ok && saldoAntes.value.greaterThan(0) ? saldoAntes.value : sub.value;
+      const totalNota = subtotal.plus(impuesto);
+      const totalFuncional = toCents(
+        subtotal
+          .times(tasa.value.rate)
+          .toDecimalPlaces(8, 4)
+          .plus(impuesto.times(tasa.value.rate).toDecimalPlaces(8, 4)),
+      );
+      // En la moneda de la FACTURA: lo que la nota pasa de lo que se debía. Así una nota a otra
+      // tasa sobre una factura en divisa a medio pagar no llama «saldo a favor» a lo que es
+      // diferencia de cambio (esa la reconoce el pago que cierra, ADR-0075 §4).
+      const excede = totalNota.greaterThan(debia) ? totalNota.minus(debia) : sub.value;
+      const convertido = toCents(excede.times(tasa.value.rate));
+      const aFavor = excede.equals(totalNota)
+        ? totalFuncional
+        : convertido.greaterThan(totalFuncional)
+          ? totalFuncional
+          : convertido;
       await sp`
         update public.supplier_credit_notes
            set status = 'posted', posted_at = now(),
                subtotal_amount = ${subtotal.toFixed(8)}, tax_amount = ${impuesto.toFixed(8)},
                total_amount = ${subtotal.plus(impuesto).toFixed(8)},
                amount_transaction_currency = ${subtotal.plus(impuesto).toFixed(8)},
-               functional_amount = ${subtotal.plus(impuesto).times(tasa.value.rate).toDecimalPlaces(8, 4).toFixed(8)}
+               functional_amount = ${subtotal.plus(impuesto).times(tasa.value.rate).toDecimalPlaces(8, 4).toFixed(8)},
+               credit_in_favor_functional = ${aFavor.toFixed(8)},
+               -- Lo mismo en la moneda de la FACTURA: es lo que compara
+               -- supplier_credit_subledger_gaps contra el auxiliar recalculado (20261005110600).
+               credit_in_favor_transaction = ${excede.toFixed(8)}
          where id = ${n!.id}`;
-      return n!.id;
+      // LA NOTA QUE CIERRA (deja el saldo de la factura en cero) a otra tasa: lo que el mayor
+      // todavía cargaba en cuentas por pagar y lo que la nota le baja difieren por la tasa. Esa
+      // diferencia es DIFERENCIAL CAMBIARIO, igual que en el pago que cierra, y se reconoce
+      // aquí: la cuenta por pagar del documento queda en cero. Positivo = pérdida.
+      const cierra =
+        saldoAntes.ok && saldoAntes.value.greaterThan(0) && !totalNota.lessThan(saldoAntes.value);
+      // CON EL MAYOR SIN LEER (cuarta ronda). `settlement_ledger_open` calla si la factura, un
+      // pago u otra nota esperan en la cola contable —en la empresa sin contabilidad, siempre—.
+      // Antes el diferencial valía entonces 0, la nota se asentaba o se encolaba sin él, y al
+      // procesarse la cola quedaba un residuo PERMANENTE en cuentas por pagar. Ahora hace lo que
+      // el pago que cierra: sin mayor, lo que la factura todavía carga se calcula con las tasas
+      // de registro de sus piezas (`cuentaPorPagarCalculada`), que es lo que esos asientos
+      // llevarán al mayor cuando se procesen.
+      const mayor = parseDecimal(factura.mayor ?? factura.calculado ?? "");
+      const diferencial =
+        cierra && mayor.ok ? totalFuncional.minus(aFavor).minus(toCents(mayor.value)) : sub.value;
+      return { id: n!.id, aFavor, diferencial };
     });
+    const nota = registrada.id;
 
     // EL ASIENTO DE LA NOTA (ADR-0065 §1, migración 67). La nota devuelve mercancía: baja la
     // deuda con el proveedor y revierte lo que la factura cargó — inventario y crédito fiscal
@@ -2434,11 +2725,14 @@ export async function registerSupplierCreditNote(
     // redondeados por separado podrían diferir y descuadrar el asiento (misma regla que la
     // factura de compra).
     const totFunc = subFunc.value.plus(impFunc.value);
+    const eventoNota = esGasto ? "ap.expense_credit_note_received" : "ap.credit_note_received";
     const contable = await generateJournalFromDocument(sql, {
       tenantId: ctx.value.tenantId,
       companyId: input.company_id,
       sourceKind: "purchase_credit_note",
-      sourceEvent: "ap.credit_note_received",
+      // La nota de un GASTO revierte gasto, no inventario: su plantilla y su evento son propios,
+      // como los de su factura (ADR-0080 §3 y §4).
+      sourceEvent: eventoNota,
       sourceId: nota,
       postingDate: fechaContableNota,
       postedBy: actor.userId,
@@ -2448,12 +2742,250 @@ export async function registerSupplierCreditNote(
         subtotal: subFunc.value.toFixed(8),
         tax_amount: impFunc.value.toFixed(8),
         total: totFunc.toFixed(8),
+        // ADR-0083 §5: débito al saldo a favor y crédito a cuentas por pagar, por este importe.
+        credit_surplus: registrada.aFavor.toFixed(8),
+        exchange_difference: registrada.diferencial.toFixed(8),
       },
+      // AF-M03 (ADR-0075 §4): a la tasa de la factura no hay diferencial; lo que quede es redondeo.
+      ...(tasa.value.rate.equals(factura.fx_rate) ? { differenceIsRounding: true } : {}),
       conditions: { taxRecoverable: factura.tax_is_recoverable },
       backlink: { table: "supplier_credit_notes", id: nota },
     });
     if (!contable.ok) {
       return err({ code: "VALIDATION_FAILED", message: contable.error.message });
+    }
+
+    // EL KARDEX (H-03, ADR-0083 §2; ADR-0060). El asiento de arriba acredita `inventory_general`
+    // por la base de la nota (o por el total, si el IVA fue al costo). Antes el kardex no se
+    // enteraba y `inventory_ledger_gap` crecía por el importe de cada nota. Ahora:
+    //   · devolución → la mercancía SALE del depósito a su costo de kardex;
+    //   · rebaja     → se revaloriza a la baja lo que siga en existencia;
+    // y la diferencia entre lo que el asiento acreditó y lo que el kardex bajó —lo ya vendido,
+    // o un costo de kardex distinto del precio abonado— va a variación de costo de compras.
+    if (!esGasto) {
+      const cero = parseDecimal("0");
+      if (!cero.ok) return err({ code: "VALIDATION_FAILED", message: cero.error.message });
+      const acreditado = toCents(factura.tax_is_recoverable ? subFunc.value : totFunc);
+      let bajado = cero.value;
+      if (input.kind === "devolucion") {
+        const porDeposito = new Map<
+          string,
+          { product_id: string; quantity: string; lot_id?: string | null }[]
+        >();
+        for (let i = 0; i < input.lines.length; i += 1) {
+          const origen = resueltas[i]!;
+          // Con recepción MANDA el depósito de la recepción; el enviado solo vale para la línea
+          // que no viene de una (lo que dicen el contrato y ADR-0083).
+          const deposito = origen.warehouse_id ?? input.warehouse_id;
+          if (deposito === null || deposito === undefined || origen.product_id === null) {
+            return err({
+              code: "VALIDATION_FAILED",
+              message: `Di de qué depósito sale «${origen.description}»: su línea de factura no viene de una recepción.`,
+            });
+          }
+          // El LOTE lo dice la recepción o la persona, nunca FEFO: FEFO excluye lo vencido, y
+          // devolverle al proveedor la mercancía vencida es justo el caso.
+          const lote = origen.lot_id ?? input.lines[i]!.lot_id ?? null;
+          if (origen.tracks_lots && lote === null) {
+            return err({
+              code: "VALIDATION_FAILED",
+              message: `Di de qué lote sale «${origen.description}»: se lleva por lotes y su línea de factura no viene de una recepción.`,
+            });
+          }
+          // El lote que dice la PERSONA se comprueba antes de mover nada: que sea de ese
+          // producto y que esté en ese depósito. Sin esto la salida respondía «Recurso no
+          // encontrado», que no dice qué corregir.
+          if (origen.lot_id === null && lote !== null) {
+            const [elegido] = await sql<{ del_producto: boolean; en_deposito: boolean }[]>`
+              select l.product_id = ${origen.product_id} as del_producto,
+                     exists (select 1 from public.stock_balances b
+                              where b.company_id = l.company_id and b.warehouse_id = ${deposito}
+                                and b.product_id = l.product_id and b.lot_id = l.id) as en_deposito
+                from public.lots l
+               where l.id = ${lote} and l.company_id = ${input.company_id}`;
+            if (!elegido?.del_producto) {
+              return err({
+                code: "VALIDATION_FAILED",
+                message: `El lote elegido no es de «${origen.description}»: elige uno de los lotes de ese producto.`,
+              });
+            }
+            if (!elegido.en_deposito) {
+              return err({
+                code: "VALIDATION_FAILED",
+                message: `Ese lote de «${origen.description}» no está en el depósito elegido: cambia el depósito o el lote.`,
+              });
+            }
+          }
+          const lista = porDeposito.get(deposito) ?? [];
+          lista.push({
+            product_id: origen.product_id,
+            quantity: input.lines[i]!.quantity,
+            ...(lote === null ? {} : { lot_id: lote }),
+          });
+          porDeposito.set(deposito, lista);
+        }
+        for (const [deposito, lineas] of porDeposito) {
+          const salida = await issueStockBatchForSupplierReturn(uow, {
+            company_id: input.company_id,
+            warehouse_id: deposito,
+            lines: lineas,
+            note: `Devolución al proveedor · nota de crédito ${input.supplier_document_number}`,
+            sourceDocumentId: nota,
+          });
+          if (!salida.ok) {
+            if (salida.error.code === "NEGATIVE_STOCK") {
+              return err({
+                code: "NEGATIVE_STOCK",
+                message:
+                  "Ya no tienes esa mercancía para devolverla; si el proveedor te la abonó igual, regístrala como rebaja.",
+              });
+            }
+            if (salida.error.code === "PERMISSION_REQUIRED") {
+              return err({ code: "PERMISSION_REQUIRED", message: salida.error.message });
+            }
+            return err({ code: "VALIDATION_FAILED", message: salida.error.message });
+          }
+          for (const m of salida.value) {
+            const v = parseDecimal(m.functional_amount);
+            if (!v.ok) return err({ code: "VALIDATION_FAILED", message: v.error.message });
+            bajado = bajado.minus(v.value);
+          }
+        }
+      } else {
+        // LOS CANDADOS, ANTES DE REPARTIR Y EN ORDEN ESTABLE. El reparto de abajo recorre las
+        // posiciones por PRIORIDAD (la de la recepción primero), que no es un orden global: dos
+        // notas simultáneas sobre el mismo producto podían tomarlas cruzadas e interbloquearse.
+        // Aquí se toman todas las de los productos de la nota en un único orden (producto,
+        // depósito, lote); el reparto las vuelve a pedir ya dentro de la transacción.
+        //
+        // EL ORDEN LO PONE EL CÓDIGO (cuarta ronda). Antes iba en un `order by` dentro de una
+        // subconsulta, que SQL no obliga a respetar al recorrer el LATERAL, y solo tomaba las
+        // posiciones con existencia: una que estuviera en cero y recibiera mercancía antes del
+        // reparto se bloqueaba después, fuera de orden. Ahora: se leen las claves de TODAS las
+        // posiciones de esos productos (también las que están en cero), se ordenan aquí y se
+        // bloquean en una sentencia que las recorre por su ordinal, como `issueStockBatch`
+        // («claves ordenadas, una sentencia») y con su mismo orden dentro de un depósito.
+        const productosDeLaNota = [
+          ...new Set(resueltas.map((r) => r.product_id).filter((p): p is string => p !== null)),
+        ];
+        if (productosDeLaNota.length > 0) {
+          const claves = await sql<
+            { product_id: string; warehouse_id: string; lot_id: string | null }[]
+          >`
+            select b.product_id, b.warehouse_id, b.lot_id
+              from public.stock_balances b
+             where b.company_id = ${input.company_id}
+               and b.product_id = any(${productosDeLaNota}::uuid[])`;
+          const enOrden = claves
+            .map((c) => `${c.product_id}|${c.warehouse_id}|${c.lot_id ?? ""}`)
+            .sort()
+            .map((c) => c.split("|"));
+          if (enOrden.length > 0) {
+            await sql`
+              select p.quantity
+                from unnest(${enOrden.map((c) => c[0]!)}::uuid[],
+                            ${enOrden.map((c) => c[1]!)}::uuid[],
+                            ${enOrden.map((c) => (c[2] === "" ? null : c[2]!))}::uuid[])
+                       with ordinality as u(product_id, warehouse_id, lot_id, orden),
+                     lateral platform.lock_stock_position(${input.company_id}, u.warehouse_id,
+                                                          u.product_id, u.lot_id) p
+               order by u.orden`;
+          }
+        }
+        for (let i = 0; i < input.lines.length; i += 1) {
+          const origen = resueltas[i]!;
+          if (origen.product_id === null) continue;
+          const [linea] = await sql<{ sub: string; imp: string }[]>`
+            select line_subtotal_transaction::text as sub, tax_amount::text as imp
+              from public.supplier_credit_note_lines
+             where supplier_credit_note_id = ${nota} and line_number = ${i + 1}`;
+          const q = parseDecimal(input.lines[i]!.quantity);
+          const sub = parseDecimal(linea?.sub ?? "0");
+          const imp = parseDecimal(linea?.imp ?? "0");
+          if (!q.ok || !sub.ok || !imp.ok || q.value.isZero()) {
+            return err({
+              code: "VALIDATION_FAILED",
+              message: "Línea de la nota no interpretable.",
+            });
+          }
+          // DÓNDE ESTÁ LA MERCANCÍA HOY. La rebaja baja el costo de lo que QUEDE del producto en
+          // la empresa, esté donde esté: la posición de su recepción primero (depósito y lote),
+          // luego el depósito indicado, luego las demás de mayor a menor existencia. Antes solo
+          // miraba el depósito y el lote de la recepción: una línea sin recepción, un producto
+          // por lotes o mercancía trasladada mandaban TODA la rebaja a variación con la
+          // existencia delante. Lo que no quede en ninguna posición —lo ya vendido— sí es
+          // variación.
+          const posiciones = await sql<{ warehouse_id: string; lot_id: string | null }[]>`
+            select b.warehouse_id, b.lot_id
+              from public.stock_balances b
+             where b.company_id = ${input.company_id} and b.product_id = ${origen.product_id}
+               and b.quantity > 0
+             order by (b.warehouse_id = ${origen.warehouse_id}::uuid
+                       and b.lot_id is not distinct from ${origen.lot_id}::uuid) desc nulls last,
+                      (b.warehouse_id = ${input.warehouse_id ?? null}::uuid) desc nulls last,
+                      b.quantity desc, b.warehouse_id, b.lot_id`;
+          const costoUnidad = (factura.tax_is_recoverable ? sub.value : sub.value.plus(imp.value))
+            .times(tasa.value.rate)
+            .dividedBy(q.value);
+          let porRepartir = q.value;
+          for (const p of posiciones) {
+            if (!porRepartir.greaterThan(0)) break;
+            // La posición se lee CON SU CANDADO: una venta a la vez no la mueve entre la lectura
+            // y la revalorización.
+            const [pos] = await sql<{ q: string; v: string }[]>`
+              select quantity::text as q, value::text as v
+                from platform.lock_stock_position(${input.company_id}, ${p.warehouse_id},
+                                                  ${origen.product_id}, ${p.lot_id})`;
+            const enStock = parseDecimal(pos?.q ?? "0");
+            const valor = parseDecimal(pos?.v ?? "0");
+            if (!enStock.ok || !valor.ok) {
+              return err({ code: "VALIDATION_FAILED", message: "Existencia no interpretable." });
+            }
+            if (!enStock.value.greaterThan(0)) continue;
+            const toma = enStock.value.greaterThan(porRepartir) ? porRepartir : enStock.value;
+            porRepartir = porRepartir.minus(toma);
+            // Al céntimo (ADR-0075 §7), y nunca más de lo que la posición vale: una rebaja no
+            // deja existencias con valor negativo.
+            let inv = toCents(costoUnidad.times(toma));
+            const tope = valor.value.toDecimalPlaces(2, 1);
+            if (inv.greaterThan(tope)) inv = tope.isNegative() ? cero.value : tope;
+            if (inv.isZero()) continue;
+            const mov = await revalorizar(sql, ctx.value.tenantId, {
+              company_id: input.company_id,
+              warehouse_id: p.warehouse_id,
+              product_id: origen.product_id,
+              lot_id: p.lot_id,
+              amount: cero.value.minus(inv).toFixed(8),
+              currency: ctx.value.functionalCurrency,
+              reason: `Rebaja de precio · nota de crédito ${input.supplier_document_number} del proveedor`,
+              sourceDocumentId: nota,
+            });
+            if (!mov.ok) return err({ code: "VALIDATION_FAILED", message: mov.error.message });
+            bajado = bajado.plus(inv);
+          }
+        }
+      }
+      // Lo que el asiento acreditó a inventario y el kardex NO bajó (o bajó de más).
+      const aVariacion = acreditado.minus(bajado);
+      if (!aVariacion.isZero()) {
+        const ajuste = await generateJournalFromDocument(sql, {
+          tenantId: ctx.value.tenantId,
+          companyId: input.company_id,
+          sourceKind: "purchase_revaluation",
+          sourceEvent: "ap.credit_note_received",
+          sourceId: nota,
+          postingDate: fechaContableNota,
+          postedBy: actor.userId,
+          description: `Nota de crédito ${input.supplier_document_number}: diferencia entre lo abonado y el kardex`,
+          functionalCurrency: ctx.value.functionalCurrency,
+          amounts: {
+            revaluation_to_inventory: aVariacion.toFixed(8),
+            revaluation_to_variance: cero.value.minus(aVariacion).toFixed(8),
+            functional_amount: "0",
+          },
+        });
+        if (!ajuste.ok) return err({ code: "VALIDATION_FAILED", message: ajuste.error.message });
+      }
     }
 
     const [total] = await sql<{ t: string }[]>`
@@ -2467,13 +2999,19 @@ export async function registerSupplierCreditNote(
       input.company_id,
       "supplier_credit_note",
       nota,
-      "ap.credit_note_received",
+      eventoNota,
       {
         supplier_invoice_id: input.supplier_invoice_id,
         supplier_document_number: input.supplier_document_number,
         total_amount: total?.t ?? "0",
         balance_after: saldo?.s ?? "0",
         journal_entry_id: contable.value.kind === "posted" ? contable.value.entryId : null,
+        kind: esGasto ? null : (input.kind ?? null),
+        is_fiscal: esFiscal,
+        document_incomplete: incompleta,
+        // VALIDAR-SENIAT (P-103): la nota NO ajusta la retención practicada ni su comprobante.
+        retention_untouched: factura.retenida,
+        credit_in_favor_functional: registrada.aFavor.toFixed(8),
       },
     );
     return ok({
@@ -2482,8 +3020,22 @@ export async function registerSupplierCreditNote(
       balance: saldo?.s ?? "0",
       // K-04: la fecha en que se registró si la suya cae en un período cerrado; si no, null.
       accounting_date: fechaContableNota === input.note_date ? null : fechaContableNota,
+      is_fiscal: esFiscal,
+      document_incomplete: incompleta,
+      retention_untouched: factura.retenida,
+      left_credit_in_favor: !registrada.aFavor.isZero(),
     });
   } catch (e) {
+    // LAD46 (trigger del kardex): el lote que sale está VENCIDO y quien registra no tiene el
+    // permiso de despacharlo. Devolverle al proveedor lo vencido es justo el caso: el mensaje
+    // dice qué permiso falta, no un «no tienes permiso» sin nombre.
+    if ((e as { code?: string }).code === "LAD46") {
+      return err({
+        code: "PERMISSION_REQUIRED",
+        message:
+          "Ese lote está vencido: sacarlo del depósito para devolverlo al proveedor exige el permiso de despachar mercancía vencida (inventory.expired). Pídeselo a quien administra los permisos.",
+      });
+    }
     const conocido = traducir(e);
     if (conocido) return err(conocido);
     if (e instanceof Error && !("code" in e)) {
@@ -2609,13 +3161,7 @@ export async function registerSupplierPayment(
              ${input.supplier_invoice_id})::text as s,
            platform.settlement_ledger_open(
              ${input.company_id}, 'ap', ${input.supplier_invoice_id})::text as mayor,
-           (select round(i.functional_amount, 2) - coalesce(i.retention_total, 0)
-                   - coalesce((select sum(p.functional_amount - p.exchange_difference)
-                                 from public.supplier_payments p
-                                where p.supplier_invoice_id = i.id), 0)
-                   - coalesce((select sum(n.functional_amount)
-                                 from public.supplier_credit_notes n
-                                where n.supplier_invoice_id = i.id and n.status = 'posted'), 0)
+           (select ${cuentaPorPagarCalculada(sql)}
               from public.supplier_invoices i
              where i.id = ${input.supplier_invoice_id})::text as calculado,
            (select count(*)::int from public.supplier_invoice_lines l
@@ -2713,6 +3259,16 @@ export async function registerSupplierPayment(
   const holgura = parseDecimal(
     cruzado && input.currency !== monedaFactura ? toleranciaCaja.toFixed() : "0",
   );
+  // H-03 (ADR-0083 §5): una factura `posted` con saldo cero o a favor la cerró una nota de
+  // crédito. Pagarla movería el auxiliar por debajo de lo que sus notas declararon a favor.
+  if (saldo.ok && !saldo.value.greaterThan(0)) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: saldo.value.isZero()
+        ? "Esta factura ya no debe nada: la cerró una nota de crédito del proveedor."
+        : `Esta factura ya no debe nada: tiene ${saldo.value.negated().toFixed(2)} ${monedaFactura} a tu favor con el proveedor.`,
+    });
+  }
   if (saldo.ok && holgura.ok && saldado.minus(saldo.value).greaterThan(holgura.value)) {
     return err({
       code: "VALIDATION_FAILED",

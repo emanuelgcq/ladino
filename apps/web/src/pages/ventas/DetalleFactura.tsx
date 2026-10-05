@@ -47,8 +47,109 @@ import { errorDePersona } from "../../lib.js";
 import { conLlaveDeIntento, intentoAnteriorPudoQuedar } from "../../llave-intento.js";
 import { RevisaIntentoAnterior } from "../../components/RevisaIntentoAnterior.js";
 import { fechaLocal } from "../../fechas.js";
-import { ANULACION } from "../../components/capa-fiscal/textos.js";
+import {
+  ANULACION,
+  CORREGIR_RETIRO,
+  PEDIDO_COMPUESTO_NO_RESERVA,
+  TIPOS_FISCALES,
+} from "../../components/capa-fiscal/textos.js";
 import { ReversarCobro } from "../../components/ReversarCobro.js";
+
+/**
+ * «CORREGIR ESTE RETIRO» (ADR-0082, AF3-06). Un solo botón y dos caminos, y cuál toca lo decide el
+ * SERVIDOR (`annulment.allowed`): si la factura de retiro todavía se puede anular (mismo día,
+ * caja abierta, papel en la mano) se anula; si no, la nota de crédito que deja sin efecto el
+ * retiro entero. Lo que va a pasar se dice antes de confirmar; la pantalla no calcula nada.
+ */
+function CorregirRetiro({
+  documentoId,
+  numero,
+  empresaId,
+  seAnula,
+  llamar,
+  onHecho,
+}: {
+  documentoId: string;
+  numero: string;
+  empresaId: string;
+  seAnula: boolean;
+  llamar: <T>(ruta: string, init?: RequestInit) => Promise<T>;
+  onHecho: () => void;
+}): React.JSX.Element {
+  const toast = useToast();
+  const [abierto, setAbierto] = useState(false);
+  const [motivo, setMotivo] = useState("");
+  const [papel, setPapel] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const abrir = (v: boolean): void => {
+    setPapel(false);
+    setError(null);
+    setAbierto(v);
+  };
+  async function corregir(): Promise<void> {
+    setError(null);
+    try {
+      await llamar(
+        seAnula
+          ? `/v1/invoices/${documentoId}/annul`
+          : `/v1/invoices/${documentoId}/withdrawal-credit-note`,
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": crypto.randomUUID() },
+          body: JSON.stringify({
+            company_id: empresaId,
+            reason: motivo.trim(),
+            ...(seAnula ? { originals_in_hand: papel } : {}),
+          }),
+        },
+      );
+      toast.success(CORREGIR_RETIRO.hecho);
+      setAbierto(false);
+      onHecho();
+    } catch (e) {
+      setError(e);
+      toast.error("No se pudo corregir el retiro", errorDePersona(e));
+    }
+  }
+  return (
+    <>
+      <Button variant="ghost" onClick={() => abrir(true)}>
+        <Undo2 /> {CORREGIR_RETIRO.boton}
+      </Button>
+      <ConfirmDialog
+        open={abierto}
+        onOpenChange={abrir}
+        title={`${CORREGIR_RETIRO.boton}: factura ${numero}`}
+        confirmLabel={seAnula ? "Anular la factura de retiro" : "Emitir la nota de crédito"}
+        destructive
+        confirmDisabled={motivo.trim().length < 3 || (seAnula && !papel)}
+        onConfirm={corregir}
+      >
+        <div className="space-y-2">
+          <p>{seAnula ? CORREGIR_RETIRO.anular : CORREGIR_RETIRO.nota}</p>
+          {seAnula && (
+            <label className="flex items-start gap-2 text-[0.9rem]">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={papel}
+                onChange={(e) => setPapel(e.target.checked)}
+              />
+              <span>{ANULACION.papelEnMano}</span>
+            </label>
+          )}
+          <Textarea
+            aria-label={CORREGIR_RETIRO.motivo}
+            placeholder={`${CORREGIR_RETIRO.motivo} (obligatorio, mínimo 3 caracteres)…`}
+            value={motivo}
+            onChange={(e) => setMotivo(e.target.value)}
+          />
+          {error !== null && <MensajeError error={error} />}
+        </div>
+      </ConfirmDialog>
+    </>
+  );
+}
 
 /** El `source_kind` con el que cada tipo de documento genera su asiento. */
 const SOURCE_KIND: Record<string, string> = {
@@ -316,9 +417,9 @@ export function DetalleFactura(): React.JSX.Element {
   /** Por qué «Anular» no está, en palabras del servidor: se dice, no se esconde (G-14). */
   const porQueNoSeAnula = annulment != null && !annulment.allowed ? annulment.message : null;
   const nombreDoc = doc.kind === "receipt" ? "recibo" : "factura";
-  // Solo la factura, la NC y la ND son fiscales: la cotización y el pedido imprimen «PDF» a secas (H2).
-  const esFiscal =
-    doc.kind === "invoice" || doc.kind === "credit_note" || doc.kind === "debit_note";
+  // Solo la factura, la NC y la ND —y la factura de retiro y su nota (ADR-0082)— son fiscales:
+  // la cotización y el pedido imprimen «PDF» a secas (H2).
+  const esFiscal = TIPOS_FISCALES.includes(doc.kind);
 
   /**
    * Los destinos del PDF (ADR-0071 §4): sin destino, la COPIA DE CORTESÍA (lo que se descarga o
@@ -384,6 +485,21 @@ export function DetalleFactura(): React.JSX.Element {
                 <Ban /> Anular
               </Button>
             )}
+            {/* ADR-0082 (AF3-06): un retiro facturado por error se corrige desde aquí. Si el
+                servidor deja anular (mismo día, papel en la mano), se anula; si no, la nota de
+                crédito que deja sin efecto el retiro entero. */}
+            {doc.kind === "withdrawal_invoice" &&
+              doc.status === "issued" &&
+              puede("sales.invoice.annul") && (
+                <CorregirRetiro
+                  documentoId={doc.id}
+                  numero={numeroDe(doc)}
+                  empresaId={empresa.id}
+                  seAnula={annulment?.allowed === true}
+                  llamar={llamar}
+                  onHecho={invalidarTrasCambio}
+                />
+              )}
             {doc.document_number !== null && (
               <>
                 <Button variant="ghost" onClick={() => void abrirPdf("cortesia")}>
@@ -771,7 +887,10 @@ export function DetalleFactura(): React.JSX.Element {
                 >
                   {/* null = documento en divisa sin tasa de hoy: debe, y se dice (una anulada o
                       un borrador llegan con «0»). */}
-                  {textoDeDeuda(balance, doc.functional_currency)}
+                  {/* ADR-0082: la factura de retiro y su nota no cargan cartera. */}
+                  {doc.kind === "withdrawal_invoice" || doc.kind === "withdrawal_credit_note"
+                    ? "Sin cuenta por cobrar"
+                    : textoDeDeuda(balance, doc.functional_currency)}
                 </span>
               </Fila>
             </CardContent>
@@ -918,6 +1037,7 @@ export function DetalleFactura(): React.JSX.Element {
             Confirmar <strong>reserva</strong> las cantidades en el depósito elegido: el disponible
             baja sin que la mercancía se mueva. La factura, cuando se emita, descargará de verdad.
           </p>
+          <p className="text-[0.85rem] text-muted-foreground">{PEDIDO_COMPUESTO_NO_RESERVA}</p>
           {almacenPedido === null && (
             <p className="text-[0.85rem] text-warning-soft-foreground">
               Elige el depósito para poder confirmar.

@@ -935,6 +935,37 @@ moneda, 2026-10-03):
 - **P-20** (RLIVA art. 51): ¿el diferencial cambiario al cobrar exige nota de débito o de crédito
   con IVA?
 - **P-76** (RLIVA art. 31): el retiro de inventario exige factura; se rehace en la ola 5.
+  - **Ola 5 (2026-10-04, ADR-0082, migraciones 20261005100000 en adelante) — estado de la familia
+    «el retiro se factura».** Siguen siendo preguntas para el asesor; lo que cambió es lo construido:
+    - **P-76 · Aplicada, pendiente de validar.** El retiro gravado emite FACTURA de retiro con
+      número de control del talonario, a nombre de la propia empresa, y va al libro de ventas.
+      *Pregunta que sigue abierta:* ¿la factura por retiro (RLIVA art. 31) se emite a nombre y RIF
+      del propio contribuyente, y basta su registro en el libro como una factura más de la serie,
+      o la «columna especial» exige un renglón o un formato distinto? ¿Lleva alguna leyenda
+      obligatoria? ¿Cómo se corrige una emitida por error después del día (nota de crédito a sí
+      mismo)? — construido en la segunda ronda (AF3-06, migración 20261005100500): una nota de
+      crédito TOTAL a nombre del propio contribuyente, con control del talonario de notas de
+      crédito, que resta en el libro y en la declaración del período en que se emite y devuelve
+      la mercancía al inventario. *Pregunta:* ¿es correcto que reste en el período de la nota
+      (y no que se rectifique el del retiro)? ¿Puede ser parcial?
+    - **P-75 · Aplicada en parte.** La base es el precio de venta de la lista principal y un precio
+      ausente o cero RECHAZA el retiro (AF3-05). *Abierta:* el piso «no menor al de mercado»
+      (RLIVA art. 43): ¿contra qué se compara y quién lo certifica?
+    - **P-82 · Aplicada con código provisional (segunda ronda, migración 20261005100400).** «Uso en
+      el negocio» va a gasto de operación; «pasa a activo fijo» e «incorporado a un inmueble» van
+      a la cuenta provisional 1.2.01 «Propiedad, planta y equipo» (papel `fixed_assets`), bajo
+      una rama nueva 1.2 «Activo no circulante». *Para el contador:* ¿son esos el código y el
+      nombre? ¿El bien incorporado a un inmueble va a la misma cuenta que el activo fijo mueble?
+      (El texto completo y sus preguntas están en la ficha de P-82, más abajo.)
+    - **P-81 · Abierta, sin cambio de conducta.** El faltante SIN evidencia sigue rechazado. El
+      camino si el asesor lo confirma: facturarlo como retiro (art. 31) con la base del RLIVA
+      art. 13 —costo más el porcentaje de utilidad bruta del último balance—. *Pregunta:* ¿de dónde
+      sale ese porcentaje en una empresa sin balance cerrado, y quién lo carga?
+    - **P-77 · Abierta, sin construir.** ¿La merma, la rotura y el vencido JUSTIFICADOS van al
+      libro de ventas como no gravados (RLIVA art. 14)? ¿Aplica el aviso de tres días a la
+      Administración? Solo se endureció la evidencia: al menos diez caracteres y dos palabras.
+    - **Nueva, dentro de P-76:** un contribuyente FORMAL no puede retirar un producto gravado (la
+      misma regla que le impide venderlo, LIVA art. 8). ¿Es correcto, o su retiro sale sin débito?
 
 1. **P-3** (arrastre combinado vs. separado) — migración sobre tabla con historia.
 2. **P-4** y **P-25** (prorrata: método y denominador) — cambian cifras ya generadas.
@@ -1009,19 +1040,30 @@ cómo se reparte entre sus hijas; se corrige con un asiento manual entre subcuen
   AF3-05, 2026-10-03):** RLIVA art. 43 (reproducción): la base del retiro es el precio de venta
   asignado según documentos y registros, nunca inferior al de mercado. Respalda la lista detal;
   falta confirmar el piso de mercado.
-- **P-76 · La Nota de retiro como documento interno (VALIDAR-SENIAT; PA 00071, PA 102).**
-  **Aplicada:** la Nota de retiro lleva correlativo propio por empresa (serie «NR»), **no consume
-  número de control de la imprenta** y va al libro de ventas como venta a la propia empresa (RIF
-  de la empresa como adquirente). En una empresa sin RIF no se emite: solo la salida de kardex y el
-  gasto. **Pregunta exacta:** «El RLIVA art. 31 manda emitir factura por el retiro y registrarla en
-  la columna especial del Libro de Ventas. ¿Se emite sobre forma libre con número de control a
-  nombre del propio contribuyente? ¿Qué es hoy la "columna especial"?» **Dónde se toca:**
-  `public.inventory_withdrawal_notes` y `platform.sales_book`. **Ampliada (auditoría fiscal de la
-  ola 3, AF3-01, 2026-10-03):** RLIVA art. 31 (reproducción): factura obligatoria. Manda la norma
-  sobre la decisión 2 de ADR-0078: se rehace en la ola 5. **Decisión (2026-10-03):** manda la norma
-  (RESPUESTA §0: si un texto normativo vigente contradice una decisión, manda la norma). La Nota de
-  retiro interna se rehace como FACTURA con número de control y columna especial del Libro de
-  Ventas en la ola 5; hasta entonces los retiros no se liberan en producción.
+- **P-76 · La factura de retiro (VALIDAR-SENIAT; RLIVA art. 31, PA 00071 arts. 13, 22-23 y 35).**
+  **Aplicada, pendiente de validar (ola 5, ADR-0082, migraciones 20261005100000 en adelante):** el
+  retiro gravado (consumo propio, regalo, donación, muestra) emite una FACTURA con el correlativo
+  de la serie de facturas y número de control del talonario, a nombre y RIF de la propia empresa,
+  sin cuenta por cobrar, fechada el día en que se registra, y va al libro de ventas como una
+  factura más. Se corrige el mismo día por anulación y después con una nota de crédito TOTAL que
+  resta en el período en que se emite. En una empresa sin RIF no se emite nada. **La «columna
+  especial» del Libro de Ventas no está construida.** **Preguntas exactas:** (1) «¿La factura por
+  retiro se emite a nombre y RIF del propio contribuyente?» (2) «¿Qué es hoy la "columna
+  especial" del Libro de Ventas: un renglón marcado, una columna aparte o un resumen?» (3) «¿Lleva
+  alguna leyenda obligatoria? Hoy imprime "Factura por retiro de inventario" y el motivo.»
+  (4) «¿Se admite la nota de crédito a nombre del propio contribuyente para dejar sin efecto un
+  retiro facturado por error? ¿Puede ser parcial?» (5) «¿La factura debe llevar la fecha del día
+  en que se registra, o puede llevar la del día del retiro si es anterior (RLIVA art. 57,
+  continuidad de número y fecha)?» **Respondido en parte (auditor fiscal, 2026-10-04):** LIVA
+  art. 36 (versión G.O. 38.263; numeración 2020 sin cotejar): lo devuelto, anulado o rescindido se
+  deduce de los débitos del período en que ocurre, si el débito se computó en ese período o en uno
+  anterior; respalda restar en el período de la nota. **Histórico:** hasta la ola 5 se emitía una
+  «Nota de retiro» interna (serie NR, sin control; ADR-0078; la norma mandó sobre esa decisión:
+  AF3-01); las ya emitidas siguen en el libro como se emitieron. **Quién puede (AF5-02):** el
+  retiro gravado exige el permiso de mover inventario y el de emitir facturas; no hay otro
+  mecanismo que lo impida: liberar la emisión fiscal productiva sigue siendo decisión del dueño
+  con el asesor, como para toda factura. **Dónde se toca:** `emitirFacturaDeRetiro` y
+  `creditWithdrawalInvoice` (`packages/domain/src/sales.ts`), `platform.sales_book`.
 - **P-77 · Las cuentas de las salidas (VALIDAR-CONTABLE; RLIVA art. 14).** **Aplicada:** merma,
   rotura, vencido y faltante justificado → 5.1.08 «Pérdidas por mermas y faltantes de
   inventario»; retiros → 5.1.09 «Retiros de inventario (uso propio, obsequios, donaciones y
@@ -1043,7 +1085,11 @@ cómo se reparte entre sus hijas; se corrige con un asiento manual entre subcuen
   cuenta en el denominador de la prorrata. **Pregunta exacta:** «¿El retiro de bienes exentos o
   exonerados (LIVA art. 4.3) entra en el denominador de la prorrata del art. 34, o solo los
   retiros gravados?» **Dónde se toca:** la rama de las notas en `platform.recompute_iva_period`
-  (20261003110000).
+  (20261003110000). **Ampliada (auditoría fiscal de la ola 5, AF5-06, 2026-10-04):** desde
+  ADR-0082 el retiro de un bien exento con motivo de retiro emite factura igual, sin IVA y con
+  «(E)» (lectura literal del RLIVA art. 31, que manda facturar «el retiro» sin distinguir).
+  **Pregunta adicional:** «¿El retiro de un bien exento exige factura (RLIVA art. 31) aunque no
+  cause débito?»
 
 
 ## El mayor al céntimo (ADR-0075 §7, migración 20261003140000, 2026-10-03)
@@ -1080,11 +1126,23 @@ cómo se reparte entre sus hijas; se corrige con un asiento manual entre subcuen
   «El faltante detectado en un conteo sin la documentación del art. 14 RLIVA: ¿se grava como retiro
   al costo más el porcentaje de utilidad bruta, imputado al período anterior, y con qué documento?»
   **Dónde se toca:** `countStock` (inventory.ts), `CountStockRequest`, plantilla `stock.counted`.
-- **P-82 · AF3-03 · Uso en el giro y traslado al activo fijo (VALIDAR-TRIBUTARIO; LIVA art. 4.3 in
-  fine).** **Aplicada:** no existen como motivo; «consumo propio» siempre causa débito. **Pregunta
-  exacta:** «¿Qué soporte exige el uso de mercancía en el giro del negocio y el traslado al activo
-  fijo para que no sean retiro gravado? ¿Se revierte el crédito fiscal?» **Dónde se toca:**
-  `ExitReason`, CHECK `inventory_moves_exit_reason_chk`.
+- **P-82 · AF3-03 · Uso en el giro, traslado al activo fijo e incorporación a un inmueble
+  (VALIDAR-TRIBUTARIO y VALIDAR-CONTABLE; LIVA art. 4 num. 3 in fine).** **Aplicada con código
+  provisional (ola 5, migración 20261005100400):** existen tres motivos de salida —«uso en el
+  negocio», «pasa a activo fijo», «construcción o reparación de un inmueble del negocio»— que
+  salen del kardex sin débito fiscal y sin factura; el primero va a gasto de operación y los otros
+  dos a la cuenta provisional 1.2.01 «Propiedad, planta y equipo» (papel `fixed_assets`). Se les
+  exige una nota de destino (AF5-07), no otro soporte, y no se toca el crédito fiscal de su
+  compra. Norma leída (Justia, versión G.O. 38.263, 2026-10-04): no es hecho imponible el bien
+  destinado a usarse o consumirse en el objeto, giro o actividad del negocio, a trasladarse al
+  activo fijo, o a incorporarse **a la construcción o reparación** de un inmueble destinado al
+  giro. **Preguntas exactas:** (1) «¿Qué soporte exige cada uno de esos tres destinos para no ser
+  retiro gravado?» (2) «¿Se mantiene, se prorratea o se revierte el crédito fiscal de la compra de
+  ese bien?» (3) «"Incorporado a un inmueble" ¿cubre solo construcción o reparación, como dice el
+  texto?» (4) Al contador: «¿son 1.2.01 y su nombre los correctos, y el bien incorporado a un
+  inmueble va a la misma cuenta que el activo fijo mueble?» **Dónde se toca:** `issueStock`
+  (`packages/domain/src/inventory.ts`), `USO_NO_GRAVADO_REASONS`, plantillas
+  `stock.used_in_business` y `stock.capitalized`.
 
 ## Moneda y diferencial (ADR-0075 §1-4, migración 20261003170000, 2026-10-03)
 
@@ -1269,3 +1327,86 @@ No hay cambio de tasa en ninguno de los dos casos: factura y pago son del mismo 
 **Pregunta exacta:** «Una factura de servicio registrada con un error (base, alícuota, proveedor) antes de declarar el período: ¿se corrige en el libro de compras con un ajuste propio, o solo con la nota de crédito del proveedor? Si ya se emitió el comprobante de retención, ¿cómo se corrige?»
 
 **Dónde se toca:** ola 5, familia «NC de proveedor» (H-03).
+
+**Respondido en parte por la construcción (ola 5, H-03, ADR-0083; 2026-10-04):** la factura de un gasto ya se corrige con la nota de crédito que emite el proveedor (`POST /v1/supplier-credit-notes` contra sus líneas de servicio): revierte gasto y crédito fiscal y entra al libro de compras en negativo, en el período de la nota. Siguen abiertas las dos mitades de la pregunta: si cabe además un ajuste propio en el libro (no se construyó) y qué pasa con el comprobante de retención ya emitido (P-103).
+
+## P-103 · H-03 · La nota de crédito de un proveedor sobre una factura a la que ya se le practicó retención de IVA (VALIDAR-SENIAT)
+
+**Fuente (auditor fiscal, 2026-10-04, AF5-01):** PA SNAT/2025/000054 art. 11 «Ajustes de precios» (ivecofi, reproducción no oficial leída en resumen; cotejo con la G.O. 43.171 pendiente). Si el ajuste aumenta el importe, se retiene también sobre el aumento. Si disminuye el impuesto causado, el agente devuelve al proveedor lo retenido en exceso que aún no haya enterado. Si ya lo enteró, el proveedor lo descuenta de su cuota del período de la retención o de los siguientes (art. 7), o pide su recuperación. No nombra la nota de crédito, la devolución ni el comprobante.
+
+**Hoy — conducta conservada, que la norma leída contradice en un caso:** la nota baja la deuda y el crédito fiscal por su total; la retención practicada, su pasivo y su comprobante quedan como se registraron, **esté o no enterada**. La respuesta de la API lo dice (`retention_untouched`) y la pantalla avisa y remite al art. 11. Si la retención ya se enteró, lo construido coincide con el art. 11. Si no se había enterado, el art. 11 manda devolver el exceso al proveedor, y Ladino lo deja para enterar. Sobre una factura ya pagada, el saldo a favor con el proveedor incluye lo retenido. **No se construye la devolución del exceso hasta esta respuesta** (decidido por criterio: la norma está leída en una reproducción no oficial y falta interpretar si una devolución o una rebaja es «ajuste de precio»).
+
+**Pregunta exacta:** «Recibimos una nota de crédito de un proveedor sobre una factura a la que, como agentes, ya le retuvimos el IVA. (1) ¿La devolución total o parcial y la rebaja son "ajuste de precio que implica una disminución del impuesto causado" del art. 11 de la PA SNAT/2025/000054? (2) "Aún no enterado" ¿se mide por la quincena declarada en el portal o por el pago de la planilla? (3) Si no se ha enterado: ¿el comprobante ya emitido se anula y se emite otro por el neto, o se añade un renglón con la nota como documento tipo 03 en negativo? ¿Cómo va en el TXT? (4) Si ya se enteró: ¿el agente no hace nada más y el proveedor lo descuenta (art. 7)? ¿Se le entrega algún soporte? (5) ¿Y la retención de ISLR sobre el mismo pago?»
+
+**Alternativa que se descartó:** rechazar toda nota de crédito sobre una factura retenida hasta tener la respuesta (dejaba sin corrección la factura de un gasto de una empresa agente, que es lo que la auditoría fiscal pidió corregir antes de producción, AF4-02; y deja el crédito fiscal sobredeclarado frente al fisco, LIVA art. 37: registrar la nota deja menos daño, AF5-01).
+
+**Qué se rompe si la respuesta es otra:** `registerSupplierCreditNote` (`packages/domain/src/purchases.ts`) tendría que practicar una retención negativa o emitir la corrección del comprobante; `retention_voucher_gaps` y el TXT de retenciones cambian; el saldo a favor de las notas ya registradas sobre facturas retenidas habría que regularizarlo (son identificables: el acta `ap.credit_note_received` / `ap.expense_credit_note_received` lleva `retention_untouched: true`).
+
+**Dónde se toca:** familia de retenciones (ADR-0072), cuando el asesor responda.
+
+## P-104 · P-07 · El reporte «IVA del período»: ¿a qué período pertenece una retención de IVA que practicamos? (VALIDAR-TRIBUTARIO)
+
+**Qué hace Ladino hoy (ola 5, 2026-10-04):** el reporte `GET /v1/reports/iva` enseña, junto a cada período ya calculado en «Declarar IVA», la columna «Retenciones practicadas»: la suma de las retenciones de IVA no canceladas que la empresa hizo a sus proveedores (`supplier_retentions`), contadas en el período en que cae **el día en que se practicaron** (`applied_at`, llevado al día de Caracas). Es una cifra informativa: no entra en la cuota del período ni en ningún asiento, y el TXT de retenciones y el comprobante siguen su propia regla (ADR-0072). No se citó norma para elegir esa fecha.
+
+**Pregunta exacta:** «En un resumen del IVA del período para el dueño, ¿la retención de IVA que practicamos como agentes se atribuye al período del pago o abono en cuenta, al de la fecha de la factura del proveedor, o a la quincena en que se emite y entera el comprobante? ¿Y debe coincidir exactamente con lo enterado en esa quincena?»
+
+**Alternativa que se descartó:** no enseñar la columna (la respuesta del dueño la pide: «retenciones practicadas y soportadas»); atribuirla por la quincena del comprobante (deja fuera lo retenido que aún no tiene comprobante).
+
+**Qué se rompe si la respuesta es otra:** una subconsulta de `ivaReport` (`packages/domain/src/reports.ts`) y la nota del reporte. Ningún documento, asiento ni declaración.
+
+**Respondido en parte (auditor fiscal, 2026-10-04, AF5-16; PA SNAT/2025/000054, reproducción ivecofi):** el art. 13 fija la retención en el pago o el abono en cuenta, lo primero; los arts. 14-15, el entero por quincena; el art. 16 in fine, que el comprobante se registra en los libros del período de su emisión o entrega. En Ladino el abono en cuenta es el registro de la factura, así que contar por `applied_at` sigue el art. 13. Queda: el libro de retenciones y el TXT leen por la emisión del comprobante, y con un comprobante corregido en otro período el reporte y el libro pueden dar cifras distintas. ¿Cuál de las dos fechas quiere ver el contador en el resumen? El reporte dice que es un resumen de gestión y no la declaración.
+
+## P-105 · H-03 · El saldo a favor con un proveedor y el costo de una devolución (VALIDAR-CONTABLE)
+
+**Fuente:** ninguna citada. Es criterio contable (VEN-NIF PYME), no una norma tributaria leída.
+
+**Hoy — aplicado por criterio (ADR-0083 §5 y «Decidido por criterio»):**
+- Lo que la nota de crédito de un proveedor abona por encima de lo que se le debía (factura ya pagada) se asienta en una cuenta de ACTIVO provisional, **1.1.09 «Saldos a favor con proveedores»** (papel `supplier_credit_receivable`), no como cuenta por pagar en negativo.
+- La mercancía devuelta sale del inventario al **costo promedio de hoy**; la diferencia con lo que el proveedor abona va a «variación de costo de compras».
+
+**Preguntas exactas:**
+1. «¿Qué código y qué nombre debe llevar esa cuenta en el plan, y se presenta en el balance como activo (otras cuentas por cobrar / anticipos a proveedores) o neta de las cuentas por pagar al mismo proveedor?»
+2. «Una devolución de mercancía al proveedor, ¿sale del inventario al costo promedio del día de la devolución (y la diferencia con lo abonado va a resultados) o al costo con que se facturó, recalculando el promedio de lo que queda?»
+3. «La diferencia de cambio que deja una nota de crédito en divisa que cierra la factura a otra tasa, ¿va a las mismas cuentas de diferencial que la de un pago?» (hoy: sí, las mismas.)
+
+**Alternativas que se descartaron:** dejar el saldo a favor en cuentas por pagar con signo contrario; salir al costo facturado.
+
+**Qué se rompe si la respuesta es otra:** (1) la cuenta se renombra o se reasigna el papel en `company_account_settings`; los asientos ya posteados se reclasifican con un asiento manual. (2) `registerSupplierCreditNote` (`packages/domain/src/purchases.ts`) tendría que sacar al costo facturado y revalorizar el resto: cambia el costo de lo vendido después de la devolución.
+
+**Dónde se toca:** contabilidad, con el contador (junto a los códigos de P-36).
+
+## P-106 · H-03 · AF5-12 · La nota de crédito del proveedor que trae un IVA distinto del que corresponde (VALIDAR-TRIBUTARIO)
+
+**Fuente:** LIVA arts. 35 y 37 num. 2 (Justia, versión G.O. 38.263, leídos en resumen el 2026-10-04; numeración 2020 sin cotejar): no se deduce lo que exceda lo legalmente procedente y se resta del crédito lo soportado en exceso. Ningún texto leído dice qué registra el comprador cuando el papel del proveedor calcula mal el IVA.
+
+**Hoy — aplicado por criterio (ADR-0083 §3):** el IVA de cada línea lo calcula el servidor con la alícuota congelada de la línea de la factura que se corrige. Si se teclea el IVA del papel y difiere más de un céntimo, la nota se rechaza (422) y no se registra.
+
+**Pregunta exacta:** «La nota de crédito de un proveedor trae un IVA que no es base × la alícuota de la factura que corrige. (1) ¿Se registra en el libro de compras con el IVA que dice el papel, con el que corresponde, o no se registra hasta que el proveedor la sustituya? (2) Mientras tanto, ¿el crédito fiscal se reduce por el mayor de los dos? (3) ¿Qué tolerancia de redondeo es admisible entre el papel y el cálculo?»
+
+**Alternativa que se descartó:** aceptar el IVA tecleado (deja al cliente fijar el crédito fiscal).
+
+**Qué se rompe si la respuesta es otra:** `registerSupplierCreditNote` (`packages/domain/src/purchases.ts`): guardar el IVA del papel junto al calculado y decidir cuál va al libro; `platform.purchases_book`.
+
+## P-107 · H-03 · AF5-10 · La tasa de la nota de crédito de un proveedor en divisa (VALIDAR-TRIBUTARIO)
+
+**Fuente:** LIVA art. 37 num. 1 (Justia, versión 2005, 2026-10-04): se deduce del crédito el impuesto de la operación anulada que se computó en el crédito. PA 00071 art. 13 num. 14: el documento en divisa expresa ambas monedas y el tipo de cambio. RLIVA art. 51: ver P-20.
+
+**Hoy:** la nota se convierte a bolívares con la tasa oficial del día de su fecha; con esa tasa entra al libro de compras y resta en la declaración. La diferencia con lo que la factura acreditó se trata como diferencial cambiario cuando la nota cierra la factura. La pantalla no pide la tasa ni los bolívares del papel. La nota de crédito que Ladino emite en ventas va a la tasa de su factura.
+
+**Pregunta exacta:** «Una nota de crédito de un proveedor en dólares, fechada otro día que su factura: (1) ¿el crédito fiscal se reduce por el IVA en bolívares que dice el papel, por el IVA a la tasa de la factura original, o por el IVA a la tasa del día de la nota? (2) Si el papel no coincide con la tasa oficial del día, ¿manda el papel?»
+
+**Alternativas:** (a) tasa de la factura, como en ventas; (b) pedir en pantalla los bolívares del papel.
+
+**Qué se rompe si la respuesta es otra:** `tasaA(…, input.note_date)` en `registerSupplierCreditNote`; el contrato `RegisterSupplierCreditNoteRequest`; el renglón de la nota en `platform.purchases_book`. Las notas en divisa ya registradas se regularizan con un asiento del contador (append-only).
+
+## P-108 · H-03 · AF5-14 · La nota de crédito de un proveedor emitida por máquina fiscal: ¿lleva número de control? (VALIDAR-SENIAT)
+
+**Fuente:** PA 00071 arts. 13-14 (requisitos de la factura y de los documentos por máquina fiscal), art. 23 (la nota de crédito lleva los requisitos de la factura) y art. 24, según constan en `REGULATORY_STATUS.md` y `EMISION_FACTURAS.md`. En `docs/02_COMPLIANCE/` no consta un tipo de documento de proveedor exento de número de control.
+
+**Hoy — aplicado según la respuesta del dueño (H-03: «si viene sin control, se registra igual para reducir el crédito… y queda marcada "documento incompleto"»):** toda nota de crédito fiscal de un proveedor registrada sin número de control queda marcada «documento incompleto», traiga o no otra referencia (migración 20261005110700). La marca no cambia el libro de compras ni el crédito: es un aviso.
+
+**Pregunta exacta:** «¿La nota de crédito que un proveedor emite por máquina fiscal lleva número de control en el sentido de la PA 00071, o se identifica solo por el número de registro de la máquina? Si no lo lleva, ¿qué dato la identifica en el libro de compras?»
+
+**Alternativa que se descartó:** que una referencia cualquiera eximiera de la marca (era lo construido en la primera ronda; contradecía la letra de la respuesta).
+
+**Qué se rompe si la respuesta es otra:** haría falta un tipo de documento «máquina fiscal» en la nota (y en la factura de proveedor) que declare por qué no hay control; el CHECK de `supplier_credit_notes` y el texto de la pantalla.

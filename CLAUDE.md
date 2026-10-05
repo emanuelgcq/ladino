@@ -177,10 +177,10 @@ Por eso esta categoría de test se escribe aparte y a propósito. Los que ya exi
 | Ningún control repetido por emisor e identificador | `control_number_collisions()` | ventas ↔ talonario (ADR-0071) |
 | Ningún talonario pisa a otro | `control_range_overlaps()` | talonario ↔ papel de la imprenta (ADR-0071) |
 | Retención de IVA practicada ⇒ renglón de comprobante vigente | `retention_voucher_gaps()` | compras ↔ comprobante de retención (ADR-0072) |
-| Retiro de inventario ⇒ Nota de retiro con su IVA | `withdrawal_note_gaps()` | inventario ↔ libro de ventas (ADR-0078) |
+| Retiro gravado de inventario desde el corte ⇒ factura de retiro con su IVA, sin cartera y a nombre de la propia empresa (antes del corte, su Nota de retiro); toda factura de retiro ⇒ una salida que existe, es de la empresa y la señala; corregido con su nota de crédito, netea en cero; y el corte existe | `withdrawal_note_gaps()` | inventario ↔ libro de ventas, en los dos sentidos (ADR-0082) |
 | Ningún importe del mayor ni valor de kardex nuevo pasa del céntimo | `cent_gaps()` | contabilidad e inventario ↔ céntimo (ADR-0075 §7) |
 | IVA en Bs = base en Bs × alícuota, por línea, y el pie es la suma de sus líneas | `fiscal_amount_gaps()` | documento fiscal ↔ regla de conversión (ADR-0075 §1) |
-| Documento saldado ⇒ su cuenta por cobrar o por pagar del mayor en cero | `settled_ledger_gaps()` | ventas y compras ↔ contabilidad (ADR-0075 §4) |
+| Documento saldado —pagado, o dejado en cero por la nota de crédito de su proveedor— ⇒ su cuenta por cobrar o por pagar del mayor en cero | `settled_ledger_gaps()` | ventas y compras ↔ contabilidad (ADR-0075 §4, ADR-0083 §7) |
 | Saldo de cada caja en su moneda = Σ originales de su subcuenta, más la cola | `treasury_currency_gaps()` | tesorería ↔ contabilidad en divisa (ADR-0075 §6) |
 | Toda `rules_version` escrita desde el corte está registrada; documento fiscal emitido (venta, factura de proveedor posteada, comprobante de retención, nota de retiro) y asiento posteado o revertido llevan una versión de REGLAS, nunca una cadena de sistema | `rules_version_gaps()` | documentos y movimientos contables ↔ conjunto de reglas (ADR-0079) |
 | El hash global de reglas guardado = el recalculado | `rule_set_drift()` | reglas ↔ su materialización (ADR-0079) |
@@ -189,6 +189,9 @@ Por eso esta categoría de test se escribe aparte y a propósito. Los que ya exi
 | Cartera por documento = cuenta por cobrar del mayor: Σ (total − lo que cancelaron sus cobros vivos), más la cola | `receivables_ledger_gap()` | ventas y cobros ↔ contabilidad (F-12, ADR-0075); sin la revaluación al cierre ni la regularización del céntimo |
 | Saldos a favor vivos = pasivo de saldos a favor del mayor; uno agotado no carga nada y todo saldo vivo nació con asiento o está en cola | `customer_credit_ledger_gap()` | ventas (NC, devolución, pago de más, reembolso, reversa) ↔ contabilidad (ADR-0075 decisión 5) |
 | Factura anulada desde el corte ⇒ mismo día de Caracas, antes del cierre de una caja, período sin declarar y acta con el original y las copias en mano | `annulment_paper_gaps()` | ventas ↔ caja, declaración de IVA y auditoría (ADR-0061, nota de la ola 4) |
+| Saldo a favor declarado por las notas de crédito de proveedor = saldo de su cuenta en el mayor, más la cola | `supplier_credit_ledger_gap()` | compras ↔ contabilidad (ADR-0083 §5) |
+| Saldo a favor con un proveedor según el auxiliar = lo que declararon sus notas de crédito vigentes, por factura y en su moneda | `supplier_credit_subledger_gaps()` | compras (pagos, retención, notas) ↔ lo declarado por la nota (ADR-0083 §5) |
+| Línea vendida de un compuesto ⇒ sus ingredientes salieron del kardex en la proporción de la receta de ese momento; cada fila coincide con su movimiento; de ninguna salida volvió más de lo que salió; ningún compuesto tiene movimientos propios | `composite_sale_gaps()` | ventas y devoluciones ↔ inventario (I-04, ADR-0084) |
 
 **Al cerrar un módulo, la pregunta no es «¿pasan sus tests?» sino «¿qué invariante cruza este
 módulo con los anteriores, y quién lo mira?».** Si la respuesta es «nadie», ese es el trabajo que
@@ -387,7 +390,7 @@ pendientes), libros y declaraciones de IVA, percepción de IGTF y la puesta a pu
 `SPRINT_0_BOOTSTRAP.md` es historia.
 
 Antes de tocar algo: `docs/00_GOVERNANCE/HANDOFF.md` (la entrega más reciente arriba),
-`docs/00_GOVERNANCE/ADR_INDEX.md` (80 ADR) y `docs/02_COMPLIANCE/REGULATORY_STATUS.md`. La
+`docs/00_GOVERNANCE/ADR_INDEX.md` (84 ADR) y `docs/02_COMPLIANCE/REGULATORY_STATUS.md`. La
 homologación de software (PA SNAT/2024/000121) fue **derogada** por la PA SNAT/2026/00084
 sin sustituta: lo que gobierna la emisión es la PA 00071 (forma libre + imprenta autorizada)
 y la PA 102 (imprenta digital). Los `VALIDAR-SENIAT` / `VALIDAR-TRIBUTARIO` abiertos están en

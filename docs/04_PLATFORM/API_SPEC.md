@@ -313,6 +313,18 @@ Pendiente y no decidido: el TTL concreto (`expires_at` no tiene default a propó
   tasa de hoy. El nominal por moneda (`debt.by_currency[].nominal`) se sirve siempre,
   salvo un cobro antiguo en otra moneda sin tasa con que valorarlo, que deja la deuda en nulo.
 - `GET /v1/reports/exchange-difference`: no suma el diferencial de un cobro reversado.
+- `GET /v1/reports/{sales|margin|iva|inventory|receivables|payables|cash-closings|igtf}` (ola 5,
+  P-07, F-13, H-11): los reportes y las carteras. Una sola forma de respuesta (`ReportTable`:
+  `columns`, `rows`, `totals`, `summary`, `notes`, `row_count`). Rango `from`/`to` en días de
+  Caracas (las carteras son «a hoy» y no lo llevan); `group` y `sort` según el reporte;
+  `format=csv|xlsx` responde el archivo y exige además `report.export`. Importes como texto
+  redondeado al servir; `null` con motivo (`sin_tasa`, `sin_permiso`, `sin_dato`), nunca 0. Permisos
+  y fuentes de cada uno: `docs/03_MODULES/REPORTING_ANALYTICS_SPEC.md`, «Lo construido». Los
+  cierres de caja exigen `treasury.read`, el mismo de `GET /v1/cash-closings` (no
+  `cash_register.read`). `from` y `to` tienen que ser fechas que existan: `2026-02-30` es 422.
+  En ventas, `fiscal_total` es «Ventas con factura»: no cuenta facturas de retiro ni notas de
+  débito por IGTF, que sí están en el libro de ventas.
+- CORS expone `Content-Disposition` (el nombre del archivo descargado).
 - `GET /v1/journal-entries/{id}`: `debit_amount` y `credit_amount` de cada línea van en moneda
   FUNCIONAL (iguales a `functional_debit` / `functional_credit`); el importe original va en
   `original_amount`, con `transaction_currency` y `fx_rate`.
@@ -323,6 +335,7 @@ Pendiente y no decidido: el TTL concreto (`expires_at` no tiene default a propó
 
 **Ola 4 (aditivo): «no hay» no es «no puedes ver» (N-05, P-05).**
 - `GET /v1/negocio/tasa` (nuevo): `{ tasa_del_dia }`, el mismo objeto del resumen (o `null` si nunca se cargó), para cualquier miembro de la empresa. No exige `treasury.read`: quien cierra su caja la necesita sin ver el dinero del negocio.
+- `GET /v1/search/documents?q=` (nuevo, P-06, ADR-0081): `{ items: [{ type, id, number, party_name, date, status }] }`, la búsqueda de documentos por número de la paleta. `type` es `invoice | receipt | credit_note | debit_note | quote | withdrawal_invoice | withdrawal_credit_note | purchase`. Solo lectura, sin importes y sin total. Ventas: exige `ar.read`, `accounting.read` o un permiso de operación de ventas (`sales.invoice.issue`, `sales.invoice.annul`, `sales.quote.manage`, `sales.order.manage`, `sales.return.manage`, `sales.payment.register`): los mismos con que el menú abre «Ventas», más los de quien vende. Compras: `ap.read`, `purchase.invoice.register` o `purchase.payment.register`. El grupo que el rol no abre no se consulta: sin ningún permiso, `items` viene vacío (200, no 403). `q` con menos de 2 caracteres: 422.
 - `GET /v1/negocio/resumen`: cada total de deuda en `null` dice su motivo en `lo_que_me_deben_motivo` / `lo_que_debo_motivo` (`"sin_permiso"` | `"sin_tasa"`; `null` cuando hay cifra) y, con `sin_tasa`, el nominal conocido en `…_por_moneda` (`[{ currency, nominal }]`; vacía en los demás casos). Sin tasa para una factura de proveedor en divisa el resumen ya no falla: `lo_que_debo` va en `null` con `sin_tasa`.
 - `GET /v1/customers`: `sort` = `name` (por omisión) | `debt_desc` | `debt_asc`. Los dos de deuda exigen `with_debt=1` (y por tanto `ar.read`); el cliente cuya deuda no se pudo valorar (`debt: null`) va arriba en los dos sentidos. Un valor desconocido, o deuda sin `with_debt`, es 422 `VALIDATION_FAILED`: nunca cae en silencio al orden por nombre.
 
@@ -415,3 +428,37 @@ Contrato AMPLIADO; el detalle campo a campo está en `openapi.json`.
   de siempre, sin `roles`.
 - Web y API se despliegan en la misma ventana: la API nueva responde 422 al primer RIF de una web
   que no envíe `legal_name`, y la API vieja rechaza el campo (esquema `strict`). Ver R-76.
+
+## La nota de crédito del proveedor (H-03, ADR-0083)
+
+| Ruta | Permiso | Qué hace |
+|---|---|---|
+| `GET /v1/supplier-invoices/{id}/lines` | `purchase.credit_note.register` o `purchase.invoice.register`; `expense.register` solo si la factura es de un gasto (403 con su mensaje en una de mercancía) | Lo que la pantalla de la nota necesita de la factura: `transaction_currency`, `is_expense`, `fiscal_support`, `has_retention`, `lines[]` (`id`, `line_number`, `description`, `product_id`, `quantity`, `has_receipt`, `tracks_lots`, `returned_quantity`; sin precios ni costos) y `lots[]`: los lotes CON existencia de los productos por lotes cuya línea no viene de una recepción (`product_id`, `warehouse_id`, `lot_id`, `code`, `expires_at`, `expired`, `quantity`), vencidos incluidos. |
+| `POST /v1/supplier-credit-notes` | `purchase.credit_note.register`; `expense.register` si la factura es de un gasto | Registra la nota. Cuerpo: `supplier_invoice_id`, `supplier_document_number`, `supplier_control_number?` (sin él, la nota fiscal queda `document_incomplete`, aunque traiga `supplier_document_ref`), `note_date` (ni futura ni anterior a su factura), `reason`, `currency` (la de la factura), `kind` (`devolucion` \| `rebaja`; obligatorio en mercancía, ausente en un gasto), `warehouse_id?` (solo vale para la línea sin recepción) y `lines[]`: `supplier_invoice_line_id` (o `product_id` si la factura lo trae una vez), `quantity`, `unit_price` sin IVA, `tax_amount?` (lo calcula el servidor; si se envía tiene que coincidir al céntimo) y `lot_id?` (devolución de un producto por lotes sin recepción). Respuesta: `id`, `total_amount`, `balance` (negativo = saldo a favor), `accounting_date`, `is_fiscal`, `document_incomplete`, `retention_untouched`, `left_credit_in_favor`. |
+| `GET /v1/suppliers/{id}/statement` | `ap.read` | Además de lo que ya traía: `total_outstanding` suma SOLO saldos positivos (es la suma de los tramos de `aging`); `credit_in_favor[]` (`currency`, `nominal`: el saldo a favor por moneda de la factura, según el auxiliar; no está restado del total), `credit_in_favor_functional` (lo que las notas vigentes asentaron en saldos a favor) y `credit_notes[]` (`id`, `supplier_invoice_id`, `supplier_document_number`, `supplier_control_number`, `note_date`, `transaction_currency`, `total_amount`, `kind`, `is_fiscal`, `document_incomplete`). |
+
+`POST /v1/supplier-payments` rechaza (422) el pago de una factura `posted` cuyo saldo es cero o negativo: la cerró una nota de crédito.
+
+## Gastos que se repiten (H-07, ola 5)
+
+| Ruta | Permiso | Qué hace |
+|---|---|---|
+| `GET /v1/recurring-expenses` | `expense.read` | Los recordatorios vivos. Respuesta: `today` (día de Caracas) e `items[]` con `id`, `category`, `description`, `account_id`, `supplier_id`, `suggested_amount` y `currency` (lo que salió la última vez: una sugerencia), `with_invoice`, `periodicity` (`weekly` · `semimonthly` · `monthly` · `yearly`), `next_due_on`, `following_due_on` (el período que le sigue), `is_due` y `days_overdue` (los decide el servidor: día contra día), `status`. |
+| `POST /v1/recurring-expenses/{id}/skip` | `expense.register` · Idempotency-Key | Cuerpo `company_id`, `due_on`. El período queda atendido sin gasto. `409 CONFLICT` si `due_on` ya no es el que toca o el recordatorio está detenido. |
+| `POST /v1/recurring-expenses/{id}/stop` | `expense.register` · Idempotency-Key | Cuerpo `company_id`. Deja de avisar; no se deshace. Repetirlo responde 200. |
+
+`POST /v1/expenses` gana tres campos opcionales en el cuerpo y uno en la respuesta:
+
+- `recurrence`: cada cuánto se paga. Solo con `is_recurring: true` (422 si no); sin él, `monthly`. Crea el recordatorio de la categoría si no hay uno vivo.
+- `recurring_expense_id` y `recurring_due_on` (los dos o ninguno, 422): «registrar ahora». El gasto atiende ese período del recordatorio. 422 si la categoría del gasto no es la del recordatorio; 409 si el período ya no es el que toca; en ningún rechazo se registra el gasto.
+- respuesta, `recurrence_kept` (`{ periodicity, next_due_on }`): presente SOLO cuando el gasto venía con `is_recurring` y su categoría ya tenía un recordatorio vivo. El gasto se registró; el recordatorio no cambió.
+
+## La lista de precios de una venta en la caja (C-06, ola 5)
+
+`POST /v1/pos/quote` y `POST /v1/pos/sales` aceptan `price_list_id` (ya existía). El orden lo resuelve el servidor: lista de la venta → lista asignada al cliente → lista de mostrador. Pedir una lista DISTINTA de la que tocaría:
+
+1. sin `sales.price_list.override` → `403 PERMISSION_REQUIRED` (como siempre);
+2. con el permiso y el ajuste «Vendo al mayor» (`company_settings.sells_wholesale`) apagado → `422 VALIDATION_FAILED` «Tu negocio no tiene activado vender al mayor. Actívalo en Configuración para cobrar con otra lista.»;
+3. con el permiso y el ajuste encendido → se cotiza y se cobra por esa lista; el documento la guarda.
+
+Pedir la misma que ya aplicaría no exige nada. El ajuste gobierna SOLO la caja: `POST /v1/invoices` y `POST /v1/quotes` (administración) siguen exigiendo solo el permiso, y la lista asignada al cliente aplica con el ajuste apagado. Un producto sin precio en la lista que aplica → `422` que nombra el producto y la lista.

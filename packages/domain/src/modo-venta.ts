@@ -83,7 +83,8 @@ export async function avisoYaFactura(sql: TransactionSql, companyId: string): Pr
                         and a.effective_from < r.effective_from)
          and (platform.caracas_day(now()) - platform.caracas_day(r.effective_from) < 30
               or not exists (select 1 from public.documents d
-                              where d.company_id = r.company_id and d.kind = 'invoice'
+                              where d.company_id = r.company_id
+                                and d.kind in ('invoice', 'withdrawal_invoice')
                                 and d.status in ('issued', 'paid')
                                 and d.issued_at >= r.effective_from))
     ) as aviso`;

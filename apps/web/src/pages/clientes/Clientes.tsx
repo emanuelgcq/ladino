@@ -20,6 +20,7 @@ import {
   NOTA_FORMATO_CLIENTES,
 } from "../../components/importar.js";
 import { useSesion } from "../../app/session.js";
+import { useAccionPedida } from "../../app/accion-pedida.js";
 import { PageHeader } from "../../components/PageHeader.js";
 import { DataTable } from "../../components/DataTable.js";
 import {
@@ -59,6 +60,7 @@ import type { Customer, CodeCatalog, PriceList } from "../../lib.js";
 import { sufijoDeArchivo } from "../../app/rif.js";
 import { avisoDigitoRif, formatearDocumento } from "@ladino/schemas";
 import { useConFacturas } from "../../app/modo-venta.js";
+import { Cartera } from "../../components/Cartera.js";
 import { CLIENTE_ESPECIAL } from "../../components/capa-fiscal/textos.js";
 
 /** La fila con la deuda funcional de HOY que calcula el servidor (ADR-0047). */
@@ -178,6 +180,10 @@ export function Clientes(): React.JSX.Element {
     [orden, setParams],
   );
   const [creando, setCreando] = useState(false);
+  // P-06: «Nuevo cliente» de la paleta llega con `?accion=nuevo` y abre el mismo diálogo del botón.
+  useAccionPedida("nuevo", true, () => {
+    if (gestiona) setCreando(true);
+  });
   const [importando, setImportando] = useState(false);
   const [detalle, setDetalle] = useState<Customer | null>(null);
   const qc = useQueryClient();
@@ -397,6 +403,19 @@ export function Clientes(): React.JSX.Element {
           onCerrar={() => setImportando(false)}
           onListo={recargar}
         />
+      )}
+      {/* F-13: la lista ordenada por deuda ES la cartera; arriba, su total, lo vencido y el
+          nominal por moneda (del servidor). Los tramos por cliente, en Cuentas por cobrar. */}
+      {verDeuda && orden !== "nombre" && (
+        <div className="mb-4 space-y-2">
+          <Cartera tipo="receivables" soloResumen />
+          <Link
+            to="/admin/cuentas?orden=vencido"
+            className="text-[0.85rem] text-accent-soft-foreground hover:underline"
+          >
+            Ver la cartera por antigüedad
+          </Link>
+        </div>
       )}
       <DataTable
         columns={columnas}

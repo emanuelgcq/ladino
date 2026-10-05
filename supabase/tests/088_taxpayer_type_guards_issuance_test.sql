@@ -58,7 +58,9 @@ do $$
 declare v_def text;
 begin
   v_def := pg_get_functiondef('platform.assert_document_issuance()'::regprocedure);
-  v_def := regexp_replace(v_def, 'if new\.kind in \(''invoice'', ''credit_note'', ''debit_note''\) then.*?end if;\s*end if;', '', '');
+  -- Desde ADR-0082 la lista de tipos de ese `if` lleva además la factura de retiro y su nota: el
+  -- recorte casa con la lista que haya (de 'invoice' a 'debit_note'). Lo esperado no cambia.
+  v_def := regexp_replace(v_def, 'if new\.kind in \(''invoice'',[^)]*''debit_note''\) then.*?end if;\s*end if;', '', '');
   execute v_def;
 end $$;
 select lives_ok($$ select pg_temp.emitir('aaaa0087-0000-4000-8000-0000000000d9', 9,

@@ -34,7 +34,27 @@ export const DocumentKind = z.enum([
   "receipt",
   /** ADR-0061: recibo de devolución — corrige un recibo; no fiscal, fuera de los libros. */
   "receipt_return",
+  /**
+   * ADR-0082 (RLIVA art. 31): factura de retiro de inventario. Factura para todo lo fiscal
+   * (correlativo de la serie de facturas, control, libro de ventas); el adquirente es la propia
+   * empresa y NO genera cuenta por cobrar.
+   */
+  "withdrawal_invoice",
+  /**
+   * ADR-0082 (PA 00071 arts. 22 y 23): la nota de crédito de una factura de retiro. Deja sin
+   * efecto el retiro entero; numera como una nota de crédito; no toca cartera.
+   */
+  "withdrawal_credit_note",
 ]);
+
+/** `POST /v1/invoices/{id}/withdrawal-credit-note`: por qué se deja sin efecto el retiro. */
+export const CorrectWithdrawalRequest = z
+  .object({
+    company_id: uuid,
+    reason: z.string().trim().min(3).max(500),
+  })
+  .strict();
+export type CorrectWithdrawalRequest = z.infer<typeof CorrectWithdrawalRequest>;
 export const DocumentStatus = z.enum([
   "draft",
   "confirmed",

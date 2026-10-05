@@ -128,6 +128,8 @@ export interface Product {
   barcode: string | null;
   /** Compuesto: se vende pero no se almacena (ADR-0035). */
   is_composed: boolean;
+  /** C-07: lleva lote y vencimiento (un solo interruptor enciende las dos banderas). */
+  tracks_lots?: boolean;
   template_id?: string | null;
   attributes?: Record<string, string> | null;
   /** Costo de referencia importado (ADR-0074, H11): informativo, no es el costo del kardex. */
@@ -704,6 +706,20 @@ export interface SupplierStatement {
   total_outstanding_motivo?: "sin_tasa" | null;
   total_outstanding_por_moneda?: { currency: string; nominal: string }[];
   total_retained: string;
+  /** H-03: el saldo a favor con el proveedor, por moneda. NO está restado de `total_outstanding`. */
+  credit_in_favor?: { currency: string; nominal: string }[];
+  credit_in_favor_functional?: string;
+  /** Las notas de crédito vigentes del proveedor, con lo que dice su papel. */
+  credit_notes?: {
+    id: string;
+    supplier_document_number: string;
+    supplier_control_number: string | null;
+    note_date: string;
+    transaction_currency: string;
+    total_amount: string;
+    is_fiscal: boolean;
+    document_incomplete: boolean;
+  }[];
   aging: ApAging;
 }
 export interface RetentionRule {

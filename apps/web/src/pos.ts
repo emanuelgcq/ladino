@@ -68,6 +68,8 @@ export async function cotizarPos(
   req: {
     company_id: string;
     customer_id?: string;
+    /** C-06: otra lista que la que aplicaría. El servidor exige `sales.price_list.override`. */
+    price_list_id?: string;
     lines: { product_id: string; quantity: string }[];
   },
 ): Promise<CotizacionPos> {

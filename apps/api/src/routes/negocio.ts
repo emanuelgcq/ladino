@@ -79,7 +79,8 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
 
       // Vendido y ganado, HOY y MES, con el margen desde el costo CONGELADO de
       // cada línea (cost_snapshot: el costo del kardex al emitir, nunca el de
-      // hoy). Las líneas sin costo se CUENTAN y la pantalla lo dice.
+      // hoy). Las líneas sin costo se CUENTAN y la pantalla lo dice. La línea de un
+      // COMPUESTO es la excepción: su costo es la suma de sus salidas de ingredientes.
       //
       // «LO VENDIDO», UNA SOLA DEFINICIÓN (plan «Ladino sin RIF», A1): facturas
       // + recibos + notas de débito − notas de crédito (la devolución emite su
@@ -122,17 +123,40 @@ export function negocioRoutes(app: Hono, sql: Sql, idempotencia: MiddlewareHandl
                  case
                    when d.kind = 'debit_note' then l.line_subtotal_functional
                    when d.kind in ('credit_note', 'receipt_return') then -l.line_subtotal_functional
+                   -- EL MISMO ORDEN que el reporte de margen (packages/domain/src/reports.ts):
+                   -- primero el costo congelado de la línea; si no lo hay, lo de un compuesto.
+                   when l.cost_snapshot is not null
+                     then l.line_subtotal_functional - l.cost_snapshot * l.quantity
+                   -- I-04 (ADR-0084): la línea de un COMPUESTO no lleva cost_snapshot; su costo
+                   -- es la SUMA de lo que sacó de sus ingredientes (filas out de
+                   -- sale_line_components, cada una al céntimo). Nunca un unitario por la
+                   -- cantidad: 53 / 3 × 3 = 53,00000001.
+                   when comp.costo is not null then l.line_subtotal_functional - comp.costo
                    -- Un SERVICIO no tiene costo de mercancía: todo lo cobrado es margen, y no
                    -- es una «venta sin costo cargado» (QA 2026-09-15, h. 20).
-                   when l.cost_snapshot is null and p.kind = 'service' then l.line_subtotal_functional
-                   when l.cost_snapshot is null then null
-                   else l.line_subtotal_functional - l.cost_snapshot * l.quantity
+                   when p.kind = 'service' then l.line_subtotal_functional
+                   else null
                  end as margen
             from docs d
             join public.document_lines l on l.document_id = d.id
             left join public.products p on p.id = l.product_id
+            left join lateral (
+              select sum(c.functional_amount) as costo
+                from public.sale_line_components c
+               where c.document_line_id = l.id and c.direction = 'out'
+                 and d.kind in ('invoice', 'receipt')) comp on true
           union all
-          select d.dia, 0 as total, sum(rl.quantity * coalesce(ol.cost_snapshot, 0)) as margen
+          -- La devolución devuelve el costo de lo que reingresó. De una línea de compuesto, la
+          -- SUMA de sus reingresos (filas back de ESA devolución); de una línea suelta, como antes.
+          select d.dia, 0 as total,
+                 sum(case when exists (select 1 from public.sale_line_components o
+                                        where o.document_line_id = ol.id and o.direction = 'out')
+                          then coalesce((select sum(b.functional_amount)
+                                           from public.sale_line_components b
+                                          where b.return_id = r.id
+                                            and b.document_line_id = ol.id
+                                            and b.direction = 'back'), 0)
+                          else rl.quantity * coalesce(ol.cost_snapshot, 0) end) as margen
             from docs d
             join public.returns r on r.credit_note_id = d.id and r.status = 'confirmed'
             join public.return_lines rl on rl.return_id = r.id

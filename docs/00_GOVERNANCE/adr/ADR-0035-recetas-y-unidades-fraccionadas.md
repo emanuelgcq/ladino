@@ -86,3 +86,65 @@ el costo del compuesto es 117,00 calculado a mano; recibir **y** sacar stock del
 LAD43; la variante rota quita la validación y el stock del compuesto entra; `recipe_cost` devuelve
 `NULL` con una línea sin conversión. `packages/inventory`: cuasi-linealidad con su cota, determinismo,
 «sin conversión no se explota» y la suma exacta del costo total.
+
+## Enmienda del 2026-10-04 — la VENTA saca los ingredientes (I-04 del recorrido 2026-09-24)
+
+> **Esta enmienda es un puntero.** La decisión estructural que contiene —`sale_line_components`,
+> la tabla append-only que ata la línea vendida a sus salidas— tiene ADR propio:
+> **[ADR-0084 — La venta de un compuesto deja escrito lo que sacó](ADR-0084-la-venta-de-un-compuesto-deja-escrito-lo-que-saco.md)**.
+> Donde este texto y el 0084 difieran, manda el 0084 (lleva además lo de la segunda ronda: el
+> margen, el permiso para marcar un compuesto y la anulación tras una devolución).
+
+ADR aplicado según la respuesta del dueño del 2026-09-28 (RESPUESTA §2.12: «se construye la mitad
+que falta»). No cambia ninguna decisión de arriba: construye lo que este ADR prometía y la venta no
+hacía.
+
+**Qué pasaba.** El esquema y el consumo suelto existían, pero ningún producto podía marcarse
+compuesto desde la API, y la venta trataba al compuesto como «no inventariable»: lo emitía sin mover
+un solo ingrediente y sin costo. Nada lo vigilaba.
+
+**Decisión.**
+
+1. **La venta explota la receta de ESE momento** (un nivel) y saca los ingredientes en la misma
+   salida en lote que las líneas sueltas (`packages/domain/src/compuestos.ts`). Cada salida va a su
+   propio costo promedio y al céntimo (ADR-0075 §7); el costo de lo vendido es la SUMA de las
+   salidas, no cantidad × un promedio redondeado. Un ingrediente con lote sale por vencimiento, como
+   cualquier venta (ADR-0060 §3).
+2. **Lo que la venta sacó queda escrito**: `public.sale_line_components` (migración
+   20261005130000), append-only, una fila por movimiento de kardex, con la cantidad de receta y el
+   factor de unidad de ese momento. Es lo que separa el pan del compuesto del pan suelto de la misma
+   venta, y lo que hace que una receta que cambia mañana no cambie lo vendido.
+   - Alternativa descartada: una columna `source_line_id` en `inventory_moves`. Tocaba el insert
+     del kardex que comparten todas las salidas y no guardaba la receta del momento.
+   - Alternativa descartada: no guardar nada y repartir la devolución por producto. Con el mismo
+     producto suelto y como ingrediente en una venta, no se sabe qué salida es de quién.
+3. **La devolución devuelve los ingredientes**, en proporción ACUMULADA a lo devuelto y al costo con
+   que salieron: tras devolver `d` de `v`, de cada salida debe haber vuelto `round8(q × d / v)` y
+   `céntimo(valor × d / v)`. Devolver la última unidad deja la venta en cero exacto. La anulación
+   repone todo por el camino de siempre (ADR-0061 §2).
+4. **Lo más estrecho en los bordes** (decidido por criterio, RESPUESTA §2.16):
+   - un ingrediente no es otro compuesto ni el propio producto (ya era así: LAD44 y el CHECK);
+   - un producto con movimientos no se vuelve compuesto (ya era así);
+   - **un compuesto que ya se vendió no deja de serlo** (nuevo, LAD44). Alternativa descartada:
+     permitirlo borrando la receta; dejaría ventas con rastro de ingredientes sobre un producto que
+     dice llevar existencia, y el invariante necesitaría una lista de perdones;
+   - un compuesto sin ingredientes no se vende (422 con su nombre).
+5. **El invariante que lo mira**: `platform.composite_sale_gaps(empresa)` — toda línea vendida de un
+   compuesto sacó sus ingredientes en la proporción de la receta de ese momento, cada fila coincide
+   con su movimiento, de ninguna salida volvió más de lo que salió y ningún compuesto tiene
+   movimientos propios. Cero filas, sin exclusiones.
+
+**Consecuencias negativas.** La línea vendida de un compuesto sigue sin `cost_snapshot` (su costo
+está en `sale_line_components`): un reporte de margen por línea tiene que leerlo de ahí. Devolver
+un compuesto reingresa ingredientes, aunque en la vida real el plato no se desarme: lo que no vuelve
+al depósito hay que sacarlo con una salida con motivo. El consumo suelto de receta sigue existiendo
+y no es una venta. Producir el compuesto y guardarlo con existencia propia queda para una fase
+posterior (RESPUESTA §2.12). Detalle en R-92.
+
+**Revertir.** Con `sale_line_components` vacía, `drop` de la tabla y del invariante. Con ventas de
+compuestos registradas no se revierte: es el único vínculo entre la línea y sus salidas.
+
+**Verificación.** pgTAP 137 (guarda, aislamiento con un usuario de los dos tenants, append-only en
+dos capas, variantes rotas del invariante); E2E `e2e-compuestos-y-lotes` (venta al céntimo,
+ingrediente que falta con su nombre, receta que cambia, devolución parcial y total, anulación,
+ingrediente con lote); `pnpm recorrido I`.

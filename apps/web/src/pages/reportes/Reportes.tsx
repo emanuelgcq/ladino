@@ -1,198 +1,175 @@
-import { useState } from "react";
-import { Link } from "react-router";
-import { useQuery } from "@tanstack/react-query";
-import { BarChart, Bar, XAxis, ResponsiveContainer, Cell } from "recharts";
-import { ArrowLeftRight, BookOpenCheck, Calculator, Scale } from "lucide-react";
+import { Link, useSearchParams } from "react-router";
+import { BookOpenCheck, Calculator } from "lucide-react";
 import { useSesion } from "../../app/session.js";
 import { PageHeader } from "../../components/PageHeader.js";
-import { DualMoney } from "../../components/DualMoney.js";
+import { EmptyState } from "../../components/EmptyState.js";
 import { DateRangePicker } from "../../components/forms.js";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../ui/card.js";
-import { Skeleton } from "../../ui/card.js";
-import { Button } from "../../ui/button.js";
-import { mostrarImporte } from "../../money.js";
-import { errorDePersona } from "../../lib.js";
-import { hoyLocal } from "../../fechas.js";
+import { ReporteDelServidor } from "../../components/TablaDeReporte.js";
+import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card.js";
+import { cn } from "../../ui/cn.js";
+import { mesLocal } from "../../fechas.js";
 import { useConFacturas } from "../../app/modo-venta.js";
+import { reportesVisibles } from "./reporte.js";
 
 /**
- * Reportes — el índice de las respuestas que el sistema ya sabe dar, y el
- * reporte de diferencial cambiario en detalle. Todos los importes vienen
- * calculados del servidor; las barras usan los valores SOLO como geometría.
+ * REPORTES (P-07). El catálogo de lo que el sistema responde, en el orden que fijó el dueño:
+ * ventas, margen, IVA del período, inventario valorizado, quién me debe y qué debo, cierres de
+ * caja e IGTF. Cada uno es UNA consulta del servidor: aquí se elige el reporte, el rango y cómo
+ * agruparlo, y se pinta lo que llega. Lo que el rol no puede abrir no aparece en la lista.
+ *
+ * El reporte, su agrupación y su rango viven en la URL (`?r=sales&g=product&desde=…&hasta=…`):
+ * una vista se puede compartir.
  */
-interface ReporteDiferencial {
-  ganancia: string;
-  perdida: string;
-  neto: string;
-  currency: string;
-  by_month: { month: string; amount: string }[];
-}
-
-function inicioDeAnio(): string {
-  return `${new Date().getFullYear()}-01-01`;
-}
+const DIA = /^\d{4}-\d{2}-\d{2}$/;
 
 export function Reportes(): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
-  const [rango, setRango] = useState({
-    from: inicioDeAnio(),
-    to: hoyLocal(),
-  });
-
-  const diferencial = useQuery({
-    queryKey: ["reporte-dif", empresa.id, rango.from, rango.to],
-    queryFn: () =>
-      llamar<ReporteDiferencial>(
-        `/v1/reports/exchange-difference?from=${rango.from}&to=${rango.to}`,
-      ),
-  });
-
-  const d = diferencial.data;
-  const barras = (d?.by_month ?? []).map((p) => ({
-    mes: p.month,
-    // SOLO altura de barra; la cifra visible es el string del servidor.
-    v: Number(p.amount),
-    negativo: p.amount.startsWith("-"),
-  }));
-
+  const { puede } = useSesion();
   const conFacturas = useConFacturas();
+  const [params, setParams] = useSearchParams();
+  const visibles = reportesVisibles(puede, conFacturas);
+  const elegido = visibles.find((r) => r.clave === params.get("r")) ?? visibles[0];
+  const mes = mesLocal();
+  const desde = DIA.test(params.get("desde") ?? "") ? (params.get("desde") as string) : mes.desde;
+  const hasta = DIA.test(params.get("hasta") ?? "") ? (params.get("hasta") as string) : mes.hasta;
+  const grupo =
+    elegido?.grupos?.find((g) => g.clave === params.get("g"))?.clave ??
+    elegido?.grupos?.[0]?.clave ??
+    null;
+
+  function poner(cambios: Record<string, string | null>): void {
+    setParams(
+      (antes) => {
+        const q = new URLSearchParams(antes);
+        for (const [k, v] of Object.entries(cambios)) {
+          if (v === null) q.delete(k);
+          else q.set(k, v);
+        }
+        return q;
+      },
+      { replace: true },
+    );
+  }
+
   const OTROS = [
-    {
-      to: "/admin/contabilidad",
-      icono: <Calculator className="size-4" />,
-      titulo: "Comprobación y estados financieros",
-      detalle:
-        "Balance de comprobación, estado de resultados y balance general — pestañas de Contabilidad.",
-    },
+    ...(puede("accounting.read")
+      ? [
+          {
+            to: "/admin/contabilidad",
+            icono: <Calculator className="size-4" />,
+            titulo: "Comprobación y estados financieros",
+          },
+        ]
+      : []),
     // Los libros fiscales existen solo para quien tiene RIF.
-    ...(conFacturas
+    ...(conFacturas && puede("fiscal_book.read")
       ? [
           {
             to: "/admin/libros",
             icono: <BookOpenCheck className="size-4" />,
             titulo: "Libros fiscales",
-            detalle:
-              "Ventas, compras y retenciones con exportación auditable (hash por generación).",
           },
         ]
       : []),
-    {
-      to: "/admin/cuentas",
-      icono: <Scale className="size-4" />,
-      titulo: "Antigüedad de cuentas por cobrar",
-      detalle: "Aging por cliente, con cada documento y su saldo.",
-    },
   ];
 
   return (
     <div>
       <PageHeader
         title="Reportes"
-        description="Cada cifra la calcula el servidor con fecha explícita: un reporte que no se puede reproducir mañana no es un reporte."
+        description="Cada cifra la calcula el servidor, con su rango de fechas: lo que ves es lo que se descarga."
       />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <ArrowLeftRight className="size-4 text-muted-foreground" />
-              <CardTitle>Diferencial cambiario</CardTitle>
-            </div>
-            <DateRangePicker from={rango.from} to={rango.to} onChange={setRango} />
-          </CardHeader>
-          <CardContent>
-            {/* Un fallo no es «cargando para siempre»: se dice y se ofrece reintentar. */}
-            {diferencial.isError ? (
-              <div
-                role="alert"
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive-soft px-3 py-2 text-[0.88rem] text-destructive-soft-foreground"
+      {elegido === undefined ? (
+        <EmptyState
+          icon={Calculator}
+          title="Tu rol no abre ningún reporte"
+          description="Pídele a quien administra la empresa el permiso del reporte que necesitas."
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[16rem_1fr]">
+          <nav aria-label="Reportes" className="space-y-1.5">
+            {visibles.map((r) => (
+              <button
+                key={r.clave}
+                type="button"
+                aria-current={r.clave === elegido.clave ? "page" : undefined}
+                onClick={() => poner({ r: r.clave, g: null })}
+                className={cn(
+                  "block w-full rounded-md border border-border p-2.5 text-left transition-colors hover:border-accent",
+                  r.clave === elegido.clave && "border-accent bg-accent-soft/40",
+                )}
               >
-                <span>{errorDePersona(diferencial.error)}</span>
-                <Button variant="secondary" size="sm" onClick={() => void diferencial.refetch()}>
-                  Reintentar
-                </Button>
-              </div>
-            ) : d === undefined ? (
-              <Skeleton className="h-40 w-full" />
-            ) : (
-              <>
-                <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <div>
-                    <p className="text-[0.8rem] text-muted-foreground">Ganancia</p>
-                    <p className="font-mono text-[1.1rem] font-semibold text-accent-soft-foreground">
-                      {mostrarImporte({ amount: d.ganancia, currency: d.currency })}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[0.8rem] text-muted-foreground">Pérdida</p>
-                    <p className="font-mono text-[1.1rem] font-semibold text-warning-soft-foreground">
-                      {mostrarImporte({ amount: d.perdida, currency: d.currency })}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[0.8rem] text-muted-foreground">Neto</p>
-                    <DualMoney variant="inline" amount={d.neto} currency={d.currency} />
-                  </div>
-                </div>
-                {/* Sin barras, el pie describía un gráfico que no estaba: la
-                    tarjeta quedaba con un hueco y una explicación de nada. */}
-                {barras.length === 0 && (
-                  <p className="py-8 text-center text-[0.88rem] text-muted-foreground">
-                    Ningún mes del período tiene diferencial que graficar.
-                  </p>
-                )}
-                {barras.length > 0 && (
-                  <div className="h-40">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={barras} margin={{ top: 4, right: 8, bottom: 0, left: 8 }}>
-                        <XAxis
-                          dataKey="mes"
-                          tickLine={false}
-                          axisLine={false}
-                          tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
-                        />
-                        <Bar dataKey="v" radius={[4, 4, 0, 0]} isAnimationActive={false}>
-                          {barras.map((b) => (
-                            <Cell
-                              key={b.mes}
-                              fill={b.negativo ? "var(--warning)" : "var(--accent)"}
-                            />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-                <CardDescription className="mt-2">
-                  {barras.length > 0
-                    ? "Cada barra es el neto del mes (esmeralda ganancia, ámbar pérdida), tal como lo calcula el servidor. El detalle por documento vive en cada venta."
-                    : "El diferencial lo calcula el servidor: aparece cuando un cobro se valora a una tasa distinta de la de emisión. El detalle por documento vive en cada venta."}
-                </CardDescription>
-              </>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Los demás reportes</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {OTROS.map((r) => (
+                <span className="block text-[0.92rem] font-medium">{r.titulo}</span>
+                <span className="block text-[0.8rem] text-muted-foreground">{r.detalle}</span>
+              </button>
+            ))}
+            {OTROS.map((o) => (
               <Link
-                key={r.to}
-                to={r.to}
-                className="block rounded-md border border-border p-3 transition-colors hover:border-accent hover:bg-accent-soft/30"
+                key={o.to}
+                to={o.to}
+                className="flex items-center gap-2 rounded-md p-2.5 text-[0.88rem] text-accent-soft-foreground hover:underline"
               >
-                <p className="flex items-center gap-2 font-medium">
-                  {r.icono} {r.titulo}
-                </p>
-                <p className="mt-0.5 text-[0.82rem] text-muted-foreground">{r.detalle}</p>
+                {o.icono} {o.titulo}
               </Link>
             ))}
-          </CardContent>
-        </Card>
-      </div>
+          </nav>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{elegido.titulo}</CardTitle>
+              <div className="flex flex-wrap items-center gap-2">
+                {elegido.conRango && (
+                  <DateRangePicker
+                    from={desde}
+                    to={hasta}
+                    onChange={(r) => poner({ desde: r.from, hasta: r.to })}
+                  />
+                )}
+                {elegido.grupos !== undefined && (
+                  <div className="flex flex-wrap gap-1" role="group" aria-label="Agrupar">
+                    {elegido.grupos.map((g) => (
+                      <button
+                        key={g.clave}
+                        type="button"
+                        aria-pressed={g.clave === grupo}
+                        onClick={() => poner({ g: g.clave })}
+                        className={cn(
+                          "rounded-full border border-border px-2.5 py-1 text-[0.8rem] hover:border-accent",
+                          g.clave === grupo && "border-accent bg-accent-soft/50 font-medium",
+                        )}
+                      >
+                        {g.etiqueta}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {elegido.conRango && desde > hasta ? (
+                <p role="alert" className="text-[0.88rem] text-destructive-soft-foreground">
+                  El «desde» no puede ser posterior al «hasta».
+                </p>
+              ) : (
+                <ReporteDelServidor
+                  // Otro reporte u otra agrupación empiezan en su primera página.
+                  key={`${elegido.clave}-${grupo ?? ""}-${desde}-${hasta}`}
+                  reporte={elegido}
+                  from={desde}
+                  to={hasta}
+                  group={grupo}
+                  {...(elegido.clave === "receivables"
+                    ? {
+                        enlaceDeFila: (f: Record<string, string | null>) =>
+                          f["id"] ? `/admin/cuentas?cliente=${f["id"]}` : null,
+                      }
+                    : {})}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

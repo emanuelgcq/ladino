@@ -145,6 +145,12 @@ export async function customerStatement(
       from public.documents d
      where d.company_id = ${companyId} and d.customer_id = ${id}
        and d.status in ('issued', 'paid', 'annulled')
+       -- ADR-0082: el estado de cuenta lista CARTERA y lo que la mueve. Una factura de retiro y
+       -- su nota de crédito no son de nadie: no salen (sin esta lista salían con saldo NULL, que
+       -- en este contrato significa «debe y no se puede calcular»). Lista POSITIVA, con los
+       -- tipos que ya salían antes: un tipo futuro no entra por omisión.
+       and d.kind in ('quote', 'order', 'invoice', 'credit_note', 'debit_note', 'receipt',
+                      'receipt_return')
      order by d.issued_at, d.id`;
   const credits = await tx<Record<string, unknown>[]>`
     select id, source_document_id, amount::text as amount,

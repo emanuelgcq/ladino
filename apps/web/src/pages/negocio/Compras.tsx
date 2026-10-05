@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardList, Paperclip, Plus, Receipt, ShoppingCart } from "lucide-react";
@@ -39,6 +39,14 @@ import {
   type CandidatasDeInstrumento,
 } from "../../components/formas-de-pago.js";
 import { HacerPedido } from "../../components/HacerPedido.js";
+import { Cartera } from "../../components/Cartera.js";
+import { conLlaveDeIntento } from "../../llave-intento.js";
+import {
+  CADA_CUANTO,
+  GastosQueTocan,
+  diaDeCalendario,
+  type GastoQueSeRepite,
+} from "../../components/GastosQueTocan.js";
 import { fechaRelativa } from "./comunes.js";
 import { fechaLocal, hoyLocal } from "../../fechas.js";
 import {
@@ -117,6 +125,8 @@ function FilaDeResumen({
 
 /** Lo que responde `POST /v1/expenses`: con factura (H-09) trae sus cifras ya calculadas. */
 interface GastoRegistrado {
+  /** H-07: la categoría ya tenía recordatorio; sigue con esta periodicidad (lo dice el servidor). */
+  recurrence_kept?: { periodicity: GastoQueSeRepite["periodicity"]; next_due_on: string };
   amount: string;
   currency: string;
   functional_currency: string;
@@ -218,6 +228,8 @@ export function ComprasNegocio(): React.JSX.Element {
   );
   const [enganchando, setEnganchando] = useState<RecepcionPendiente | null>(null);
   const [nuevoGasto, setNuevoGasto] = useState(false);
+  // H-07: el gasto que se repite y toca, abierto en el formulario de siempre.
+  const [gastoQueToca, setGastoQueToca] = useState<GastoQueSeRepite | null>(null);
   const [nuevoPedido, setNuevoPedido] = useState(false);
   const [pagando, setPagando] = useState<FacturaProveedor | null>(null);
   const puedePagar = puede("purchase.payment.register");
@@ -257,6 +269,7 @@ export function ComprasNegocio(): React.JSX.Element {
 
   const recargar = () => {
     void qc.invalidateQueries({ queryKey: ["gastos", empresa.id] });
+    void qc.invalidateQueries({ queryKey: ["gastos-que-se-repiten", empresa.id] });
     void qc.invalidateQueries({ queryKey: ["facturas-prov", empresa.id] });
     void qc.invalidateQueries({ queryKey: ["proveedores", empresa.id] });
     void qc.invalidateQueries({ queryKey: ["negocio-resumen", empresa.id] });
@@ -346,6 +359,7 @@ export function ComprasNegocio(): React.JSX.Element {
 
       {pestana === "gastos" && puedeGastos ? (
         <div role="tabpanel" id="compras-panel-gastos" aria-labelledby="compras-tab-gastos">
+          <GastosQueTocan onRegistrar={setGastoQueToca} />
           {gastos.isPending ? (
             <ListaCargando />
           ) : gastos.isError ? (
@@ -399,6 +413,13 @@ export function ComprasNegocio(): React.JSX.Element {
         </div>
       ) : pestana === "compras" ? (
         <div role="tabpanel" id="compras-panel-compras" aria-labelledby="compras-tab-compras">
+          {/* H-11: «Ver qué debo» aterriza aquí: a quién le debo, cuánto y cuándo vence, sin
+              elegir proveedor antes. Lo calcula el servidor; solo para quien puede ver la deuda. */}
+          {puede("ap.read") && (
+            <div className="mb-4">
+              <Cartera tipo="payables" />
+            </div>
+          )}
           {facturas.isPending ? (
             <ListaCargando />
           ) : facturas.isError ? (
@@ -534,6 +555,14 @@ export function ComprasNegocio(): React.JSX.Element {
       )}
 
       {nuevoGasto && <RegistrarGasto onCerrar={() => setNuevoGasto(false)} onListo={recargar} />}
+      {gastoQueToca !== null && (
+        <RegistrarGasto
+          key={gastoQueToca.id}
+          desde={gastoQueToca}
+          onCerrar={() => setGastoQueToca(null)}
+          onListo={recargar}
+        />
+      )}
       <HacerPedido abierto={nuevoPedido} onCerrar={() => setNuevoPedido(false)} />
       {pagando !== null && (
         <PagarFactura
@@ -577,21 +606,42 @@ function PieDePaginas({
   );
 }
 
+/** `520.00000000` → `520,00`: el texto del importe sugerido, tal como se teclea. Sin cuentas. */
+function importeParaElCampo(importe: string | null): string {
+  if (importe === null) return "";
+  const [enteros = "", decimales = ""] = importe.split(".");
+  return `${enteros},${decimales.replace(/0+$/, "").padEnd(2, "0")}`;
+}
+
 function RegistrarGasto({
   onCerrar,
   onListo,
+  desde,
 }: {
   onCerrar: () => void;
   onListo: () => void;
+  /** H-07: el gasto que se repite y toca. Sus datos llegan puestos; la persona los confirma. */
+  desde?: GastoQueSeRepite;
 }): React.JSX.Element {
   const { empresa, llamar, puede } = useSesion();
   const toast = useToast();
-  const [categoria, setCategoria] = useState<string | null>(null);
-  const [otraCategoria, setOtraCategoria] = useState("");
-  const [descripcion, setDescripcion] = useState("");
-  const [cuenta, setCuenta] = useState<string | null>(null);
-  const [monto, setMonto] = useState("");
+  const deLaLista =
+    desde !== undefined && (CATEGORIAS_GASTO as readonly string[]).includes(desde.category);
+  const [categoria, setCategoria] = useState<string | null>(
+    desde === undefined ? null : deLaLista ? desde.category : "otro",
+  );
+  const [otraCategoria, setOtraCategoria] = useState(
+    desde === undefined || deLaLista ? "" : desde.category,
+  );
+  const [descripcion, setDescripcion] = useState(desde?.description ?? "");
+  const [cuenta, setCuenta] = useState<string | null>(desde?.account_id ?? null);
+  // El importe de la última vez es una SUGERENCIA: queda escrito y la persona lo confirma.
+  const [monto, setMonto] = useState(importeParaElCampo(desde?.suggested_amount ?? null));
   const [recurrente, setRecurrente] = useState(false);
+  const [cadaCuanto, setCadaCuanto] = useState<GastoQueSeRepite["periodicity"]>("monthly");
+  // La llave es por INTENTO (RESPUESTA §2.9): se conserva ante un fallo de red —el reintento
+  // devuelve el gasto ya registrado, no un segundo— y se estrena tras un 4xx.
+  const llave = useRef(crypto.randomUUID());
   const [adjunto, setAdjunto] = useState<File | null>(null);
   // La RUTA del comprobante ya subido. La API exige subirlo ANTES de crear el
   // gasto; si el gasto falla después, la ruta se conserva y el reintento la
@@ -599,7 +649,7 @@ function RegistrarGasto({
   const [adjuntoSubido, setAdjuntoSubido] = useState<{ archivo: File; ruta: string } | null>(null);
   // H-09: con factura fiscal el gasto es una compra de servicio. La pantalla recoge lo que trae
   // el papel; el impuesto, lo retenido y lo que sale de la cuenta los calcula el servidor.
-  const [conFactura, setConFactura] = useState(false);
+  const [conFactura, setConFactura] = useState(desde?.with_invoice ?? false);
   const [proveedor, setProveedor] = useState<EntityOption | null>(null);
   // La moneda IMPRESA en la factura (ADR-0080): en ella van las bases y así entra al libro. No
   // es la de la cuenta: si difieren, el pago cruza a la tasa del día y el resumen lo dice.
@@ -731,21 +781,30 @@ function RegistrarGasto({
           setAdjuntoSubido({ archivo: adjunto, ruta: r.attachment_path });
         }
       }
-      return llamar<GastoRegistrado>("/v1/expenses", {
-        method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-        body: JSON.stringify({
-          company_id: empresa.id,
-          category: categoriaFinal,
-          ...(descripcion.trim() === "" ? {} : { description: descripcion.trim() }),
-          account_id: cuenta,
-          // H-09: con factura NO se manda el importe: lo calcula el servidor.
-          ...(conFactura ? { invoice: cuerpoDeFactura } : { amount: importeLimpio(monto) }),
-          ...(recurrente ? { is_recurring: true } : {}),
-          ...(forzar !== null ? { allow_negative_balance: true, overdraft_reason: forzar } : {}),
-          ...(attachment === undefined ? {} : { attachment_path: attachment }),
-        }),
+      const cuerpo = JSON.stringify({
+        company_id: empresa.id,
+        category: categoriaFinal,
+        ...(descripcion.trim() === "" ? {} : { description: descripcion.trim() }),
+        account_id: cuenta,
+        // H-09: con factura NO se manda el importe: lo calcula el servidor.
+        ...(conFactura ? { invoice: cuerpoDeFactura } : { amount: importeLimpio(monto) }),
+        // H-07: «registrar ahora» atiende el período que toca; si no, la marca con su
+        // periodicidad crea el recordatorio.
+        ...(desde !== undefined
+          ? { recurring_expense_id: desde.id, recurring_due_on: desde.next_due_on }
+          : recurrente
+            ? { is_recurring: true, recurrence: cadaCuanto }
+            : {}),
+        ...(forzar !== null ? { allow_negative_balance: true, overdraft_reason: forzar } : {}),
+        ...(attachment === undefined ? {} : { attachment_path: attachment }),
       });
+      return conLlaveDeIntento(llave, (k) =>
+        llamar<GastoRegistrado>("/v1/expenses", {
+          method: "POST",
+          headers: { "Idempotency-Key": k },
+          body: cuerpo,
+        }),
+      );
     },
     onSuccess: (g) => {
       // H-09: las cifras de la factura vienen del servidor, ya calculadas; aquí solo se enseñan.
@@ -763,6 +822,16 @@ function RegistrarGasto({
               sale: mostrarImporte({ amount: g.amount, currency: g.currency }),
             }),
       );
+      // H-07 (F9): se marcó «se repite» y la categoría ya tenía su recordatorio. El gasto quedó
+      // anotado; lo que NO cambió se dice, con la periodicidad que dio el servidor.
+      if (g.recurrence_kept !== undefined) {
+        const cada =
+          CADA_CUANTO.find(([c]) => c === g.recurrence_kept?.periodicity)?.[1].toLowerCase() ?? "";
+        toast.warning(
+          "Ya te avisábamos de este gasto",
+          `Te lo recordamos ${cada} y sigue igual: el próximo aviso es el ${diaDeCalendario(g.recurrence_kept.next_due_on)}. Para cambiarlo, deténlo en «Gastos que se repiten» y márcalo de nuevo.`,
+        );
+      }
       onListo();
       onCerrar();
     },
@@ -781,7 +850,11 @@ function RegistrarGasto({
       <Dialog open onOpenChange={(v) => !v && onCerrar()}>
         <DialogContent className="max-w-md">
           <DialogTitle>Registrar gasto</DialogTitle>
-          <DialogDescription>Lo que pagas y no es mercancía para vender.</DialogDescription>
+          <DialogDescription>
+            {desde === undefined
+              ? "Lo que pagas y no es mercancía para vender."
+              : `${desde.category}, el pago que tocaba el ${diaDeCalendario(desde.next_due_on)}. Revisa los datos de la última vez y confirma.`}
+          </DialogDescription>
           <div className="space-y-3 pt-2">
             <div>
               <p className="pb-1.5 text-[0.88rem] font-medium" id="gasto-categoria-titulo">
@@ -797,6 +870,7 @@ function RegistrarGasto({
                     key={cat}
                     type="button"
                     aria-pressed={categoria === cat}
+                    disabled={desde !== undefined}
                     onClick={() => setCategoria(cat)}
                     className={`rounded-full border px-3 py-1.5 text-[0.85rem] ${
                       categoria === cat
@@ -810,6 +884,7 @@ function RegistrarGasto({
                 <button
                   type="button"
                   aria-pressed={categoria === "otro"}
+                  disabled={desde !== undefined}
                   onClick={() => setCategoria("otro")}
                   className={`rounded-full border px-3 py-1.5 text-[0.85rem] ${
                     categoria === "otro"
@@ -825,6 +900,7 @@ function RegistrarGasto({
                   className="mt-2"
                   value={otraCategoria}
                   onChange={(e) => setOtraCategoria(e.target.value)}
+                  disabled={desde !== undefined}
                   placeholder="¿Qué fue?"
                   aria-label="Categoría del gasto"
                   autoFocus
@@ -1059,19 +1135,34 @@ function RegistrarGasto({
                 />
               )}
             </FormField>
-            <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
-              <span className="text-[0.9rem]">
-                Se paga todos los meses
-                <span className="block text-[0.78rem] text-muted-foreground">
-                  Para recordártelo cuando toque.
+            {/* H-07: el gasto que ya se repite no vuelve a preguntarlo. */}
+            {desde === undefined && (
+              <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+                <span className="text-[0.9rem]">
+                  Este gasto se repite
+                  <span className="block text-[0.78rem] text-muted-foreground">
+                    Para recordártelo cuando toque, en Inicio y aquí.
+                  </span>
                 </span>
-              </span>
-              <Switch
-                checked={recurrente}
-                onCheckedChange={setRecurrente}
-                aria-label="Se paga todos los meses"
-              />
-            </label>
+                <Switch
+                  checked={recurrente}
+                  onCheckedChange={setRecurrente}
+                  aria-label="Este gasto se repite"
+                />
+              </label>
+            )}
+            {desde === undefined && recurrente && (
+              <FormField label="¿Cada cuánto se paga?">
+                {(p) => (
+                  <SimpleSelect
+                    id={p.id}
+                    value={cadaCuanto}
+                    onValueChange={(v) => setCadaCuanto(v as GastoQueSeRepite["periodicity"])}
+                    options={CADA_CUANTO.map(([value, label]) => ({ value, label }))}
+                  />
+                )}
+              </FormField>
+            )}
             {/* H-08: el campo estaba `hidden` y no se alcanzaba con el teclado. Ahora sigue en
                 el orden de tabulación (solo oculto a la vista) y el rótulo enseña su foco. */}
             <label className="flex cursor-pointer items-center gap-2 rounded-md text-[0.88rem] text-muted-foreground focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">

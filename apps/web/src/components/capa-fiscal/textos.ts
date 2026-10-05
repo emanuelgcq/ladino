@@ -1,3 +1,93 @@
+/**
+ * LA SALIDA DE INVENTARIO DICE QUÉ EMITE ANTES DE CONFIRMAR (ADR-0082; RLIVA art. 31).
+ *
+ * Viven aquí porque nombran el IVA y la factura. Lo que de verdad se emite lo decide el SERVIDOR
+ * (si el negocio factura, el precio, la alícuota, el número del talonario): estos textos dicen la
+ * regla, no una cifra, y la pantalla no calcula nada.
+ */
+export const SALIDA_QUE_EMITE = {
+  retiro:
+    "Es un retiro: si tu negocio factura, al confirmar se emite una factura de retiro a nombre del propio negocio, con su IVA sobre el precio de venta y un número de control de tu talonario. No genera cuenta por cobrar. Si tu negocio no factura, solo sale del inventario.",
+  noGravado:
+    "No se emite ningún documento: sale del inventario al costo, sin IVA. Úsalo solo si el producto se queda trabajando en el negocio, y di adónde fue.",
+  /** AF5-02: a quien mueve mercancía y no factura. Si el negocio factura, lo dirá el servidor. */
+  retiroSinPermiso:
+    "Es un retiro: si tu negocio factura, emite una factura a nombre de tu negocio y lo registra quien puede facturar. Si tu negocio no factura, solo sale del inventario.",
+  perdida: "No se emite ningún documento: va a pérdidas, con la evidencia que la respalda.",
+} as const;
+
+/** El resumen de la salida, en la tarjeta del verbo. */
+export const CONSECUENCIA_SALIDA =
+  "Sale al costo promedio vigente, que calcula el servidor. Merma, rotura, vencido y faltante van a «Pérdidas por mermas y faltantes» con su evidencia; consumo propio, regalo, donación y muestra son un retiro: si facturas, se emite una factura de retiro con su IVA; lo que se usa en el negocio, pasa a activo fijo o se incorpora a un inmueble del negocio sale sin IVA y sin documento.";
+
+/**
+ * ANTES de confirmar, con las cifras que el servidor ensayó (`/v1/inventory/issues/preview`). El
+ * número no se promete: lo asigna el talonario al emitir.
+ */
+export function avisoPrevioDeFacturaDeRetiro(serie: string, base: string, iva: string): string {
+  return (
+    `Se emitirá una factura de retiro de la serie ${serie} con base ${base} e IVA ${iva}, a nombre ` +
+    "del propio negocio. Gasta un número de control de tu talonario y no genera cuenta por cobrar."
+  );
+}
+/** Y cuando el servidor dice que no se emite nada, por qué. */
+export const SALIDA_NO_EMITE: Record<"retiro" | "no_gravado" | "perdida" | "sin_rif", string> = {
+  retiro: "No se emite ningún documento.",
+  no_gravado:
+    "No se emite ningún documento: sale del inventario al costo, sin IVA, a la cuenta de gasto o de activo que le corresponde.",
+  perdida: "No se emite ningún documento: va a pérdidas, con la evidencia que la respalda.",
+  sin_rif:
+    "No se emite ningún documento: tu negocio no factura. Sale del inventario y queda como gasto.",
+};
+
+/**
+ * CORREGIR UN RETIRO FACTURADO (ADR-0082, AF3-06), en el detalle de la factura de retiro. Lo que
+ * va a pasar se dice ANTES de confirmar; cuál de los dos caminos toca lo decide el servidor.
+ */
+export const CORREGIR_RETIRO = {
+  boton: "Corregir este retiro",
+  anular:
+    "Se anula la factura de retiro: conserva su número y su control, la mercancía vuelve al inventario y se revierte su IVA. Solo si tienes en la mano el original y todas las copias.",
+  nota: "Esta factura ya no se puede anular. Se emite una nota de crédito por el retiro ENTERO: gasta un número de control de tu talonario, la mercancía vuelve al inventario al costo con que salió y el IVA del retiro se resta en el libro de ventas y en la declaración de este período. Para corregir solo una parte, deja sin efecto el retiro entero con la nota y regístralo de nuevo.",
+  motivo: "¿Por qué se deja sin efecto?",
+  hecho: "Retiro corregido",
+} as const;
+
+/** AF5-07: la nota de DESTINO de una salida sin IVA (uso en el negocio, activo fijo, inmueble). */
+export const DESTINO_DE_LA_SALIDA = {
+  etiqueta: "Destino",
+  ayuda:
+    "Adónde fue la mercancía, con al menos dos palabras: por ejemplo «Cloro para la limpieza del local». Es lo que respalda que salga sin IVA.",
+} as const;
+
+/** Tras confirmar un retiro que emitió su factura: se dice y se ofrece abrirla. */
+export const RETIRO_EMITIDO = {
+  titulo: "Retiro registrado",
+  ver: "Ver la factura de retiro",
+  cerrar: "Cerrar",
+} as const;
+
+/**
+ * Los tipos de documento que son FISCALES para la pantalla del detalle: gastan número de control
+ * y se imprimen sobre la forma libre. Una sola lista (el servidor tiene la suya en documents-pdf).
+ */
+export const TIPOS_FISCALES: readonly string[] = [
+  "invoice",
+  "credit_note",
+  "debit_note",
+  "withdrawal_invoice",
+  "withdrawal_credit_note",
+];
+
+/** Lo que la pantalla dice cuando la salida emitió su factura de retiro. Las cifras son del servidor. */
+export function avisoFacturaDeRetiro(numero: string, control: string | null, iva: string): string {
+  return (
+    `Se emitió la factura de retiro ${numero}` +
+    (control !== null ? ` (control ${control})` : "") +
+    ` con IVA de ${iva}.`
+  );
+}
+
 /** El aviso del precio de compra: el impuesto lo resuelve el servidor con la regla vigente. */
 export const AVISO_PRECIO_COMPRA =
   "El precio es por unidad y sin IVA: el impuesto lo pone el sistema con la regla vigente.";
@@ -205,3 +295,61 @@ export const CLIENTE_ESPECIAL = {
   fichaAyuda:
     "De la clasificación depende quién retiene IVA. Cambiarla deja acta con el valor anterior.",
 };
+
+/**
+ * H-03 (RESPUESTA del dueño del 2026-09-28; ADR-0083): la nota de crédito que EMITE el proveedor.
+ * Los textos viven aquí; las reglas (qué va al libro, el impuesto, el kardex, el saldo) son del
+ * servidor. PA 00071 art. 23 → art. 13: la nota de un contribuyente lleva número de control.
+ */
+export const NC_PROVEEDOR = {
+  descripcion:
+    "Copia los datos del papel que emitió tu proveedor. Rebaja lo que se debe de ESA factura; si ya estaba pagada, queda anotado a tu favor con el proveedor.",
+  sinControl:
+    "Sin número de control la nota se registra igual y baja tu crédito fiscal, y queda marcada como documento incompleto. Esa marca no se quita después: si tienes el papel con su número de control, escríbelo ahora.",
+  noFiscal:
+    "Esta compra se registró sin factura fiscal: su nota no es una nota de crédito fiscal y no va al libro de compras.",
+  conRetencion:
+    "A esta factura se le practicó retención de IVA. La nota no cambia lo retenido ni su comprobante. La providencia de retenciones (PA SNAT/2025/000054, art. 11) trata este caso: si la retención todavía no se enteró, lo retenido de más se le devuelve al proveedor; si ya se enteró, lo descuenta él. Confírmalo con tu contador antes de pagarle o devolverle dinero.",
+  preguntaClase: "¿Qué pasó con la mercancía?",
+  devolucion: "La devolví al proveedor",
+  rebaja: "Me la quedé: me rebajó el precio",
+  ayudaDevolucion: "La mercancía sale de tu inventario, a su costo.",
+  ayudaRebaja: "La mercancía se queda: baja el costo de la que todavía tienes.",
+  deposito: "¿De qué depósito sale la mercancía?",
+  ayudaLineas: (moneda: string): string =>
+    `Llena solo las líneas que la nota abona, con los importes sin IVA, en ${moneda}: el impuesto lo pone el sistema con la alícuota de la factura.`,
+  /** G-10 en compras: una factura de proveedor no se anula. */
+  porError:
+    "Una factura de proveedor registrada por error no se anula: se corrige con la nota de crédito del proveedor por todo su importe.",
+  bajoLaDeuda: "La deuda con el proveedor bajó.",
+  quedoAFavor:
+    "La factura ya no debía ese importe: queda anotado a tu favor con el proveedor. Todavía no se descuenta solo de la próxima factura: tenlo en cuenta al pagarle.",
+  faltaElLote:
+    "Este producto se lleva por lotes y su factura no viene de una recepción: di de qué lote sale lo que devuelves.",
+  lote: (producto: string): string => `Lote de ${producto} que devuelves`,
+  loteVencido: "vencido",
+  sinLotes:
+    "No hay lotes con existencia de este producto en el depósito elegido: elige otro depósito o regístrala como rebaja.",
+  ayudaLoteVencido: "Devolver un lote vencido exige el permiso de despachar mercancía vencida.",
+  aTuFavor: "A tu favor con este proveedor",
+  aTuFavorAyuda:
+    "Viene de notas de crédito que abonaron más de lo que se le debía en esa factura. No está restado de lo que debes y todavía no se descuenta solo: tenlo en cuenta al pagarle.",
+  listaTitulo: "Notas de crédito del proveedor",
+  noFiscalEtiqueta: "No fiscal",
+  incompletaTitulo: "Documento incompleto",
+  incompleta: "La nota quedó registrada sin número de control y marcada como documento incompleto.",
+};
+
+/**
+ * I-04 (ola 5, C7): el consumo SUELTO de una receta (Administración → Inventario → Recetas) saca
+ * los ingredientes otra vez sobre un producto cuya venta ya los saca. La confirmación lo dice.
+ */
+export const CONSUMO_SUELTO_DE_RECETA =
+  "La venta de este producto ya descuenta sus ingredientes. Usa esto solo para registrar un consumo que NO se vendió (una prueba, una preparación que se perdió).";
+
+/**
+ * I-04 (ola 5, tercera ronda; ADR-0084): al confirmar un pedido, la línea de un producto que se
+ * arma con otros no reserva nada. Lo dice la confirmación del pedido, donde se habla de reservar.
+ */
+export const PEDIDO_COMPUESTO_NO_RESERVA =
+  "Los productos que se arman con otros no se reservan: su existencia se comprueba al facturar.";

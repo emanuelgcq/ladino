@@ -67,3 +67,11 @@ txn imported→matched→reconciled; batch draft→approved→sent→settled.
 - Accounting
 - AP/AR
 - Money
+
+## El gasto que se repite (H-07, migración 20261005140000)
+
+Un gasto marcado «se repite» deja un RECORDATORIO por categoría (`recurring_expenses`): qué se paga, cada cuánto (semana, quincena, mes, año) y desde qué día. **Toca** cuando su próximo día (`next_due_on`) es hoy o anterior, comparando el día calendario de Caracas contra un día, sin horas; se calcula al leer, no hay tarea programada. Cada ocurrencia sale del día del primer pago: un gasto del 31 toca el último día de un mes corto y vuelve al 31. El aviso se enseña en Inicio y en Compras → Gastos a quien tiene `expense.read`.
+
+**«Registrar ahora»** abre el formulario de gasto de siempre con la categoría (fija), la cuenta y el importe de la última vez como sugerencia, y registra por `POST /v1/expenses` —con factura fiscal o sin ella, con sus validaciones de período, tasa, saldo y retención—. El período queda atendido (`recurring_expense_periods`, append-only) y el aviso pasa al siguiente. Un período se atiende una sola vez: el segundo intento recibe 409 y no registra otro gasto.
+
+**Lo que NO hace:** no registra dinero solo, no avisa antes del día, no se edita (se detiene y se vuelve a marcar), y un gasto registrado a mano de esa categoría no atiende su período. «Omitir esta vez» y «Ya no se paga» no se deshacen.

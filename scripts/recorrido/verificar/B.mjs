@@ -330,4 +330,47 @@ c.caso(
   },
 );
 
+// ── Ola 5 · B-01 (ADR-0081): ya no se promete «vender describiendo la venta» ──
+c.caso(
+  "B-01",
+  "una venta sin producto sigue siendo 422, y ninguna pantalla ni guía promete lo contrario",
+  async () => {
+    // Por qué se retira: la línea «descrita» no existe en el servidor.
+    const [deposito] = await sql`
+      select id from public.warehouses where company_id = ${EMPRESAS.E2} limit 1`;
+    const r = await pedir(PERSONAS.cajero, "E2", "POST", "/v1/pos/sales", {
+      company_id: EMPRESAS.E2,
+      warehouse_id: deposito.id,
+      lines: [{ description: "Servicio de flete, sin producto", quantity: "1" }],
+    });
+    afirmar(r.status === 422, `una línea descrita, sin producto, dio ${r.status}`);
+
+    const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const promesa = /describiendo la venta/i;
+    const conPromesa = [];
+    const mirar = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const ruta = path.join(dir, e.name);
+        if (e.isDirectory()) mirar(ruta);
+        else if (/\.(tsx?|md)$/.test(e.name) && promesa.test(fs.readFileSync(ruta, "utf8"))) {
+          conPromesa.push(path.relative(raiz, ruta));
+        }
+      }
+    };
+    mirar(path.join(raiz, "apps", "web", "src"));
+    mirar(path.join(raiz, "docs", "08_UX"));
+    afirmar(conPromesa.length === 0, `sigue prometiéndose en: ${conPromesa.join(", ")}`);
+
+    // Y el asistente no manda al mostrador a quien no tiene qué vender.
+    const empezar = fs.readFileSync(
+      path.join(raiz, "apps", "web", "src", "pages", "negocio", "Empezar.tsx"),
+      "utf8",
+    );
+    afirmar(
+      empezar.includes("Para vender necesitas al menos un producto"),
+      "la tarjeta final de /empezar no dice que falta un producto",
+    );
+  },
+);
+
 export default c.correr;

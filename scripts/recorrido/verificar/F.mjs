@@ -626,4 +626,90 @@ c.caso(
   },
 );
 
+// F-13 (ola 5): «Quién me debe» sale SIN elegir cliente, con totales y tramos, y cuadra con la
+// única función de antigüedad (platform.ar_aging) y con lo vencido (customer_overdue_today).
+c.caso(
+  "F-13",
+  "la cartera de E2 y E3 cuadra con ar_aging, ordena en el servidor y no se abre sin ar.read",
+  async () => {
+    for (const e of ["E2", "E3"]) {
+      const r = await pedir(PERSONAS.duenoE2E3, e, "GET", "/v1/reports/receivables");
+      afirmar(r.status === 200, `${e}: la cartera dio ${r.status}`);
+      const t = r.json;
+      const fuente = await sql`
+        select a.customer_id::text as id,
+               (case when bool_or(a.amount is null) then null
+                     else round(sum(a.amount), 2) end)::text as deuda
+          from platform.ar_aging(${EMPRESAS[e]}, null, ${t.as_of}::date) a
+         group by a.customer_id`;
+      afirmar(fuente.length > 0, `${e}: el escenario no tiene a nadie debiendo`);
+      afirmar(
+        t.rows.length === fuente.length,
+        `${e}: ${t.rows.length} filas, ar_aging tiene ${fuente.length} clientes`,
+      );
+      for (const f of fuente) {
+        const fila = t.rows.find((x) => x.id === f.id);
+        afirmar(fila !== undefined, `${e}: falta el cliente ${f.id}`);
+        afirmar(
+          fila.debt === f.deuda,
+          `${e}: ${fila.label} dice ${fila.debt}, ar_aging ${f.deuda}`,
+        );
+      }
+      const [total] = await sql`
+        select (case when bool_or(amount is null) then null
+                     else round(coalesce(sum(amount), 0), 2) end)::text as deuda,
+               (select (case when bool_or(o.nominal is null or o.functional_today is null) then null
+                             else round(coalesce(sum(o.functional_today), 0), 2) end)::text
+                  from platform.customer_overdue_today(${EMPRESAS[e]}, null, ${t.as_of}::date) o)
+                 as vencido
+          from platform.ar_aging(${EMPRESAS[e]}, null, ${t.as_of}::date)`;
+      afirmar(
+        t.totals.debt === total.deuda,
+        `${e}: total ${t.totals.debt} ≠ ar_aging ${total.deuda}`,
+      );
+      afirmar(
+        t.totals.overdue === total.vencido,
+        `${e}: vencido ${t.totals.overdue} ≠ customer_overdue_today ${total.vencido}`,
+      );
+      const resumen = t.summary.find((s) => s.key === "debt");
+      afirmar(resumen?.value === total.deuda, `${e}: el resumen no trae el total`);
+      // Los tramos del total suman la deuda (lo comprueba Postgres, no JavaScript).
+      if (total.deuda !== null) {
+        const tramos = ["b_0-30", "b_31-60", "b_61-90", "b_90+"].map((k) => t.totals[k]);
+        const [s] = await sql`
+          select (select sum(x::numeric) from unnest(${tramos}::text[]) as x) = ${total.deuda}::numeric
+                   as cuadra`;
+        afirmar(
+          s.cuadra === true,
+          `${e}: los tramos ${JSON.stringify(tramos)} no suman ${total.deuda}`,
+        );
+      }
+      // El orden lo hace el servidor: por lo vencido, mayor primero (sin tasa, delante).
+      const v = await pedir(
+        PERSONAS.duenoE2E3,
+        e,
+        "GET",
+        "/v1/reports/receivables?sort=overdue_desc",
+      );
+      const vencidos = v.json.rows.map((x) => x.overdue);
+      const [o] = await sql`
+        select coalesce(bool_and(a >= b), true) as ordenado
+          from (select x::numeric as a, lead(x::numeric) over (order by n) as b
+                  from unnest(${vencidos.filter((x) => x !== null)}::text[]) with ordinality as u(x, n)) p
+         where b is not null`;
+      afirmar(
+        o.ordenado === true,
+        `${e}: «vencido» no llega ordenado: ${JSON.stringify(vencidos)}`,
+      );
+    }
+    // El almacenista no tiene ar.read: 403. El cajero sí la ve (cobra), pero no se la lleva.
+    const almacen = await pedir(PERSONAS.almacenista, "E2", "GET", "/v1/reports/receivables");
+    afirmar(almacen.status === 403, `el almacenista recibió ${almacen.status}`);
+    const cajero = await pedir(PERSONAS.cajero, "E2", "GET", "/v1/reports/receivables");
+    afirmar(cajero.status === 200, `el cajero recibió ${cajero.status}`);
+    const baja = await pedir(PERSONAS.cajero, "E2", "GET", "/v1/reports/receivables?format=csv");
+    afirmar(baja.status === 403, `el cajero descargó la cartera (${baja.status})`);
+  },
+);
+
 export default c.correr;

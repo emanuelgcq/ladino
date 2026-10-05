@@ -107,22 +107,47 @@ export type ReceiveStockApiRequest = z.infer<typeof ReceiveStockApiRequest>;
  *     una empresa que factura, débito fiscal al valor de mercado y Nota de retiro numerada.
  */
 export const ExitReason = z.enum(
-  ["merma", "rotura", "vencido", "faltante", "consumo_propio", "regalo", "donacion", "muestra"],
+  [
+    "merma",
+    "rotura",
+    "vencido",
+    "faltante",
+    "consumo_propio",
+    "regalo",
+    "donacion",
+    "muestra",
+    // ADR-0082 (AF3-03; LIVA art. 4.3 in fine, VALIDAR-TRIBUTARIO P-82): salidas NO gravadas.
+    "uso_en_negocio",
+    "activo_fijo",
+    "incorporado_inmueble",
+  ],
   {
     errorMap: () => ({
       message:
-        "Elige el motivo de la salida: merma, rotura, vencido, faltante, consumo propio, regalo, donación o muestra.",
+        "Elige el motivo de la salida: merma, rotura, vencido, faltante, consumo propio, regalo, donación, muestra, uso en el negocio, pasa a activo fijo o incorporado a un inmueble del negocio.",
     }),
   },
 );
 export type ExitReason = z.infer<typeof ExitReason>;
-/** Los motivos que son retiro (LIVA art. 4.3). */
+/** Los motivos que son retiro GRAVADO (LIVA art. 4.3): en una empresa que factura, se facturan. */
 export const RETIRO_REASONS: readonly ExitReason[] = [
   "consumo_propio",
   "regalo",
   "donacion",
   "muestra",
 ];
+/**
+ * Los motivos NO gravados (ADR-0082, AF3-03; LIVA art. 4.3 in fine): el bien se usa o consume en
+ * el giro, pasa al activo fijo o se incorpora a un inmueble del negocio. Sale del kardex sin
+ * débito fiscal y sin factura.
+ */
+export const USO_NO_GRAVADO_REASONS: readonly ExitReason[] = [
+  "uso_en_negocio",
+  "activo_fijo",
+  "incorporado_inmueble",
+];
+/** Los motivos de pérdida, que exigen su evidencia (RLIVA art. 14). */
+export const PERDIDA_REASONS: readonly ExitReason[] = ["merma", "rotura", "vencido", "faltante"];
 
 export const IssueStockRequest = z
   .object({
@@ -245,9 +270,50 @@ export const InventoryMoveResponse = z
     transfer_id: uuid.nullable(),
     /** El correlativo de la Nota de retiro, si la salida la emitió (ADR-0078 §3). */
     withdrawal_note_number: z.number().int().positive().nullable().optional(),
+    /**
+     * ADR-0082: la FACTURA de retiro que la salida emitió (serie y número, control e IVA en la
+     * moneda funcional), o null si no emitió ninguna (motivo no gravado, pérdida, o empresa sin
+     * RIF). Aditivo.
+     */
+    withdrawal_invoice: z
+      .object({
+        id: uuid,
+        series: z.string(),
+        number: z.string(),
+        control_number: z.string().nullable(),
+        subtotal_amount: z.string(),
+        tax_amount: z.string(),
+        total_amount: z.string(),
+        currency: z.string(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 export type InventoryMoveResponse = z.infer<typeof InventoryMoveResponse>;
+
+/**
+ * `POST /v1/inventory/issues/preview` (ADR-0082): lo que la salida VA a emitir, con sus cifras,
+ * antes de confirmar. El servidor ensaya la salida entera y la deshace: no mueve el kardex ni
+ * gasta correlativo ni control. El número no se promete: se asigna al emitir.
+ *   · `emits = withdrawal_invoice`: retiro gravado de una empresa que factura; trae la serie, la
+ *     base, el IVA y el total en la moneda funcional;
+ *   · `emits = nothing`: `why` dice por qué — motivo no gravado, pérdida justificada, o la
+ *     empresa no factura (sin RIF).
+ */
+export const StockExitPreviewResponse = z
+  .object({
+    emits: z.enum(["withdrawal_invoice", "nothing"]),
+    why: z.enum(["retiro", "no_gravado", "perdida", "sin_rif"]),
+    series: z.string().nullable(),
+    subtotal_amount: z.string().nullable(),
+    tax_amount: z.string().nullable(),
+    total_amount: z.string().nullable(),
+    currency: z.string().nullable(),
+  })
+  .strict();
+export type StockExitPreviewResponse = z.infer<typeof StockExitPreviewResponse>;
 
 export const CountStockResponse = z
   .object({

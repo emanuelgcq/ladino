@@ -178,7 +178,7 @@ async function gasto(page, ev, etq, { categoria, otra, cuenta, monto, nota, recu
   await elegirOpcion(page, /^¿De qué cuenta salió\?/, cuenta);
   await d.getByLabel(/^¿Cuánto\?/).fill(monto);
   if (nota) await d.getByLabel(/^Algo más que anotar/).fill(nota);
-  if (recurrente) await clic(d.getByLabel("Se paga todos los meses"));
+  if (recurrente) await clic(d.getByLabel("Este gasto se repite"));
   if (foto) await d.locator('input[type="file"]').setInputFiles(foto);
   await esperar(page, 800);
   await ev(page, `${etq}-lleno`);

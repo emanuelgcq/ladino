@@ -41,7 +41,7 @@ const EMPRESAS = {
 };
 const BLOQUES = "ABCDEFGHIJKLMNOP".split("");
 /** Filas de invariante (no INFORME) que `invariantes.sql` devuelve por empresa: súbela al añadir una. */
-const INVARIANTES_ESPERADOS = 28;
+const INVARIANTES_ESPERADOS = 31;
 const ESQUEMAS = ["public", "platform", "auth", "storage", "supabase_migrations"];
 
 function correr(cmd, args, { entrada, silencioso = false } = {}) {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -16,6 +16,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { useSesion } from "../../app/session.js";
+import { useAccionPedida } from "../../app/accion-pedida.js";
 import { errorDePersona } from "../../lib.js";
 import { mostrarImporte } from "../../money.js";
 import { compararImportes } from "../../components/decimal-compare.js";
@@ -241,6 +242,15 @@ export function Dinero(): React.JSX.Element {
   };
 
   const lista = cuentas.data?.accounts ?? [];
+  // P-06: «Cerrar caja» de la paleta llega con `?accion=cerrar-caja`. Con UNA sola caja se abre
+  // su cierre; con varias, la persona elige cuál (cada una tiene su botón «Cerrar la caja»).
+  const [cierrePedido, setCierrePedido] = useState<{ cuenta: string; vez: number } | null>(null);
+  useAccionPedida("cerrar-caja", cuentas.isSuccess, () => {
+    const cajas = lista.filter((c) => c.kind === "cash" && !c.is_system);
+    if (puede("cash.close") && cajas.length === 1) {
+      setCierrePedido((antes) => ({ cuenta: cajas[0]!.id, vez: (antes?.vez ?? 0) + 1 }));
+    }
+  });
   const funcional = resumen.data?.functional_currency ?? "VES";
   // La deuda vive en la administración: el enlace solo para quien puede
   // entrar ahí; a los demás se les dice, sin puerta que no abre.
@@ -355,7 +365,13 @@ export function Dinero(): React.JSX.Element {
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {lista.map((c) => (
-              <TarjetaCuenta key={c.id} cuenta={c} cuentas={lista} onCerrada={recargar} />
+              <TarjetaCuenta
+                key={c.id}
+                cuenta={c}
+                cuentas={lista}
+                onCerrada={recargar}
+                cierrePedido={cierrePedido?.cuenta === c.id ? cierrePedido.vez : 0}
+              />
             ))}
           </div>
         )}
@@ -655,10 +671,13 @@ function TarjetaCuenta({
   cuenta,
   cuentas,
   onCerrada,
+  cierrePedido,
 }: {
   cuenta: Cuenta;
   cuentas: Cuenta[];
   onCerrada: () => void;
+  /** P-06: distinto de 0 cuando la paleta pidió cerrar ESTA caja; cada vez, un número nuevo. */
+  cierrePedido: number;
 }): React.JSX.Element {
   const { puede } = useSesion();
   const puedeCerrar = puede("cash.close");
@@ -689,7 +708,7 @@ function TarjetaCuenta({
         </p>
         <div className="mt-2 flex flex-wrap gap-2">
           {cuenta.kind === "cash" && !cuenta.is_system && puedeCerrar && (
-            <CerrarCaja cuenta={cuenta} onCerrada={onCerrada} />
+            <CerrarCaja cuenta={cuenta} onCerrada={onCerrada} pedido={cierrePedido} />
           )}
           {puedeMover && (
             <Button
@@ -956,15 +975,21 @@ function EditarCuenta({
 function CerrarCaja({
   cuenta,
   onCerrada,
+  pedido,
 }: {
   cuenta: Cuenta;
   onCerrada: () => void;
+  pedido: number;
 }): React.JSX.Element {
   const { empresa, llamar } = useSesion();
   const toast = useToast();
   const [abierto, setAbierto] = useState(false);
   const [contado, setContado] = useState("");
   const [motivo, setMotivo] = useState("");
+  // P-06: la paleta abre el mismo diálogo que el botón; nada se cierra sin contar y confirmar.
+  useEffect(() => {
+    if (pedido > 0) setAbierto(true);
+  }, [pedido]);
 
   const contadoLimpio = importeLimpio(contado);
   const contadoOk = importeValido(contadoLimpio);

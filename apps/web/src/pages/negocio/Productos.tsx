@@ -38,6 +38,7 @@ import {
 } from "../../components/forms.js";
 import { ImportarProductos } from "../../components/importar-productos.js";
 import { BotonEscanear } from "../../components/EscanerCodigo.js";
+import { IngredientesDeCompuesto } from "../../components/IngredientesDeCompuesto.js";
 import { tasaLimpia } from "../../tasa.js";
 import { ACEPTA_FOTOS, fotoSoltada, subirFotoProducto } from "../../components/foto.js";
 import { useConFacturas } from "../../app/modo-venta.js";
@@ -58,6 +59,8 @@ interface ProductoFila {
   kind: "good" | "service";
   status: string;
   barcode: string | null;
+  /** I-04: se arma con otros productos (no lleva existencia propia). */
+  is_composed?: boolean;
   image_path: string | null;
   image_url?: string | null;
   price_amount?: string | null;
@@ -398,6 +401,71 @@ const DE_LA_EMPRESA = "empresa";
  * lo avanzado (código, código de barras, categoría, unidad, clasificación, precio al mayor),
  * plegado en «Más detalles».
  */
+/**
+ * EL SEGUNDO PASO DEL ALTA de un producto que se arma con otros: sus ingredientes. «Listo» sin
+ * ninguno guardado AVISA —sin ingredientes no se puede vender— y deja volver; no cierra en
+ * silencio dejando un producto que la caja rechazará. Lo guardado se lee de la misma consulta
+ * que usa el editor (misma clave de caché): aquí no se cuenta nada aparte.
+ */
+function PasoDeIngredientes({
+  armado,
+  puedeEditar,
+  onCerrar,
+}: {
+  armado: { id: string; nombre: string };
+  puedeEditar: boolean;
+  onCerrar: () => void;
+}): React.JSX.Element {
+  const { empresa, llamar } = useSesion();
+  const [avisado, setAvisado] = useState(false);
+  const guardados = useQuery({
+    queryKey: ["ingredientes", empresa.id, armado.id],
+    queryFn: () => llamar<{ lines: unknown[] }>(`/v1/products/${armado.id}/recipe`),
+  });
+  const sinIngredientes = (guardados.data?.lines.length ?? 0) === 0;
+  return (
+    <Dialog open onOpenChange={(v) => !v && onCerrar()}>
+      <DialogContent className="max-w-lg">
+        <DialogTitle>¿Con qué se arma «{armado.nombre}»?</DialogTitle>
+        <DialogDescription>
+          El producto ya está creado. Escribe cuánto lleva de cada ingrediente una unidad.
+        </DialogDescription>
+        <div className="max-h-[65vh] overflow-y-auto pr-1 pt-2">
+          <IngredientesDeCompuesto productoId={armado.id} puedeEditar={puedeEditar} />
+        </div>
+        {avisado && sinIngredientes && (
+          <p role="alert" className="text-[0.88rem] text-warning-soft-foreground">
+            Sin ingredientes este producto no se puede vender. Agrégalos y guárdalos ahora, o
+            después: abre el producto en Productos y ahí están sus ingredientes.
+          </p>
+        )}
+        <DialogFooter>
+          {avisado && sinIngredientes ? (
+            <>
+              <Button variant="ghost" onClick={onCerrar}>
+                Cerrar sin ingredientes
+              </Button>
+              <Button variant="primary" onClick={() => setAvisado(false)}>
+                Volver a los ingredientes
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="primary"
+              onClick={() => {
+                if (sinIngredientes) setAvisado(true);
+                else onCerrar();
+              }}
+            >
+              Listo
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function AltaSimple({
   onCerrar,
   onCreado,
@@ -405,7 +473,10 @@ export function AltaSimple({
   onCerrar: () => void;
   onCreado: () => void;
 }): React.JSX.Element {
-  const { empresa, llamar } = useSesion();
+  const { empresa, llamar, puede } = useSesion();
+  // Marcar «se arma con otros productos» exige poder escribir sus ingredientes (lo decide el
+  // servidor): a quien no puede no se le ofrece un producto que quedaría sin poder venderse.
+  const puedeArmar = puede("product.recipe.manage");
   const toast = useToast();
   const [nombre, setNombre] = useState("");
   const [precio, setPrecio] = useState("");
@@ -413,6 +484,14 @@ export function AltaSimple({
   // a Bs con la tasa del día (y lo enseña debajo). No hay moneda que elegir.
   const moneda = "USD";
   const [esServicio, setEsServicio] = useState(false);
+  // I-04 y C-07: «se arma con otros productos» y «se vence». Ninguno de los dos admite la
+  // existencia de hoy en esta pantalla: el primero no se cuenta, y lo del segundo entra por
+  // «Llegó mercancía», que pide el código del paquete y la fecha. Lo decide el servidor; aquí
+  // solo se esconde el campo que rechazaría. En esta pantalla se dice «código del paquete» y
+  // «se vence», como en «Llegó mercancía» (glosario de las pantallas de la persona).
+  const [seArma, setSeArma] = useState(false);
+  const [seVence, setSeVence] = useState(false);
+  const [armado, setArmado] = useState<{ id: string; nombre: string } | null>(null);
   const [existencia, setExistencia] = useState("");
   const [costo, setCosto] = useState("");
   const [masDetalles, setMasDetalles] = useState(false);
@@ -475,7 +554,7 @@ export function AltaSimple({
   const precioLimpio = importeLimpio(precio);
   const existenciaLimpia = cantidadLimpia(existencia);
   const costoLimpio = importeLimpio(costo);
-  const conStock = !esServicio && existenciaLimpia !== "";
+  const conStock = !esServicio && !seArma && !seVence && existenciaLimpia !== "";
   const mayorLimpio = importeLimpio(mayor);
   const conMayor = ajustes.data?.sells_wholesale === true && mayorLimpio !== "";
   // Un precio al mayor mal escrito NO se descarta en silencio: se avisa y
@@ -529,6 +608,8 @@ export function AltaSimple({
           name: nombre.trim(),
           price: { amount: precioLimpio, currency: moneda },
           ...(esServicio ? { is_service: true } : {}),
+          ...(!esServicio && seArma ? { is_composed: true } : {}),
+          ...(!esServicio && seVence ? { tracks_lots: true } : {}),
           ...(conStock
             ? {
                 initial_stock: {
@@ -564,14 +645,26 @@ export function AltaSimple({
           "Producto agregado, sin foto",
           `${r.fotoFallo} Ábrelo en Productos y usa «Agregar foto».`,
         );
+      } else if (!esServicio && seArma) {
+        toast.success("Producto agregado", "Falta decir con qué se arma.");
       } else {
         toast.success("Producto agregado", `${nombre.trim()} ya está listo para vender.`);
       }
       onCreado();
+      // I-04: un producto que se arma con otros no se vende hasta tener sus ingredientes: el
+      // alta sigue con ese paso en vez de cerrarse.
+      if (!esServicio && seArma) {
+        setArmado({ id: r.id, nombre: nombre.trim() });
+        return;
+      }
       onCerrar();
     },
     onError: (e) => toast.error("No se pudo agregar", errorDePersona(e)),
   });
+
+  if (armado !== null) {
+    return <PasoDeIngredientes armado={armado} puedeEditar={puedeArmar} onCerrar={onCerrar} />;
+  }
 
   return (
     <Dialog open onOpenChange={(v) => !v && onCerrar()}>
@@ -682,6 +775,59 @@ export function AltaSimple({
           </label>
 
           {!esServicio && (
+            <>
+              <label
+                hidden={!puedeArmar}
+                className={
+                  puedeArmar
+                    ? "flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2"
+                    : "hidden"
+                }
+              >
+                <span className="text-[0.9rem]">
+                  Se arma con otros productos
+                  <span className="block text-[0.78rem] text-muted-foreground">
+                    Una arepa rellena, un combo, un plato. No se cuenta en el inventario: al
+                    venderlo se descuentan sus ingredientes, que escribes al guardar.
+                  </span>
+                </span>
+                <Switch
+                  checked={seArma}
+                  onCheckedChange={(v) => {
+                    setSeArma(v);
+                    if (v) setSeVence(false);
+                  }}
+                  aria-label="Se arma con otros productos"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+                <span className="text-[0.9rem]">
+                  Se vence
+                  <span className="block text-[0.78rem] text-muted-foreground">
+                    Para lo que caduca. Cada vez que llegue se pedirá el código del paquete y la
+                    fecha en que vence, y se venderá primero lo que vence antes. Elígelo bien:
+                    cuando ya haya entrado mercancía no se podrá cambiar.
+                  </span>
+                </span>
+                <Switch
+                  checked={seVence}
+                  onCheckedChange={(v) => {
+                    setSeVence(v);
+                    if (v) setSeArma(false);
+                  }}
+                  aria-label="Se vence"
+                />
+              </label>
+              {seVence && (
+                <p className="text-[0.8rem] text-muted-foreground">
+                  Lo que tienes hoy se registra después, en «Llegó mercancía», con su código y su
+                  fecha.
+                </p>
+              )}
+            </>
+          )}
+
+          {!esServicio && !seArma && !seVence && (
             <div className="grid grid-cols-2 gap-2">
               <FormField
                 label="¿Cuántos tienes hoy?"
@@ -968,6 +1114,16 @@ function DetalleProducto({
             <div className="flex items-center justify-between text-[0.95rem]">
               <span className="text-muted-foreground">Código de barras</span>
               <span className="font-mono text-[0.85rem]">{producto.barcode}</span>
+            </div>
+          )}
+          {/* I-04: los ingredientes de un producto que se arma con otros se ven y se cambian
+              también aquí, no solo al crearlo (los cambia quien puede escribirlos). */}
+          {producto.is_composed === true && (
+            <div className="rounded-md border border-border p-3">
+              <IngredientesDeCompuesto
+                productoId={producto.id}
+                puedeEditar={puede("product.recipe.manage")}
+              />
             </div>
           )}
           <div className="flex gap-2">

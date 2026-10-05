@@ -75,6 +75,9 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // H-09 (migración 20261004170100): una línea de factura de proveedor sin producto fuera de la
   // factura de un gasto. El dominio lo dice antes con su mensaje.
   LADH9: { code: "VALIDATION_FAILED", status: 422 },
+  // H-03 (migración 20261005110000): una línea de nota de crédito de proveedor sin producto que
+  // no corrige una línea de servicio de SU factura. El dominio lo dice antes con su mensaje.
+  LADH3: { code: "VALIDATION_FAILED", status: 422 },
   LAD50: { code: "TAX_RULE_MISSING", status: 409 },
   LAD51: { code: "EXCHANGE_RATE_MISSING", status: 409 },
   // ADR-0073 (B-02): la general propuesta no es una general del catálogo (0 %, fuera de 8–16,5 %
@@ -104,6 +107,14 @@ const POR_SQLSTATE: Record<string, { code: string; status: number }> = {
   // Migración 35: un talonario de contingencia lleva la palabra en su serie
   // (PA 102) — un rango cualquiera no puede disfrazarse de contingencia.
   LAD69: { code: "VALIDATION_FAILED", status: 422 },
+  // ADR-0082 (migración 20261005100800): las guardas de la factura de retiro y de su nota de
+  // crédito —a nombre de un tercero, sin su salida, cobro, devolución, saldo a favor, nota
+  // general, nota que no es total, anular lo ya corregido—. Antes compartían LAD67 con la moneda
+  // de la cuenta. El dominio las dice antes con el mensaje de la guarda; esta es la red.
+  LAD72: { code: "VALIDATION_FAILED", status: 422 },
+  // C-07 (20261005130200): un lote de un producto que vence nace con su fecha. El dominio lo
+  // traduce en sus dos puertas; esta es la red para cualquier otra.
+  LAD73: { code: "VALIDATION_FAILED", status: 422 },
 
   // --- estándar
   "23505": { code: "DUPLICATE", status: 409 },
@@ -662,6 +673,11 @@ export function personaDeOtroCuerpo(previo: string): string {
  * (otra cuenta) y a quién acudir. Es el único permiso con frase propia; los demás, la genérica.
  */
 const PERSONA_PROPIA_DE_PERMISO: Record<string, string> = {
+  // AF5-02 (ADR-0082): no es un permiso sino la MARCA del caso —un retiro gravado emite factura
+  // y lo registra quien puede facturar (`sales.invoice.issue`)—. «Necesitas el permiso para
+  // vender» no le diría a un almacenista por qué no puede sacar un regalo.
+  "inventory.withdrawal_invoice":
+    "Este retiro emite una factura a nombre de tu negocio: lo registra quien puede facturar.",
   "treasury.overdraft":
     "Esta cuenta no tiene saldo suficiente. Elige otra cuenta o pídele a quien administra que lo registre.",
 };

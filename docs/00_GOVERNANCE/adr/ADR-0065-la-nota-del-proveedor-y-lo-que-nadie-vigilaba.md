@@ -158,3 +158,12 @@ El momento de la anulación lo sella la base (`supplier_invoices.annulled_at`, m
 120200). El sello no admite un valor dado ni se puede mover después: con él se decide qué libro
 cambia. Implementación: migraciones `20260928120000`–`120200` y pgTAP 078. Lo que queda para el
 asesor está en P-46.
+
+## Enmienda del 2026-10-04 — la nota mueve el kardex y el saldo a favor tiene su cuenta (ADR-0083)
+
+El §1 de este ADR dice que la nota «devuelve mercancía» y acredita inventario. Eso dejaba el kardex sin moverse. Desde ADR-0083 (migraciones `20261005110000`–`110300`):
+- la nota de mercancía dice si es devolución (salida de kardex al costo) o rebaja (revalorización de lo que queda), y la diferencia con lo que su asiento acredita a inventario va a variación de costo;
+- lo que la nota abona por encima de lo que se debía de la factura no queda en cuentas por pagar: va a «saldos a favor con proveedores» (`supplier_credit_receivable`), y lo vigila `platform.supplier_credit_ledger_gap`;
+- la nota que cierra una factura a otra tasa reconoce la diferencia de cambio;
+- la factura de un gasto (ADR-0080) se corrige con la misma operación.
+El período, el libro y la declaración (§1 y §2) no cambian.

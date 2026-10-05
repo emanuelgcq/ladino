@@ -539,7 +539,7 @@ describe("el inventario en el mayor: kardex ↔ mayor en cero después de cada h
     expect(await huecos()).toEqual([{ kind: "entrada", problem: "missing" }]);
   });
 
-  it("S2 · una nota de crédito PARCIAL del proveedor sobre una línea ya facturada entera no mueve el puente (va la última: la NC acredita inventario en el mayor)", async () => {
+  it("S2 · una nota de crédito PARCIAL del proveedor sobre una línea ya facturada entera no mueve el puente: la mercancía sale del kardex y el asiento de la nota la cubre", async () => {
     // La NC del proveedor se asienta contra la cuenta por pagar y el inventario, no contra
     // «mercancía recibida por facturar»: no entra en el acumulado factura/recepción ni tiene por
     // qué. El puente de la recepción de C8 sigue donde quedó.
@@ -555,9 +555,189 @@ describe("el inventario en el mayor: kardex ↔ mayor en cero después de cada h
       note_date: HOY,
       currency: "VES",
       reason: "Devolución de una de las tres unidades",
+      // H-03 (ola 5): la pantalla pregunta qué es la nota; el fixture manda lo que ella manda.
+      kind: "devolucion",
       lines: [{ product_id: HARINA, quantity: "1", unit_price: "33.33", tax_amount: "5.33" }],
     });
     expect(nota.status, await nota.clone().text()).toBe(201);
     expect(await saldoPapel("goods_received_not_invoiced")).toBe(puenteAntes);
+  });
+});
+
+/**
+ * H-03 (ola 5, ADR-0083): LA NOTA DE CRÉDITO DEL PROVEEDOR MUEVE EL KARDEX.
+ *
+ * Antes la nota acreditaba `inventory_general` en el mayor y el kardex no se enteraba:
+ * `inventory_ledger_gap` crecía por el importe de cada nota. Ahora la devolución saca la
+ * mercancía a su costo, la rebaja revaloriza lo que queda, y la diferencia va a variación.
+ *
+ * Los tests de arriba dejan el invariante en rojo A PROPÓSITO (la variante rota): aquí se mide
+ * que cada nota NO lo mueve —la brecha y los huecos de antes son los de después—.
+ */
+describe("H-03 · la nota de crédito del proveedor mueve el kardex", () => {
+  let FACTURA = "";
+  let LINEA = "";
+
+  async function existencia(producto: string): Promise<{ q: string; v: string }> {
+    const [b] = await sql<{ q: string; v: string }[]>`
+      select coalesce(sum(quantity), 0)::text as q, coalesce(sum(value), 0)::text as v
+        from public.stock_balances
+       where company_id = ${COMPANY} and warehouse_id = ${W1} and product_id = ${producto}`;
+    return b!;
+  }
+  const nota = (extra: Record<string, unknown>) =>
+    pedir("POST", "/v1/supplier-credit-notes", {
+      company_id: COMPANY,
+      supplier_invoice_id: FACTURA,
+      note_date: HOY,
+      currency: "VES",
+      reason: "Fixture H-03",
+      ...extra,
+    });
+
+  it("la factura de la que se devuelve: 4 de aceite a 50, recibidos y facturados", async () => {
+    const rec = await pedir("POST", "/v1/goods-receipts", {
+      company_id: COMPANY,
+      supplier_id: PROVEEDOR,
+      warehouse_id: W1,
+      currency: "VES",
+      lines: [{ product_id: ACEITE, quantity: "4", unit_price: "50" }],
+    });
+    expect(rec.status, await rec.clone().text()).toBe(201);
+    const [linea] = await sql<{ id: string }[]>`
+      select id from public.goods_receipt_lines
+       where goods_receipt_id = ${((await rec.json()) as { id: string }).id}`;
+    const f = await pedir("POST", "/v1/supplier-invoices", {
+      company_id: COMPANY,
+      supplier_id: PROVEEDOR,
+      supplier_document_number: `FAC-H03-${RUN}`,
+      supplier_control_number: "00-0000931",
+      invoice_date: HOY,
+      currency: "VES",
+      lines: [
+        { goods_receipt_line_id: linea!.id, product_id: ACEITE, quantity: "4", unit_price: "50" },
+      ],
+    });
+    expect(f.status, await f.clone().text()).toBe(201);
+    FACTURA = ((await f.json()) as { id: string }).id;
+    const [il] = await sql<{ id: string }[]>`
+      select id from public.supplier_invoice_lines where supplier_invoice_id = ${FACTURA}`;
+    LINEA = il!.id;
+  });
+
+  it("sin decir si es devolución o rebaja, la nota de mercancía se rechaza (422) y no queda nada", async () => {
+    const r = await nota({
+      supplier_document_number: `NC-H03-${RUN}-0`,
+      supplier_control_number: "00-0000940",
+      lines: [{ supplier_invoice_line_id: LINEA, quantity: "1", unit_price: "50" }],
+    });
+    expect(r.status).toBe(422);
+    expect(((await r.json()) as { message: string }).message).toContain("devolución de mercancía");
+    const [n] = await sql<{ n: number }[]>`
+      select count(*)::int as n from public.supplier_credit_notes
+       where supplier_invoice_id = ${FACTURA}`;
+    expect(n!.n).toBe(0);
+  });
+
+  it("DEVOLUCIÓN · la mercancía sale del kardex a su costo, el IVA lo pone el servidor y el invariante no se mueve", async () => {
+    const antes = await brecha();
+    const huecosAntes = await huecos();
+    const stockAntes = await existencia(ACEITE);
+    const variacionAntes = await saldoPapel("purchase_cost_variance");
+    const r = await nota({
+      supplier_document_number: `NC-H03-${RUN}-1`,
+      supplier_control_number: "00-0000941",
+      kind: "devolucion",
+      // Lo que manda la pantalla: la línea de la factura, cantidad y precio. NI producto NI IVA.
+      lines: [{ supplier_invoice_line_id: LINEA, quantity: "1", unit_price: "50" }],
+    });
+    expect(r.status, await r.clone().text()).toBe(201);
+    const n = (await r.json()) as Record<string, unknown>;
+    // 50 de base al 16 % de la línea de la factura: 8 de IVA que el cliente NO mandó.
+    expect(n["total_amount"]).toBe("58.00000000");
+    expect(n["is_fiscal"]).toBe(true);
+    expect(n["document_incomplete"]).toBe(false);
+
+    const stock = await existencia(ACEITE);
+    const [mov] = await sql<{ ok: boolean; costo: string }[]>`
+      select ${stockAntes.q}::numeric - ${stock.q}::numeric = 1 as ok,
+             (${stockAntes.v}::numeric - ${stock.v}::numeric)::text as costo`;
+    expect(mov!.ok, "sale UNA unidad del depósito").toBe(true);
+    // El kardex bajó por el COSTO de esa unidad, y el mayor de inventario por lo mismo.
+    const despues = await brecha();
+    const [cuadra] = await sql<{ ok: boolean; detalle: string }[]>`
+      select ${despues.diferencia}::numeric = ${antes.diferencia}::numeric
+             and ${antes.kardex}::numeric - ${despues.kardex}::numeric = ${mov!.costo}::numeric
+             and ${antes.mayor}::numeric - ${despues.mayor}::numeric = ${mov!.costo}::numeric
+             and ${despues.en_cola}::numeric = ${antes.en_cola}::numeric as ok,
+             ${JSON.stringify({ antes, despues, costo: mov!.costo })}::text as detalle`;
+    expect(cuadra!.ok, cuadra!.detalle).toBe(true);
+    expect(await huecos()).toEqual(huecosAntes);
+    // Lo que el proveedor abonó (50) menos lo que la unidad costaba en el kardex: a variación.
+    const [vari] = await sql<{ ok: boolean }[]>`
+      select ${await saldoPapel("purchase_cost_variance")}::numeric - ${variacionAntes}::numeric
+             = ${mov!.costo}::numeric - 50 as ok`;
+    expect(vari!.ok, `costo de kardex ${mov!.costo}`).toBe(true);
+  });
+
+  it("REBAJA · la mercancía se queda: se revaloriza lo que hay y el invariante no se mueve", async () => {
+    const antes = await brecha();
+    const huecosAntes = await huecos();
+    const stockAntes = await existencia(ACEITE);
+    const r = await nota({
+      supplier_document_number: `NC-H03-${RUN}-2`,
+      supplier_control_number: "00-0000942",
+      kind: "rebaja",
+      // El proveedor rebajó 5 por unidad en 2 de las unidades.
+      lines: [{ supplier_invoice_line_id: LINEA, quantity: "2", unit_price: "5" }],
+    });
+    expect(r.status, await r.clone().text()).toBe(201);
+    expect(((await r.json()) as { total_amount: string }).total_amount).toBe("11.60000000");
+    const stock = await existencia(ACEITE);
+    const despues = await brecha();
+    const [cuadra] = await sql<{ ok: boolean; detalle: string }[]>`
+      select ${stock.q}::numeric = ${stockAntes.q}::numeric
+             and ${stockAntes.v}::numeric - ${stock.v}::numeric = 10
+             and ${antes.kardex}::numeric - ${despues.kardex}::numeric = 10
+             and ${antes.mayor}::numeric - ${despues.mayor}::numeric = 10
+             and ${despues.diferencia}::numeric = ${antes.diferencia}::numeric as ok,
+             ${JSON.stringify({ antes, despues, stockAntes, stock })}::text as detalle`;
+    expect(cuadra!.ok, cuadra!.detalle).toBe(true);
+    expect(await huecos()).toEqual(huecosAntes);
+  });
+
+  it("no se devuelve más de lo facturado (422), y la nota rechazada no deja movimiento", async () => {
+    const stockAntes = await existencia(ACEITE);
+    const r = await nota({
+      supplier_document_number: `NC-H03-${RUN}-3`,
+      supplier_control_number: "00-0000943",
+      kind: "devolucion",
+      lines: [{ supplier_invoice_line_id: LINEA, quantity: "4", unit_price: "1" }],
+    });
+    expect(r.status).toBe(422);
+    expect(((await r.json()) as { message: string }).message).toContain(
+      "No se puede devolver más de lo facturado",
+    );
+    expect(await existencia(ACEITE)).toEqual(stockAntes);
+  });
+
+  it("SIN NÚMERO DE CONTROL · se registra igual, queda «incompleta» y el libro de compras la resta", async () => {
+    const r = await nota({
+      supplier_document_number: `NC-H03-${RUN}-4`,
+      kind: "rebaja",
+      lines: [{ supplier_invoice_line_id: LINEA, quantity: "1", unit_price: "1" }],
+    });
+    expect(r.status, await r.clone().text()).toBe(201);
+    const n = (await r.json()) as { id: string; document_incomplete: boolean; is_fiscal: boolean };
+    expect(n.is_fiscal).toBe(true);
+    expect(n.document_incomplete).toBe(true);
+    const [fila] = await sql<{ incompleta: boolean }[]>`
+      select document_incomplete as incompleta from public.supplier_credit_notes where id = ${n.id}`;
+    expect(fila!.incompleta).toBe(true);
+    const [enLibro] = await sql<{ iva: string }[]>`
+      select iva_credito::text as iva
+        from platform.purchases_book(${COMPANY}, ${HOY}::date, ${HOY}::date)
+       where supplier_document_number = ${`NC-H03-${RUN}-4`}`;
+    expect(Number(enLibro!.iva)).toBe(-0.16);
   });
 });

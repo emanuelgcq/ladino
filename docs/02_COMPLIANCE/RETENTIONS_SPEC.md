@@ -65,7 +65,15 @@ Migraciones 20261002110000 y 20261002110100. Contrato de la API 0.2.0.
   un documento de varias alícuotas da 422 con su lista (P-69). **`document_type`** va en 01 porque hoy
   solo la FACTURA de proveedor practica retención: `registerSupplierCreditNote` no toca
   `supplier_retentions` y no hay ND de proveedor; si una NC o ND llegara a retener, su renglón tiene
-  que llevar 03 o 02 (el CHECK ya los admite).
+  que llevar 03 o 02 (el CHECK ya los admite). **Desde la ola 5 (H-03, ADR-0083) la nota de crédito
+  del proveedor se registra desde la pantalla, también sobre una factura retenida, y sigue SIN tocar
+  la retención ni el comprobante**: lo dice en su respuesta (`retention_untouched`) y en su acta. Qué
+  debe pasar con lo retenido es VALIDAR-SENIAT (P-103). **Norma leída el 2026-10-04 (PA
+  SNAT/2025/000054 art. 11, «Ajustes de precios», reproducción no oficial):** si el ajuste disminuye
+  el impuesto causado, el agente devuelve al proveedor lo retenido en exceso aún no enterado; si ya
+  se enteró, lo descuenta el proveedor (art. 7). Ladino hoy **no distingue los dos casos**: coincide
+  con la norma cuando la retención ya se enteró y no cuando sigue sin enterar. No se construye la
+  devolución hasta la respuesta del asesor; la pantalla lo avisa (AF5-01).
 - **Exclusiones del art. 3 como data** (`retention_exclusions`, catálogo de plataforma): solo las
   que REGULATORY_STATUS.md cita con fuente; numerales verificados solo el 2 y el 8, la 13.ª no se
   siembra. La persona marca una `marked` con motivo (10-500 caracteres) en `retention_exclusion`;

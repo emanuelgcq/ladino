@@ -601,4 +601,370 @@ c.caso(
   },
 );
 
+// ── Ola 5 · H-03: la nota de crédito del proveedor ──────────────────────────
+
+c.caso(
+  "H-03",
+  "la nota de crédito del proveedor se registra con lo que manda la pantalla (línea de la factura, sin IVA tecleado), sin control queda incompleta, resta el crédito del libro y no mueve el invariante kardex ↔ mayor",
+  async () => {
+    const [base] = await sql`
+      select i.supplier_id, l.product_id
+        from public.supplier_invoices i
+        join public.supplier_invoice_lines l on l.supplier_invoice_id = i.id
+       where i.company_id = ${EMPRESAS.E3} and i.supplier_document_number = 'F-89002'
+       limit 1`;
+    afirmar(base, "no está F-89002 en E3: el escenario no es el del recorrido");
+    const [hoy] = await sql`select (now() at time zone 'America/Caracas')::date::text as d`;
+    // Una factura PROPIA de esta comprobación: no consume la de H-01 ni la de nadie.
+    const f = await pedir(PERSONAS.duenoE2E3, "E3", "POST", "/v1/supplier-invoices", {
+      company_id: EMPRESAS.E3,
+      supplier_id: base.supplier_id,
+      supplier_document_number: `H03-${RUN}`,
+      supplier_control_number: `00-H03${RUN}`,
+      invoice_date: hoy.d,
+      currency: "VES",
+      lines: [{ product_id: base.product_id, quantity: "2", unit_price: "1000" }],
+    });
+    afirmar(f.status === 201, `factura para la nota: ${f.status}: ${f.texto.slice(0, 300)}`);
+    const brecha = async () =>
+      (
+        await sql`
+          select diferencia::text as d,
+                 (select count(*)::int from platform.inventory_coverage_gaps(${EMPRESAS.E3})) as huecos
+            from platform.inventory_ledger_gap(${EMPRESAS.E3})`
+      )[0];
+    const antes = await brecha();
+
+    // Lo que la pantalla lee antes de preguntar nada.
+    const lineas = await pedir(
+      PERSONAS.duenoE2E3,
+      "E3",
+      "GET",
+      `/v1/supplier-invoices/${f.json.id}/lines`,
+    );
+    afirmar(lineas.status === 200, `líneas de la factura: ${lineas.status}`);
+    afirmar(
+      lineas.json.is_expense === false &&
+        lineas.json.fiscal_support === true &&
+        lineas.json.lines.length === 1 &&
+        lineas.json.lines[0].product_id === base.product_id,
+      `las líneas no describen la factura: ${JSON.stringify(lineas.json).slice(0, 300)}`,
+    );
+    const cuerpo = {
+      company_id: EMPRESAS.E3,
+      supplier_invoice_id: f.json.id,
+      supplier_document_number: `NC-H03-${RUN}`,
+      note_date: hoy.d,
+      reason: "Recorrido H-03: el proveedor rebajó el precio",
+      currency: "VES",
+      lines: [
+        { supplier_invoice_line_id: lineas.json.lines[0].id, quantity: "1", unit_price: "100" },
+      ],
+    };
+    // Sin decir qué pasó con la mercancía no se registra: la pantalla lo pregunta.
+    const sinClase = await pedir(
+      PERSONAS.duenoE2E3,
+      "E3",
+      "POST",
+      "/v1/supplier-credit-notes",
+      cuerpo,
+    );
+    afirmar(sinClase.status === 422, `sin clase: ${sinClase.status}`);
+    // Sin número de control (el defecto original: 422 sin salida): ahora entra, incompleta.
+    const nota = await pedir(PERSONAS.duenoE2E3, "E3", "POST", "/v1/supplier-credit-notes", {
+      ...cuerpo,
+      kind: "rebaja",
+    });
+    afirmar(nota.status === 201, `nota sin control: ${nota.status}: ${nota.texto.slice(0, 300)}`);
+    afirmar(
+      nota.json.document_incomplete === true && nota.json.is_fiscal === true,
+      `la nota sin control no quedó incompleta: ${JSON.stringify(nota.json)}`,
+    );
+    // El IVA lo puso el servidor (la pantalla no lo manda) y el libro de compras lo resta.
+    const [fila] = await sql`
+      select n.tax_amount > 0 as con_iva, n.correction_kind,
+             (select b.iva_credito < 0
+                from platform.purchases_book(${EMPRESAS.E3}, ${hoy.d}::date, ${hoy.d}::date) b
+               where b.supplier_document_number = ${`NC-H03-${RUN}`}) as resta_credito
+        from public.supplier_credit_notes n where n.id = ${nota.json.id}`;
+    afirmar(
+      fila.con_iva === true && fila.correction_kind === "rebaja" && fila.resta_credito === true,
+      `la nota no lleva IVA o no resta el crédito del libro: ${JSON.stringify(fila)}`,
+    );
+    const despues = await brecha();
+    afirmar(
+      despues.d === antes.d && despues.huecos === antes.huecos,
+      `la nota movió el invariante kardex ↔ mayor: ${JSON.stringify({ antes, despues })}`,
+    );
+  },
+);
+
+// H-11 (ola 5): «Qué debo» sale SIN elegir proveedor: por proveedor, monto y vencimiento, y cuadra
+// con platform.ap_aging (que valora con platform.supplier_debt_today).
+c.caso(
+  "H-11",
+  "la cartera de proveedores de E2 y E3 cuadra con ap_aging, trae el vencimiento y exige ap.read",
+  async () => {
+    for (const e of ["E2", "E3"]) {
+      const r = await pedir(PERSONAS.duenoE2E3, e, "GET", "/v1/reports/payables");
+      afirmar(r.status === 200, `${e}: la cartera dio ${r.status}`);
+      const t = r.json;
+      const fuente = await sql`
+        select a.supplier_id::text as id,
+               (case when bool_or(a.amount is null) then null
+                     else round(sum(a.amount), 2) end)::text as deuda,
+               sum(a.document_count)::text as n
+          from platform.ap_aging(${EMPRESAS[e]}, null, ${t.as_of}::date) a
+         group by a.supplier_id`;
+      afirmar(
+        t.rows.length === fuente.length,
+        `${e}: ${t.rows.length} filas, ap_aging tiene ${fuente.length} proveedores`,
+      );
+      for (const f of fuente) {
+        const fila = t.rows.find((x) => x.id === f.id);
+        afirmar(fila !== undefined, `${e}: falta el proveedor ${f.id}`);
+        afirmar(
+          fila.debt === f.deuda,
+          `${e}: ${fila.label} dice ${fila.debt}, ap_aging ${f.deuda}`,
+        );
+        afirmar(
+          fila.documents === f.n,
+          `${e}: ${fila.label} cuenta ${fila.documents} facturas, no ${f.n}`,
+        );
+        afirmar(
+          /^\d{4}-\d{2}-\d{2}$/.test(fila.next_due ?? ""),
+          `${e}: ${fila.label} sin vencimiento`,
+        );
+      }
+      const [total] = await sql`
+        select (case when bool_or(amount is null) then null
+                     else round(coalesce(sum(amount), 0), 2) end)::text as deuda
+          from platform.ap_aging(${EMPRESAS[e]}, null, ${t.as_of}::date)`;
+      afirmar(
+        t.totals.debt === total.deuda,
+        `${e}: total ${t.totals.debt} ≠ ap_aging ${total.deuda}`,
+      );
+      // Sin tasa la deuda es null con su motivo, nunca «0»: o hay cifra, o hay motivo.
+      const resumen = t.summary.find((s) => s.key === "debt");
+      afirmar(
+        resumen.value === total.deuda && (resumen.value !== null || resumen.reason === "sin_tasa"),
+        `${e}: el resumen dice ${JSON.stringify(resumen)}`,
+      );
+    }
+    const cajero = await pedir(PERSONAS.cajero, "E2", "GET", "/v1/reports/payables");
+    afirmar(cajero.status === 403, `el cajero recibió ${cajero.status}`);
+    const almacen = await pedir(PERSONAS.almacenista, "E2", "GET", "/v1/reports/payables");
+    afirmar(almacen.status === 403, `el almacenista recibió ${almacen.status}`);
+  },
+);
+
+// H-07 (ola 5): el gasto que se repite AVISA cuando toca, y «registrar ahora» pasa por la puerta
+// de siempre sin duplicar. Escribe en E2 tres gastos de 1 Bs con una categoría propia de la
+// corrida y deja el recordatorio detenido: no queda aviso vivo para nadie más.
+c.caso(
+  "H-07",
+  "un gasto semanal de hace ocho días toca; «registrar ahora» lo atiende una vez (el segundo clic es 409) y el cajero no ve el aviso",
+  async () => {
+    const categoria = `Recordatorio ${RUN}`;
+    const [cuenta] = await sql`
+      select ca.id from public.company_accounts ca
+        left join public.company_account_balances b on b.account_id = ca.id
+       where ca.company_id = ${EMPRESAS.E2} and ca.is_active and ca.currency = 'VES'
+       order by coalesce(b.balance, 0) desc limit 1`;
+    afirmar(cuenta, "E2 no tiene una cuenta activa en Bs: el escenario no es el del recorrido");
+    const [dias] = await sql`
+      select ((now() at time zone 'America/Caracas')::date - 8)::text as ancla,
+             ((now() at time zone 'America/Caracas')::date - 1)::text as ayer,
+             ((now() at time zone 'America/Caracas')::date + 6)::text as proximo`;
+    const cuerpo = (extra) => ({
+      company_id: EMPRESAS.E2,
+      category: categoria,
+      account_id: cuenta.id,
+      amount: "1",
+      allow_negative_balance: true,
+      overdraft_reason: "Comprobación H-07 del recorrido",
+      ...extra,
+    });
+    const primero = await pedir(
+      PERSONAS.duenoE2E3,
+      "E2",
+      "POST",
+      "/v1/expenses",
+      // Mediodía de Caracas de hace ocho días.
+      cuerpo({ is_recurring: true, recurrence: "weekly", paid_at: `${dias.ancla}T16:00:00.000Z` }),
+    );
+    afirmar(
+      primero.status === 201,
+      `el primer gasto dio ${primero.status}: ${primero.texto.slice(0, 300)}`,
+    );
+
+    const lista = await pedir(PERSONAS.duenoE2E3, "E2", "GET", "/v1/recurring-expenses");
+    afirmar(lista.status === 200, `la lista de recordatorios dio ${lista.status}`);
+    const aviso = lista.json.items.find((x) => x.category === categoria);
+    afirmar(aviso !== undefined, "el gasto marcado «se repite» no creó su recordatorio");
+    afirmar(
+      aviso.is_due === true && aviso.next_due_on === dias.ayer && aviso.days_overdue === 1,
+      `no toca como debía (ayer, un día de atraso): ${JSON.stringify(aviso)}`,
+    );
+    afirmar(
+      aviso.suggested_amount === "1.00000000" && aviso.account_id === cuenta.id,
+      `los datos de la última vez no quedaron para precargar: ${JSON.stringify(aviso)}`,
+    );
+    const cajero = await pedir(PERSONAS.cajero, "E2", "GET", "/v1/recurring-expenses");
+    afirmar(cajero.status === 403, `el cajero (sin expense.read) recibió ${cajero.status}`);
+
+    const ahora = cuerpo({ recurring_expense_id: aviso.id, recurring_due_on: aviso.next_due_on });
+    const registrado = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/expenses", ahora);
+    afirmar(
+      registrado.status === 201,
+      `«registrar ahora» dio ${registrado.status}: ${registrado.texto.slice(0, 300)}`,
+    );
+    const segundo = await pedir(PERSONAS.duenoE2E3, "E2", "POST", "/v1/expenses", ahora);
+    afirmar(
+      segundo.status === 409 && segundo.json.code === "CONFLICT",
+      `el segundo clic debía ser 409 CONFLICT: ${segundo.status} ${segundo.texto.slice(0, 200)}`,
+    );
+    const [n] = await sql`
+      select count(*)::int as n from public.expenses
+       where company_id = ${EMPRESAS.E2} and category = ${categoria}`;
+    afirmar(
+      n.n === 2,
+      `debía haber 2 gastos de la categoría (el primero y el de ahora), hay ${n.n}`,
+    );
+
+    const despues = await pedir(PERSONAS.duenoE2E3, "E2", "GET", "/v1/recurring-expenses");
+    const ya = despues.json.items.find((x) => x.id === aviso.id);
+    afirmar(
+      ya.is_due === false && ya.next_due_on === dias.proximo,
+      `atendido el período, el aviso debía pasar al ${dias.proximo}: ${JSON.stringify(ya)}`,
+    );
+    const fin = await pedir(
+      PERSONAS.duenoE2E3,
+      "E2",
+      "POST",
+      `/v1/recurring-expenses/${aviso.id}/stop`,
+      { company_id: EMPRESAS.E2 },
+    );
+    afirmar(fin.status === 200 && fin.json.status === "stopped", `detenerlo dio ${fin.status}`);
+  },
+);
+
+// ── Ola 5 · H-03, tercera ronda: lo que se debe no resta el saldo a favor, y la nota que cierra ──
+
+c.caso(
+  "H-03",
+  "tercera ronda: la nota que cierra una factura la deja sin deuda y sin pago posible; el estado de cuenta suma lo que se debe sin restar el saldo a favor y enseña las notas con su marca",
+  async () => {
+    const [base] = await sql`
+      select i.supplier_id, l.product_id
+        from public.supplier_invoices i
+        join public.supplier_invoice_lines l on l.supplier_invoice_id = i.id
+       where i.company_id = ${EMPRESAS.E3} and i.supplier_document_number = 'F-89002'
+       limit 1`;
+    afirmar(base, "no está F-89002 en E3: el escenario no es el del recorrido");
+    const [hoy] = await sql`select (now() at time zone 'America/Caracas')::date::text as d`;
+    const f = await pedir(PERSONAS.duenoE2E3, "E3", "POST", "/v1/supplier-invoices", {
+      company_id: EMPRESAS.E3,
+      supplier_id: base.supplier_id,
+      supplier_document_number: `H03C-${RUN}`,
+      supplier_control_number: `00-H03C${RUN}`,
+      invoice_date: hoy.d,
+      currency: "VES",
+      lines: [{ product_id: base.product_id, quantity: "1", unit_price: "1000" }],
+    });
+    afirmar(f.status === 201, `factura: ${f.status}: ${f.texto.slice(0, 300)}`);
+    const lineas = await pedir(
+      PERSONAS.duenoE2E3,
+      "E3",
+      "GET",
+      `/v1/supplier-invoices/${f.json.id}/lines`,
+    );
+    afirmar(
+      lineas.status === 200 && Array.isArray(lineas.json.lots),
+      `las líneas no traen la lista de lotes: ${lineas.status}`,
+    );
+    const cuerpo = {
+      company_id: EMPRESAS.E3,
+      supplier_invoice_id: f.json.id,
+      supplier_document_number: `NC-H03C-${RUN}`,
+      supplier_control_number: `00-NCH03C${RUN}`,
+      reason: "Recorrido H-03: factura registrada por error",
+      currency: "VES",
+      kind: "rebaja",
+      lines: [
+        { supplier_invoice_line_id: lineas.json.lines[0].id, quantity: "1", unit_price: "1000" },
+      ],
+    };
+    // AF5-11: ni futura ni anterior a su factura.
+    const [fechas] = await sql`
+      select (${hoy.d}::date + 1)::text as manana, (${hoy.d}::date - 1)::text as ayer`;
+    for (const [fecha, texto] of [
+      [fechas.manana, "fecha futura"],
+      [fechas.ayer, "anterior a la factura"],
+    ]) {
+      const mal = await pedir(PERSONAS.duenoE2E3, "E3", "POST", "/v1/supplier-credit-notes", {
+        ...cuerpo,
+        note_date: fecha,
+      });
+      afirmar(
+        mal.status === 422 && String(mal.json.message).includes(texto),
+        `la nota del ${fecha} debía rechazarse («${texto}»): ${mal.status} ${mal.texto.slice(0, 200)}`,
+      );
+    }
+    const nota = await pedir(PERSONAS.duenoE2E3, "E3", "POST", "/v1/supplier-credit-notes", {
+      ...cuerpo,
+      note_date: hoy.d,
+    });
+    afirmar(nota.status === 201, `la nota que cierra: ${nota.status}: ${nota.texto.slice(0, 300)}`);
+    // E3 es contribuyente especial: la factura nació con su retención practicada, así que la
+    // nota por todo el importe pasa de lo que se debía y lo retenido queda a favor (P-103).
+    afirmar(
+      Number(nota.json.balance) <= 0 &&
+        nota.json.left_credit_in_favor === Number(nota.json.balance) < 0,
+      `la nota por todo el importe debía dejar la factura sin deuda: ${JSON.stringify(nota.json)}`,
+    );
+    // La factura sigue asentada (no «pagada»), no debe nada y no admite un pago.
+    const [estado] = await sql`
+      select i.status,
+             platform.settlement_ledger_open(${EMPRESAS.E3}, 'ap', i.id)::text as abierto
+        from public.supplier_invoices i where i.id = ${f.json.id}`;
+    afirmar(
+      estado.status === "posted" && (estado.abierto === null || Number(estado.abierto) === 0),
+      `la factura cerrada por la nota: ${JSON.stringify(estado)}`,
+    );
+    const pago = await pedir(PERSONAS.duenoE2E3, "E3", "POST", "/v1/supplier-payments", {
+      company_id: EMPRESAS.E3,
+      supplier_invoice_id: f.json.id,
+      gross_amount: "1.00000000",
+      currency: "VES",
+      instrument: "transferencia",
+      reference: `H03C-${RUN}`,
+    });
+    afirmar(
+      pago.status === 422 && String(pago.json.message).includes("ya no debe nada"),
+      `el pago de una factura sin deuda debía rechazarse: ${pago.status} ${pago.texto.slice(0, 200)}`,
+    );
+    // El estado de cuenta: lo que se debe ES la antigüedad; el saldo a favor, aparte.
+    const ec = await pedir(
+      PERSONAS.duenoE2E3,
+      "E3",
+      "GET",
+      `/v1/suppliers/${base.supplier_id}/statement`,
+    );
+    afirmar(ec.status === 200, `estado de cuenta: ${ec.status}`);
+    afirmar(
+      ec.json.total_outstanding === ec.json.aging.total ||
+        Number(ec.json.total_outstanding) === Number(ec.json.aging.total),
+      `el total (${ec.json.total_outstanding}) no es la antigüedad (${ec.json.aging.total})`,
+    );
+    afirmar(
+      Array.isArray(ec.json.credit_in_favor) &&
+        (Number(nota.json.balance) === 0 ||
+          ec.json.credit_in_favor.some((x) => x.currency === "VES" && Number(x.nominal) > 0)) &&
+        ec.json.credit_notes.some((n) => n.id === nota.json.id && n.document_incomplete === false),
+      `el estado de cuenta no enseña el saldo a favor aparte o no lista la nota: ${JSON.stringify(ec.json).slice(0, 300)}`,
+    );
+  },
+);
+
 export default c.correr;

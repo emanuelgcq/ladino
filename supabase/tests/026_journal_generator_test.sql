@@ -154,10 +154,23 @@ select is(
                                -- outbox el MISMO nombre que su hecho contable (issueStock y
                                -- countStock), registrados en EVENT_CATALOG.md.
                                'stock.withdrawn', 'stock.shrinkage', 'stock.counted',
+                               -- El reingreso de un retiro corregido con su nota de crédito
+                               -- (20261005100900, ADR-0082): reingresarRetiro publica y asienta
+                               -- con este nombre, no con el genérico de toda entrada.
+                               'stock.withdrawal_returned',
                                -- El gasto con factura fiscal (20261004170000, H-09, ADR-0080):
                                -- registerSupplierInvoice publica y audita este nombre —y no
                                -- `ap.invoice_posted`— cuando la factura es de un gasto.
-                               'ap.expense_invoice_posted')),
+                               'ap.expense_invoice_posted',
+                               -- La nota de crédito del proveedor sobre la factura de un gasto
+                               -- (20261005110000, H-03, ADR-0083): registerSupplierCreditNote
+                               -- publica y audita este nombre cuando la factura es de un gasto.
+                               'ap.expense_credit_note_received',
+                               -- Las salidas no gravadas (20261005100400, AF3-03, ADR-0082):
+                               -- issueStock publica y audita estos nombres cuando el bien se
+                               -- usa en el giro o pasa al activo fijo; registrados en
+                               -- EVENT_CATALOG.md.
+                               'stock.used_in_business', 'stock.capitalized')),
   0::bigint,
   'los eventos del preset son los del OUTBOX, con su nombre real: no se inventa un vocabulario paralelo');
 

@@ -21,7 +21,7 @@ import {
   type Costed,
   type StockPosition,
 } from "@ladino/inventory";
-import { RETIRO_REASONS } from "@ladino/schemas";
+import { PERDIDA_REASONS, RETIRO_REASONS, USO_NO_GRAVADO_REASONS } from "@ladino/schemas";
 import type {
   ReceiveStockRequest,
   IssueStockRequest,
@@ -56,7 +56,9 @@ export type InventoryError =
   | CompanyScopeError
   | { code: "DUPLICATE"; message: string }
   | { code: "VALIDATION_FAILED"; message: string }
-  | { code: "NEGATIVE_STOCK"; message: string }
+  // `productId`: el producto que no alcanza, cuando se sabe (I-04: la venta de un compuesto lo
+  // usa para decir de qué compuesto es ingrediente).
+  | { code: "NEGATIVE_STOCK"; message: string; productId?: string }
   | { code: "CONFLICT"; message: string }
   | { code: "EXCHANGE_RATE_MISSING"; message: string }
   | { code: "UNIT_CONVERSION_MISSING"; message: string };
@@ -385,6 +387,16 @@ function traducir(e: unknown): InventoryError | null {
     };
   }
   if (code === "LAD38") return { code: "VALIDATION_FAILED", message };
+  // C-07 (20261005130200): la red del esquema bajo `resolverLote`. Un lote de un producto que
+  // vence nace con su fecha; el mensaje de la guarda nombra el lote y el producto.
+  if (code === "LAD73") {
+    return {
+      code: "VALIDATION_FAILED",
+      message: "Este producto lleva lote y vencimiento: falta la fecha en que vence el lote.",
+    };
+  }
+  // Las guardas de la factura de retiro y de su nota (20261005100800): su mensaje es de persona.
+  if (code === "LAD72") return { code: "VALIDATION_FAILED", message };
   if (code === "23505") {
     return { code: "DUPLICATE", message: "Ya existe un movimiento con esa referencia." };
   }
@@ -408,12 +420,30 @@ async function resolverLote(
   input: ReceiveStockRequest,
 ): Promise<Result<string | null, InventoryError>> {
   if (input.lot_id != null) return ok(input.lot_id);
+  // C-07: la llegada PIDE el lote y su fecha cuando el producto los lleva. La red del esquema
+  // (LAD38, «el movimiento exige lote») sigue debajo; aquí se dice con el nombre del producto y
+  // antes de crear nada. La fecha solo se exige al lote NUEVO: uno que ya existe trae la suya.
+  const [producto] = await sql<{ name: string; tracks_lots: boolean; tracks_expiry: boolean }[]>`
+    select name, tracks_lots, tracks_expiry from public.products
+     where id = ${input.product_id} and company_id = ${input.company_id}`;
+  if (producto?.tracks_lots === true && input.lot_code === undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `«${producto.name}» lleva lote y vencimiento: escribe el código del lote y la fecha en que vence.`,
+    });
+  }
   if (input.lot_code === undefined) return ok(null);
   const [existente] = await sql<{ id: string }[]>`
     select id from public.lots
      where company_id = ${input.company_id} and product_id = ${input.product_id}
        and code = ${input.lot_code}`;
   if (existente) return ok(existente.id);
+  if (producto?.tracks_expiry === true && input.lot_expires_at === undefined) {
+    return err({
+      code: "VALIDATION_FAILED",
+      message: `«${producto.name}» lleva lote y vencimiento: falta la fecha en que vence el lote «${input.lot_code}».`,
+    });
+  }
   try {
     const [creado] = await sql<{ id: string }[]>`
       insert into public.lots (tenant_id, company_id, product_id, code, expires_at)
@@ -592,7 +622,7 @@ async function ingresar(
     if (conocido) return err(conocido);
     throw e;
   }
-  await auditarYPublicar(sql, fila, ctx.value.tenantId, "stock.received", {
+  await auditarYPublicar(sql, fila, ctx.value.tenantId, input.evento ?? "stock.received", {
     reference: fila.reference,
   });
   if (input.accounting !== "document") {
@@ -618,7 +648,65 @@ export type IssueStockInput = Omit<IssueStockRequest, "reason"> & {
   readonly sourceDocumentId?: string;
   /** Por omisión, salida directa (consumo interno); la receta la declara costo de ventas. */
   readonly accountingSource?: OrigenSalida;
+  /**
+   * ADR-0082: quien emite la FACTURA DE RETIRO. Inventario no importa ventas (ventas ya importa
+   * inventario): la emisión se inyecta. Un retiro gravado de una empresa que factura SIN este
+   * emisor se rechaza: no existe el retiro sin su factura (RLIVA art. 31).
+   */
+  readonly facturarRetiro?: FacturarRetiro;
 };
+
+/** La factura de retiro ya emitida, tal como la devuelve la salida. */
+export interface FacturaDeRetiroEmitida {
+  readonly id: string;
+  readonly series: string;
+  readonly number: string;
+  readonly control_number: string | null;
+  readonly subtotal_amount: string;
+  readonly tax_amount: string;
+  readonly total_amount: string;
+  readonly currency: string;
+}
+export type FacturarRetiro = (a: {
+  readonly companyId: string;
+  readonly warehouseId: string;
+  readonly productId: string;
+  readonly quantity: string;
+  readonly moveId: string;
+  readonly motivo: string;
+  readonly fecha: string;
+}) => Promise<Result<FacturaDeRetiroEmitida, InventoryError>>;
+
+/**
+ * AF3-04 (RLIVA art. 14): la evidencia de una pérdida dice algo. «abc» no es un soporte: se piden
+ * al menos diez caracteres y dos palabras (un acta con su número, una foto con su fecha).
+ */
+export function evidenciaSuficiente(evidencia: string | null): boolean {
+  if (evidencia === null) return false;
+  const limpia = evidencia.trim();
+  return (
+    limpia.length >= 10 && limpia.split(/\s+/).filter((p) => /[\p{L}\p{N}]/u.test(p)).length >= 2
+  );
+}
+/**
+ * AF5-07: una salida NO gravada (uso en el negocio, activo fijo, inmueble del negocio) sale sin
+ * débito y sin documento; lo único que la separa de un consumo propio sin IVA es que diga adónde
+ * fue. Misma regla que la evidencia de una pérdida, y se guarda en el mismo sitio.
+ */
+export const MENSAJE_DESTINO =
+  "Esta salida no lleva IVA porque la mercancía se queda en el negocio: di adónde fue, con al menos dos palabras y diez caracteres —por ejemplo «Cloro para la limpieza del local» o «Estante para el depósito de la sede»—.";
+/**
+ * AF5-02: el retiro gravado emite una factura fiscal y gasta un número de control. Lo registra
+ * quien puede facturar. El corchete es la marca que `personaDePermiso` (apps/api) reconoce para
+ * dar este mismo texto a la persona en vez del genérico del permiso.
+ */
+export const MENSAJE_RETIRO_EXIGE_FACTURAR =
+  "Este retiro emite una factura a nombre de tu negocio: lo registra quien puede facturar. [inventory.withdrawal_invoice: exige sales.invoice.issue]";
+/** AF5-08 (RLIVA art. 57): correlativo y fecha van juntos; la factura de retiro es de hoy. */
+export const MENSAJE_RETIRO_ES_DE_HOY =
+  "Una factura de retiro lleva la fecha de hoy: registra el retiro sin fecha, o con la de hoy.";
+export const MENSAJE_EVIDENCIA =
+  "Una merma, rotura, vencimiento o faltante necesita su evidencia: describe el soporte con al menos dos palabras y diez caracteres —por ejemplo «Acta 0012 del 03/10/2026» o «Foto del lote vencido, 03/10»— (RLIVA art. 14).";
 
 /**
  * EL ASIENTO DE UN MOVIMIENTO SUELTO (ADR-0060 §2), en la misma transacción. Un
@@ -634,7 +722,17 @@ async function asentarMovimiento(
   fila: InventoryMoveResponse,
   hecho: {
     readonly sourceKind: "stock_opening" | OrigenSalida;
-    readonly evento: "stock.received" | "stock.shipped" | "stock.shrinkage" | "stock.withdrawn";
+    readonly evento:
+      | "stock.received"
+      | "stock.shipped"
+      | "stock.shrinkage"
+      | "stock.withdrawn"
+      // AF3-03 (20261005100400): las salidas no gravadas, cada una a su papel.
+      | "stock.used_in_business"
+      | "stock.capitalized"
+      // 20261005100900: el reingreso de un retiro corregido, con nombre propio (su plantilla
+      // acredita «gasto por retiro»: no puede compartir el nombre de una entrada cualquiera).
+      | "stock.withdrawal_returned";
     readonly descripcion: string;
     readonly amounts: {
       readonly functional_amount?: string;
@@ -760,7 +858,11 @@ async function repartirPorLotes(
       from jsonb_to_recordset(${sql.json(solicitud)}::jsonb) as x(product_id uuid, quantity numeric),
            lateral platform.allocate_lots_fefo(${input.company_id}, ${input.warehouse_id},
                                                x.product_id, x.quantity,
-                                               (coalesce(${occurredAt}::timestamptz, now()))::date) a`;
+                                               -- C-07: «vencido» es día contra día, y el día es el
+                                               -- de Caracas, igual que LAD46 (migración
+                                               -- 20261005130100). El día en que vence aún se vende.
+                                               (coalesce(${occurredAt}::timestamptz, now())
+                                                  at time zone 'America/Caracas')::date) a`;
 
   const porProducto = new Map<string, { lot_id: string; restante: Decimal }[]>();
   for (const a of asignado) {
@@ -779,6 +881,8 @@ async function repartirPorLotes(
       return err({
         code: "NEGATIVE_STOCK",
         message: `No hay suficiente «${nombre.get(productId) ?? "producto"}» en lotes vigentes: se piden ${q.toFixed()} y hay ${disponible.toFixed()} sin vencer en este depósito. Lo vencido no se vende; se da de baja con un ajuste.`,
+        // Quién falta: la venta de un compuesto dice con él de qué compuesto es ingrediente.
+        productId,
       });
     }
   }
@@ -877,6 +981,80 @@ export async function reponerSalidasDeDocumento(
   return ok({ repuesto: total.value.toFixed(8), movimientos: salidas.length });
 }
 
+/**
+ * EL REINGRESO DE UN RETIRO CORREGIDO (ADR-0082, AF3-06). La nota de crédito de una factura de
+ * retiro deja sin efecto el retiro entero: la mercancía vuelve al MISMO depósito y lote, por la
+ * misma cantidad y el MISMO valor con que salió —no el promedio de hoy—, señalando a la nota como
+ * su documento, y su asiento es el contra-asiento del retiro (hecho `inventory_move /
+ * stock.withdrawal_returned`: inventario y débito fiscal contra el gasto por retiro). Así el kardex de la
+ * factura y de su nota netea en cero (`withdrawal_note_gaps`, enunciado 6).
+ * La autoriza el permiso de mover mercancía (`inventory.move`) sobre ESE depósito; el de corregir
+ * el documento lo exige quien llama.
+ */
+export async function reingresarRetiro(
+  uow: UnitOfWork,
+  input: {
+    readonly companyId: string;
+    readonly facturaId: string;
+    readonly notaId: string;
+    /** El IVA de la nota en moneda funcional: el débito fiscal que se revierte. */
+    readonly impuesto: string;
+    readonly descripcion: string;
+  },
+): Promise<Result<InventoryMoveResponse, InventoryError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "Reponer existencias exige un usuario real.",
+    });
+  }
+  const [salida] = await sql<
+    {
+      warehouse_id: string;
+      product_id: string;
+      lot_id: string | null;
+      quantity: string;
+      valor: string;
+    }[]
+  >`select warehouse_id, product_id, lot_id, (-quantity)::text as quantity,
+           (-functional_amount)::text as valor
+      from public.inventory_moves
+     where company_id = ${input.companyId} and source_document_id = ${input.facturaId}
+       and kind = 'salida'
+     order by created_at, id
+     limit 1`;
+  if (!salida) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
+  const ctx = await autorizar(sql, actor.userId, input.companyId, "inventory.move", [
+    salida.warehouse_id,
+  ]);
+  if (!ctx.ok) return ctx;
+  await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
+  const entrada = await ingresar(uow, actor.userId, ctx.value, {
+    company_id: input.companyId,
+    warehouse_id: salida.warehouse_id,
+    product_id: salida.product_id,
+    ...(salida.lot_id === null ? {} : { lot_id: salida.lot_id }),
+    quantity: salida.quantity,
+    amount: salida.valor,
+    currency: ctx.value.functionalCurrency,
+    note: "Reingreso por la nota de crédito del retiro",
+    sourceDocumentId: input.notaId,
+    accounting: "document",
+    // Un evento por hecho, con el nombre de su hecho contable (pgTAP 026).
+    evento: "stock.withdrawal_returned",
+  });
+  if (!entrada.ok) return entrada;
+  const contable = await asentarMovimiento(sql, actor.userId, ctx.value, entrada.value, {
+    sourceKind: "inventory_move",
+    evento: "stock.withdrawal_returned",
+    descripcion: input.descripcion,
+    amounts: { cost_amount: salida.valor, tax_amount: input.impuesto },
+  });
+  if (!contable.ok) return contable;
+  return ok(entrada.value);
+}
+
 export async function issueStockBatch(
   uow: UnitOfWork,
   input: IssueStockBatchInput,
@@ -925,6 +1103,37 @@ export async function issueStockBatchForSale(
   ]);
   if (!ctx.ok) return ctx;
   return sacarLote(uow, ctx.value, input);
+}
+
+/**
+ * LA SALIDA DE KARDEX DE UNA DEVOLUCIÓN AL PROVEEDOR (H-03, ADR-0083). Mismo patrón que la
+ * salida de una venta: la autoriza el permiso de la operación que la contiene
+ * (`purchase.credit_note.register`), sobre la empresa y sobre ESTE almacén. No asienta: el
+ * hecho contable es la nota de crédito, que cubre sus movimientos por `source_document_id`.
+ */
+export async function issueStockBatchForSupplierReturn(
+  uow: UnitOfWork,
+  input: IssueStockBatchInput,
+): Promise<Result<InventoryMoveResponse[], InventoryError>> {
+  const { sql, actor } = uow;
+  if (actor.kind !== "user") {
+    return err({
+      code: "PERMISSION_REQUIRED",
+      message: "Mover existencias exige un usuario real.",
+    });
+  }
+  if (input.lines.length === 0) return ok([]);
+  const ctx = await autorizar(
+    sql,
+    actor.userId,
+    input.company_id,
+    "purchase.credit_note.register",
+    [input.warehouse_id],
+  );
+  if (!ctx.ok) return ctx;
+  // No se devuelve lo que no está, NUNCA: aunque la empresa permita vender en negativo, una
+  // devolución al proveedor de mercancía que ya no existe no es una devolución.
+  return sacarLote(uow, { ...ctx.value, allowNegative: false }, input);
 }
 
 /**
@@ -1030,11 +1239,19 @@ async function sacarLote(
       allowNegative: ctx.value.allowNegative,
     });
     if (!costed.ok) {
-      return err(
-        costed.error.code === "NEGATIVE_STOCK"
-          ? { code: "NEGATIVE_STOCK", message: costed.error.message }
-          : { code: "VALIDATION_FAILED", message: costed.error.message },
-      );
+      if (costed.error.code === "NEGATIVE_STOCK") {
+        // I-04: se dice CUÁL producto falta (la venta de un compuesto saca varios, y «no hay
+        // existencia» sin nombre no le sirve a quien está en la caja). Solo en el camino de error.
+        const [falta] = await sql<{ name: string }[]>`
+          select name from public.products
+           where id = ${l.product_id} and company_id = ${input.company_id}`;
+        return err({
+          code: "NEGATIVE_STOCK",
+          message: `No hay suficiente «${falta?.name ?? "producto"}» en este depósito: se piden ${cantidades[i]!.toFixed()} y quedan ${posicion.quantity.toFixed()}.`,
+          productId: l.product_id,
+        });
+      }
+      return err({ code: "VALIDATION_FAILED", message: costed.error.message });
     }
     posiciones.set(clave, costed.value.position);
     const hecho = hechoMonetario(
@@ -1115,6 +1332,8 @@ export type OrigenSalida = "inventory_move" | "sales_cost";
 export type ReceiveStockInput = ReceiveStockRequest & {
   readonly sourceDocumentId?: string;
   readonly accounting?: AsientoEntrada;
+  /** El nombre con que la entrada se publica y audita, si no es una entrada cualquiera. */
+  readonly evento?: "stock.withdrawal_returned";
 };
 export type AdjustStockInput = AdjustStockRequest & {
   readonly sourceDocumentId?: string;
@@ -1155,19 +1374,27 @@ export async function issueStock(
     return err({
       code: "VALIDATION_FAILED",
       message:
-        "Elige el motivo de la salida: merma, rotura, vencido, faltante, consumo propio, regalo, donación o muestra.",
+        "Elige el motivo de la salida: merma, rotura, vencido, faltante, consumo propio, regalo, donación, muestra, uso en el negocio, pasa a activo fijo o incorporado a un inmueble del negocio.",
     });
   }
   const esRetiro = motivo !== null && RETIRO_REASONS.includes(motivo);
+  // AF3-03 (LIVA art. 4.3 in fine; VALIDAR-TRIBUTARIO P-82): usado en el giro, llevado al activo
+  // fijo o incorporado a un inmueble del negocio. Sale del kardex sin débito y sin factura.
+  const esUsoNoGravado = motivo !== null && USO_NO_GRAVADO_REASONS.includes(motivo);
+  const esPerdida = motivo !== null && PERDIDA_REASONS.includes(motivo);
   // LA PÉRDIDA JUSTIFICADA lleva su soporte (RLIVA art. 14, §2.13): sin evidencia no es faltante
-  // justificado, y Ladino no la registra como tal.
+  // justificado, y Ladino no la registra como tal. AF3-04: y el soporte dice algo.
+  // AF3-02b (decidido por criterio, lo más estrecho): el faltante SIN evidencia sería retiro
+  // gravable (RLIVA art. 31) con la base del art. 13 —costo más el porcentaje de utilidad bruta
+  // del último balance—. Ese porcentaje no existe como dato de la empresa y no se inventa: se
+  // sigue RECHAZANDO, y el camino queda descrito en PENDIENTES_ASESOR P-81.
   const evidencia = input.evidence?.trim() ?? null;
-  if (motivo !== null && !esRetiro && (evidencia === null || evidencia.length < 3)) {
-    return err({
-      code: "VALIDATION_FAILED",
-      message:
-        "Una merma, rotura, vencimiento o faltante necesita su evidencia: escribe la referencia del acta, la foto o el informe que la respalda (RLIVA art. 14).",
-    });
+  if (esPerdida && !evidenciaSuficiente(evidencia)) {
+    return err({ code: "VALIDATION_FAILED", message: MENSAJE_EVIDENCIA });
+  }
+  // AF5-07: la salida no gravada dice su DESTINO (la misma regla, guardada en `exit_evidence`).
+  if (esUsoNoGravado && !evidenciaSuficiente(evidencia)) {
+    return err({ code: "VALIDATION_FAILED", message: MENSAJE_DESTINO });
   }
   // EL RETIRO NO REESCRIBE UN PERÍODO YA DECLARADO (criterio B-1, decidido por criterio): si su
   // fecha cae en un período cuya declaración de IVA se generó DESPUÉS de cerrarse, el débito ya no
@@ -1188,13 +1415,64 @@ export async function issueStock(
       });
     }
   }
-  // El valor de mercado del retiro se resuelve ANTES de escribir nada: si falta el precio o la
-  // tasa, la salida no ocurre (y no queda un movimiento sin su débito fiscal).
-  let retiro: ValorDeRetiro | null = null;
+  // LA FACTURA DE RETIRO (ADR-0082; RLIVA art. 31) se emite ANTES de mover el kardex —el mismo
+  // orden de candados que la venta: talonario → existencia—, con el id que llevará la salida ya
+  // decidido. Si falta el precio, la tasa, el papel del talonario o el tipo de contribuyente, la
+  // salida no ocurre: no existe el retiro sin su factura. Una empresa SIN RIF no factura: solo
+  // deja la salida de kardex y el gasto.
+  // El instante es UNO y lo pone la base (inicio de la transacción, o el que se pidió): fecha de
+  // emisión de la factura, del movimiento y de su asiento. Con dos relojes, a medianoche el libro
+  // y el mayor caerían en días distintos.
+  let factura: FacturaDeRetiroEmitida | null = null;
+  let idDeLaSalida: string | null = null;
   if (esRetiro && (await modoDeVenta(sql, input.company_id, momentoTasa)) === "facturas") {
-    const v = await valorDeRetiro(sql, input.company_id, input.product_id, q.value, momentoTasa);
-    if (!v.ok) return v;
-    retiro = v.value;
+    // AF5-02: emitir un documento fiscal no es mover mercancía. Además de `inventory.move` (arriba),
+    // quien registra un retiro que se factura necesita el permiso de emitir facturas. Los motivos
+    // que no emiten documento y la empresa sin RIF no pasan por aquí.
+    const puedeFacturar = await companyScope(
+      sql,
+      actor.userId,
+      input.company_id,
+      "sales.invoice.issue",
+    );
+    if (!puedeFacturar.ok) {
+      return puedeFacturar.error.code === "PERMISSION_REQUIRED"
+        ? err({ code: "PERMISSION_REQUIRED", message: MENSAJE_RETIRO_EXIGE_FACTURAR })
+        : puedeFacturar;
+    }
+    // AF5-08 (RLIVA art. 57): la factura toma el SIGUIENTE correlativo y control; con una fecha de
+    // otro día rompería la continuidad de número y fecha. Dos `date`, día de Caracas.
+    if (input.occurred_at !== undefined) {
+      const [dia] = await sql<{ hoy: boolean }[]>`
+        select platform.caracas_day(${input.occurred_at}::timestamptz)
+                 = platform.caracas_day(now()) as hoy`;
+      if (dia?.hoy !== true) {
+        return err({ code: "VALIDATION_FAILED", message: MENSAJE_RETIRO_ES_DE_HOY });
+      }
+    }
+    if (input.facturarRetiro === undefined) {
+      return err({
+        code: "VALIDATION_FAILED",
+        message:
+          "Este retiro se factura (RLIVA art. 31) y esta vía no emite la factura: regístralo desde Inventario › Salida.",
+      });
+    }
+    const [inst] = await sql<{ id: string; t: string }[]>`
+      select platform.uuidv7() as id,
+             to_char(coalesce(${occurredAt}::timestamptz, now()) at time zone 'utc',
+                     'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as t`;
+    const f = await input.facturarRetiro({
+      companyId: input.company_id,
+      warehouseId: input.warehouse_id,
+      productId: input.product_id,
+      quantity: q.value.toFixed(),
+      moveId: inst!.id,
+      motivo: ETIQUETA_MOTIVO[motivo],
+      fecha: inst!.t,
+    });
+    if (!f.ok) return f;
+    factura = f.value;
+    idDeLaSalida = inst!.id;
   }
 
   await sql`select set_config('ladino.rules_version', ${RULES_VERSION}, true)`;
@@ -1243,12 +1521,14 @@ export async function issueStock(
         // El texto libre `reason` es del ajuste y la revaluación; la salida usa su columna.
         reason: null,
         exitReason: motivo,
-        exitEvidence: esRetiro ? null : evidencia,
+        exitEvidence: esPerdida || esUsoNoGravado ? evidencia : null,
         note: input.note ?? null,
         transferId: null,
         counterpartId: null,
-        id: null,
-        sourceDocumentId: input.sourceDocumentId ?? null,
+        // La salida de un retiro facturado lleva el id que su factura ya guardó, y la señala
+        // como su documento: anularla repone exactamente esta salida (ADR-0061 §2).
+        id: idDeLaSalida,
+        sourceDocumentId: factura?.id ?? input.sourceDocumentId ?? null,
       }),
     );
   } catch (e) {
@@ -1257,54 +1537,28 @@ export async function issueStock(
     throw e;
   }
   // UN evento por hecho, con el MISMO nombre que su hecho contable (pgTAP 026: el preset no usa un
-  // vocabulario paralelo al del outbox): el costo de una venta es `stock.shipped`; el retiro,
-  // `stock.withdrawn`; la merma, rotura, vencido o faltante, `stock.shrinkage`.
+  // vocabulario paralelo al del outbox): el costo de una venta es `stock.shipped`; el retiro
+  // —gravado o no—, `stock.withdrawn`; la merma, rotura, vencido o faltante, `stock.shrinkage`.
+  // AF3-03 (20261005100400): la salida no gravada tiene su hecho propio, por el papel de su
+  // contrapartida: lo usado en el giro es gasto de operación (`stock.used_in_business`); lo que
+  // pasa al activo fijo o se incorpora a un inmueble es activo (`stock.capitalized`).
   const eventoSalida =
-    origen === "sales_cost" ? "stock.shipped" : esRetiro ? "stock.withdrawn" : "stock.shrinkage";
+    origen === "sales_cost"
+      ? "stock.shipped"
+      : esRetiro
+        ? "stock.withdrawn"
+        : motivo === "uso_en_negocio"
+          ? "stock.used_in_business"
+          : esUsoNoGravado
+            ? "stock.capitalized"
+            : "stock.shrinkage";
   await auditarYPublicar(sql, fila, ctx.value.tenantId, eventoSalida, {
     reference: fila.reference,
     exit_reason: motivo,
+    ...(factura !== null ? { withdrawal_invoice_id: factura.id } : {}),
   });
   const costo = fila.functional_amount.replace("-", "");
   const ref = fila.reference ? `: ${fila.reference}` : "";
-
-  // LA NOTA DE RETIRO (ADR-0078 §3): documento interno numerado por la base; el débito fiscal del
-  // asiento es exactamente el suyo, para que el libro y el mayor cuadren.
-  let numeroNota: number | null = null;
-  if (retiro !== null) {
-    const [nota] = await sql<{ id: string; note_number: string }[]>`
-      insert into public.inventory_withdrawal_notes
-        (tenant_id, company_id, note_number, move_id, warehouse_id, product_id, quantity,
-         exit_reason, price_list_id, list_unit_price, list_currency, fx_rate, rate_source,
-         base_functional, tax_category_snapshot, tax_treatment, tax_rule_id, tax_rate_snapshot,
-         tax_functional, functional_currency, rules_version)
-      values (${ctx.value.tenantId}, ${fila.company_id}, 0, ${fila.id}, ${fila.warehouse_id},
-              ${fila.product_id}, ${q.value.toFixed()}, ${motivo}, ${retiro.priceListId},
-              ${retiro.listUnitPrice}, ${retiro.listCurrency}, ${retiro.fxRate},
-              ${retiro.rateSource}, ${retiro.base}, ${retiro.taxCategory},
-              platform.tax_treatment_of(${retiro.taxCategory}), ${retiro.taxRuleId},
-              ${retiro.taxRate}, ${retiro.tax}, ${ctx.value.functionalCurrency},
-              ${RULES_VERSION})
-      returning id, note_number::text as note_number`;
-    numeroNota = Number(nota!.note_number);
-    await sql`
-      insert into public.audit_events
-        (tenant_id, company_id, aggregate_type, aggregate_id, event_type,
-         actor_type, occurred_at, rules_version, payload)
-      values (${ctx.value.tenantId}, ${fila.company_id}, 'inventory_move', ${fila.id},
-              'inventory.withdrawal_note.issued', 'user', now(), ${RULES_VERSION},
-              ${sql.json({
-                note_id: nota!.id,
-                note_number: numeroNota,
-                exit_reason: motivo,
-                base_functional: retiro.base,
-                tax_functional: retiro.tax,
-                list_unit_price: retiro.listUnitPrice,
-                list_currency: retiro.listCurrency,
-                fx_rate: retiro.fxRate,
-                rate_source: retiro.rateSource,
-              })})`;
-  }
 
   const contable =
     origen === "sales_cost"
@@ -1314,16 +1568,23 @@ export async function issueStock(
           descripcion: `Costo de lo consumido${ref}`,
           amounts: { cost_amount: costo },
         })
-      : esRetiro
+      : esRetiro || esUsoNoGravado
         ? await asentarMovimiento(sql, actor.userId, ctx.value, fila, {
             sourceKind: "inventory_move",
             evento: eventoSalida,
+            // ADR-0082: el asiento de la factura de retiro ES este —gasto por retiro al costo y
+            // débito fiscal contra inventario—; no nace cuenta por cobrar. AF3-03: el motivo no
+            // gravado va sin débito, a su papel (gasto de operación o activo fijo, por el evento);
+            // el código de la cuenta de activo es provisional (P-82).
             descripcion:
-              `Retiro por ${ETIQUETA_MOTIVO[motivo]}` +
-              (numeroNota !== null ? ` (Nota de retiro NR-${numeroNota})` : "") +
+              (esRetiro
+                ? `Retiro por ${ETIQUETA_MOTIVO[motivo]}`
+                : `Salida no gravada: ${ETIQUETA_MOTIVO[motivo]}`) +
+              (factura !== null ? ` (Factura de retiro ${factura.number})` : "") +
               ref,
-            // Sin RIF no hay débito: las dos líneas del IVA salen en cero y no se escriben.
-            amounts: { cost_amount: costo, tax_amount: retiro?.tax ?? "0" },
+            // Sin RIF, o en un motivo no gravado, no hay débito: las dos líneas del IVA salen en
+            // cero y no se escriben.
+            amounts: { cost_amount: costo, tax_amount: factura?.tax_amount ?? "0" },
           })
         : await asentarMovimiento(sql, actor.userId, ctx.value, fila, {
             sourceKind: "inventory_move",
@@ -1332,7 +1593,7 @@ export async function issueStock(
             amounts: { functional_amount: fila.functional_amount },
           });
   if (!contable.ok) return contable;
-  return ok({ ...fila, withdrawal_note_number: numeroNota });
+  return ok({ ...fila, withdrawal_note_number: null, withdrawal_invoice: factura });
 }
 
 /** El motivo en palabras: va en la descripción del asiento (I-11). */
@@ -1345,115 +1606,10 @@ const ETIQUETA_MOTIVO: Record<ExitReason, string> = {
   regalo: "regalo",
   donacion: "donación",
   muestra: "muestra",
+  uso_en_negocio: "uso en el negocio",
+  activo_fijo: "pasa a activo fijo",
+  incorporado_inmueble: "incorporado a un inmueble del negocio",
 };
-
-interface ValorDeRetiro {
-  readonly priceListId: string;
-  readonly listUnitPrice: string;
-  readonly listCurrency: string;
-  readonly fxRate: string;
-  readonly rateSource: string;
-  readonly base: string;
-  readonly taxCategory: string;
-  readonly taxRuleId: string | null;
-  readonly taxRate: string;
-  readonly tax: string;
-}
-
-/**
- * EL VALOR DE MERCADO DEL RETIRO (LIVA art. 4.3, ADR-0078 §3). Decidido por criterio: el precio de
- * la lista detal vigente (la lista por omisión de la empresa) a la tasa del día, al céntimo; la
- * alícuota, la de la categoría del producto para la propia empresa como adquirente. Alternativa:
- * el costo — VALIDAR-TRIBUTARIO en PENDIENTES_ASESOR. Sin precio o sin tasa NO se retira: un
- * retiro sin valor de mercado no tendría débito que declarar.
- */
-async function valorDeRetiro(
-  sql: TransactionSql,
-  companyId: string,
-  productId: string,
-  cantidadRetirada: Decimal,
-  momento: string,
-): Promise<Result<ValorDeRetiro, InventoryError>> {
-  const [base] = await sql<
-    {
-      lista: string | null;
-      moneda_lista: string | null;
-      funcional: string;
-      precio: string | null;
-      categoria: string;
-      tipo: string | null;
-    }[]
-  >`
-    select cs.default_price_list_id as lista, pl.currency_code as moneda_lista,
-           c.functional_currency_code as funcional,
-           case when cs.default_price_list_id is null then null
-                else platform.price_at(cs.default_price_list_id, p.id, ${momento}::timestamptz)::text
-           end as precio,
-           p.tax_category_code as categoria, c.taxpayer_type_code as tipo
-      from public.products p
-      join public.companies c on c.id = p.company_id
-      left join public.company_settings cs on cs.company_id = c.id
-      left join public.price_lists pl on pl.id = cs.default_price_list_id
-     where p.id = ${productId} and p.company_id = ${companyId}`;
-  if (!base) return err({ code: "NOT_FOUND", message: "Recurso no encontrado." });
-  if (base.lista === null || base.precio === null || base.moneda_lista === null) {
-    return err({
-      code: "VALIDATION_FAILED",
-      message:
-        "El retiro se valora al precio de venta (LIVA art. 4.3) y este producto no tiene precio en tu lista de precios principal. Ponle precio y vuelve a registrar la salida.",
-    });
-  }
-  let tasa = "1";
-  let fuente = "identidad";
-  if (base.moneda_lista !== base.funcional) {
-    const [t] = await sql<{ rate: string | null; source: string | null }[]>`
-      select f.rate::text as rate, f.source
-        from platform.rate_for(${companyId}, ${base.moneda_lista}, ${base.funcional},
-                               ${diaNegocio(momento)}::date) f`;
-    if (!t?.rate) {
-      return err({
-        code: "EXCHANGE_RATE_MISSING",
-        message: `No hay tasa de ${base.moneda_lista} a ${base.funcional} vigente para hoy: el retiro se valora al precio de venta en bolívares. Carga la tasa con su fuente y vuelve a intentar.`,
-      });
-    }
-    tasa = t.rate;
-    fuente = t.source ?? "manual";
-  }
-  let regla: { tax_rule_id: string; rate: string } | undefined;
-  try {
-    [regla] = await sql.savepoint(
-      (sp) => sp<{ tax_rule_id: string; rate: string }[]>`
-        select t.tax_rule_id, t.rate::text as rate
-          from platform.resolve_tax(${companyId}, ${diaNegocio(momento)}::date, 'VE', 'iva',
-                                    ${base.tipo ?? "ordinario"}, ${base.categoria}) t`,
-    );
-  } catch (e) {
-    const conocido = traducir(e);
-    if (conocido) return err(conocido);
-    throw e;
-  }
-  const precio = parseDecimal(base.precio);
-  const factor = parseDecimal(tasa);
-  const alicuota = parseDecimal(regla?.rate ?? "0");
-  if (!precio.ok || !factor.ok || !alicuota.ok) {
-    return err({ code: "VALIDATION_FAILED", message: "El valor de mercado no se pudo calcular." });
-  }
-  // Al céntimo, mitad hacia arriba: es un importe del libro de ventas en bolívares.
-  const baseBs = precio.value.times(cantidadRetirada).times(factor.value).toDecimalPlaces(2, 4);
-  const impuesto = baseBs.times(alicuota.value).toDecimalPlaces(2, 4);
-  return ok({
-    priceListId: base.lista,
-    listUnitPrice: base.precio,
-    listCurrency: base.moneda_lista,
-    fxRate: tasa,
-    rateSource: fuente,
-    base: baseBs.toFixed(8),
-    taxCategory: base.categoria,
-    taxRuleId: regla?.tax_rule_id ?? null,
-    taxRate: regla?.rate ?? "0",
-    tax: impuesto.toFixed(8),
-  });
-}
 
 /**
  * EL CONTEO (ADR-0078 §4, I-07). La persona escribe lo que contó; la diferencia contra el sistema
